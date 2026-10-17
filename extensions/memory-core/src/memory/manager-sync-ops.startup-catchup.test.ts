@@ -154,7 +154,7 @@ describe("session startup catch-up", () => {
     await harness.waitForSessionSync();
   }
 
-  it("excludes system-only cron-base sessions but catches later user content", async () => {
+  it("defers startup parsing while excluding system-only sessions and catching later user content", async () => {
     const session = await writeSqliteSession({
       sessionId: "cron-base",
       sessionKey: "agent:main:cron:synthetic-job",
@@ -166,13 +166,31 @@ describe("session startup catch-up", () => {
         provenance: { kind: "internal_system", sourceTool: "cron" },
       },
     });
-    const harness = await Harness.create([]);
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
-    expect(harness.isSessionsDirty()).toBe(false);
+    const harness = await Harness.create([], true);
+    const parse = vi.spyOn(memorySessions, "buildSessionEntries");
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([]);
+      expect(harness.isSessionsDirty()).toBe(false);
+      expect(parse).toHaveBeenCalledOnce();
+      parse.mockClear();
+      await harness.catchUp();
+      expect(parse).not.toHaveBeenCalled();
+      expect(harness.indexedPaths).toEqual([]);
+      await flushSessionSync(harness);
+      expect(harness.indexedPaths).toEqual([]);
 
-    await append(session, "Remember my favorite fruit is mango.");
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.sessionKey]);
-    expect(harness.isSessionsDirty()).toBe(true);
+      await append(session, "Remember my favorite fruit is mango.");
+      await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([session.sessionKey]);
+      parse.mockClear();
+      await harness.catchUp();
+      expect(parse).not.toHaveBeenCalled();
+      await flushSessionSync(harness);
+      expect(harness.indexedPaths).toEqual([session.corpusPath]);
+      expect(harness.indexedContents[0]).toContain("Remember my favorite fruit is mango.");
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it("prunes indexed sessions that are absent from the live corpus", async () => {

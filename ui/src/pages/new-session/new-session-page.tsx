@@ -1,11 +1,13 @@
-import { createMemo, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
@@ -23,7 +25,6 @@ import { NewSessionDictationView } from "./composer-dictation-view.tsx";
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
@@ -40,6 +41,10 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
 
+const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
+  export: "CreationComposer",
+});
+
 export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
   // Instant-thread handoff parks and restores this exact registered host across route roots.
   return (
@@ -53,6 +58,31 @@ export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
 }
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
+
+function DraftAgentSelect(props: { page: () => NewSessionPageOwner }) {
+  const place = () => props.page().place;
+  const submission = () => props.page().submission;
+  return (
+    <Show when={place().agents().length > 1}>
+      <AgentSelect
+        ref={(node) => {
+          props.page().agentPicker = node;
+        }}
+        params={{
+          agents: place().agents(),
+          agentId: place().agentId,
+          agentIdentity: props.page().context?.agentIdentity,
+          disabled: submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
+          onSelect: (agentId) => place().selectAgentId(agentId),
+          onOpenChange: (open) => {
+            props.page().agentPickerOpen = open;
+            props.page().changed();
+          },
+        }}
+      />
+    </Show>
+  );
+}
 
 function DraftBlock(props: {
   page: () => NewSessionPageOwner;
@@ -119,21 +149,8 @@ function DraftBlock(props: {
         }
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
-          <Show when={place().agents().length > 1}>
-            <AgentSelect
-              params={{
-                agents: place().agents(),
-                agentId: place().agentId,
-                agentIdentity: props.page().context?.agentIdentity,
-                disabled:
-                  submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
-                onSelect: (agentId) => place().selectAgentId(agentId),
-                onOpenChange: (open) => {
-                  props.page().agentPickerOpen = open;
-                  props.page().changed();
-                },
-              }}
-            />
+          <Show when={Boolean(props.page().submission.completedSubmission)}>
+            <DraftAgentSelect page={props.page} />
           </Show>
         }
         placeSelect={<NewSessionPlaceControls params={placeOptions()} />}
@@ -215,18 +232,18 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
         ].map((source) => source.subscribe(notify))
       : [];
     const document = host.ownerDocument;
-    const window = document.defaultView!;
-    const dismiss = installChatComposerPickerDismissal(document);
-    const keydown = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(host, event);
-    document.addEventListener("keydown", keydown, true);
-    window.addEventListener("beforeunload", owner.flushDraft);
+    stops.push(
+      installChatComposerPickerDismissal(document),
+      listen(
+        document,
+        "keydown",
+        (event) => focusChatComposerFromPrintableKeydown(host, event),
+        true,
+      ),
+      listen(document.defaultView!, "beforeunload", owner.flushDraft),
+    );
     notify();
-    return () => {
-      stops.forEach((stop) => stop());
-      dismiss();
-      document.removeEventListener("keydown", keydown, true);
-      window.removeEventListener("beforeunload", owner.flushDraft);
-    };
+    return () => stops.forEach((stop) => stop());
   });
   const visibilityControl = {
     get visibility() {
@@ -316,6 +333,11 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
                 <DraftWelcome
                   sessions={page().context?.sessions}
                   options={page().welcomeOptions()}
+                  assistantNameControl={
+                    !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
+                      <DraftAgentSelect page={page} />
+                    ) : undefined
+                  }
                   composer={<DraftBlock page={page} revision={revision} options={options} />}
                 />
               }
@@ -325,7 +347,17 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           )}
           onOpenImage={owner.setImageLightbox}
         />
-        <CreationComposer composer={creationComposer()} onOpenImage={owner.setImageLightbox} />
+        <Show when={creationComposer()}>
+          {(composer) => (
+            <Errored
+              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
+            >
+              <Loading fallback={<LoadingState />}>
+                <CreationComposer composer={composer()} onOpenImage={owner.setImageLightbox} />
+              </Loading>
+            </Errored>
+          )}
+        </Show>
         <ConnectMachineDialog
           {...page().connectMachine.view(page().place.isAdmin(), () => {
             owner.connectMachine.close();

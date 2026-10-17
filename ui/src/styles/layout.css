@@ -336,12 +336,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   --settings-content-block-start-padding: 4px;
 }
 
-.shell--settings .connection-action-block {
-  margin-inline: calc(0px - var(--settings-content-inline-padding, var(--content-inline-padding)));
-  border-inline: 0;
-  border-radius: 0;
-}
-
 .shell--settings:not(.shell--mobile-nav) .content--custodian {
   padding: 0;
 }
@@ -2621,6 +2615,7 @@ openclaw-session-menu[popover] {
    letters and digits share one rail. Identity-menu chords use the system UI face
    below because theme body fonts are not guaranteed to cover modifier glyphs. */
 .session-menu__shortcut,
+.side-panel-type-option__shortcut,
 .chat-controls__model-option-action kbd {
   flex: 0 0 auto;
   min-width: 12px;
@@ -2631,7 +2626,13 @@ openclaw-session-menu[popover] {
   text-align: center;
 }
 
-.sidebar-identity-menu .session-menu__shortcut {
+.session-menu__shortcut,
+.side-panel-type-option__shortcut {
+  text-align: end;
+}
+
+.sidebar-identity-menu .session-menu__shortcut,
+.side-panel-type-option__shortcut {
   font-family: var(--font-shortcut);
 }
 
@@ -2767,8 +2768,7 @@ openclaw-session-menu[popover] {
 
 .session-menu__icon-choice--custom svg,
 .session-menu__icon-choice--glyph svg,
-.sidebar-agent-menu__pin svg,
-.connection-action-block__icon svg {
+.sidebar-agent-menu__pin svg {
   width: 16px;
   height: 16px;
 }
@@ -3863,8 +3863,7 @@ button.gateway-status:focus-visible {
 
 .sidebar-agent-menu > .sidebar-customize-menu__item,
 .sidebar-agent-menu > .sidebar-customize-menu__title,
-.sidebar-agent-menu > .sidebar-customize-menu__separator,
-.sidebar-agent-menu__filter {
+.sidebar-agent-menu > .sidebar-customize-menu__separator {
   flex: none;
 }
 
@@ -3878,25 +3877,6 @@ button.gateway-status:focus-visible {
   overscroll-behavior: contain;
   scrollbar-color: color-mix(in srgb, var(--border) 72%, transparent) transparent;
   scrollbar-width: thin;
-}
-
-.sidebar-agent-menu__filter {
-  width: calc(100% - 8px);
-  min-width: 0;
-  margin: 0 4px 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.sidebar-agent-menu__empty {
-  padding: 16px 8px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-agent-menu > .sidebar-customize-menu__separator {
@@ -4134,39 +4114,6 @@ button.gateway-status:focus-visible {
   margin-top: 20px;
 }
 
-.shell--settings .content.content--actions-blocked {
-  padding-top: 0;
-}
-
-.shell--settings .content.content--actions-blocked > openclaw-router-outlet {
-  display: block;
-  margin-top: 0;
-  padding-top: var(--settings-content-block-start-padding);
-}
-
-.connection-action-block {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 8px 14px;
-  border: 1px solid color-mix(in srgb, var(--warn) 12%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--warn) 7%, var(--secondary));
-  color: color-mix(in srgb, var(--warn) 72%, var(--text));
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.35;
-}
-
-.connection-action-block__icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.connection-action-block__text {
-  min-width: 0;
-}
-
 .content--chat,
 .content--custodian,
 .content--workboard,
@@ -4224,7 +4171,6 @@ button.gateway-status:focus-visible {
 /* The embed owner reports when its authenticated frame actually renders. */
 .content.content--plugin-embed
   > :is(
-    .connection-action-block,
     openclaw-sidebar-attention,
     openclaw-sidebar-update-card,
     .native-embed-header,
@@ -4282,7 +4228,7 @@ button.gateway-status:focus-visible {
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
-  &.content--toolbar-header:not(.content--actions-blocked) {
+  &.content--toolbar-header {
     padding-top: 0;
   }
 
@@ -4381,12 +4327,8 @@ button.gateway-status:focus-visible {
       var(--content-inline-padding)
   );
 
-  > .connection-action-block {
-    margin-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance));
-  }
-
   /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(.content--toolbar-header, .content--actions-blocked) {
+  &:not(.content--toolbar-header) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 
@@ -4410,7 +4352,7 @@ html.openclaw-native-web-chrome
       var(--shell-native-titlebar-controls-width) + 8px - var(--content-inline-padding)
   );
 
-  &:not(.content--toolbar-header, .content--actions-blocked) {
+  &:not(.content--toolbar-header) {
     padding-top: calc(var(--page-toolbar-height) + 16px);
   }
 }

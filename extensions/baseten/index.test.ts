@@ -245,6 +245,7 @@ describe("Baseten provider registration", () => {
         authoredModel: legacy ? { ...current, id: modelId } : undefined,
         reasoningLevels: ["off", "max", undefined],
         context: {
+          tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
           messages: [
             { role: "user", content: "Read the fixture.", timestamp: 0 },
             {

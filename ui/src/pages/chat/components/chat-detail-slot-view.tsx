@@ -3,23 +3,26 @@ import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-l
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
-import { ensureLazySidebarElement } from "../chat-pane-sidebar-layout.ts";
+import { ensureLazySidebarElement, lazySidebarElements } from "../chat-pane-sidebar-layout.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import { ChatToolOutput } from "./chat-tool-output.ts";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 export function ChatDetailSlot(props: ChatDetailSlotProps) {
-  const panelLoad = createMemo(() =>
-    props.content.kind === "tool-output" ||
-    props.content.kind === "loading" ||
-    props.content.kind === "unavailable"
+  const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
+  const panelLoad = createMemo(() => {
+    elements.read();
+    return props.content.kind === "tool-output" ||
+      props.content.kind === "loading" ||
+      props.content.kind === "unavailable"
       ? undefined
-      : ensureLazySidebarElement("detail-panel", props.requestUpdate),
-  );
+      : ensureLazySidebarElement("detail-panel");
+  });
   return (
     <>
       {props.content.kind === "loading" ? (

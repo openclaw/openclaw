@@ -5,10 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import * as pidAlive from "../shared/pid-alive.js";
-import {
-  readOpenClawDatabaseQuarantineFailure,
-  recordOpenClawDatabaseQuarantine,
-} from "../state/openclaw-quarantine-store.js";
+import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -133,9 +131,10 @@ function mockLinuxNamespace(root: string) {
       platform: "linux",
       identity: "01234567-89ab-cdef-0123-456789abcdef",
     }));
-    const stat = fs.statSync.bind(fs);
-    vi.spyOn(fs, "statSync").mockImplementation((file, options) =>
-      stat(file === "/proc/self/ns/pid" ? root : file, options),
+    const namespaceLink = `pid:[${fs.statSync(root, { bigint: true }).ino}]`;
+    const readlink = fs.readlinkSync.bind(fs);
+    vi.spyOn(fs, "readlinkSync").mockImplementation((file, options) =>
+      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
     );
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     readGatewayLockProcessNamespace();
@@ -313,14 +312,12 @@ describe("Gateway owner lease", () => {
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const before = fs.readFileSync(databasePath);
       if (condition === "quarantined") {
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env,
-            kind: "state",
-            path: resolveOpenClawStateSqlitePath(env),
-            reason: "synthetic index damage",
-          }),
-        ).toBe(true);
+        seedOpenClawDatabaseQuarantine({
+          env,
+          kind: "state",
+          path: resolveOpenClawStateSqlitePath(env),
+          reason: "synthetic index damage",
+        });
       }
       const run = vi.fn();
       await expect(
@@ -394,9 +391,7 @@ describe("Gateway owner lease", () => {
       }
       const before = fs.readFileSync(databasePath);
       const reason = "fixture Gateway lease index quarantine";
-      expect(
-        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason });
       const run = vi.fn();
       await expect(
         withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
@@ -432,9 +427,7 @@ describe("Gateway owner lease", () => {
       const databasePath = resolveOpenClawStateSqlitePath(env);
       const before = fs.readFileSync(databasePath);
       const reason = "fixture audit index quarantine";
-      expect(
-        recordOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({ env, kind: "state", path: databasePath, reason });
       const run = vi.fn(() => "inspected");
       await expect(
         withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
@@ -663,6 +656,9 @@ describe("Gateway owner lease", () => {
         throw new Error("heartbeat cleanup retained native custody");
       },
       assertResponsive: () => undefined,
+      holdOwnerFence() {
+        throw new Error("heartbeat startup failed");
+      },
     }));
     try {
       await expect(

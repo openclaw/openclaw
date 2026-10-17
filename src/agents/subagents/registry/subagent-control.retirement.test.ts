@@ -48,7 +48,10 @@ import {
   registerSubagentRun,
   resumeSubagentRun,
 } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  prepareSubagentRecoveryFixture,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import { testing } from "./subagent-registry.test-helpers.js";
@@ -617,7 +620,8 @@ describe("restored historical cancellation ownership", () => {
     return input;
   }
 
-  function persistRetiredOwner(input: ReturnType<typeof records>) {
+  async function persistRetiredOwner(input: ReturnType<typeof records>) {
+    await prepareSubagentRecoveryFixture(input.subagent, { stateDir: fixture.stateDir });
     const database = openOpenClawStateDatabase();
     seedSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
   }
@@ -657,7 +661,7 @@ describe("restored historical cancellation ownership", () => {
         rearmGeneration: 1,
         ...(yielded ? { requesterYieldBatch: true, afterRequesterYield: true } : {}),
       };
-      persistRetiredOwner(input);
+      await persistRetiredOwner(input);
       await restore();
       resumeSubagentRun(input.subagent.runId, "restore");
       await settle();
@@ -677,7 +681,7 @@ describe("restored historical cancellation ownership", () => {
 
   it("defers a rejected historical retirement write without aborting resume", async () => {
     const input = historicalCancellation();
-    persistRetiredOwner(input);
+    await persistRetiredOwner(input);
     await restore();
     const database = openOpenClawStateDatabase();
     database.db.exec(`CREATE TRIGGER reject_retired_cancellation
@@ -707,7 +711,7 @@ describe("restored historical cancellation ownership", () => {
     "preserves a newer child generation instead of waking the retired cancellation (%s)",
     async (stage) => {
       const input = historicalCancellation();
-      persistRetiredOwner(input);
+      await persistRetiredOwner(input);
       const successor = createSubagentRunRecord({
         runId: "successor-run",
         childSessionKey: input.subagent.childSessionKey,
@@ -762,7 +766,7 @@ describe("restored historical cancellation ownership", () => {
     input.subagent.cleanupCompletedAt = undefined;
     input.subagent.cleanupHandled = false;
     input.subagent.requesterSettleWake!.retireAfterSettle = true;
-    persistRetiredOwner(input);
+    await persistRetiredOwner(input);
     await restore();
     await settle();
     await testing.sweepOnceForTests();
@@ -782,7 +786,7 @@ describe("restored historical cancellation ownership", () => {
     async (offset) => {
       const input = historicalCancellation();
       input.subagent.killReconciliation = undefined;
-      persistRetiredOwner(input);
+      await persistRetiredOwner(input);
       await restoreSubagentRunsFromDisk({ runs: subagentRuns });
       input.subagent = subagentRuns.get(input.subagent.runId)!;
       const driver = requesterWakeDriver([input]);

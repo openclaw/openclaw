@@ -11,7 +11,7 @@ import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
-import type { TestChatTranscript } from "./chat-transcript-owner.test-support.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
@@ -22,7 +22,7 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-function mountThread(container: HTMLElement, transcript: TestChatTranscript) {
+function mountThread(container: HTMLElement, transcript: ChatTranscript) {
   const [props, setProps] = createSignal<ChatThreadProps | null>(null);
   const view = mountSolid(
     () => (
@@ -150,7 +150,7 @@ describe("conversation position rail", () => {
         }
       } finally {
         view.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -221,7 +221,7 @@ describe("conversation position rail", () => {
       expect(rail.hasAttribute("data-overflow")).toBe(false);
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -481,7 +481,7 @@ describe("conversation position rail", () => {
         }
       } finally {
         view.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -510,16 +510,15 @@ describe("conversation position rail", () => {
     const view = mountThread(container, transcript);
     const rerender = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
     const settleFrames = () =>
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
-    props.onRequestUpdate = rerender;
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       const root = container.querySelector<HTMLElement>(".chat-thread");
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks");
       const original = container.querySelector<HTMLElement>(
@@ -591,7 +590,7 @@ describe("conversation position rail", () => {
       expect(observed.has(replacement)).toBe(false);
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -632,7 +631,7 @@ describe("conversation position rail", () => {
       expect(session.activeMessageId(ids)).toBe("row-39");
       expect(session.activeMessageId(["missing"])).toBeNull();
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -653,16 +652,15 @@ describe("conversation position rail", () => {
     const view = mountThread(container, transcript);
     const rerender = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
-    props.onRequestUpdate = rerender;
     const markers = () => [
       ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
     ];
     const preview = () => container.querySelector(".chat-position-rail__preview-copy")?.textContent;
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       expect(markers()).toHaveLength(40);
       // Rail wheel input belongs to its scrollport, never transcript history.
       for (const type of ["wheel", "touchstart", "touchmove"]) {
@@ -741,15 +739,15 @@ describe("conversation position rail", () => {
       rerender();
       expect(preview()).toBeUndefined();
       const state = getTranscriptState(props.paneId);
-      state.searchOpen = true;
-      state.searchQuery = "Checkpoint 5";
+      state.search.toggle();
+      state.search.setQuery("Checkpoint 5");
       rerender();
       expect(markers()).toHaveLength(1);
-      state.searchQuery = "not present";
+      state.search.setQuery("not present");
       rerender();
       expect(markers()).toHaveLength(0);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -779,12 +777,11 @@ describe("conversation position rail", () => {
       const view = mountThread(container, transcript);
       const rerender = () => {
         view.render(props);
-        transcript.hostUpdated();
+        transcript.update();
       };
-      props.onRequestUpdate = rerender;
       try {
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
         const preview = container.querySelector(".chat-position-rail__preview-copy")!;
         expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
@@ -820,7 +817,7 @@ describe("conversation position rail", () => {
         expect(preview.closest("[inert]")).not.toBeNull();
       } finally {
         view.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -864,13 +861,13 @@ describe("conversation position rail", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const view = mountThread(container, transcript);
-    props.onRequestUpdate = () => {
+    const renderCurrent = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
     try {
-      props.onRequestUpdate();
-      transcript.hostConnected();
+      renderCurrent();
+      transcript.start();
       const markers = container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker");
       expect(markers).toHaveLength(1);
       markers[0]!.focus();
@@ -882,7 +879,7 @@ describe("conversation position rail", () => {
       ).not.toContain("Styles loaded");
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -914,14 +911,13 @@ describe("conversation position rail", () => {
     const view = mountThread(container, transcript);
     const rerender = () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
     };
-    props.onRequestUpdate = rerender;
     const marker = () =>
       container.querySelector<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(1);
       props.stream = "Draft response";
       rerender();
@@ -993,7 +989,7 @@ describe("conversation position rail", () => {
       expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
     } finally {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 });

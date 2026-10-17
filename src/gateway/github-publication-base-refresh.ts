@@ -76,6 +76,7 @@ export async function refreshManagedWorkspaceBase(params: {
     identity,
     assertCurrent,
   });
+  let previousBase: string | undefined;
   const result = await withLocalWorkspaceProjection<SessionGitHubBaseRefreshResult>(
     { ...owner, assertCurrent },
     async (state) => {
@@ -89,6 +90,7 @@ export async function refreshManagedWorkspaceBase(params: {
       // This operation prepares an existing private checkout; it never creates a new binding.
       state.current();
       await state.settle();
+      previousBase = state.current().base_commit ?? undefined;
       const check = () => {
         assertCurrent();
         state.current();
@@ -359,60 +361,108 @@ export async function refreshManagedWorkspaceBase(params: {
   if (result.status === "conflicts") {
     return result;
   }
+  // The guest can confirm only snapshots selected by the host. An arbitrary
+  // guest donor could expose host-only data through Git's thin-pack deltas.
+  const candidates = [
+    ...new Set([result.baseCommit, previousBase].filter((base) => base !== undefined)),
+  ];
+  assertCurrent();
+  const available = await sandbox.backend!.runShellCommand({
+    script: FIND_REVIEW_BASE,
+    args: [sandbox.containerWorkdir, ...candidates],
+    signal: params.signal,
+  });
+  assertCurrent();
+  if (available.code !== 0) {
+    throw new Error(REVIEW_BASE_PREPARATION_ERROR);
+  }
+  const advertised = available.stdout.toString().trim();
+  const retainedCommit = candidates.find((candidate) => candidate === advertised);
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-base-"));
   try {
-    // The guest receives one source snapshot through existing stdin transport, never host Git state.
-    const pack = await withWorktreeGitConfig(
-      owner.worktree.path,
-      true,
-      { beforeRun: assertCurrent },
-      (git) =>
-        git.withContentEnvironment((baseEnv) =>
-          prepareWorkerWorkspaceGitPack({
-            root: owner.worktree.path,
-            baseCommit: result.baseCommit,
-            temporaryRoot: temporary,
-            signal: params.signal ?? new AbortController().signal,
-            baseEnv,
-          }),
-        ),
-    );
-    const size = (await fs.stat(pack)).size;
-    if (size > MAX_RECONCILIATION_PACK_BYTES) {
-      throw new Error(
-        "The selected review base exceeds the sandbox transfer limit; saved integration is retained.",
+    for (const retained of retainedCommit ? [retainedCommit, undefined] : [undefined]) {
+      const temporaryRoot = path.join(temporary, retained ? "retained" : "full");
+      await fs.mkdir(temporaryRoot);
+      const pack = await withWorktreeGitConfig(
+        owner.worktree.path,
+        true,
+        { beforeRun: assertCurrent },
+        (git) =>
+          git.withContentEnvironment((baseEnv) =>
+            prepareWorkerWorkspaceGitPack({
+              root: owner.worktree.path,
+              baseCommit: result.baseCommit,
+              retainedCommit: retained,
+              temporaryRoot,
+              signal: params.signal ?? new AbortController().signal,
+              baseEnv,
+            }),
+          ),
       );
+      const size = (await fs.stat(pack)).size;
+      if (size > MAX_RECONCILIATION_PACK_BYTES) {
+        throw new Error(
+          "The selected review base exceeds the sandbox transfer limit; saved integration is retained.",
+        );
+      }
+      const input = await fs.readFile(pack);
+      assertCurrent();
+      const imported = await sandbox.backend!.runShellCommand({
+        script: IMPORT_REVIEW_BASE,
+        allowFailure: true,
+        args: [sandbox.containerWorkdir, result.baseCommit, retained ? "retained" : "full"],
+        stdin: input,
+        signal: params.signal,
+      });
+      assertCurrent();
+      if (imported.code === 0) {
+        return { ...result, review: { mode: "local", base: result.baseCommit } };
+      }
+      // Missing donor objects can invalidate a thin pack or leave omitted source
+      // objects unavailable. Retry the authorized full snapshot before staging.
+      if (!retained || imported.code !== 75) {
+        throw new Error(REVIEW_BASE_PREPARATION_ERROR);
+      }
     }
-    const input = await fs.readFile(pack);
-    assertCurrent();
-    const imported = await sandbox.backend!.runShellCommand({
-      script: IMPORT_REVIEW_BASE,
-      args: [sandbox.containerWorkdir, result.baseCommit],
-      stdin: input,
-      signal: params.signal,
-    });
-    assertCurrent();
-    if (imported.code !== 0) {
-      throw new Error(
-        "Source integration is saved, but sandbox review-base preparation failed. Resolve any pending sandbox Git merge or index lock, then retry refresh_base before tests and Auto Review.",
-      );
-    }
-    return { ...result, review: { mode: "local", base: result.baseCommit } };
+    throw new Error(REVIEW_BASE_PREPARATION_ERROR);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }
 }
 
-const IMPORT_REVIEW_BASE = String.raw`set -eu
+const REVIEW_BASE_PREPARATION_ERROR =
+  "Source integration is saved, but sandbox review-base preparation failed. Resolve any pending sandbox Git merge or index lock, then retry refresh_base before tests and Auto Review.";
+
+const REVIEW_BASE_GIT = String.raw`set -eu
 export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0
 git() { command git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
 cd "$1"
-base="$2"
 test "$(git rev-parse --show-toplevel)" = "$(pwd -P)"
 if git rev-parse --verify --quiet MERGE_HEAD >/dev/null; then
   exit 1
 fi
-git -c core.hooksPath=/dev/null -c core.fsmonitor=false index-pack --stdin >/dev/null
+`;
+
+const FIND_REVIEW_BASE =
+  REVIEW_BASE_GIT +
+  String.raw`
+shift
+for candidate do
+  if git cat-file -e "$candidate^{commit}" 2>/dev/null; then
+    printf '%s\n' "$candidate"
+    break
+  fi
+done
+`;
+
+const IMPORT_REVIEW_BASE =
+  REVIEW_BASE_GIT +
+  String.raw`
+base="$2"
+git index-pack --stdin --fix-thin >/dev/null || exit 75
+if test "$3" = retained; then
+  git rev-list --objects --no-object-names --missing=error "$base^{tree}" >/dev/null || exit 75
+fi
 missing_parent=false
 for parent in $(git cat-file -p "$base" | sed -n '/^$/q; s/^parent //p'); do
   git cat-file -e "$parent^{commit}" 2>/dev/null || missing_parent=true

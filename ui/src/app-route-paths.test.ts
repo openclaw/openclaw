@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
+  APP_ROUTE_OFFLINE_PREFIXES,
   clawCatalogPackageNameFromPath,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   dynamicRouteFromPath,
@@ -582,5 +583,13 @@ describe("terminal route paths", () => {
   it("does not consume a different mount's terminal identity", () => {
     expect(terminalSessionIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
     expect(routeIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
+  });
+});
+
+describe("offline route admission", () => {
+  it("never claims Gateway-owned plugin HTTP namespaces", () => {
+    expect(APP_ROUTE_OFFLINE_PREFIXES).toContain("/chat/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES).not.toContain("/plugin/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES.some((prefix) => prefix.startsWith("/plugins"))).toBe(false);
   });
 });

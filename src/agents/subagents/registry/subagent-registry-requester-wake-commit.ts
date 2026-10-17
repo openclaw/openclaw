@@ -162,7 +162,6 @@ export function commitRequesterInitialTransfer(
     const result = await mutateSubagentRuns(
       pending.entries.map((entry) => entry.runId),
       (rows) => {
-        params.validateSelection?.();
         const drafts = pending.entries.map((entry) => {
           const current = rows.get(entry.runId);
           if (!current || !isSameSubagentRunOwner(current, entry)) {

@@ -89,18 +89,24 @@ export function renderChatComposerView(
     <Show when={props.disabledBanner?.presentation !== "hidden" ? props.disabledBanner : undefined}>
       {(banner) => (
         <div
-          class={`agent-chat__disabled-banner ${
-            banner().kind === "composer-replacement"
-              ? "agent-chat__disabled-banner--replacement"
-              : ""
-          } ${banner().presentation === "compact" ? "agent-chat__disabled-banner--compact" : ""} callout ${
-            banner().tone === "neutral" ? "agent-chat__disabled-banner--neutral" : "info"
-          } callout--action`}
+          class={[
+            "agent-chat__disabled-banner",
+            {
+              "agent-chat__disabled-banner--replacement": banner().kind === "composer-replacement",
+              "agent-chat__disabled-banner--compact": banner().presentation === "compact",
+            },
+            "callout",
+            banner().tone === "neutral" ? "agent-chat__disabled-banner--neutral" : "info",
+            "callout--action",
+          ]}
           role="status"
         >
           {banner().icon ? (
             <span
-              class={`agent-chat__disabled-banner-icon agent-chat__disabled-banner-icon--${banner().icon}`}
+              class={[
+                "agent-chat__disabled-banner-icon",
+                `agent-chat__disabled-banner-icon--${banner().icon}`,
+              ]}
               aria-hidden="true"
             >
               <Icon
@@ -122,7 +128,7 @@ export function renderChatComposerView(
             {(onAction) => (
               <button
                 type="button"
-                class={`btn btn--sm ${banner().actionStyle ?? ""}`}
+                class={["btn btn--sm", banner().actionStyle]}
                 disabled={Boolean(banner().disabledReason) || banner().busy}
                 aria-busy={banner().busy ? "true" : "false"}
                 title={banner().disabledReason ?? undefined}
@@ -224,6 +230,17 @@ export function renderChatComposerView(
         {props.footerContent}
         <div class="agent-chat__composer-notices">
           {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
+          <Show when={context().cancellationCaveat}>
+            {(caveat) => (
+              <div
+                class="agent-chat__cancellation-notice compaction-indicator"
+                role="status"
+                aria-live="polite"
+              >
+                {caveat()}
+              </div>
+            )}
+          </Show>
         </div>
         <ComposerQuestionDock panel={context().questionPanelProps} />
         {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}
@@ -277,7 +294,14 @@ export function renderChatComposerView(
       {showComposerInput() ? (
         <ComposerInputScope state={context().state}>
           <div
-            class={`agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline ? "agent-chat__input--offline" : ""}${context().dictation?.active ? " agent-chat__input--dictating" : ""}${!context().canCompose ? " agent-chat__input--disabled" : ""}`}
+            class={[
+              "agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar",
+              {
+                "agent-chat__input--offline": props.offline,
+                "agent-chat__input--dictating": context().dictation?.active,
+                "agent-chat__input--disabled": !context().canCompose,
+              },
+            ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
@@ -380,7 +404,7 @@ export function renderChatComposerView(
               {props.realtimeTalkVideoStream ? (
                 <div class="agent-chat__video-preview">
                   <video
-                    class={mirrorCameraPreview() ? "agent-chat__video-preview-mirrored" : undefined}
+                    class={{ "agent-chat__video-preview-mirrored": mirrorCameraPreview() }}
                     autoplay
                     muted
                     ref={(video) => {

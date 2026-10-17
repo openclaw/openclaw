@@ -40,10 +40,11 @@ function transportFixture(
   Object.assign(db, {
     port: port1,
     control,
-    worker: { terminate },
+    worker: { terminate, off: vi.fn() },
     requestId: 1,
     anchor,
     isOpen: true,
+    isTransaction: false,
     mutationRevision: 0,
   });
   const sent = vi.spyOn(port1, "postMessage");
@@ -87,7 +88,17 @@ function transportFixture(
           : {
               id: mode === "mismatched" && pending.operation === "query" ? id + 1 : id,
               result: {
+                inTransaction:
+                  pending.operation === "query" && /^\s*BEGIN\b/i.test(pending.sql)
+                    ? true
+                    : pending.operation === "query" &&
+                        /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(pending.sql)
+                      ? false
+                      : db.isTransaction,
                 command,
+                mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
+                  ? "scoped"
+                  : undefined,
                 rows: [{ value: 7 }],
                 rowCount: 1,
                 fields: [{ name: "value", dataTypeID: 23 }],
@@ -144,7 +155,7 @@ describe("PostgreSQL bridge request correlation", () => {
   });
 
   it.each(["COMMIT", "ROLLBACK"])(
-    "changes the anchor token for COMMIT, retaining it for ROLLBACK (%s)",
+    "retains scoped replicas when an empty transaction ends with %s",
     (command) => {
       const fixture = transportFixture("normal");
       fixture.command(command);
@@ -152,7 +163,7 @@ describe("PostgreSQL bridge request correlation", () => {
       const before = readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry");
       fixture.db.exec(command);
       const after = readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry");
-      expect(after === before).toBe(command === "ROLLBACK");
+      expect(after).toBe(before);
     },
   );
 
@@ -243,7 +254,7 @@ describe("PostgreSQL bridge request correlation", () => {
               lockTimeoutMs: 60_000,
               statementTimeoutMs: 90_000,
             }),
-        ).toThrow("only synchronous admission and migrations may run on the main thread");
+        ).toThrow("PostgreSQL connections must run in a worker");
       } finally {
         anchor.close();
       }

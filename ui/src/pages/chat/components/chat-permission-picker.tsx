@@ -85,7 +85,10 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         type: "radio",
         checked: selected,
         disabled: disabled() || locked,
-        class: `chat-controls__permission-option${selected ? " chat-controls__permission-option--selected" : ""}`,
+        class: [
+          "chat-controls__permission-option",
+          { "chat-controls__permission-option--selected": selected },
+        ],
         attributes: {
           "data-chat-permission-option": value,
           "data-chat-permission-shortcut": String(index + 1),

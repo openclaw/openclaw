@@ -5,7 +5,7 @@ import type {
 } from "@openclaw/libterminal/browser";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
+import type { TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
@@ -26,6 +26,27 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
   };
 
 export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSessionKey } | null;
+
+export type TerminalInputs = {
+  client: TerminalGatewayClient | null;
+  agentId: string | null;
+  sessionKey: string | null;
+  available: boolean;
+  suppressed: boolean;
+  themeMode: "dark" | "light";
+  basePath: string;
+  fullscreen: boolean;
+  embedded: boolean;
+  onClose: (() => void) | undefined;
+  tabsInHeader: boolean;
+  page: boolean;
+  routeTarget: TerminalRouteTarget;
+  createTerminalController: (
+    options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) => Promise<GhosttyTerminalController>;
+  catalogReadyTimeoutMs: number;
+};
 
 export type TerminalOperation = {
   generation: number;
@@ -61,34 +82,21 @@ export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "cata
 
 export type TerminalPanelError = { text: string; retryAction?: TerminalPanelOpenAction };
 
-export type TerminalPanelSessionControllerState = {
+export type TerminalPanelSessionState = {
   tabs: TerminalPanelSessionTab[];
   activeId: string | null;
   booting: boolean;
   error: TerminalPanelError | null;
 };
 
-export interface TerminalPanelSessionControllerHost {
+export interface TerminalPanelSessionHost {
+  readonly inputs: HTMLElement & TerminalInputs;
   readonly updateComplete: Promise<unknown>;
-  readonly ownerDocument: Document;
-  invalidate(): void;
+  publish(): void;
   readonly isConnected: boolean;
-  readonly client: TerminalGatewayClient | null;
-  readonly agentId: string | null;
-  readonly sessionKey: string | null;
-  readonly available: boolean;
-  readonly themeMode: "dark" | "light";
   readonly terminalFontFamily: string;
-  readonly fullscreen: boolean;
-  readonly page: boolean;
-  readonly routeTarget: TerminalRouteTarget;
   readonly terminalPanelOpen: boolean;
-  readonly catalogReadyTimeoutMs: number;
   readonly terminalPanelUploadController: TerminalPanelUpload;
-  createTerminalController(
-    options: CreateGhosttyTerminalOptions,
-    shouldFocusOnOpen?: () => boolean,
-  ): Promise<GhosttyTerminalController>;
   closeTerminalPanel(): void;
   findTerminalPanelViewport(): Element | null;
   hideTerminalPanelForUnavailableSurface(): void;

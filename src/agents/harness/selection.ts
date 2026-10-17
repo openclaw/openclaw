@@ -56,11 +56,15 @@ import {
   type ResolvedPluginHarnessToolPolicies,
 } from "./execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { bindHarnessSettledTurnCallback } from "./host-source-authority.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
-import { withoutPluginHarnessPrivateState } from "./plugin-private-state.js";
+import {
+  prepareHarnessFinalizationParams,
+  withoutPluginHarnessPrivateState,
+} from "./plugin-private-state.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
@@ -602,35 +606,18 @@ function withoutInternalHarnessAuthority(
       })(),
   });
   return {
-    params: { ...pluginParams, hostCapabilities: host.capabilities },
+    params: {
+      ...pluginParams,
+      hostCapabilities: host.capabilities,
+      onSettledTurn: bindHarnessSettledTurnCallback(
+        params.onSettledTurn,
+        host.capabilities.assertActive,
+        params.abortSignal,
+      ),
+    },
     closeHostCapabilities: host.close,
     setInputAttachmentReadAllowed: host.setInputAttachmentReadAllowed,
     runWithHostScope: host.runWithScope,
-  };
-}
-
-function prepareHarnessFinalizationParams(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
-  builtIn: boolean,
-): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
-  import("./types.js").AgentHarnessAttemptParamsV2
-> {
-  const {
-    hostCapabilities: _hostCapabilities,
-    systemAgentTool: _systemAgentTool,
-    ...withoutCapabilities
-  } = params;
-  if (builtIn) {
-    return withoutCapabilities;
-  }
-  const pluginParams = withoutPluginHarnessPrivateState(withoutCapabilities);
-  const boundary = "plugin harness finalization handoff";
-  return {
-    ...pluginParams,
-    model: unwrapModelHeaderSentinelsForProviderEgress(pluginParams.model, boundary),
-    resolvedApiKey: pluginParams.resolvedApiKey
-      ? unwrapSecretSentinelsForProviderEgress(pluginParams.resolvedApiKey, boundary)
-      : pluginParams.resolvedApiKey,
   };
 }
 

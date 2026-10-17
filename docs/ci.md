@@ -12,6 +12,13 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+Gateway server tests use the same 16-file process bound in local full-suite runs
+and CI config/include selections. This retires the shared worker before retained
+module graphs exhaust a 16 GB runner on Bun. The CI shard keeps its original file
+membership, runtime selection, and outer timing key; the project runner executes
+its chunks sequentially. Native `--shard` and suite-wide state or output options
+retain their single-invocation semantics.
+
 The existing `live-cache` release job has a 30-minute budget for three sequential
 eight-minute checks on one runner: stored cache floors, transport prefixes, and
 agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
@@ -43,8 +50,16 @@ import graph.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
-Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
-[conformance job](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
+Storage-engine PRs, scheduled main runs, and manual CI validations include two hosted PostgreSQL 17
+[conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
+The infrastructure/state and integration groups run in parallel with separate
+databases. Infrastructure/state has a 60-minute budget because full port/recovery
+coverage can exceed 30 minutes; integrations retains a 30-minute budget.
+Database-engine `*.integration.test.ts` suites run with integrations, balancing
+real command/recovery work across the two jobs. Inspect either assignment with
+the conformance runner's `--list` option. Their combined inventory matches the
+local full suite; a failure in either shard leaves the other running and fails
+the aggregate gate.
 
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
@@ -132,6 +147,14 @@ paired-device image is provisioned.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
+Scoped PR plans inspect the four root-test partitions separately and select every
+partition that consumes a changed input, including type-only imports. A change
+used only by tooling tests checks that partition; shared setup can select all
+four. Full checks retain the aggregate root alias. Missing or duplicate compiler
+inventories retain full coverage. Selected partitions keep their original stripe
+identities when four admitted core rows are available; smaller plans run only the
+selected partitions serially in the central row.
+
 Preflight passes the complete changed-path manifest between steps as a local JSON
 file, so large PRs do not lose test-planning inputs to Actions output or environment
 size limits. Frozen targets that predate this transport retain their bounded JSON
@@ -148,7 +171,7 @@ Full GitHub and hybrid type checks run the five core stripes independently, reta
 
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
-Changed compiler planning reads every selected program from one native compiler snapshot. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, this avoids serial compiler discovery without changing graph membership or full fallback. Cold Linux replays reduced compiler planning from 77–91 seconds to 17–21 seconds on four available CPUs; the complete materializer reached 14.8 GiB peak RSS. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
+Changed compiler planning reads complete programs from sequential native snapshots for core and additional graphs. It releases the core programs and closes their API before opening the additional graphs to bound each compiler heap. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, each snapshot shares parsing and resolution without changing graph membership or full fallback. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative

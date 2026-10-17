@@ -39,6 +39,13 @@ export const ChatHistoryParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   cursor: Type.Optional(Type.String()),
+  // Receipts are useful only with the exact retained fields, not the transcript cursor alone.
+  knownState: Type.Optional(
+    closedObject({
+      pendingInputs: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      sessionInfo: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+    }),
+  ),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   maxBytes: Type.Optional(Type.Integer({ minimum: 1024 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -158,7 +165,9 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   messages: Type.Array(Type.Unknown()),
   activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
   deltaCursor: Type.String(),
-  sessionInfo: Type.Unknown(),
+  sessionInfo: Type.Optional(Type.Unknown()),
+  sessionInfoSnapshotAt: Type.Optional(Type.Number()),
+  stateRevision: Type.Optional(ChatHistoryParamsSchema.properties.knownState),
   agentsList: Type.Optional(Type.Unknown()),
   inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
@@ -474,6 +483,8 @@ export const ChatFinalEventSchema = closedObject({
 export const ChatAbortedEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("aborted"),
+  // Captured before abort clears the local provider wait; not backend-release evidence.
+  localModelMayStillBeFinishing: Type.Optional(Type.Literal(true)),
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
   stopReason: Type.Optional(Type.String()),

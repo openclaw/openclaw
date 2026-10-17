@@ -41,7 +41,9 @@ badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 
-Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
 
 The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
 
@@ -52,6 +54,8 @@ Saved pin labels remain visible while their details refresh, even when those ses
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
 Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
+
+Consecutive informational system, recovery, and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
@@ -406,6 +410,7 @@ for group controls and filtering.
 Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
+Agents without an advertised image use their fallback without probing an avatar route.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
 Profiles with an uploaded photo or a linked email (for a Gateway-proxied Gravatar) request the
 versioned profile image; profiles with neither use initials without probing an image route. Authenticated
@@ -421,7 +426,10 @@ After an automatic read, the next waits three times its duration,
 bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
 bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
-stops when neither roster is visible. Each refresh reads at most 300 sessions
+stops when neither roster is visible. Team mode's owner and status filters reuse
+this window instead of also loading a separate sidebar list; **Involving me**
+still selects membership on the Gateway. Unchanged rows reuse the sidebar's
+revision-based responses. Each refresh reads at most 300 sessions
 across agents, loading pinned sessions first and then the most recent sessions.
 Pinned sessions count toward that limit; sessions outside the window do not appear
 in the grouped sidebar or contribute to activity summaries, except that the open

@@ -1,6 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import type { MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
@@ -42,7 +42,9 @@ export type AgentRunFrameRenderItem = {
 
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
-export function chatItemGroups(item: AgentRunFrameInput | AgentRunFrameRenderItem): MessageGroup[] {
+export function chatItemGroups(
+  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
+): MessageGroup[] {
   if (item.kind === "agent-run-frame") {
     return item.parts.flatMap(chatItemGroups);
   }

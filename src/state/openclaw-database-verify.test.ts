@@ -7,22 +7,24 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
-  recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
-import { readPersistedQuarantineRow } from "./openclaw-quarantine-store.test-support.js";
+import {
+  readPersistedQuarantineRow,
+  seedOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.test-support.js";
+import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  recordOpenClawStateDatabaseOpenFailure,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
@@ -73,14 +75,12 @@ describe("OpenClaw database quarantine", () => {
     openOpenClawStateDatabase({ env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: agentPath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "agent",
+      path: agentPath,
+      reason: "corrupt index",
+    });
     const error = new Error("corrupt index");
     error.name = "SqliteIntegrityError";
     recordOpenClawAgentDatabaseOpenFailure(agentPath, error);
@@ -96,19 +96,10 @@ describe("OpenClaw database quarantine", () => {
       quarantine.exec(`
         CREATE TRIGGER refuse_quarantine_clear BEFORE DELETE ON quarantined_databases
         BEGIN SELECT RAISE(ABORT, 'quarantine store is read-only'); END;
-        CREATE TRIGGER refuse_quarantine_record BEFORE INSERT ON quarantined_databases
-        BEGIN SELECT RAISE(ABORT, 'quarantine store is read-only'); END;
       `);
       expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env })).toBe(false);
       expect(readPersistedQuarantineRow(agentPath, { env })).toEqual(before);
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env,
-          kind: "agent",
-          path: agentPath,
-          reason: "new reason",
-        }),
-      ).toBe(false);
+      expect(clearOpenClawDatabaseQuarantine(agentPath, { env })).toBe(false);
       expect(readPersistedQuarantineRow(agentPath, { env })).toEqual(before);
       expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
         expect.objectContaining({
@@ -116,9 +107,7 @@ describe("OpenClaw database quarantine", () => {
           message: expect.stringContaining("corrupt index"),
         }),
       );
-      quarantine.exec(
-        "DROP TRIGGER refuse_quarantine_clear; DROP TRIGGER refuse_quarantine_record;",
-      );
+      quarantine.exec("DROP TRIGGER refuse_quarantine_clear;");
     } finally {
       quarantine.close();
     }
@@ -144,21 +133,19 @@ describe("OpenClaw database quarantine", () => {
     expect(quarantine.prepare("SELECT * FROM agent_integrity_verifications").all()).toEqual([]);
   });
 
-  it("records and clears dedicated quarantine rows with rollback journaling", () => {
+  it("clears historical quarantine rows with rollback journaling", () => {
     const stateDir = tempDirs.make("openclaw-database-verify-store-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(stateDir, "agent.sqlite");
     const storePath = quarantineStorePath(stateDir);
 
     expect(clearOpenClawDatabaseQuarantine(databasePath, { env })).toBe(true);
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: databasePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "agent",
+      path: databasePath,
+      reason: "corrupt index",
+    });
     expect(readPersistedQuarantineRow(databasePath, { env })).toEqual({
       kind: "agent",
       quarantinedAt: expect.any(Number),
@@ -196,15 +183,13 @@ describe("OpenClaw database quarantine", () => {
     }
     const generation = readStableSqliteFileGeneration(databasePath);
 
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        generation,
-        kind: "agent",
-        path: databasePath,
-        reason: "corrupt generation",
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env,
+      generation,
+      kind: "agent",
+      path: databasePath,
+      reason: "corrupt generation",
+    });
     const quarantineBefore = readPersistedQuarantineRow(databasePath, { env });
     expect(quarantineBefore?.reason).toBe("corrupt generation");
     expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toMatchObject({
@@ -221,7 +206,7 @@ describe("OpenClaw database quarantine", () => {
     expect(readPersistedQuarantineRow(databasePath, { env })).toEqual(quarantineBefore);
   });
 
-  it("reads schema-v1 quarantine rows and migrates them on the next write", () => {
+  it("reads schema-v1 quarantine rows and migrates them when clearing another path", () => {
     const stateDir = tempDirs.make("openclaw-database-verify-store-v1-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(stateDir, "agent.sqlite");
@@ -257,14 +242,7 @@ describe("OpenClaw database quarantine", () => {
     expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toMatchObject({
       name: "SqliteIntegrityError",
     });
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: databasePath,
-        reason: "migrated quarantine",
-      }),
-    ).toBe(true);
+    expect(clearOpenClawDatabaseQuarantine(`${databasePath}.other`, { env })).toBe(true);
 
     const migrated = new DatabaseSync(storePath, { readOnly: true });
     try {
@@ -273,7 +251,7 @@ describe("OpenClaw database quarantine", () => {
         migrated
           .prepare("SELECT reason, verified_generation FROM quarantined_databases WHERE path = ?")
           .get(path.resolve(databasePath)),
-      ).toEqual({ reason: "migrated quarantine", verified_generation: null });
+      ).toEqual({ reason: "legacy quarantine", verified_generation: null });
     } finally {
       migrated.close();
     }
@@ -288,14 +266,13 @@ describe("OpenClaw database quarantine", () => {
     fs.writeFileSync(storePath, "", { mode: 0o600 });
 
     expect(readOpenClawDatabaseQuarantineFailure("agent", databasePath, { env })).toBeUndefined();
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: databasePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
+    expect(clearOpenClawDatabaseQuarantine(databasePath, { env })).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "agent",
+      path: databasePath,
+      reason: "corrupt index",
+    });
     expect(readPersistedQuarantineRow(databasePath, { env })?.reason).toBe("corrupt index");
   });
 
@@ -306,14 +283,12 @@ describe("OpenClaw database quarantine", () => {
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const databasePath = path.join(stateDir, "agent.sqlite");
       const storePath = quarantineStorePath(stateDir);
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env,
-          kind: "agent",
-          path: databasePath,
-          reason: "committed reason",
-        }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({
+        env,
+        kind: "agent",
+        path: databasePath,
+        reason: "committed reason",
+      });
 
       const quarantineBefore = readPersistedQuarantineRow(databasePath, { env });
       expect(quarantineBefore?.reason).toBe("committed reason");
@@ -349,14 +324,12 @@ describe("OpenClaw database quarantine", () => {
     const statePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
 
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "state",
-        path: statePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "state",
+      path: statePath,
+      reason: "corrupt index",
+    });
     const error = new Error("corrupt index");
     error.name = "SqliteIntegrityError";
     recordOpenClawStateDatabaseOpenFailure(statePath, error);

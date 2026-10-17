@@ -49,7 +49,6 @@ function resolveTemplateAltText(value: string | undefined, fallback: string): st
   return truncateTemplateText(value ?? fallback, TEMPLATE_ALT_TEXT_LIMIT);
 }
 
-/** Convert portable template payloads at the LINE provider boundary. */
 export function buildTemplateMessageFromPayload(
   payload: LineTemplateMessagePayload,
 ): TemplateMessage | TextMessage | null {

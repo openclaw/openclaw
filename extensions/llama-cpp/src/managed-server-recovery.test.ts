@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   dataDir: vi.fn<() => string>(),
@@ -58,14 +57,9 @@ async function createFixture() {
   });
   const model = {
     id: "chat",
-    name: "Chat",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
     maxTokens: 2048,
     params: { modelPath },
-  } satisfies ModelDefinitionConfig;
+  };
   const provider = {
     baseUrl: "http://127.0.0.1:19432/v1",
     localService: {
@@ -73,190 +67,130 @@ async function createFixture() {
       args: ["--host", "127.0.0.1", "--port", "19432", "--models-preset", presetPath],
     },
     params: { modelCacheDir: root },
-    models: [model],
+    models: [],
   };
-  return { root, asset, command, presetPath, modelPath, model, provider };
-}
-
-describe("managed llama-server recovery", () => {
-  it.each(["missing host", "duplicate preset", "different port"])(
-    "leaves routers untouched for a configuration with %s",
-    async (kind) => {
-      const { model, presetPath, provider } = await createFixture();
-      if (kind === "missing host") {
-        provider.localService.args.splice(0, 2);
-      } else if (kind === "duplicate preset") {
-        provider.localService.args.push("--models-preset", `${presetPath}.other`);
-      } else {
-        provider.localService.args[3] = "19433";
-      }
-
-      await ensureManagedLlamaServerForChat({ model, provider });
-
-      expect(mocks.reap).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not recover a router for a direct-model configuration without a preset", async () => {
-    const { model, modelPath, provider } = await createFixture();
-    provider.localService.args = ["--host", "127.0.0.1", "--model", modelPath, "--port", "19432"];
-
-    await ensureManagedLlamaServerForChat({ model, provider });
-
-    expect(mocks.reap).not.toHaveBeenCalled();
-  });
-
-  it.each(["absolute", "relative", "equals"])(
-    "recovers a %s preset before transport creation, once per host",
-    async (kind) => {
-      const { root, command, modelPath, presetPath, provider } = await createFixture();
-      const preset = kind === "relative" ? "models.ini" : presetPath;
-      const localService = {
-        ...provider.localService,
-        ...(kind === "relative" ? { cwd: root } : {}),
-        args: [
-          "--host",
-          "127.0.0.1",
-          "--port",
-          "19432",
-          ...(kind === "equals" ? [`--models-preset=${preset}`] : ["--models-preset", preset]),
-        ],
-      };
-      let orphanAlive = true;
-      mocks.reap.mockImplementation(async ({ command: executable, matchesArguments, cwd }) => {
-        expect(executable).toBe(command);
-        const argv = [command, "--host", "127.0.0.1"];
-        expect(matchesArguments([...argv, "--port", "19432", "--models-preset", preset])).toBe(
-          true,
-        );
-        expect(cwd).toBe(kind === "relative" ? root : undefined);
-        expect(matchesArguments([...argv, "--port", "19433", "--models-preset", preset])).toBe(
-          false,
-        );
-        expect(
-          matchesArguments([...argv, "--port", "19432", "--models-preset", `${preset}.other`]),
-        ).toBe(false);
-        expect(
-          matchesArguments([
-            ...argv,
-            "--port",
-            "19432",
-            "--port",
-            "19433",
-            "--models-preset",
-            preset,
-          ]),
-        ).toBe(false);
-        orphanAlive = false;
-        return [1234];
-      });
-      mocks.genericCreate.mockImplementation(async () => {
-        expect(orphanAlive).toBe(false);
-        return { provider: null };
-      });
-      const options = {
-        config: {
-          models: { providers: { "llama-cpp": { ...provider, localService, models: [] } } },
-        },
-        provider: "local",
-        model: modelPath,
-        local: { modelPath },
-      };
-      await llamaCppEmbeddingProviderAdapter.create(options);
-      await llamaCppEmbeddingProviderAdapter.create(options);
-      expect(mocks.reap).toHaveBeenCalledOnce();
-      expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it("restores a missing configured managed executable before preparing chat", async () => {
-    const { asset, command, presetPath, model, provider } = await createFixture();
-    await ensureManagedLlamaServerForChat({ model, provider });
-
-    expect(mocks.install).toHaveBeenCalledExactlyOnceWith({
-      asset,
-      signal: undefined,
-      onProgress: undefined,
-    });
-    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
-    expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
-    expect(provider.localService.command).toBe(command);
-    await ensureManagedLlamaServerForChat({ model, provider });
-    expect(mocks.install).toHaveBeenCalledTimes(1);
-  });
-
-  it("restores the managed executable before creating the embedding transport", async () => {
-    const { asset, command, modelPath, provider } = await createFixture();
-    mocks.genericCreate.mockImplementation(async () => {
-      expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
-      return { provider: null };
-    });
-
-    await llamaCppEmbeddingProviderAdapter.create({
-      config: { models: { providers: { "llama-cpp": { ...provider, models: [] } } } },
+  const prepare = () => ensureManagedLlamaServerForChat({ model, provider });
+  const embed = (localService = provider.localService) =>
+    llamaCppEmbeddingProviderAdapter.create({
+      config: { models: { providers: { "llama-cpp": { ...provider, localService, models: [] } } } },
       provider: "local",
       model: modelPath,
       local: { modelPath },
     });
+  return { root, asset, command, presetPath, modelPath, provider, prepare, embed };
+}
 
-    expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ asset }));
-    expect(mocks.genericCreate).toHaveBeenCalledTimes(1);
+it.each(["missing host", "duplicate preset", "different port", "direct model"])(
+  "leaves routers untouched for a configuration with %s",
+  async (kind) => {
+    const { prepare, presetPath, modelPath, provider } = await createFixture();
+    const args = provider.localService.args;
+    if (kind === "missing host") {
+      args.splice(0, 2);
+    } else if (kind === "duplicate preset") {
+      args.push("--models-preset", `${presetPath}.other`);
+    } else if (kind === "different port") {
+      args[3] = "19433";
+    } else {
+      args.splice(4, 2, "--model", modelPath);
+    }
+    await prepare();
+    expect(mocks.reap).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["absolute", "relative", "equals"])("recovers %s before transport", async (kind) => {
+  const { root, command, presetPath, provider, embed } = await createFixture();
+  const preset = kind === "relative" ? "models.ini" : presetPath;
+  const localService = {
+    ...provider.localService,
+    ...(kind === "relative" ? { cwd: root } : {}),
+    args: [
+      ...provider.localService.args.slice(0, 4),
+      ...(kind === "equals" ? [`--models-preset=${preset}`] : ["--models-preset", preset]),
+    ],
+  };
+  let orphanAlive = true;
+  mocks.reap.mockImplementation(async ({ command: executable, matchesArguments, cwd }) => {
+    expect(executable).toBe(command);
+    const matches = (...args: string[]) =>
+      matchesArguments([command, "--host", "127.0.0.1", ...args]);
+    expect(matches("--port", "19432", "--models-preset", preset)).toBe(true);
+    expect(cwd).toBe(kind === "relative" ? root : undefined);
+    expect(matches("--port", "19433", "--models-preset", preset)).toBe(false);
+    expect(matches("--port", "19432", "--models-preset", `${preset}.other`)).toBe(false);
+    expect(matches("--port", "19432", "--port", "19433", "--models-preset", preset)).toBe(false);
+    orphanAlive = false;
+    return [1234];
   });
+  mocks.genericCreate.mockImplementation(async () => {
+    expect(orphanAlive).toBe(false);
+    return { provider: null };
+  });
+  await embed(localService);
+  await embed(localService);
+  expect(mocks.reap).toHaveBeenCalledOnce();
+  expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
+});
 
-  it("keeps an existing managed executable without reinstalling it", async () => {
-    const { command, model, provider } = await createFixture();
+it.each([false, true])("prepares chat with an existing executable: %s", async (existing) => {
+  const { asset, command, presetPath, prepare, provider } = await createFixture();
+  if (existing) {
     await fs.mkdir(path.dirname(command), { recursive: true });
     await fs.writeFile(command, "existing executable");
-
-    await ensureManagedLlamaServerForChat({ model, provider });
-
-    expect(mocks.install).not.toHaveBeenCalled();
-    expect(await fs.readFile(command, "utf8")).toBe("existing executable");
-  });
-
-  it.each(["custom", "older release", "another state directory"])(
-    "does not replace a missing executable from %s",
-    async (kind) => {
-      const { root, command, model, provider } = await createFixture();
-      const configuredCommand =
-        kind === "custom"
-          ? path.join(root, "custom", "llama-server")
-          : kind === "older release"
-            ? command.replace(LLAMA_SERVER_RELEASE, "b1")
-            : command.replace(root, path.join(root, "other"));
-      provider.localService.command = configuredCommand;
-
-      await ensureManagedLlamaServerForChat({ model, provider });
-
-      expect(mocks.install).not.toHaveBeenCalled();
-      expect(provider.localService.command).toBe(configuredCommand);
-      expect(mocks.reap).not.toHaveBeenCalled();
-    },
+  }
+  await prepare();
+  const installOptions = { asset, signal: undefined, onProgress: undefined };
+  expect(mocks.install.mock.calls).toEqual(existing ? [] : [[installOptions]]);
+  expect(await fs.readFile(command, "utf8")).toBe(
+    existing ? "existing executable" : "restored managed executable",
   );
+  expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
+  expect(provider.localService.command).toBe(command);
+  await prepare();
+  expect(mocks.install).toHaveBeenCalledTimes(existing ? 0 : 1);
+});
 
-  it("propagates installation failures without changing the configured command", async () => {
-    const { command, model, provider } = await createFixture();
-    mocks.install.mockRejectedValue(new Error("archive verification failed"));
+it("restores the managed executable before creating the embedding transport", async () => {
+  const { asset, command, embed } = await createFixture();
+  mocks.genericCreate.mockImplementation(async () => {
+    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
+    return { provider: null };
+  });
+  await embed();
+  expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ asset }));
+  expect(mocks.genericCreate).toHaveBeenCalledTimes(1);
+});
 
-    await expect(ensureManagedLlamaServerForChat({ model, provider })).rejects.toThrow(
-      "archive verification failed",
+it.each(["custom", "older release", "another state directory"])("ignores %s", async (kind) => {
+  const { root, command, prepare, provider } = await createFixture();
+  const configuredCommand =
+    kind === "custom"
+      ? path.join(root, "custom", "llama-server")
+      : kind === "older release"
+        ? command.replace(LLAMA_SERVER_RELEASE, "b1")
+        : command.replace(root, path.join(root, "other"));
+  provider.localService.command = configuredCommand;
+  await prepare();
+  expect(mocks.install).not.toHaveBeenCalled();
+  expect(provider.localService.command).toBe(configuredCommand);
+  expect(mocks.reap).not.toHaveBeenCalled();
+});
+
+it.each(["installation", "EACCES", "ENOTDIR"])("propagates %s", async (code) => {
+  const { command, prepare, provider } = await createFixture();
+  const stat = fs.stat;
+  const message =
+    code === "installation" ? "archive verification failed" : "cannot inspect executable";
+  const error = Object.assign(new Error(message), { code });
+  if (code === "installation") {
+    mocks.install.mockRejectedValue(error);
+  } else {
+    vi.spyOn(fs, "stat").mockImplementation((...args) =>
+      args[0] === command ? Promise.reject(error) : stat(...args),
     );
-    expect(mocks.install).toHaveBeenCalledTimes(1);
-    expect(provider.localService.command).toBe(command);
-  });
-
-  it.each(["EACCES", "ENOTDIR"])("does not reinstall after a %s filesystem error", async (code) => {
-    const { command, model, provider } = await createFixture();
-    const stat = fs.stat;
-    const error = Object.assign(new Error("cannot inspect executable"), { code });
-    vi.spyOn(fs, "stat").mockImplementation((...args) => {
-      if (args[0] === command) {
-        return Promise.reject(error);
-      }
-      return stat(...args);
-    });
-
-    await expect(ensureManagedLlamaServerForChat({ model, provider })).rejects.toBe(error);
-    expect(mocks.install).not.toHaveBeenCalled();
-  });
+  }
+  await expect(prepare()).rejects.toBe(error);
+  expect(mocks.install).toHaveBeenCalledTimes(code === "installation" ? 1 : 0);
+  expect(provider.localService.command).toBe(command);
 });

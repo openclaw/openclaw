@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-// Re-exports the OpenClaw CLI entry point for package execution.
-// Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
@@ -11,6 +9,7 @@ import {
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
+import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
@@ -21,12 +20,17 @@ import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
 } from "./cli/startup-trace.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
 import { isMainModule } from "./infra/is-main.js";
 import "./shared/detached-async-context.js";
 
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+if (isMain) {
+  installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
+}
 const handledAdmission =
   isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
@@ -191,7 +195,6 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
   const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
-  // These log the error and exit gracefully instead of crashing without trace.
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
@@ -218,7 +221,7 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
     for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
       console.error("[openclaw]", message);
     }
-    restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+    restoreRuntimeTerminalState("uncaught exception");
     exitAfterSignalExitBarriers(1, "uncaught exception");
   });
 
@@ -246,7 +249,7 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
           console.error("[openclaw]", message);
         }
       }
-      restoreRuntimeTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+      restoreRuntimeTerminalState("legacy cli failure");
       process.exitCode = 1;
     },
   });

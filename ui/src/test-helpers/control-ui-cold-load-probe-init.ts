@@ -5,40 +5,27 @@ export type SolidSidebarProbeOwner = {
   readonly hostElement: HTMLElement;
   readonly isConnected: boolean;
   sessionData: SessionDataProbeOwner;
-  requestUpdate(): void;
+  invalidate(): void;
   prepareRender(): void;
   commitRender(): void;
 };
-export type SidebarLifecycle = "requestUpdate" | "prepareRender" | "commitRender";
+export type SidebarLifecycle = "invalidate" | "prepareRender" | "commitRender";
 export type ProbeMethod = (...args: unknown[]) => unknown;
-type ChatMethod =
-  | "requestUpdate"
-  | "performUpdate"
-  | "render"
-  | "prepareRender"
-  | "commitRender"
-  | "afterCommit";
 export type ChatProbeOwner = {
+  readonly element: HTMLElement;
   readonly isConnected: boolean;
-  requestUpdate: ProbeMethod;
-  performUpdate: ProbeMethod;
   render: ProbeMethod;
-  prepareRender?: ProbeMethod;
-  commitRender?: ProbeMethod;
-  afterCommit?: ProbeMethod;
 };
 export type ChatOwnerRecord = {
   host: HTMLElement;
   owner: ChatProbeOwner;
-  originals: Map<ChatMethod, ProbeMethod>;
+  originalRender?: ProbeMethod;
   pending: Map<string, number>;
   pendingRequests: Map<number, string>;
-  queuedRequests: Map<number, string>;
-  publicationRequests: Map<number, string>;
-  publicationPending: boolean;
 };
 
 export type ColdLoadProbeInput = {
+  ownerProbes?: boolean;
   latencyMs: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;

@@ -7,14 +7,12 @@ import {
 } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
-import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import {
   getPendingPreparedModelRuntimeReplacement,
   getPublishedPreparedModelCatalogOwnerSnapshot,
 } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
-import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -54,6 +52,7 @@ import {
   prepareSessionAcpMeta,
   sessionProjectionKey,
   resolveSessionCatalogProfiles,
+  resolveRequiredWorkerInferenceProfileId,
   readPreparedChatMetadata,
   type PreparedChatMetadataProjection,
 } from "./chat-metadata-session-projection.js";
@@ -577,29 +576,29 @@ export function createGatewayChatMetadataRuntime(params: {
     const assemble = (
       neutral: PreparedChatMetadataProjection,
       session: PreparedChatMetadataProjection,
-      acpMeta: SessionAcpMeta | null,
-      runtimeOwnership: AgentHarnessSessionRuntimeOwnership | undefined,
-      readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
-    ): ChatStartupProjectionResult => ({
-      // History consumes stable catalogs only; live readiness stays inside the current-read fence.
-      ...(readParams.readPolicy === "ready"
-        ? {}
-        : {
-            metadata: readPreparedChatMetadata(
-              session,
-              {
-                ...readParams,
-                requesterProfileId: readParams.readRequesterProfileId?.(),
+    ): ChatStartupProjectionResult => {
+      if (readParams.readPolicy !== "ready") {
+        // Catalog preparation may yield; retain the requester's publication fence.
+        readParams.readRequesterProfileId?.();
+      }
+      return {
+        // The pane's model picker reads models.list; startup carries commands and worker policy.
+        ...(readParams.readPolicy === "ready"
+          ? {}
+          : {
+              metadata: {
+                commands: session.agent.commands,
+                swarmEnabled: session.agent.swarmEnabled,
+                requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
+                  readParams,
+                  deps.getConfig(),
+                ),
               },
-              deps.getConfig(),
-              acpMeta,
-              runtimeOwnership,
-              readAccountSelection,
-            ),
-          }),
-      sessionModelCatalog: session.modelCatalog,
-      defaultModelCatalog: neutral.modelCatalog,
-    });
+            }),
+        sessionModelCatalog: session.modelCatalog,
+        defaultModelCatalog: neutral.modelCatalog,
+      };
+    };
     const projectStartup = async (
       generation: PreparedMetadataGeneration,
     ): Promise<PreparedProjection<ChatStartupProjectionResult>> => {
@@ -619,20 +618,9 @@ export function createGatewayChatMetadataRuntime(params: {
             readParams.readRequesterProfileId?.(),
           )
         : readNeutral;
-      const readAccountSelection = await prepareChatAccountSelection({
-        authStore: agent.authStore,
-        sessionEntry: readParams.sessionEntry,
-        readRequesterProfileId: readParams.readRequesterProfileId,
-      });
-      const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
-      const runtimeOwnership = await readSessionRuntimeOwnershipAsync({
-        ...readParams,
-        config: deps.getConfig(),
-      });
       return {
         isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
-        read: () =>
-          assemble(readNeutral, readSession, acpMeta, runtimeOwnership, readAccountSelection),
+        read: () => assemble(readNeutral, readSession),
       };
     };
     if (readParams.readPolicy !== "ready" && hasSessionContext) {
@@ -660,15 +648,7 @@ export function createGatewayChatMetadataRuntime(params: {
     ) {
       return undefined;
     }
-    if (readParams.readPolicy === "ready") {
-      return assemble(neutral.projection, session.projection, null, undefined);
-    }
-    const acpMeta = await prepareSessionAcpMeta(readParams, deps.getConfig());
-    const runtimeOwnership = await readSessionRuntimeOwnershipAsync({
-      ...readParams,
-      config: deps.getConfig(),
-    });
-    return assemble(neutral.projection, session.projection, acpMeta, runtimeOwnership);
+    return assemble(neutral.projection, session.projection);
   };
 
   const invalidate = () => {

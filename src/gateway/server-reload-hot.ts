@@ -19,6 +19,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewayRestartPolicy } from "../infra/restart.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
+import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import { reloadPlanNeedsRecovery } from "./config-reload-recovery.js";
@@ -324,62 +325,69 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         throw error;
       } finally {
-        // Commit removes the predecessor from runtime state. Drain it even if
-        // later publication fails or the replacement loses lifecycle ownership.
-        try {
-          if (runtimeCommitted && plan.restartCron) {
-            if (ownsCron()) {
-              params.cronReconciliation.invalidate();
-              params.onCronRestart?.();
+        // Committed runtime owners read the published plugin generation.
+        await runAfterPluginLifecycleCommit(async () => {
+          // Commit removes the predecessor from runtime state. Drain it even if
+          // later publication fails or the replacement loses lifecycle ownership.
+          try {
+            if (runtimeCommitted && plan.restartCron) {
+              if (ownsCron()) {
+                params.cronReconciliation.invalidate();
+                params.onCronRestart?.();
+              }
+              if (cronExitWatcherHandoff && ownsCron()) {
+                await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
+                await cronExitWatcherHandoff.previous.stopOwner();
+              } else if (state.cronState.cron.stopAndDrain) {
+                await state.cronState.cron.stopAndDrain();
+              } else {
+                state.cronState.cron.stop();
+                await state.cronState.stopStreamWatchers();
+              }
             }
-            if (cronExitWatcherHandoff && ownsCron()) {
-              await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
-              await cronExitWatcherHandoff.previous.stopOwner();
-            } else if (state.cronState.cron.stopAndDrain) {
-              await state.cronState.cron.stopAndDrain();
-            } else {
-              state.cronState.cron.stop();
-              await state.cronState.stopStreamWatchers();
-            }
+          } catch (error) {
+            failConfigCommit(error);
           }
-        } catch (error) {
-          failConfigCommit(error);
-        }
-      }
-      if (plan.restartHeartbeat) {
-        await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
-          params.logReload.warn(message),
-        );
-      }
-      if (!ownsCron()) {
-        return;
-      }
-      // Only accepted runtime state may own monitor writes and emitted events.
-      if (plan.reconcileSystemJobs) {
-        const result = await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit);
-        if (result === "retry-scheduled") {
-          params.logReload.warn("cron system jobs pending; continuing hot reload with cron retry");
-        }
-      }
-      if (plan.restartCron && ownsCron()) {
-        startGatewayCronWithLogging({
-          cronState: nextState.cronState,
-          cronReconciliation: params.cronReconciliation,
-          reason: "reload",
-          config: nextConfig,
-          logCron: params.logCron,
-          onStartError: (err) => {
-            if (!ownsCron()) {
-              return;
-            }
-            try {
-              scheduleRecoveryRestart("cron reload", err);
-            } catch (recoveryError) {
-              params.logCron.error(formatErrorMessage(recoveryError));
-            }
-          },
         });
       }
+      await runAfterPluginLifecycleCommit(async () => {
+        if (plan.restartHeartbeat) {
+          await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
+            params.logReload.warn(message),
+          );
+        }
+        if (!ownsCron()) {
+          return;
+        }
+        // Only accepted runtime state may own monitor writes and emitted events.
+        if (plan.reconcileSystemJobs) {
+          const result = await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit);
+          if (result === "retry-scheduled") {
+            params.logReload.warn(
+              "cron system jobs pending; continuing hot reload with cron retry",
+            );
+          }
+        }
+        if (plan.restartCron && ownsCron()) {
+          startGatewayCronWithLogging({
+            cronState: nextState.cronState,
+            cronReconciliation: params.cronReconciliation,
+            reason: "reload",
+            config: nextConfig,
+            logCron: params.logCron,
+            onStartError: (err) => {
+              if (!ownsCron()) {
+                return;
+              }
+              try {
+                scheduleRecoveryRestart("cron reload", err);
+              } catch (recoveryError) {
+                params.logCron.error(formatErrorMessage(recoveryError));
+              }
+            },
+          });
+        }
+      });
     };
     const settleRecoveryRestart = (
       restartTransaction: GatewayRestartTransactionResult,
@@ -613,106 +621,110 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return "applied-restart-required";
     }
 
-    try {
-      if (modelRuntime.required) {
-        await mrReload.pruneRemovedProviderModelCatalogs(
-          modelRuntime.sourceConfig,
-          publication?.sourceConfig ?? nextConfig,
-        );
-        await refreshModelRuntimeSnapshots(nextConfig);
-        modelRuntime.complete();
-      }
-    } catch (err) {
-      if (err instanceof PreparedModelRuntimePublicationSupersededError) {
-        // The successor rebuilds stale owners even when its own edit is model-neutral.
-        modelRuntime.defer();
-        params.logReload.warn(
-          `prepared model runtime reload superseded: ${formatErrorMessage(err)}; rebuilding with the newer config`,
-        );
-        throw createReloadCancellationError(true);
-      }
-      scheduleRecoveryRestart("prepared model runtime reload", err);
-      return "applied-restart-required";
-    } finally {
-      await reloadRetainedPluginServices();
-    }
-
-    if (plan.disposeMcpRuntimes) {
-      await disposeMcpRuntimesWithTimeout({
-        dispose: () =>
-          reloadSessionMcpRuntimes({
-            cfg: nextConfig,
-            manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
-            reloadPlugins: plan.reloadPlugins,
-          }),
-        timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
-        onWarn: params.logReload.warn,
-        label: "bundle-mcp runtime disposal during config reload",
-      });
-    }
-
-    if (plan.restartGmailWatcher) {
-      const restartAbortController =
-        params.createGmailRestartAbortController?.() ?? new AbortController();
+    return await runAfterPluginLifecycleCommit(async () => {
       try {
-        await params.stopPostReadySidecars?.();
-        if (!restartAbortController.signal.aborted) {
-          const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
-            import("../hooks/gmail-watcher.js"),
-            import("../hooks/gmail-watcher-lifecycle.js"),
-          ]);
-          if (!restartAbortController.signal.aborted) {
-            await stopGmailWatcher().catch((err: unknown) => {
-              params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
-            });
-          }
-          if (!restartAbortController.signal.aborted) {
-            await startGmailWatcherWithLogs({
-              cfg: nextConfig,
-              log: params.logHooks,
-              signal: restartAbortController.signal,
-              scheduler: params.scheduler,
-              onSkipped: () =>
-                params.logHooks.info(
-                  "skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)",
-                ),
-            });
-          }
+        if (modelRuntime.required) {
+          await mrReload.pruneRemovedProviderModelCatalogs(
+            modelRuntime.sourceConfig,
+            publication?.sourceConfig ?? nextConfig,
+          );
+          await refreshModelRuntimeSnapshots(nextConfig);
+          modelRuntime.complete();
         }
       } catch (err) {
-        scheduleRecoveryRestart("gmail watcher reload", err);
+        if (err instanceof PreparedModelRuntimePublicationSupersededError) {
+          // The successor rebuilds stale owners even when its own edit is model-neutral.
+          modelRuntime.defer();
+          params.logReload.warn(
+            `prepared model runtime reload superseded: ${formatErrorMessage(err)}; rebuilding with the newer config`,
+          );
+          throw createReloadCancellationError(true);
+        }
+        scheduleRecoveryRestart("prepared model runtime reload", err);
+        return "applied-restart-required";
       } finally {
-        params.clearGmailRestartAbortController?.(restartAbortController);
+        await reloadRetainedPluginServices();
       }
-    }
 
-    await restartGatewayChannels({
-      params,
-      nextConfig,
-      channelsToRestart,
-      restartChannelAccounts,
-      activePluginChannelsAfterReload,
-      shouldSkipChannelRestart,
-      isLifecycleReloadAborted,
-      getChannelAutostartSuppression,
-      channelReloadTargets,
-      scheduleRecoveryRestart,
+      if (plan.disposeMcpRuntimes) {
+        await disposeMcpRuntimesWithTimeout({
+          dispose: () =>
+            reloadSessionMcpRuntimes({
+              cfg: nextConfig,
+              manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
+              reloadPlugins: plan.reloadPlugins,
+            }),
+          timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
+          onWarn: params.logReload.warn,
+          label: "bundle-mcp runtime disposal during config reload",
+        });
+      }
+
+      if (plan.restartGmailWatcher) {
+        const restartAbortController =
+          params.createGmailRestartAbortController?.() ?? new AbortController();
+        try {
+          await params.stopPostReadySidecars?.();
+          if (!restartAbortController.signal.aborted) {
+            const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
+              import("../hooks/gmail-watcher.js"),
+              import("../hooks/gmail-watcher-lifecycle.js"),
+            ]);
+            if (!restartAbortController.signal.aborted) {
+              await stopGmailWatcher().catch((err: unknown) => {
+                params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
+              });
+            }
+            if (!restartAbortController.signal.aborted) {
+              await startGmailWatcherWithLogs({
+                cfg: nextConfig,
+                log: params.logHooks,
+                signal: restartAbortController.signal,
+                scheduler: params.scheduler,
+                onSkipped: () =>
+                  params.logHooks.info(
+                    "skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)",
+                  ),
+              });
+            }
+          }
+        } catch (err) {
+          scheduleRecoveryRestart("gmail watcher reload", err);
+        } finally {
+          params.clearGmailRestartAbortController?.(restartAbortController);
+        }
+      }
+
+      await restartGatewayChannels({
+        params,
+        nextConfig,
+        channelsToRestart,
+        restartChannelAccounts,
+        activePluginChannelsAfterReload,
+        shouldSkipChannelRestart,
+        isLifecycleReloadAborted,
+        getChannelAutostartSuppression,
+        channelReloadTargets,
+        scheduleRecoveryRestart,
+      });
+
+      if (modelRuntime.refreshContextWindows) {
+        try {
+          await refreshContextWindowCache(nextConfig);
+        } catch (err) {
+          scheduleRecoveryRestart("context window cache reload", err);
+        }
+      }
+      if (plan.hotReasons.length > 0) {
+        params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
+      } else if (plan.noopPaths.length > 0) {
+        params.logReload.info(
+          `config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`,
+        );
+      }
+      const status = recoveryRestartScheduled ? "applied-restart-required" : "applied";
+      return pluginRuntimeApplication ? { status, runtime: pluginRuntimeApplication } : status;
     });
-
-    if (modelRuntime.refreshContextWindows) {
-      try {
-        await refreshContextWindowCache(nextConfig);
-      } catch (err) {
-        scheduleRecoveryRestart("context window cache reload", err);
-      }
-    }
-    if (plan.hotReasons.length > 0) {
-      params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
-    } else if (plan.noopPaths.length > 0) {
-      params.logReload.info(`config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`);
-    }
-    const status = recoveryRestartScheduled ? "applied-restart-required" : "applied";
-    return pluginRuntimeApplication ? { status, runtime: pluginRuntimeApplication } : status;
   };
 
   return {

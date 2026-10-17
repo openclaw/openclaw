@@ -5,11 +5,17 @@ import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
-const { unexpectedIo } = vi.hoisted(() => ({
+const { unexpectedIo, unexpectedRecallImport } = vi.hoisted(() => ({
   unexpectedIo: () => {
     throw new Error("Unexpected memory or transcript I/O in status-only hook");
   },
+  unexpectedRecallImport: () => {
+    throw new Error("Unexpected model recall module load in status-only hook");
+  },
 }));
+
+// mock-isolation: Registration and skipped turns must not load model recall execution.
+vi.mock("./recall.js", unexpectedRecallImport);
 
 // mock-isolation: Status-only hooks must not discover models or boot an agent runtime.
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
@@ -63,7 +69,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 
 type Runtime = OpenClawPluginApi["runtime"];
 
-function setup(mode: "off" | "escalate" = "escalate") {
+function setup(mode: "off" | "escalate" | "always" = "escalate") {
   const otherEntry = { pluginId: "other-plugin", lines: ["Other plugin status"] };
   const entry: SessionEntry = {
     sessionId: "status-transition",
@@ -155,6 +161,44 @@ function setup(mode: "off" | "escalate" = "escalate") {
 }
 
 describe("Active Memory policy status", () => {
+  it("lets a cold recall import finish after near-limit preflight latency", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const importStarted = Promise.withResolvers<void>();
+    const finishImport = Promise.withResolvers<void>();
+    // mock-isolation: Delay module availability without starting a real model or database.
+    vi.doMock("./recall.js", async () => {
+      importStarted.resolve();
+      await finishImport.promise;
+      return {
+        maybeResolveActiveRecall: async () => ({
+          status: "ok",
+          summary: "The remembered ramen order",
+        }),
+      };
+    });
+    const fixture = setup("always");
+    fixture.lookup.mockImplementationOnce(
+      async () =>
+        await new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), 1_490);
+        }),
+    );
+    const pending = fixture.run(true);
+    try {
+      await vi.advanceTimersByTimeAsync(1_490);
+      await importStarted.promise;
+      await vi.advanceTimersByTimeAsync(100);
+      finishImport.resolve();
+      expect((await pending)?.prependContext).toContain("The remembered ramen order");
+    } finally {
+      finishImport.resolve();
+      await pending;
+      // mock-isolation: Restore the import guard for subsequent status-only hooks.
+      vi.doMock("./recall.js", unexpectedRecallImport);
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["off", "escalate"] as const)(
     "clears a denied turn's status when an allowed %s turn skips recall",
     async (mode) => {

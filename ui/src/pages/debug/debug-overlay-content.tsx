@@ -157,7 +157,7 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
   const eventRevision = () =>
     !props.minimized && visible() ? eventLog.read().revision : undefined;
   onSettled(() => {
-    // Gateway notifications sample the current mode; the effect owns mode changes.
+    // Gateway receipts abort retired diagnostics and synchronously revoke unauthorized status polling.
     const stopGateway = source.subscribe(() => syncPolling(props.minimized));
     const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
     return () => {

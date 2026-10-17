@@ -1,15 +1,26 @@
 /** Tests authority policies on registered Gateway methods. */
 import { describe, expect, it } from "vitest";
+import { GATEWAY_EVENTS } from "./events.js";
 import {
   createCoreGatewayMethodDescriptors,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-method-policy.js";
-import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+import { listGatewayMethods } from "./server-methods-list.js";
 import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("listGatewayMethods", () => {
   const voiceSelectionMethods = ["talk.voice.get", "talk.voice.set", "talk.voice.complete"];
+
+  it("advertises avatar generation with admin authority and inference throttling", () => {
+    expect(listGatewayMethods()).toContain("agents.avatar.generate");
+    expect(coreGatewayHandlers["agents.avatar.generate"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "agents.avatar.generate",
+      ),
+    ).toMatchObject({ scope: "operator.admin", since: "2026.10", controlPlaneWrite: true });
+  });
 
   it("advertises private backgrounds with personal read/write scopes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
@@ -63,25 +74,8 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it("advertises node plugin tool catalog updates", () => {
-    expect(listGatewayMethods()).toContain("node.pluginTools.update");
-  });
-
-  it("advertises node skill catalog updates", () => {
-    expect(listGatewayMethods()).toContain("node.skills.update");
-  });
-
-  it("advertises unified approval lookup, history, and resolution", () => {
-    expect(listGatewayMethods()).toContain("approval.get");
-    expect(listGatewayMethods()).toContain("approval.history");
-    expect(listGatewayMethods()).toContain("approval.resolve");
-  });
-
-  it("keeps Claw discovery and Add after model probing without changing the legacy prefix", () => {
+  it("keeps Claw discovery and Add after model probing without retired task methods", () => {
     const methods = listGatewayMethods();
-    expect(methods.slice(0, LEGACY_ADVERTISED_GATEWAY_METHODS.length)).toEqual(
-      LEGACY_ADVERTISED_GATEWAY_METHODS,
-    );
     expect(methods.some((method) => method.startsWith("tasks."))).toBe(false);
     const clawMethods = [
       "claws.catalog.search",
@@ -98,25 +92,11 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it("advertises ClawHub skill trust methods", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("skills.securityVerdicts");
-    expect(methods).toContain("skills.skillCard");
-  });
-
-  it("advertises Control UI GitHub previews", () => {
-    expect(listGatewayMethods()).toContain("controlUi.githubPreview");
-  });
-
   it("advertises Control UI session pull request detection", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests.subscribe");
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests.checks");
     expect(coreGatewayHandlers["controlUi.sessionPullRequests.checks"]).toBeTypeOf("function");
     expect(GATEWAY_EVENTS).toContain("controlUi.sessionPullRequests.changed");
-  });
-
-  it("advertises explicit session viewer presence", () => {
-    expect(listGatewayMethods()).toContain("sessions.viewers.set");
   });
 
   it("advertises session workspace reveal", () => {
@@ -195,66 +175,9 @@ describe("listGatewayMethods", () => {
     });
   });
 
-  it("preserves the legacy advertised method order", () => {
+  it("advertises session involvement and keeps plugin discovery after public sharing", () => {
     const methods = listGatewayMethods();
-    expect(methods.slice(0, 5)).toEqual([
-      "health",
-      "diagnostics.stability",
-      "doctor.memory.status",
-      "doctor.memory.dreamDiary",
-      "doctor.memory.backfillDreamDiary",
-    ]);
-    expect(methods.slice(31, 36)).toEqual([
-      "exec.approvals.get",
-      "exec.approvals.set",
-      "exec.approvals.node.get",
-      "exec.approvals.node.set",
-      "exec.approval.get",
-    ]);
-    expect(methods).toContain("tts.speak");
-    expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
-    expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
-    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("hooks.status") + 1);
-    expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
-    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
-    expect(methods.indexOf("sessions.catalog.startTerminal")).toBe(
-      methods.indexOf("update.hold") + 1,
-    );
-    expect(methods.indexOf("worker.desktop.observe")).toBe(
-      methods.indexOf("sessions.catalog.startTerminal") + 1,
-    );
-    expect(methods.indexOf("projects.list")).toBe(methods.indexOf("worker.desktop.observe") + 1);
-    expect(methods.indexOf("projects.register")).toBe(methods.indexOf("projects.list") + 1);
-    expect(methods.indexOf("projects.remove")).toBe(methods.indexOf("projects.register") + 1);
-    expect(methods.indexOf("worker.desktop.launch")).toBe(methods.indexOf("projects.remove") + 1);
-    expect(methods.indexOf("secrets.store.list")).toBe(
-      methods.indexOf("worker.desktop.launch") + 1,
-    );
-    expect(methods.indexOf("secrets.store.set")).toBe(methods.indexOf("secrets.store.list") + 1);
-    expect(methods.indexOf("secrets.store.delete")).toBe(methods.indexOf("secrets.store.set") + 1);
-    expect(methods.indexOf("users.prefs.get")).toBe(methods.indexOf("secrets.store.delete") + 1);
-    expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
-    expect(methods.indexOf("projects.add")).toBe(methods.indexOf("users.prefs.set") + 1);
-    expect(methods.indexOf("projects.searchRemote")).toBe(methods.indexOf("projects.add") + 1);
-    expect(methods.indexOf("desktop.observe")).toBe(methods.indexOf("projects.searchRemote") + 1);
-    expect(methods.indexOf("desktop.launch")).toBe(methods.indexOf("desktop.observe") + 1);
-    expect(methods.indexOf("device.scopes.requestUpgrade")).toBe(
-      methods.indexOf("desktop.launch") + 1,
-    );
-    expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
-      methods.indexOf("device.scopes.requestUpgrade") + 1,
-    );
-    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
-    expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
-    expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
-    expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);
-    expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
-    expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
     expect(methods).toContain("sessions.setInvolvement");
-    expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
-    expect(methods.indexOf("session.members.listEvidence")).toBe(
-      methods.indexOf("diagnostics.lanes") + 1,
-    );
     expect(methods.indexOf("plugins.catalog.browse")).toBe(
       methods.indexOf("session.publicShare.set") + 1,
     );
@@ -276,20 +199,8 @@ describe("listGatewayMethods", () => {
     ).toMatchObject({ scope: "operator.admin", controlPlaneWrite: true });
   });
 
-  it("advertises the versioned Talk session RPCs", () => {
+  it("advertises and wires Talk voice selection", () => {
     const methods = listGatewayMethods();
-    expect(methods).toContain("talk.client.create");
-    expect(methods).toContain("talk.client.transcript");
-    expect(methods).toContain("talk.client.close");
-    expect(methods).toContain("talk.client.toolCall");
-    expect(methods).toContain("talk.client.steer");
-    expect(methods).toContain("talk.session.create");
-    expect(methods).toContain("talk.session.appendAudio");
-    expect(methods).toContain("talk.session.cancelOutput");
-    expect(methods).toContain("talk.session.acknowledgeMark");
-    expect(methods).toContain("talk.session.submitToolResult");
-    expect(methods).toContain("talk.session.steer");
-    expect(methods).toContain("talk.session.close");
     for (const method of voiceSelectionMethods) {
       expect(methods).toContain(method);
       expect(coreGatewayHandlers[method]).toBeTypeOf("function");

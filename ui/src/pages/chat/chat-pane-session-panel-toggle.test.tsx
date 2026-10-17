@@ -384,7 +384,6 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
             narrow: false,
             panelDefinitions: definitions,
             primary: conversation,
-            requestUpdate,
           }),
         );
         return <SidebarRegionView {...region()} />;
@@ -426,10 +425,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
       }),
     );
     expect(
-      pane
-        .querySelector("openclaw-browser-panel")
-        ?.renderRoot?.querySelector(".bp-shot")
-        ?.getAttribute("alt"),
+      pane.querySelector("openclaw-browser-panel")?.querySelector(".bp-shot")?.getAttribute("alt"),
     ).toBe("Local preview");
   } finally {
     commit.resolve();

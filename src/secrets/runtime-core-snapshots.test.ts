@@ -35,9 +35,11 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
+// mock-isolation: Secret snapshot fixtures supply external-profile results and must not read real provider credentials.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 

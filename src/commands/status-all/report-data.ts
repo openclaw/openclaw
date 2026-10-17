@@ -14,6 +14,7 @@ import {
 } from "../../plugins/status.js";
 import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveStatusDatabaseEngines } from "../status-database-engines.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {
   resolveStatusGatewayDiagnosticsSafe,
@@ -170,6 +171,10 @@ export async function buildStatusAllReportData(params: {
     gatewayService: params.daemon,
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
+    databaseEngines: await resolveStatusDatabaseEngines(
+      params.overview.cfg,
+      summary.databaseStores,
+    ),
   };
   const overviewRows = buildStatusAllOverviewRows({
     surface: overviewSurface,

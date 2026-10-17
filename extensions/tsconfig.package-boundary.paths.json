@@ -985,6 +985,18 @@
       ],
       "openclaw/plugin-sdk/meeting-config": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/meeting-config.d.ts"
+      ],
+      "openclaw/plugin-sdk/collection-input-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/collection-input-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/http-response-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/http-response-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/node-crypto-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/node-crypto-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/path-existence-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/path-existence-runtime.d.ts"
       ]
     }
   }

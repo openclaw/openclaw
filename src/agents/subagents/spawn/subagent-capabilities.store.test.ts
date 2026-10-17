@@ -16,6 +16,7 @@ import {
 } from "../../../gateway/session-row-projection-access.js";
 import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   runOpenClawAgentWriteTransaction,
@@ -162,6 +163,72 @@ describe("persisted subagent capability lookups", () => {
       });
     },
   );
+
+  it("retains capability facts across another agent's topology change", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const key = "agent:main:dashboard:retained-capabilities";
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", storePath, sessionKey: key },
+        { sessionId: "retained-capabilities", updatedAt: 1, spawnDepth: 2 },
+      );
+      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      try {
+        await projection.ensureMaterialized();
+        const context = bindSessionRowProjection(createDirectChatContext({}), () => projection);
+        await withPluginRuntimeGatewayContextResolver(
+          () => context,
+          async () => {
+            const read = () => createSubagentSessionStore(storePath, "main").get(key);
+            const prepared = await prepareSessionCapabilityRead(read);
+            try {
+              expect(prepared.read()?.spawnDepth).toBe(2);
+              sessionChanges.emit({ all: true, scope: { agentId: "deleting", topology: true } });
+              expect(prepared.read()?.spawnDepth).toBe(2);
+              await sessionAccessor.patchSessionEntryCore(
+                { agentId: "main", storePath, sessionKey: key },
+                () => ({ spawnDepth: 3 }),
+              );
+              expect(() => prepared.read()).toThrow("Session capability metadata changed");
+            } finally {
+              prepared.release();
+            }
+          },
+        );
+      } finally {
+        projection.dispose();
+      }
+    });
+  });
+
+  it("surfaces the database failure when capability preparation cannot read its store", async () => {
+    const storePath = path.join(
+      tempDirs.make("subagent-capability-unreadable-"),
+      "sessions.sqlite",
+    );
+    fs.writeFileSync(storePath, "not a SQLite database");
+    const store = createSubagentSessionStore(storePath, "main");
+    await expect(
+      withPreparedRead(() => store.get("agent:main:dashboard:unreadable"), { retain: true }),
+    ).rejects.toThrow(/not a database/i);
+  });
+
+  it("retains writer-guarded capability facts inside an ordinary prepared read", async () => {
+    const { storePath, cfg, key } = fixture("subagent-capability-nested-");
+    const depth = () => resolveCapabilities(key, { cfg }).depth;
+    writeEntries(storePath, { [key]: makeEntry("nested-child", { spawnDepth: 1 }) });
+    const retained = await withPreparedRead(() => {
+      expect(depth()).toBe(1);
+      return prepareSessionCapabilityRead(depth);
+    });
+    try {
+      expect(retained.read()).toBe(1);
+      writeEntries(storePath, { [key]: makeEntry("nested-child", { spawnDepth: 2 }) });
+      expect(() => retained.read()).toThrow("Session capability metadata changed");
+    } finally {
+      retained.release();
+    }
+  });
 
   it("prepares requested capability rows and observes the next committed policy", async () => {
     const { storePath, cfg, key } = fixture("subagent-capability-memo-");

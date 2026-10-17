@@ -1,18 +1,16 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  takeSqliteWorkerOperationAdmissionAttachment,
-  withSqliteWorkerOperationAdmission,
-} from "../infra/sqlite-worker-operation-admission.js";
-import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
-  type OpenClawStateDatabaseAsyncResource,
+  type OpenClawStateDatabaseAsyncResource as AsyncResource,
 } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  expiryAdmission,
+  leaseTestContext,
+  observe,
+  waitUntil,
+} from "./openclaw-state-lease-async.test-support.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
-import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 import type { LeaseHeartbeatCleanup } from "./openclaw-state-lease-heartbeat.js";
 import {
   withOpenClawStateLeaseWorkerAdmission,
@@ -20,162 +18,117 @@ import {
 } from "./openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "./openclaw-state-lease.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
-import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type CreateStorage =
   typeof import("./openclaw-state-lease-worker-storage.js").createOpenClawStateLeaseWorkerStorage;
 type StartHeartbeat =
   typeof import("./openclaw-state-lease-heartbeat.js").startOpenClawStateLeaseHeartbeat;
-type RegisterResource =
-  typeof import("./openclaw-state-db-cache.js").registerOpenClawStateDatabaseAsyncResource;
 
+const { leaseMocks } = await vi.hoisted(() => import("./openclaw-state-lease-async.test-mocks.js"));
 const mocks = vi.hoisted(() => ({
   createStorage: vi.fn<CreateStorage>(),
   startHeartbeat: vi.fn<StartHeartbeat>(),
-  registerResource: vi.fn<RegisterResource>(),
-  unregisterExit: vi.fn<() => void>(),
-  isWriteContention: vi.fn<(_error: unknown) => boolean>(() => false),
-  forbidden: vi.fn(() => {
-    throw new Error("Controlled lease test reached native storage, identity lookup, or transport");
-  }),
 }));
 
+// mock-isolation: Drive the real lease owner with controlled storage and reject native acquisition.
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   createOpenClawStateLeaseWorkerStorage: mocks.createStorage,
-  acquireLease: mocks.forbidden,
+  acquireLease: leaseMocks.forbidden,
 }));
 vi.mock("./openclaw-state-lease-heartbeat.js", () => ({
   startOpenClawStateLeaseHeartbeat: mocks.startHeartbeat,
 }));
-vi.mock("./openclaw-state-db-cache.js", () => ({
-  registerOpenClawStateDatabaseAsyncResource: mocks.registerResource,
-}));
-vi.mock("./openclaw-state-lease-process-exit.js", () => ({
-  registerProcessExitLeaseCleanup: () => mocks.unregisterExit,
-}));
-vi.mock("./openclaw-state-lease-storage.js", () => ({
-  STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
-  isOpenClawStateLeaseWriteContention: mocks.isWriteContention,
-  releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
-    execute?.(),
-  resolveLeaseDatabasePath: mocks.forbidden,
-  renewOpenClawStateLease: mocks.forbidden,
-  verifyOpenClawStateLeaseOwnership: mocks.forbidden,
-  releaseOpenClawStateLease: mocks.forbidden,
-}));
-vi.mock("./openclaw-state-db-readonly.js", () => ({
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: mocks.forbidden,
-}));
-vi.mock("../infra/sqlite-worker-identity.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
-    "../infra/sqlite-worker-identity.js",
-  )),
-  inspectDatabasePathIdentitySync: mocks.forbidden,
-  readDatabasePathIdentitySync: mocks.forbidden,
-}));
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.isWriteContention.mockReturnValue(false);
-});
-afterEach(() => expect(mocks.forbidden).not.toHaveBeenCalled());
-
-function observe<T>(promise: Promise<T>) {
-  let settled = false;
-  const outcome = promise.then(
-    (value) => {
-      settled = true;
-      return { ok: true as const, value };
-    },
-    (error: unknown) => {
-      settled = true;
-      return { ok: false as const, error };
-    },
-  );
-  return { outcome, settled: () => settled };
-}
-
 function publishExpiry(scope: WorkerLeaseScope, expiresAt: number): number {
-  const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
-  const { admission } = scope.createAdmission({ settled: settled.promise });
-  try {
-    const attachment = withSqliteWorkerOperationAdmission(
-      admission,
-      takeSqliteWorkerOperationAdmissionAttachment,
-    );
-    if (
-      !isRecord(attachment) ||
-      attachment.kind !== "state-lease-expiry" ||
-      !(attachment.observation instanceof SharedArrayBuffer)
-    ) {
-      throw new Error("Missing owner-bound expiry observation");
-    }
-    expect(attachment.identity).toEqual(scope.identity);
-    Atomics.store(
-      new BigInt64Array(attachment.observation),
-      leaseHeartbeatState.expiresAt,
-      BigInt(expiresAt),
-    );
-    return expiresAt;
-  } finally {
-    admission.finish();
-    settled.resolve({ kind: "completed" });
-  }
+  using observation = expiryAdmission(scope);
+  return observation.publish(expiresAt);
 }
 
 function fixture(
   options: {
     pauseAcquisition?: boolean;
-    firstCleanupError?: Error;
-    firstReleaseError?: Error;
+    failure?: { phase: "heartbeat" | "release"; error: Error };
+    startupContention?: boolean;
   } = {},
 ) {
-  const maintenance = createOpenClawDatabaseMaintenanceScope();
-  const events: string[] = [];
-  const registered = new Set<OpenClawStateDatabaseAsyncResource>();
-  const acquiring = createDeferredCore();
-  const allowAcquire = createDeferredCore();
-  const started = createDeferredCore();
-  const ready = createDeferredCore();
-  const cleanupStarted = createDeferredCore();
-  const allowCleanup = createDeferredCore();
-  const retryStarted = createDeferredCore();
-  const allowRetry = createDeferredCore();
-  const acquired: OpenClawStateLeaseIdentity[] = [];
-  const released: OpenClawStateLeaseIdentity[] = [];
+  const f = {
+    ...leaseTestContext(),
+    events: new Array<string>(),
+    registered: new Set<AsyncResource>(),
+    acquiring: createDeferredCore(),
+    allowAcquire: createDeferredCore(),
+    started: createDeferredCore(),
+    ready: createDeferredCore(),
+    cleanupStarted: createDeferredCore(),
+    allowCleanup: createDeferredCore(),
+    retryStarted: createDeferredCore(),
+    allowRetry: createDeferredCore(),
+    acquired: new Array<OpenClawStateLeaseIdentity>(),
+    released: new Array<OpenClawStateLeaseIdentity>(),
+    closeActor: vi.fn(() => void f.events.push("actor-close")),
+    closeResources(identity?: Parameters<AsyncResource["close"]>[0]): Promise<void[]> {
+      return Promise.all([...f.registered].map((resource) => resource.close(identity)));
+    },
+    async dispose(outcome: Promise<unknown>): Promise<void> {
+      for (const gate of [f.allowAcquire, f.ready, f.allowCleanup, f.allowRetry]) {
+        gate.resolve();
+      }
+      await outcome;
+      await f.maintenance.close();
+    },
+    options: {
+      scope: "core:mcp-oauth",
+      key: "synthetic-maintenance",
+      leaseMs: 30_000,
+      waitMs: 0,
+      heartbeat: "worker" as const,
+    },
+  };
+  const { maintenance, context } = f;
   let releaseAttempts = 0;
   let cleanupComplete = false;
   let cleanupAttempts = 0;
   let cleanupAttempt: Promise<void> | undefined;
-  const context: OpenClawStateWorkerContext = {
-    environment: { OPENCLAW_STATE_DIR: "/synthetic-state" },
-    maintenanceScope: maintenance,
-    admission: {
-      coordinationKey: "file:synthetic-state",
-      databasePath: "/synthetic-state/lease.sqlite",
-      identity: { key: "file:synthetic-state", canonicalPath: "/synthetic-state/lease.sqlite" },
-      assertCurrent() {
-        expect(getOpenClawDatabaseMaintenanceScope()).toBe(maintenance);
-      },
-    },
-  };
+  let expiresAt = 0;
+  const startup = options.startupContention !== undefined;
+  const busy = Object.assign(new Error("Synthetic startup write contention"), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 5,
+  });
+  leaseMocks.isWriteContention.mockImplementation((error) => error === busy);
   const assertCurrent = () => {
     maintenance.assertAdmission();
     context.admission.assertCurrent();
   };
-  mocks.registerResource.mockImplementation((resource) => {
-    events.push("register");
-    registered.add(resource);
-    return () => registered.delete(resource);
+  leaseMocks.registerResource.mockImplementation((resource) => {
+    f.events.push("register");
+    f.registered.add(resource);
+    return () => f.registered.delete(resource);
   });
   mocks.createStorage.mockImplementation((originalContext) => {
     expect(originalContext).toBe(context);
     return {
       path: context.admission.databasePath,
       assertCurrent,
-      verify: mocks.forbidden,
-      renew: mocks.forbidden,
-      startTimer: mocks.forbidden,
+      verify: startup
+        ? (owner) =>
+            owner.runLifecycle("verify", async (scope) => {
+              scope.assertCurrent();
+              return publishExpiry(scope, expiresAt);
+            })
+        : leaseMocks.forbidden,
+      renew: startup
+        ? (owner, leaseMs) =>
+            owner.runLifecycle("renew", async (scope) => {
+              scope.assertCurrent();
+              expiresAt = Date.now() + leaseMs;
+              // The independent child can renew while the actor is denied its writer turn.
+              if (options.startupContention) {
+                throw busy;
+              }
+              return publishExpiry(scope, expiresAt);
+            })
+        : leaseMocks.forbidden,
+      startTimer: leaseMocks.forbidden,
       async withRetainedStartup(operation, assertActive) {
         assertCurrent();
         assertActive();
@@ -184,24 +137,25 @@ function fixture(
       acquire: (owner, leaseMs) =>
         owner.runLifecycle("acquire", async (scope) => {
           scope.assertCurrent();
-          events.push("acquire");
-          acquiring.resolve();
+          f.events.push("acquire");
+          f.acquiring.resolve();
           if (options.pauseAcquisition) {
-            await allowAcquire.promise;
+            await f.allowAcquire.promise;
             scope.assertCurrent();
           }
-          acquired.push(scope.identity);
-          return { kind: "acquired", expiresAt: publishExpiry(scope, Date.now() + leaseMs) };
+          f.acquired.push(scope.identity);
+          expiresAt = publishExpiry(scope, Date.now() + leaseMs);
+          return { kind: "acquired", expiresAt };
         }),
       release: (owner) =>
         owner.runLifecycle("release", async (scope) => {
           scope.assertCurrent();
           expect(cleanupComplete).toBe(true);
-          events.push("release");
-          if (releaseAttempts++ === 0 && options.firstReleaseError) {
-            throw options.firstReleaseError;
+          f.events.push("release");
+          if (releaseAttempts++ === 0 && options.failure?.phase === "release") {
+            throw options.failure.error;
           }
-          released.push(scope.identity);
+          f.released.push(scope.identity);
         }),
     };
   });
@@ -216,20 +170,19 @@ function fixture(
       return (cleanupAttempt ??= Promise.resolve()
         .then(async () => {
           assertCurrent();
-          cleanupAttempts += 1;
-          if (cleanupAttempts === 1) {
-            cleanupStarted.resolve();
-            await allowCleanup.promise;
-            if (options.firstCleanupError) {
-              events.push("heartbeat-cleanup-failed");
-              throw options.firstCleanupError;
+          if (++cleanupAttempts === 1) {
+            f.cleanupStarted.resolve();
+            await f.allowCleanup.promise;
+            if (options.failure?.phase === "heartbeat") {
+              f.events.push("heartbeat-cleanup-failed");
+              throw options.failure.error;
             }
           } else {
-            retryStarted.resolve();
-            await allowRetry.promise;
+            f.retryStarted.resolve();
+            await f.allowRetry.promise;
           }
           cleanupComplete = true;
-          events.push("heartbeat-cleanup-complete");
+          f.events.push("heartbeat-cleanup-complete");
         })
         .catch((error: unknown) => {
           cleanupAttempt = undefined;
@@ -240,57 +193,36 @@ function fixture(
   mocks.startHeartbeat.mockImplementation((params) => {
     expect(params.startupContext).toBe(context);
     params.retainCleanup?.(cleanup);
-    started.resolve();
+    f.started.resolve();
+    if (startup) {
+      setTimeout(() => {
+        void Promise.resolve(params.renewDuringStartup?.()).catch(f.ready.reject);
+      }, params.heartbeatMs);
+      setTimeout(() => {
+        if (expiresAt <= Date.now()) {
+          f.ready.reject(new Error("Lease expired during heartbeat startup"));
+        } else {
+          f.ready.resolve();
+        }
+      }, 1_100);
+    }
     return {
-      ready: ready.promise,
+      ready: f.ready.promise,
       assertRunning: assertCurrent,
       verify: async () => Date.now() + params.leaseMs,
       renew: async () => Date.now() + params.leaseMs,
-      assertResponsive: mocks.forbidden,
-      close: mocks.forbidden,
+      assertResponsive: leaseMocks.forbidden,
+      holdOwnerFence: leaseMocks.forbidden,
+      close: leaseMocks.forbidden,
       stop: async () => {
         await cleanup.close();
         return 0;
       },
     };
   });
-  const closeActor = vi.fn(() => {
-    events.push("actor-close");
-  });
   // Insert first: phase ordering, rather than insertion ordering, must protect it.
-  maintenance.own({}, "shared-resources", closeActor);
-  return {
-    maintenance,
-    context,
-    events,
-    registered,
-    acquiring,
-    allowAcquire,
-    started,
-    ready,
-    cleanupStarted,
-    allowCleanup,
-    retryStarted,
-    allowRetry,
-    acquired,
-    released,
-    closeActor,
-    async dispose(outcome: Promise<unknown>) {
-      allowAcquire.resolve();
-      ready.resolve();
-      allowCleanup.resolve();
-      allowRetry.resolve();
-      await outcome;
-      await maintenance.close();
-    },
-    options: {
-      scope: "core:mcp-oauth",
-      key: "synthetic-maintenance",
-      leaseMs: 30_000,
-      waitMs: 0,
-      heartbeat: "worker" as const,
-    },
-  };
+  maintenance.own({}, "shared-resources", f.closeActor);
+  return f;
 }
 
 describe("async lease maintenance ownership", () => {
@@ -298,71 +230,14 @@ describe("async lease maintenance ownership", () => {
     "bridges a short lease across delayed independent-heartbeat startup (contention: %s)",
     async (contention) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const f = fixture();
-      const createStorage = mocks.createStorage.getMockImplementation();
-      const startHeartbeat = mocks.startHeartbeat.getMockImplementation();
-      if (!createStorage || !startHeartbeat) {
-        throw new Error("Lease fixture did not install its owners");
-      }
-      let expiresAt = 0;
-      const busy = Object.assign(new Error("Synthetic startup write contention"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 5,
-      });
-      mocks.isWriteContention.mockImplementation((error) => error === busy);
-      mocks.createStorage.mockImplementation((context) => {
-        const storage = createStorage(context);
-        const acquire = storage.acquire.bind(storage);
-        storage.acquire = async (...args) => {
-          const result = await acquire(...args);
-          if (result.kind === "acquired") {
-            expiresAt = result.expiresAt;
-          }
-          return result;
-        };
-        storage.renew = (owner, leaseMs) =>
-          owner.runLifecycle("renew", async (scope) => {
-            scope.assertCurrent();
-            expiresAt = Date.now() + leaseMs;
-            if (contention) {
-              // The independent child renewed while the actor was denied its writer turn.
-              throw busy;
-            }
-            return publishExpiry(scope, expiresAt);
-          });
-        storage.verify = (owner) =>
-          owner.runLifecycle("verify", async (scope) => {
-            scope.assertCurrent();
-            return publishExpiry(scope, expiresAt);
-          });
-        return storage;
-      });
-      mocks.startHeartbeat.mockImplementation((params) => {
-        const heartbeat = startHeartbeat(params);
-        setTimeout(() => {
-          void Promise.resolve(params.renewDuringStartup?.()).catch(f.ready.reject);
-        }, params.heartbeatMs);
-        setTimeout(() => {
-          if (expiresAt <= Date.now()) {
-            f.ready.reject(new Error("The lease expired while the heartbeat was starting"));
-          } else {
-            f.ready.resolve();
-          }
-        }, 1_100);
-        return heartbeat;
-      });
+      const f = fixture({ startupContention: contention });
       f.allowCleanup.resolve();
       const callback = vi.fn(async () => "completed");
       const observed = observe(
         withOpenClawStateLeaseAsync({ ...f.options, leaseMs: 1_000 }, f.context, callback),
       );
       try {
-        await Promise.race([
-          f.started.promise,
-          observed.outcome.then((result) => {
-            throw result.ok ? new Error("Lease completed before startup") : result.error;
-          }),
-        ]);
+        await waitUntil(f.started.promise, observed);
         await f.maintenance.run(() => vi.advanceTimersByTimeAsync(1_100));
         expect(await observed.outcome).toEqual({ ok: true, value: "completed" });
         expect(callback).toHaveBeenCalledOnce();
@@ -376,7 +251,7 @@ describe("async lease maintenance ownership", () => {
 
   it("keeps the complete lease with its original scope when another scope invokes it", async () => {
     const f = fixture();
-    const other = createOpenClawDatabaseMaintenanceScope();
+    const { maintenance: other } = leaseTestContext();
     const entered = createDeferredCore();
     const finishCallback = createDeferredCore();
     const callback = vi.fn(async () => {
@@ -427,11 +302,7 @@ describe("async lease maintenance ownership", () => {
     async (phase) => {
       const callbackError = new Error("Synthetic callback failed");
       const cleanupError = new Error("Synthetic cleanup failed once");
-      const f = fixture(
-        phase === "heartbeat"
-          ? { firstCleanupError: cleanupError }
-          : { firstReleaseError: cleanupError },
-      );
+      const f = fixture({ failure: { phase, error: cleanupError } });
       const write = vi.fn();
       const callback = vi.fn(async (lease: OpenClawStateAsyncLeaseContext) => {
         if (phase === "heartbeat") {
@@ -504,14 +375,10 @@ describe("async lease maintenance ownership", () => {
         await f.acquiring.promise;
         expect(f.events).toEqual(["register", "acquire"]);
         expect(f.registered.size).toBe(1);
-        await Promise.all(
-          [...f.registered].map((resource) =>
-            resource.close({
-              key: "file:sibling",
-              canonicalPath: "/synthetic-state/sibling.sqlite",
-            }),
-          ),
-        );
+        await f.closeResources({
+          key: "file:sibling",
+          canonicalPath: "/synthetic-state/sibling.sqlite",
+        });
         const identity = f.context.admission.identity;
         const closingIdentity =
           closeKind === "all"
@@ -519,10 +386,7 @@ describe("async lease maintenance ownership", () => {
             : closeKind === "identity"
               ? identity
               : { ...identity, key: "file:replacement" };
-        // Model the registry's resource snapshot; no path resolution or native close runs.
-        const closing = observe(
-          Promise.all([...f.registered].map((resource) => resource.close(closingIdentity))),
-        );
+        const closing = observe(f.closeResources(closingIdentity));
         expect(observed.settled()).toBe(false);
         expect(closing.settled()).toBe(false);
         f.allowAcquire.resolve();

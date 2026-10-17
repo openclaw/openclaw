@@ -290,11 +290,6 @@ export async function prepareMediaGenerationTask<
   try {
     resources?.assertOpen();
     prepared = resources ? await resources.run(prepare) : await prepare();
-    if (prepared.kind === "task") {
-      // Cancellation fences admission; accepted work retains resources independently.
-      signal?.throwIfAborted();
-      resources?.assertOpen();
-    }
   } catch (error) {
     const title = `${params.generationLabel.charAt(0).toUpperCase()}${params.generationLabel.slice(1)}`;
     return rethrowAfterMediaCleanup(

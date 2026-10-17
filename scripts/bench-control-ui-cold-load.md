@@ -52,6 +52,12 @@ FCP is the browser's paint metric. Diagnostic runs also save filmstrip frames.
 Use `--untraced` for timing comparisons without boot tracing or CPU sampling,
 then collect separate traced runs for the storyboard and attribution.
 
+`--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
+including tool results and replay metadata. Combine it with `--warm-reload` to
+measure a large native IndexedDB restore. `snapshotSave` reports the persisted
+row count and UTF-8 bytes, synchronous serialization time, and total flush time
+for a save through the live cache owner before each reload.
+
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels
 in diagnostic traces distinguish transcript, sidebar, and composer cache
@@ -62,38 +68,36 @@ not a measurement of native IndexedDB cost alone.
 settles. The stream mixes full presence snapshots, session patches for displayed,
 held-but-hidden, and outside-window rows, open-session messages and assistant
 streaming, changing catalog hosts, and unrelated cron/run-state activity. The live
-phase runs after tracing and CPU sampling stop. The selected session starts with an
+phase runs after reload tracing and CPU sampling stop; `--cpu-profile` starts a separate live CPU capture. The selected session starts with an
 active canonical run; live messages and deltas advance its history receipt before
 publishing the event, so later history reads retain the same messages and stream. Capture ends after all frames
 arrive and the planned 20-second stream plus 750 ms have elapsed; busy sessions
 need not become idle. `plannedWindowMs` and the observed `elapsedMs` distinguish
-the planned window from delayed delivery on a loaded host. Its `run-N.live.json` records Lit
-updates and bounded `requestUpdate` scheduling stacks per event label, plus DOM
+the planned window from delayed delivery on a loaded host. Its `run-N.live.json` records
+observed Solid owner calls and bounded lifecycle scheduling stacks per event label, plus DOM
 snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.png`
 shows the synthetic final state. Row attachment and viewport visibility distinguish
 an absent row from a rendered row below the fold.
 
 For the Solid sidebar, `solidSidebar.lifecycle` separately counts owner
-`requestUpdate` invalidations and `prepareRender`/`commitRender` projection lifecycle
+`invalidate` calls and `prepareRender`/`commitRender` projection lifecycle
 passes. Bounded owner and session-data origin stacks identify their callers. These
 are not full Solid render counts: fine-grained bindings update independently. The
 init probe captures the existing host-to-owner WeakMap registration, restores that
 tap immediately, and restores the owner wrappers at the end of the live phase.
-A missing Solid owner fails the capture instead of reporting zero work. Lit tags
-retain their original per-tag `performUpdate` counters; zero Lit updates for a
-ported Solid tag are a measurement gap, not a performance improvement.
+A missing sidebar or pane owner fails the capture instead of reporting zero work.
 
-`solidChat` counts every page/pane owner request, owner publication, actual
-projection `render` read, pane prepare/commit, and page after-commit call separately.
-Each projection pass retains the pending producer stacks and request IDs, including
-requests coalesced by the owner. IDs remain attached to their publication batch,
-so a request that drives an early projection and a later queued publication is
-visible on both passes. Unattributed passes and remaining pending producers are
-explicit. Existing lifecycle hook notifications distinguish owner facts from
-element invalidation/commit notifications; their combined count is not a DOM
-commit count. The probe preserves and restores the hook's complete descriptor,
-including the existing test adapter's accessor, along with all owner methods.
-These are projection/lifecycle counts, not all fine-grained Solid binding work.
+`solidChat` counts the pane runtime's actual `render` calls and existing lifecycle
+hook notifications. Each render retains any explicit lifecycle invalidation IDs
+and scheduling stacks received since the preceding render. Unattributed renders
+and remaining pending producers are explicit; domain mutations and fine-grained
+bindings can update without a whole-pane render or lifecycle invalidation.
+Owner and element notifications remain separate, so their combined count is not
+a DOM commit count. The probe preserves and restores the hook's complete
+descriptor, including the test adapter's accessor, and the pane render method.
+Page snapshot computations and fine-grained Solid bindings are explicitly listed
+as unmeasured. Use source-mapped CPU profiles for those paths; a missing counter
+is not evidence of zero work. The retired Lit counters are no longer emitted.
 
 Live updates are attributed to the most recently delivered event label. Paced
 refreshes and clock-driven presence updates may finish during a later event's
@@ -106,11 +110,11 @@ focused browser contracts with updated authoritative mock responses for that pro
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.
 It measures renderer-main-thread task interval union, long tasks, layouts with
-JavaScript stacks, Lit updates per tag, source-mapped CPU self-time hotspots,
+JavaScript stacks, observed Solid lifecycle calls, source-mapped CPU self-time hotspots,
 Solid flush self/inclusive sampled time, and RPC request/response bytes. The top
 20 CPU entries retain browser/GC overhead alongside source-attributed call sites.
 A reload settles after all scheduled fixture events and outstanding RPCs complete,
-then 750 ms with no wire, Lit, or captured Solid sidebar lifecycle activity. That quiet interval is measurement padding,
+then 750 ms with no wire or captured Solid lifecycle activity. That quiet interval is measurement padding,
 not part of a correctness test.
 
 Filmstrip frames come from Chrome tracing. Significant changes compare consecutive
@@ -125,6 +129,31 @@ measure server CPU, HTTP authentication/proxy redirects, real plugin bundle cost
 or a service-worker cache (service workers are blocked). The original real-Gateway
 latency rig remains useful for those boundaries. Synthetic fixture fidelity and
 measured results must be reported separately from private deployment evidence.
+
+## Source-mapped CPU attribution
+
+Use `--cpu-profile --live-events --untraced` to collect separate reload and live
+profiles without the additional timeline trace. CPU mode leaves the
+owner-method and animation-frame wrappers disabled (`ownerProbes: false`,
+`solidChat`/`solidSidebar` absent as `null`); source stacks supply the attribution.
+This also lets live replay run after renderer owners have been replaced by native
+Solid components. `--cpu-profile` also captures
+`--streaming-reply` when selected. Each phase prints self time, inclusive function
+time (application sources first), and inclusive source-file time. Recursion and
+multiple frames from one file count once per sample. All rows are saved in
+`run-N.cpu-profile.json`; `cpu-profile.json` holds per-row medians, treating missing
+functions as zero. Raw phase profiles retain unmapped browser/native frames.
+The mapper reads adjacent `.js.map` files, including hidden release maps, and
+reports missing mappings; keep maps alongside any `--bundle-dir` assets.
+
+`--cpu-profile-compare /path/to/baseline/cpu-profile.json` enables profiling and
+prints candidate-minus-baseline self/inclusive function deltas, also saved in
+`cpu-profile-compare.json`. A per-run report is accepted too. Function identity is
+source path, name, line and column; moving a function appears as a removal/addition.
+Mapped filesystem paths are repository-relative, independent of the build output directory.
+Use the same fixture, phases, sampling and machine for both captures.
+Profiling inflates timing: use these tables to prove the hot path runs, then
+measure improvements in separate unprofiled, interleaved runs.
 
 ## Initial baseline
 

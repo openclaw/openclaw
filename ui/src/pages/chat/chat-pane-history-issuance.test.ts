@@ -67,7 +67,13 @@ async function expectRecoveredHistory(
   await vi.waitFor(() => expect(requestCalls(request, method)).toHaveLength(attempts));
   expect(request).toHaveBeenCalledWith(
     method,
-    { sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 },
+    {
+      sessionKey: state.sessionKey,
+      knownState: {},
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
   await vi.waitFor(() => expect(state.chatMessages).toEqual(assistantHistory(text).messages));

@@ -12,6 +12,7 @@ import {
   scheduleMediaGenerationTaskCompletion,
 } from "../agents/tools/media-generate-background-shared.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import * as messageRuntime from "../channels/message/runtime.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -48,6 +49,7 @@ async function withMediaSession(
     queueContext: ReturnType<typeof captureOpenClawStateWorkerContext>;
     mediaPath: string;
     dispatch: MockInstance<typeof recoveryRuntime.dispatchGatewayLifecycleMethod>;
+    send: MockInstance<typeof messageRuntime.sendDurableMessageBatchCore>;
     systemWake: MockInstance<typeof sessionEvents.enqueueSessionEventForHost>;
     drain: (id: string) => ReturnType<typeof drainPendingSessionDelivery>;
   }) => Promise<void>,
@@ -91,9 +93,13 @@ async function withMediaSession(
         deliveryStatus: { status: "sent" },
       },
     });
+    const send = vi.spyOn(messageRuntime, "sendDurableMessageBatchCore").mockResolvedValue({
+      status: "sent",
+      results: [{ channel: "discord", messageId: "media-message" }],
+    } as Awaited<ReturnType<typeof messageRuntime.sendDurableMessageBatchCore>>);
     const systemWake = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const drain = (id: string) =>
+    const drainOnce = (id: string) =>
       drainPendingSessionDelivery({
         id,
         queueContext,
@@ -102,6 +108,16 @@ async function withMediaSession(
         bypassBackoff: true,
         deliver: (entry) => deliverQueuedSessionDelivery({ entry, queueContext, deps: {} }),
       });
+    // Host delivery settles first; the completion turn runs on the next drain.
+    const drain = async (id: string) => {
+      const before = await queue.loadPendingSessionDelivery(id, queueContext);
+      const pending = await drainOnce(id);
+      const mediaJustDelivered =
+        (before?.kind === "agentTurn" ? (before.expectedMediaUrls?.length ?? 0) : 0) > 0 &&
+        pending?.kind === "agentTurn" &&
+        pending.expectedMediaUrls?.length === 0;
+      return mediaJustDelivered ? await drainOnce(id) : pending;
+    };
     try {
       await run({
         state,
@@ -111,6 +127,7 @@ async function withMediaSession(
         mediaPath,
         queueContext,
         dispatch,
+        send,
         systemWake,
         drain,
       });
@@ -202,6 +219,7 @@ describe("original requester media handoff", () => {
         mediaPath,
         queueContext,
         dispatch,
+        send,
         systemWake,
         drain,
       }) => {
@@ -276,6 +294,12 @@ describe("original requester media handoff", () => {
           await drain(entry.id);
           expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
           if (change === "current") {
+            // Outbound custody carries the requester so a replay cannot outlive it.
+            expect(send.mock.calls[0]?.[3]).toEqual({
+              ...scope,
+              sessionId: "original-requester",
+              lifecycleRevision: "original-lifecycle",
+            });
             expect(dispatch).toHaveBeenCalledOnce();
             expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
               agentId: "main",
@@ -290,6 +314,10 @@ describe("original requester media handoff", () => {
         } else if (change !== "current") {
           expect(dispatch).not.toHaveBeenCalled();
         }
+        // A retired requester never receives the media.
+        expect(send).toHaveBeenCalledTimes(
+          change === "current" || change === "store-during-dispatch" ? 1 : 0,
+        );
         expect(systemWake).not.toHaveBeenCalled();
         expect(
           await loadTranscriptEvents({ ...scope, sessionId: "replacement-requester" }),
@@ -512,12 +540,16 @@ describe("queued media completion past the handoff deadline", () => {
           expect(operationBeforeRelease.terminalOutcome).toBeUndefined();
           const operation = findMediaGenerationOperation(handle.runId);
           if (outcome === "delivery-failed") {
-            expect(operation).toMatchObject({ status: "succeeded", terminalOutcome: "blocked" });
+            // The host already delivered the media; a refused follow-up turn
+            // must not retain it a second time as undelivered.
+            expect(operation?.status).toBe("succeeded");
+            expect(operation?.terminalOutcome).toBeUndefined();
             expect(
               afterRelease.filter((event) => isRecord(event) && event.type === "message"),
             ).toHaveLength(1);
-            expect(JSON.stringify(afterRelease)).toContain("completion delivery was not confirmed");
-            expect(JSON.stringify(afterRelease)).toContain("lighthouse.png");
+            expect(JSON.stringify(afterRelease)).not.toContain(
+              "completion delivery was not confirmed",
+            );
           } else {
             expect(operation?.status).toBe(outcome === "delivered" ? "succeeded" : "failed");
             expect(operation?.terminalOutcome).toBeUndefined();

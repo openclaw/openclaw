@@ -15,7 +15,7 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it.each(["named", "failed"])(
-    "replaces the naming blob when title generation is %s",
+    "replaces the title placeholder when title generation is %s",
     async (outcome) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const key = "agent:main:dashboard:title-settlement";
@@ -60,18 +60,23 @@ suite.define(() => {
     },
   );
 
-  it.each(["chip", "roster"] as const)(
-    "selects a visible provisional row in its %s destination without admitting it and removes it on rejection",
-    async (mode) => {
+  it.each([
+    { destination: "chip", mode: "chip", pinned: false },
+    { destination: "roster", mode: "roster", pinned: false },
+    { destination: "pinned agent", mode: "roster", pinned: true },
+  ] as const)(
+    "selects a visible provisional row in the $destination area without admitting it and removes it on rejection",
+    async ({ destination, mode, pinned }) => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
         async ({ page }) => {
           await page.addInitScript(
-            ({ key, sidebarAgentsMode }) =>
-              localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode })),
+            ({ key, sidebarAgentsMode, pinnedAgentIds }) =>
+              localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode, pinnedAgentIds })),
             {
               key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
               sidebarAgentsMode: mode,
+              pinnedAgentIds: pinned ? ["main"] : [],
             },
           );
           const old = {
@@ -84,7 +89,15 @@ suite.define(() => {
           const gateway = await installMockGateway(page, { sessionKey: old.key, sessions: [old] });
           await page.goto(new URL(controlUiSessionPath(old.key), suite.server.baseUrl).href);
           const oldRow = page.locator('[data-session-key="' + old.key + '"]');
-          await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
+          if (mode === "chip") {
+            await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
+          } else if (pinned) {
+            await page.locator('[data-pinned-agent="main"]').waitFor();
+            expect(await oldRow.count()).toBe(0);
+          } else {
+            await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').waitFor();
+            expect(await oldRow.count()).toBe(0);
+          }
           await navigateInApp(page, "new-session", "?agent=main");
           await page
             .locator(".new-session-page__message")
@@ -104,39 +117,57 @@ suite.define(() => {
               { animations: "disabled", elements: [sessions] },
             );
             await writeFile(
-              path.join(suite.artifactDir, `pending-session-${mode}.png`),
+              path.join(suite.artifactDir, `pending-session-${destination.replace(" ", "-")}.png`),
               frame.elements[0]!.png,
             );
           }
           // The handoff occupies the slot its admitted row will take, not a detached
           // row above the list and its agent header.
-          const destination =
-            mode === "roster"
+          const rowDestination = pinned
+            ? ".sidebar-agent-roster"
+            : mode === "roster"
               ? '.sidebar-sessions [data-agent-group="main"]'
               : ".sidebar-sessions .sidebar-recent-sessions";
-          expect(
-            await page.locator(destination + " .sidebar-recent-session--creating").count(),
-          ).toBe(1);
+          const pendingSelector = pinned
+            ? `${rowDestination} > .sidebar-recent-session--creating`
+            : `${rowDestination} .sidebar-recent-session--creating`;
+          expect(await page.locator(pendingSelector).count()).toBe(1);
           const titleInset = (row: typeof provisional) =>
             row
               .locator(".sidebar-recent-session__text")
               .evaluate((element) => Math.round(element.getBoundingClientRect().left));
-          expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
+          if (mode === "chip") {
+            expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
+          }
           expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
-          expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
+          if (mode === "chip") {
+            expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
+          }
           expect(await provisional.locator("button, a[href]").count()).toBe(0);
           expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
-          const blob = provisional.locator(".session-title-placeholder > span");
-          expect(
-            await blob.evaluate((element) => getComputedStyle(element).backgroundColor),
-          ).not.toBe("rgba(0, 0, 0, 0)");
-          expect(await blob.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-            "session-title-wave",
-          );
+          const bars = page.locator(".session-title-placeholder > span");
+          expect(await bars.count()).toBe(2);
+          for (const bar of await bars.all()) {
+            const style = await bar.evaluate((element) => {
+              const computed = getComputedStyle(element);
+              return {
+                radius: computed.borderRadius,
+                transform: computed.transform,
+                background: computed.backgroundColor,
+                animation: getComputedStyle(element, "::after").animationName,
+              };
+            });
+            expect(style.radius).toBe("3px");
+            expect(style.transform).toBe("none");
+            expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+            expect(style.animation).toBe("shimmer");
+          }
           await page.emulateMedia({ reducedMotion: "reduce" });
-          expect(await blob.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-            "none",
-          );
+          for (const bar of await bars.all()) {
+            expect(
+              await bar.evaluate((element) => getComputedStyle(element, "::after").animationName),
+            ).toBe("none");
+          }
           expect(await page.locator(".chat-pane__header .session-title-placeholder").count()).toBe(
             1,
           );
@@ -154,7 +185,15 @@ suite.define(() => {
           );
           await navigateInApp(page, "chat");
           await waitForCommittedChatRoute(page);
-          await oldRow.locator('[aria-current="page"]').waitFor();
+          if (mode === "chip") {
+            await oldRow.locator('[aria-current="page"]').waitFor();
+          } else if (pinned) {
+            expect(await page.locator('[data-pinned-agent="main"]').count()).toBe(1);
+          } else {
+            expect(
+              await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').count(),
+            ).toBe(1);
+          }
         },
       );
     },

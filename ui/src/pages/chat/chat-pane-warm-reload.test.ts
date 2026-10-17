@@ -122,7 +122,7 @@ describe("chat pane warm reload", () => {
         "openclaw-chat-runtime-test",
         ChatPaneRuntime,
       ) as unknown as TestChatPane;
-      vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+      vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
       const context = createInitializationContext(
         createGatewayBrowserClientFixture({
           offlineRecoveryScope: "test-recovery-scope",
@@ -171,8 +171,8 @@ describe("chat pane warm reload", () => {
           transcript,
         );
         const { container } = view;
-        transcript.hostConnected();
-        transcript.hostUpdated();
+        transcript.start();
+        transcript.update();
         if (!empty && !priorProjection) {
           expect(container.textContent).toContain("The browser remembers this conversation.");
         }
@@ -184,7 +184,7 @@ describe("chat pane warm reload", () => {
 
         expect(pane.state.chatMessages).toEqual(priorProjection ? currentMessages : messages);
         view.update(threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages));
-        transcript.hostUpdated();
+        transcript.update();
         if (priorProjection && !networkEmpty) {
           expect(container.textContent).toContain("A newer turn is present on the Gateway.");
         }
@@ -204,7 +204,7 @@ describe("chat pane warm reload", () => {
         expect(pane.state.chatMessages).toEqual(priorProjection ? currentMessages : messages);
       } finally {
         view?.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
         pane.disconnectedCallback();
         pane.context.sessions.dispose();
         await store.flush();

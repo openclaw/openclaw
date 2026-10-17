@@ -7,6 +7,12 @@ import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
 import { buildStatusCommandReportData } from "./status.command-report-data.js";
 import { createStatusCommandReportDataParams } from "./status.test-support.js";
 
+// mock-isolation: Keep database inspection in its own owner proof; these tests exercise report data.
+vi.mock("./status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({ source: "admitted", stores: [] }),
+}));
+
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_PROFILE", undefined);
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);

@@ -1,11 +1,9 @@
-import { untrack } from "solid-js";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { SettingsSidebarLoader } from "../components/settings-sidebar-lazy.tsx";
 import type { SettingsSidebarProps } from "../components/settings-sidebar.tsx";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -20,6 +18,7 @@ import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   APP_SIDEBAR_ELEMENT,
@@ -33,14 +32,21 @@ import {
   floatingSidebarAttentionVisible,
   navigationSurfaceIsHidden,
   NAVIGATION_RAIL_WIDTH,
+  type ShellNavigationElements,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
-import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
+import {
+  isCustodianPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 
-export interface ShellViewHost extends ShellLazyOverlayHost {
+export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
+  routeOutlet?: ControlUiReadinessOutlet;
+  terminalPanel?: HTMLElement & { readonly available?: boolean };
   readonly devicePairSetup: DevicePairSetupLoader;
   readonly shellRevision: () => number;
   readonly settingsSidebar: SettingsSidebarLoader;
@@ -71,16 +77,12 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
   readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;
   refreshControlUi: () => Promise<boolean>;
   recoverNotFoundRoute: () => boolean;
-  prepareView(): void;
   invalidate(): void;
-  querySelectorAll: ParentNode["querySelectorAll"];
   resizeNavigation(splitRatio: number): void;
   readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
 }
 
 export function readShellView(host: ShellViewHost) {
-  // Imperative preparation consumes current owner facts; it must not widen view dependencies.
-  untrack(() => host.prepareView());
   const context = host.context;
   const runtime = host.runtime;
   const callbacks = host.viewCallbacks;
@@ -94,9 +96,10 @@ export function readShellView(host: ShellViewHost) {
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
-  const historyRecovering = [...host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].some(
-    (pane) => pane.conversationPresented && pane.historyRecovering,
-  );
+  // Chat owns the live panes beneath its retained route island.
+  const historyRecovering = [
+    ...(host.routeOutlet?.querySelectorAll<ChatPaneElement>("openclaw-chat-pane") ?? []),
+  ].some((pane) => pane.conversationPresented && pane.historyRecovering);
   const connectionStatus = resolveGatewayStatus(
     gatewaySnapshot,
     controlUiRefreshRequired,
@@ -117,23 +120,10 @@ export function readShellView(host: ShellViewHost) {
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
-  const custodianPanelAvailable =
-    // Scope-aware to match the store: admin-only, never advertisement alone.
-    canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
+  const custodianPanelAvailable = isCustodianPanelAvailable(context.gateway);
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
-  // Session routes have an offline outbox, New Session keeps a local draft, and
-  // Appearance persists local preference intent for replay. Connection settings
-  // must remain usable to replace an unreachable Gateway. Their server actions
-  // are independently gated; other pages cannot submit useful disconnected work.
   const reloadRequired = gatewaySnapshot.phase === "reload-required";
-  const pageActionsBlocked =
-    !reloadRequired &&
-    !gatewayConnected &&
-    !sessionRoute &&
-    activeRoute !== "new-session" &&
-    activeRoute !== "appearance" &&
-    activeRoute !== "connection";
   // Plugin tabs share one route; the URL picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -343,6 +333,7 @@ export function readShellView(host: ShellViewHost) {
   };
   return {
     nowMs: Date.now(),
+    routeReady: host.routeState.routeId !== undefined || host.routeState.routeFailed,
     context,
     runtime,
     callbacks,
@@ -363,7 +354,6 @@ export function readShellView(host: ShellViewHost) {
       !host.routeState.sessionRouteNotice &&
       isSessionRouteId(host.routeState.routeId),
     reloadRequired,
-    pageActionsBlocked,
     nativeEmbed,
     embedSettings,
     settingsTakeover,

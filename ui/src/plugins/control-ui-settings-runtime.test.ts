@@ -62,6 +62,27 @@ it("loads packaged Settings independently and retires its assets with the runtim
   loaded.dispose();
   expect(f.stop).toHaveBeenCalledOnce();
 });
+it("selects Memories from a package that also owns Overview without runtime activation", async () => {
+  const f = fixture();
+  const memories: ControlUiSettingsView = {
+    placement: { section: "memory", panel: "memories" },
+    mount: vi.fn(),
+  };
+  packaged[0]!.settingsViews = [placement, memories.placement];
+  f.module.settingsViews.push(memories);
+  try {
+    const loaded = await f.runtime.loadSettingsView(
+      memories.placement,
+      new AbortController().signal,
+    );
+    expect(loaded.view).toBe(memories);
+    expect(f.activate).not.toHaveBeenCalled();
+    loaded.dispose();
+    expect(f.stop).toHaveBeenCalledOnce();
+  } finally {
+    f.runtime.dispose();
+  }
+});
 it("rejects ambiguous packaged placement owners before loading code", async () => {
   const f = fixture();
   packaged.push({ ...packaged[0]!, pluginId: "duplicate" });

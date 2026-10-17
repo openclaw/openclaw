@@ -24,12 +24,25 @@ afterEach(async () => {
   instance = undefined;
 });
 
-function outputOf(result: { stderr: string; stdout: string }): string {
+async function doctor(...flags: string[]): Promise<string> {
+  if (!instance) {
+    throw new Error("Doctor test instance is not initialized");
+  }
+  const result = await instance.cli(
+    ["doctor", "--non-interactive", "--no-workspace-suggestions", ...flags],
+    { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
+  );
+  expect(result.code).toBe(0);
   return `${result.stdout}\n${result.stderr}`;
 }
 
-function normalizedOutputOf(result: { stderr: string; stdout: string }): string {
-  return stripAnsiSequences(outputOf(result)).replaceAll("│", " ").replace(/\s+/g, " ").trim();
+function normalized(output: string): string {
+  return stripAnsiSequences(output).replaceAll("│", " ").replace(/\s+/g, " ").trim();
+}
+
+async function readToken(configPath: string) {
+  const config: OpenClawConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+  return config.gateway?.auth?.token;
 }
 
 async function writeConfig(config: OpenClawConfig): Promise<void> {
@@ -46,18 +59,19 @@ async function writeConfig(config: OpenClawConfig): Promise<void> {
   await io.writeConfigFile({ ...(await io.readSourceConfigBestEffort()), ...config });
 }
 
-function localGatewayConfig(token?: GatewayToken): OpenClawConfig {
+function localGatewayConfig(
+  token?: GatewayToken,
+  providers?: NonNullable<OpenClawConfig["secrets"]>["providers"],
+): OpenClawConfig {
   return {
     gateway: {
       mode: "local",
       port: instance?.port,
       bind: "loopback",
-      auth: {
-        mode: "token",
-        ...(token === undefined ? {} : { token }),
-      },
+      auth: { mode: "token", ...(token === undefined ? {} : { token }) },
       controlUi: { enabled: false },
     },
+    ...(providers ? { secrets: { providers } } : {}),
   };
 }
 
@@ -82,12 +96,7 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
           id: "QA_DOCTOR_GATEWAY_TOKEN",
         }),
       );
-      const resolved = await instance.cli(
-        ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
-      );
-      const resolvedOutput = outputOf(resolved);
-      expect(resolved.code).toBe(0);
+      const resolvedOutput = await doctor();
       expect(resolvedOutput).not.toContain("Gateway token SecretRef could not be resolved");
       expect(resolvedOutput).not.toContain(resolvedValue);
 
@@ -99,55 +108,26 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
         id: "QA_DOCTOR_MISSING_GATEWAY_TOKEN",
       };
       await writeConfig(localGatewayConfig(unresolvedRef));
-      const unresolved = await instance.cli(
-        [
-          "doctor",
-          "--repair",
-          "--yes",
-          "--non-interactive",
-          "--generate-gateway-token",
-          "--no-workspace-suggestions",
-        ],
-        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
-      );
-      const unresolvedOutput = outputOf(unresolved);
-      expect(unresolved.code).toBe(0);
+      const unresolvedOutput = await doctor("--repair", "--yes", "--generate-gateway-token");
       expect(unresolvedOutput).toContain("Gateway token SecretRef could not be resolved");
       expect(unresolvedOutput).toContain(
         "Doctor will not overwrite gateway.auth.token with a plaintext value.",
       );
       expect(unresolvedOutput).not.toContain("qa-ambient-token-must-not-win");
-      const unresolvedConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
-        gateway?: { auth?: { token?: unknown } };
-      };
-      expect(unresolvedConfig.gateway?.auth?.token).toEqual(unresolvedRef);
+      expect(await readToken(instance.configPath)).toEqual(unresolvedRef);
 
       const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
       const fileSecret = "qa-file-token";
       await fs.writeFile(filePath, JSON.stringify({ gateway: { token: fileSecret } }), {
         mode: 0o600,
       });
-      await writeConfig({
-        ...localGatewayConfig({
-          source: "file",
-          provider: "filemain",
-          id: "/gateway/token",
-        }),
-        secrets: {
-          providers: {
-            filemain: {
-              source: "file",
-              path: filePath,
-            },
-          },
-        },
-      });
-      const fileResult = await instance.cli(
-        ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
+      await writeConfig(
+        localGatewayConfig(
+          { source: "file", provider: "filemain", id: "/gateway/token" },
+          { filemain: { source: "file", path: filePath } },
+        ),
       );
-      expect(fileResult.code).toBe(0);
-      const fileOutput = normalizedOutputOf(fileResult);
+      const fileOutput = normalized(await doctor());
       expect(fileOutput).not.toContain("Gateway token SecretRef could not be resolved");
       expect(fileOutput).not.toContain(fileSecret);
 
@@ -157,16 +137,11 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
         `fs.writeFileSync(${JSON.stringify(execMarker)}, 'executed');`,
         "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'qa-exec-token' } }));",
       ].join("");
-      const activeInstance = instance;
       await withSecureTestNodeCommand(async (command) => {
-        await writeConfig({
-          ...localGatewayConfig({
-            source: "exec",
-            provider: "execmain",
-            id: "gateway/token",
-          }),
-          secrets: {
-            providers: {
+        await writeConfig(
+          localGatewayConfig(
+            { source: "exec", provider: "execmain", id: "gateway/token" },
+            {
               execmain: {
                 source: "exec",
                 command,
@@ -174,59 +149,24 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
                 trustedDirs: [path.dirname(command)],
               },
             },
-          },
-        });
-        const execGated = await activeInstance.cli(
-          ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-          { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
+          ),
         );
-        expect(execGated.code).toBe(0);
-        expect(normalizedOutputOf(execGated)).toMatch(
+        expect(normalized(await doctor())).toMatch(
           /Gateway health checks skipped because gateway credentials use an exec(?:\s|│)*SecretRef\./,
         );
         await expect(fs.access(execMarker)).rejects.toThrow();
 
-        const execAllowed = await activeInstance.cli(
-          ["doctor", "--non-interactive", "--allow-exec", "--no-workspace-suggestions"],
-          { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
-        );
-        expect(execAllowed.code).toBe(0);
-        const execAllowedOutput = normalizedOutputOf(execAllowed);
+        const execAllowedOutput = normalized(await doctor("--allow-exec"));
         await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
         expect(execAllowedOutput).not.toContain("qa-exec-token");
       });
 
       delete instance.env.OPENCLAW_GATEWAY_TOKEN;
       await writeConfig(localGatewayConfig());
-      const generated = await instance.cli(
-        [
-          "doctor",
-          "--repair",
-          "--yes",
-          "--non-interactive",
-          "--generate-gateway-token",
-          "--no-workspace-suggestions",
-        ],
-        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
-      );
-      expect(generated.code).toBe(0);
-      const generatedConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
-        gateway?: { auth?: { token?: unknown } };
-      };
-      expect(typeof generatedConfig.gateway?.auth?.token).toBe("string");
-      expect(String(generatedConfig.gateway?.auth?.token).length).toBeGreaterThan(20);
-
-      console.log(
-        `[qa-doctor-auth-secretref] ${JSON.stringify({
-          resolvedRefAccepted: true,
-          unresolvedRefPreserved: true,
-          ambientFallbackRejected: true,
-          execRefGated: true,
-          execRefAllowed: true,
-          fileRefAllowed: true,
-          generatedTokenPersisted: true,
-        })}`,
-      );
+      await doctor("--repair", "--yes", "--generate-gateway-token");
+      const token = await readToken(instance.configPath);
+      expect(typeof token).toBe("string");
+      expect(token).toEqual(expect.stringMatching(/^.{21,}$/u));
     },
   );
 });

@@ -7,7 +7,6 @@ import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
-import type { SolidController } from "../lib/reactive/solid-controller-host.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -99,7 +98,7 @@ export const appSidebarProperties = {
   };
 };
 
-/** Synchronous sidebar state and controller lifecycle; Solid owns its DOM. */
+/** Synchronous sidebar state and native attachment; Solid owns its DOM. */
 export abstract class AppSidebarBase {
   declare basePath: AppSidebarProps["basePath"];
   declare activeRouteId: AppSidebarProps["activeRouteId"];
@@ -140,14 +139,15 @@ export abstract class AppSidebarBase {
   declare readonly addEventListener: HTMLElement["addEventListener"];
   declare readonly removeEventListener: HTMLElement["removeEventListener"];
   declare readonly contains: HTMLElement["contains"];
-  declare readonly matches: HTMLElement["matches"];
 
-  private readonly controllers = new Set<SolidController>();
   private readonly listeners = new Set<() => void>();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
-  contextualSidebar: ContextualSidebar | undefined;
+  readContextualSidebar: () => ContextualSidebar | undefined = () => undefined;
+  get contextualSidebar(): ContextualSidebar | undefined {
+    return this.isConnected ? this.readContextualSidebar() : undefined;
+  }
 
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
@@ -176,7 +176,6 @@ export abstract class AppSidebarBase {
       "addEventListener",
       "removeEventListener",
       "contains",
-      "matches",
     ] as const) {
       const value = hostElement[key];
       Object.defineProperty(this, key, {
@@ -188,7 +187,7 @@ export abstract class AppSidebarBase {
   bindInputs(props: AppSidebarProps, context: ApplicationContext): void {
     this.props = props;
     this.context = context;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   attach(): void {
@@ -196,11 +195,8 @@ export abstract class AppSidebarBase {
       return;
     }
     this.attached = true;
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
     this.connectedCallback();
-    this.requestUpdate();
+    this.invalidate();
   }
   detach(): void {
     if (!this.attached) {
@@ -208,9 +204,6 @@ export abstract class AppSidebarBase {
     }
     this.attached = false;
     this.disconnectedCallback();
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
     this.finishUpdate?.(false);
     this.finishUpdate = undefined;
   }
@@ -218,20 +211,11 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  addController(controller: SolidController): void {
-    this.controllers.add(controller);
-    if (this.isConnected) {
-      controller.hostConnected?.();
-    }
-  }
-  removeController(controller: SolidController): void {
-    this.controllers.delete(controller);
-  }
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  requestUpdate(): void {
+  invalidate(): void {
     if (!this.finishUpdate) {
       this.complete = new Promise((resolve) => {
         this.finishUpdate = resolve;
@@ -249,9 +233,6 @@ export abstract class AppSidebarBase {
       return;
     }
     this.willUpdate();
-    for (const controller of this.controllers) {
-      controller.hostUpdate?.();
-    }
   }
   commitRender(): void {
     if (!this.isConnected) {
@@ -259,9 +240,6 @@ export abstract class AppSidebarBase {
     }
     const finish = this.finishUpdate;
     this.finishUpdate = undefined;
-    for (const controller of this.controllers) {
-      controller.hostUpdated?.();
-    }
     this.updated();
     finish?.(true);
   }

@@ -179,7 +179,7 @@ function QuotaRow(props: {
         aria-valuenow={props.usedPercent}
       >
         <span
-          class={severity() ? `context-usage__limit-fill--${severity()}` : ""}
+          class={{ [`context-usage__limit-fill--${severity()}`]: Boolean(severity()) }}
           style={{ width: `${props.usedPercent}%` }}
         />
       </div>

@@ -379,11 +379,8 @@ function touch(cell: ReplicaCell): void {
       forgetUnused(candidate);
       continue;
     }
-    if (
-      pool.cells.size <= MAX_SNAPSHOTS &&
-      pool.snapshots <= MAX_SNAPSHOTS &&
-      (pool.bytes <= MAX_BYTES || pool.snapshots === 1)
-    ) {
+    // Live handles retain empty cells; only resident payloads consume the cache budget.
+    if (pool.snapshots <= MAX_SNAPSHOTS && (pool.bytes <= MAX_BYTES || pool.snapshots === 1)) {
       break;
     }
     discard(candidate);
@@ -555,6 +552,7 @@ export function readSessionActorRowFacts(params: {
     sessionKey: params.sessionKey,
     entry: attachSessionEntrySnapshots({ ...state.entry }, {}, "list"),
     hasBoard: projection.hasBoard,
+    transcriptAssistantMessage: "unknown",
     ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
   });
 }

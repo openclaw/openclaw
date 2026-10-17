@@ -57,24 +57,22 @@ type SummaryScope = {
 };
 
 function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope }) {
+  // The keyed parent replaces this entire history lifetime when its scope changes.
   const scope = untrack(() => props.scope);
   const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
   const [error, setError] = createSignal(false);
   let alive = true;
   let snapshot: ChatHistoryResult | null = null;
   const current = () =>
-    untrack(
-      () =>
-        alive &&
-        !scope.signal.aborted &&
-        props.presented &&
-        props.gateway === scope.gateway &&
-        scope.gateway.snapshot.phase === "connected" &&
-        scope.gateway.snapshot.client === scope.client &&
-        scope.gateway.connectionRevision === scope.revision &&
-        props.session?.sessionKey === scope.session.sessionKey &&
-        props.session?.agentId === scope.session.agentId,
-    );
+    alive &&
+    !scope.signal.aborted &&
+    props.presented &&
+    props.gateway === scope.gateway &&
+    scope.gateway.snapshot.phase === "connected" &&
+    scope.gateway.snapshot.client === scope.client &&
+    scope.gateway.connectionRevision === scope.revision &&
+    props.session?.sessionKey === scope.session.sessionKey &&
+    props.session?.agentId === scope.session.agentId;
   onCleanup(() => {
     alive = false;
   });
@@ -215,6 +213,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
         })
       : null;
   });
+  // Hydrate the external avatar identity owner for the visible message authors.
   createEffect(
     () => ({
       owner: identities()?.read(),

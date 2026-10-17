@@ -48,6 +48,9 @@ function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {
 
 export function ActivityPageView(props: { page: ActivityPageState }) {
   const state = () => props.page.read();
+  const liveSnapshot = () => props.page.liveActivity.read();
+  const pageRevision = () =>
+    props.page.revision() + props.page.liveActivity.revision() + props.page.agents.revision();
   const [filters, setFilters] = createStore({
     filterText: "",
     toolFilter: "",
@@ -56,7 +59,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
   });
   const update = (patch: Partial<typeof filters>) =>
     setFilters((draft) => Object.assign(draft, patch));
-  const liveRevision = createMemo(() => state().liveActivity.snapshot.revision);
+  const liveRevision = createMemo(() => liveSnapshot().revision);
   const [expandedIds, setExpandedIds] = createSignal(() => {
     liveRevision();
     return new Set<string>();
@@ -75,16 +78,20 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
   const pending = () => !state().routeData || !state().routeLocation;
   const presence = () => projectPresencePayload(state().presencePayload).users;
   const sessionHost = () => ({
-    agentsList: state().context.agents.state.agentsList,
+    agentsList: props.page.agents.read().agentsList,
     hello: state().context.gateway.snapshot.hello,
   });
   let stream: HTMLDivElement | undefined;
   let atBottom = true;
   let previousRevision = -1;
-  let previousEntries: ReturnType<ActivityPageState["read"]>["entries"] | undefined;
+  let previousEntries: ReturnType<ActivityPageState["liveActivity"]["read"]>["entries"] | undefined;
   let previousAutoFollow = true;
   const follow = createMemo(
-    () => ({ entries: state().entries, enabled: filters.autoFollow, revision: liveRevision() }),
+    () => ({
+      entries: liveSnapshot().entries,
+      enabled: filters.autoFollow,
+      revision: liveRevision(),
+    }),
     {
       equals: (previous, next) =>
         previous.entries === next.entries &&
@@ -129,7 +136,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
   };
   onSettled(() => listen(document, "visibilitychange", visibilityChanged));
   const expiry = createMemo(() => {
-    props.page.revision();
+    pageRevision();
     presentationTime();
     if (!visible()) {
       return undefined;
@@ -210,7 +217,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                     null,
                 }}
                 presenceViewers={presence()}
-                presentationRevision={props.page.revision() + presentationTime()}
+                presentationRevision={pageRevision() + presentationTime()}
                 result={state().sessionActivity.result}
                 loading={pending() || state().sessionActivity.loading}
                 retrying={state().sessionActivity.retrying}
@@ -284,16 +291,13 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                   error={state().sessionActivity.error}
                   onRetry={() => props.page.syncSessionActivity("retry")}
                 />
-                <Show when={state().liveActivity?.snapshot.error}>
+                <Show when={liveSnapshot().error}>
                   <div role="alert">
-                    <SettingsStatus
-                      kind="danger"
-                      label={state().liveActivity?.snapshot.error ?? ""}
-                    />
+                    <SettingsStatus kind="danger" label={liveSnapshot().error ?? ""} />
                     <button
                       type="button"
                       class="btn btn--sm"
-                      onClick={() => state().liveActivity?.retry()}
+                      onClick={() => props.page.retryLiveActivity()}
                     >
                       {t("common.retry")}
                     </button>
@@ -301,7 +305,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                 </Show>
                 <LiveActivityView
                   basePath={state().context.basePath}
-                  entries={state().entries}
+                  entries={liveSnapshot().entries}
                   filterText={filters.filterText}
                   statusFilters={filters.statusFilters}
                   toolFilter={filters.toolFilter}
@@ -313,9 +317,9 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                     update({ statusFilters: { ...filters.statusFilters, [status]: enabled } })
                   }
                   onToggleAutoFollow={(next) => update({ autoFollow: next })}
-                  onClear={() => state().liveActivity?.clear()}
+                  onClear={() => props.page.clearLiveActivity()}
                   onExpandAll={() =>
-                    setExpandedIds(new Set(state().entries.map((entry) => entry.id)))
+                    setExpandedIds(new Set(liveSnapshot().entries.map((entry) => entry.id)))
                   }
                   onCollapseAll={() => setExpandedIds(new Set())}
                   onEntryToggle={(id, open) => setExpandedIds((ids) => toggle(ids, id, open))}

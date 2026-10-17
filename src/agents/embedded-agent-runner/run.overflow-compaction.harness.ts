@@ -230,9 +230,7 @@ export const mockedBuildEmbeddedRunPayloads = vi.fn<
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
 >(() => []);
 const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
-const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
-  async (_sessionKey?: string) => undefined,
-);
+const mockedWaitForSessionMaintenance = vi.fn(async (_sessionKey?: string) => undefined);
 const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
 const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 const mockedTruncateOversizedToolResultsInSession = vi.fn(() => ({
@@ -489,8 +487,8 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
-  mockedWaitForDeferredTurnMaintenanceForSession.mockReset();
-  mockedWaitForDeferredTurnMaintenanceForSession.mockResolvedValue(undefined);
+  mockedWaitForSessionMaintenance.mockReset();
+  mockedWaitForSessionMaintenance.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
   mockedResolveLiveToolResultMaxChars.mockReset();
@@ -878,9 +876,13 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     };
   });
 
-  vi.doMock("./context-engine-maintenance.js", () => ({
+  vi.doMock("./context-engine-maintenance.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./context-engine-maintenance.js")>()),
     runContextEngineMaintenance: mockedRunContextEngineMaintenance,
-    waitForDeferredTurnMaintenanceForSession: mockedWaitForDeferredTurnMaintenanceForSession,
+  }));
+  vi.doMock("../session-maintenance/coordinator.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../session-maintenance/coordinator.js")>()),
+    waitForSessionMaintenance: mockedWaitForSessionMaintenance,
   }));
 
   vi.doMock("./model.js", () => ({

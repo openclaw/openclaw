@@ -1,12 +1,11 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { createEffect, createMemo, createStore } from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type {
   CiAutomationOption,
   CiAutomationOptions,
@@ -44,13 +43,9 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   });
   const saving = createMemo(() => Object.keys(state.pending).length > 0);
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-  const gatewayProjection = projectSource<
-    ApplicationGateway | undefined,
-    ApplicationGatewaySnapshot | undefined
-  >(undefined, {
-    read: (source) => source?.snapshot,
-    subscribe: (source, notify) => source?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
+  const gatewayProjection = createMemo(() => {
+    const source = props.gateway;
+    return source && projectOwner(source, (gateway) => gateway.snapshot);
   });
   let connectionRevision = -1;
   let connectionGeneration = -1;
@@ -71,9 +66,9 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   createEffect(
     () => props.gateway,
     (source) => {
-      gatewayProjection.replaceSource(source);
       reset();
-      const stopGateway = gatewayProjection.subscribe(() => {
+      // Retire request authority on every connection transition, before subsequent events.
+      const stopGateway = source?.subscribe(() => {
         syncConnection();
         queueRefresh();
       });
@@ -337,7 +332,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   }
 
   const view = createMemo<ChatCiAutomationProps>(() => {
-    const snapshot = gatewayProjection.read();
+    const snapshot = gatewayProjection()?.read();
     const unavailable = !automationTarget(props)
       ? t("chat.pullRequests.automationSessionRequired")
       : !canRead(snapshot)

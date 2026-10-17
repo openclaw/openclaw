@@ -16,6 +16,7 @@ import {
   readSqliteDatabaseGeneration,
   isSqliteDatabaseAdmissionFactCurrent as valid,
   type Admission,
+  type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission-record.js";
 
@@ -95,7 +96,7 @@ export class SqliteDatabaseCleanCloseSeals {
     private readonly publishFact: (
       record: Admission,
       key: Pick<SqliteDatabaseAdmissionKey<unknown>, "name" | "schemaDependent" | "lifetime">,
-      value: unknown,
+      value: AdmissionFactValue,
       revision: number,
     ) => void,
     private readonly references: {
@@ -156,7 +157,7 @@ export class SqliteDatabaseCleanCloseSeals {
         this.publishFact(
           record,
           { name, schemaDependent, lifetime: "process" },
-          value,
+          { value },
           readSqliteDatabaseFactRevision(record, schemaDependent),
         );
       }

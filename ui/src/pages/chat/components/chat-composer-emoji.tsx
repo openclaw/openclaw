@@ -58,6 +58,7 @@ export function createComposerEmojiMenu() {
   function popupRef(overlay?: Overlay) {
     unsubscribePopup?.();
     popup = overlay ?? null;
+    // A close edge dismisses the editing target even if the overlay reopens before rendering.
     unsubscribePopup = popup?.subscribe((open) => {
       if (!open && state.items.length) {
         dismiss(textarea);

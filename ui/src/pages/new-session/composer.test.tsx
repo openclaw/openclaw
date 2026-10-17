@@ -12,14 +12,14 @@ import {
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
-import { createNewSessionComposerTextarea } from "./composer-controller.ts";
+import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import {
   composerContext,
   renderComposer,
   resetComposerTestFixtures,
 } from "./composer.test-support.ts";
 
-function composerTextarea(composer: HTMLElement): HTMLTextAreaElement {
+function getComposerTextarea(composer: HTMLElement): HTMLTextAreaElement {
   const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
   if (!textarea) {
     throw new Error("Expected composer textarea");
@@ -53,7 +53,7 @@ describe("new-session placeholder animation", () => {
     vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
     const view = renderComposer();
     document.body.append(view.container);
-    const textarea = composerTextarea(view.composer);
+    const textarea = getComposerTextarea(view.composer);
     const target = textarea.getAttribute("aria-label")!;
     const advance = (timestamp: number) => {
       const callbacks = [...frames.values()];
@@ -119,7 +119,7 @@ describe("new-session composer keyboard submission", () => {
       },
       onSubmit,
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
 
     textarea.value = "/";
     textarea.setSelectionRange(1, 1);
@@ -198,12 +198,12 @@ describe("new-session composer keyboard submission", () => {
     const request = vi.fn(() => response.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const context = composerContext({ client });
-    const { composer, rerenderForAgent, textareaController } = renderComposer({
+    const { composer, rerenderForAgent, composerTextarea } = renderComposer({
       agentId: "writer",
       context,
       message: "$",
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
 
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
@@ -228,7 +228,7 @@ describe("new-session composer keyboard submission", () => {
       ],
     });
     await waitForFast(() => {
-      expect(textareaController.skillMenu.state.skillCommandRefreshPending).toBe(false);
+      expect(composerTextarea.skillMenu.state.skillCommandRefreshPending).toBe(false);
     });
     expect(composer.querySelector(".skill-menu")?.textContent ?? "").not.toContain("writer_only");
     expect(getSkillCommandCompletions("writer_only")).toEqual([]);
@@ -245,12 +245,12 @@ describe("new-session composer keyboard submission", () => {
     } as unknown as GatewayBrowserClient;
     const snapshot = { client: firstClient };
     const context = composerContext(snapshot);
-    const { composer, rerender, textareaController } = renderComposer({
+    const { composer, rerender, composerTextarea } = renderComposer({
       agentId: "writer",
       context,
       message: "$",
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
 
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
@@ -276,7 +276,7 @@ describe("new-session composer keyboard submission", () => {
       ],
     });
     await waitForFast(() => {
-      expect(textareaController.skillMenu.state.skillCommandRefreshPending).toBe(false);
+      expect(composerTextarea.skillMenu.state.skillCommandRefreshPending).toBe(false);
     });
     expect(composer.querySelector(".skill-menu")?.textContent ?? "").not.toContain(
       "previous_client_only",
@@ -300,7 +300,7 @@ describe("new-session composer keyboard submission", () => {
         message = next;
       },
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
 
     textarea.value = "$";
     textarea.setSelectionRange(1, 1);
@@ -327,7 +327,7 @@ describe("new-session composer keyboard submission", () => {
     const onSubmit = vi.fn();
     const { composer, rerenderForDraftRoute } = renderComposer({ onSubmit });
 
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     textarea.value = "$";
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -367,7 +367,7 @@ describe("new-session composer keyboard submission", () => {
         message = next;
       },
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
 
     textarea.value = "Use /release_ and /office_";
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -393,7 +393,7 @@ describe("new-session composer keyboard submission", () => {
       canSubmit: false,
       onSubmit,
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
@@ -421,7 +421,7 @@ describe("new-session composer keyboard submission", () => {
       onBackgroundSubmit,
       requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
@@ -440,7 +440,7 @@ describe("new-session composer keyboard submission", () => {
   it("keeps an IME confirmation Enter from starting a session", () => {
     const onSubmit = vi.fn();
     const { composer } = renderComposer({ message: "日本語の入力", onSubmit });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
     textarea.dispatchEvent(compositionEnd);
@@ -490,7 +490,7 @@ describe("new-session composer keyboard submission", () => {
       onBackgroundSubmit,
       requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
@@ -517,7 +517,7 @@ describe("new-session composer keyboard submission", () => {
       submitDisabledReason: "Restoring your last session setup…",
       onSubmit,
     });
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" });
 
     textarea.dispatchEvent(event);
@@ -612,7 +612,7 @@ describe("new-session composer sizing lifecycle", () => {
   it("leaves native input geometry to the deferred sizing owner", () => {
     vi.spyOn(CSS, "supports").mockReturnValue(true);
     const { composer } = renderComposer();
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     const read = vi.fn(() => 42);
     Object.defineProperty(textarea, "scrollHeight", { configurable: true, get: read });
     Object.defineProperty(textarea, "clientHeight", { configurable: true, get: read });
@@ -647,9 +647,9 @@ describe("new-session composer sizing lifecycle", () => {
       disconnect = disconnect;
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    const textareaController = createNewSessionComposerTextarea();
+    const composerTextarea = createNewSessionComposerTextarea();
     const onInput = vi.fn();
-    const first = renderComposer({ textareaController, onInput });
+    const first = renderComposer({ composerTextarea, onInput });
     document.body.append(first.container);
     const textarea = first.composer.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) {
@@ -685,7 +685,7 @@ describe("new-session composer sizing lifecycle", () => {
     expect(readsAfterAttach).toBeGreaterThan(0);
     expect(resizeObserverConstructed).toHaveBeenCalledOnce();
     expect(disconnect).not.toHaveBeenCalled();
-    textareaController.disconnect();
+    composerTextarea.disconnect();
     expect(disconnect).toHaveBeenCalledOnce();
     first.container.remove();
   });
@@ -803,7 +803,7 @@ describe("new-session composer attachment drops", () => {
   it("keeps non-file drops native inside the textarea and cancels them elsewhere", () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
 
     const dragenter = createDragEvent("dragenter", [], ["text/plain"]);
     composer.dispatchEvent(dragenter);
@@ -843,7 +843,7 @@ describe("new-session composer attachment drops", () => {
     expect(replace).not.toHaveBeenCalled();
     expect(attachmentDraft.attachments).toEqual([]);
 
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     expect(textarea.disabled).toBe(true);
     const disabledTextareaDrop = createDragEvent("drop", [], ["text/uri-list"]);
     textarea.dispatchEvent(disabledTextareaDrop);
@@ -853,7 +853,7 @@ describe("new-session composer attachment drops", () => {
 
 describe("new-session composer dictation insertion", () => {
   function draftTextarea(composer: HTMLElement, value: string, start: number, end = start) {
-    const textarea = composerTextarea(composer);
+    const textarea = getComposerTextarea(composer);
     textarea.value = value;
     textarea.selectionStart = start;
     textarea.selectionEnd = end;
@@ -861,88 +861,88 @@ describe("new-session composer dictation insertion", () => {
   }
 
   it("inserts at the caret the writer left, not where the caret ended up", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship it" });
     const textarea = draftTextarea(composer, "ship it", 4);
 
     // Pressing the microphone blurs the draft, so the caret is read then rather
     // than when the transcript comes back and the caret has moved.
-    textareaController.captureSelection();
+    composerTextarea.captureSelection();
     textarea.selectionStart = textarea.value.length;
     textarea.selectionEnd = textarea.value.length;
 
-    expect(textareaController.insertTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
     expect(textarea.value).toBe("ship please it");
   });
 
   it("preserves edits made after Stop before inserting a late transcript", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship it" });
     const textarea = draftTextarea(composer, "ship it", 4);
-    textareaController.captureSelection();
+    composerTextarea.captureSelection();
     textarea.value = "ship it today";
     textarea.selectionStart = 4;
     textarea.selectionEnd = 4;
 
-    expect(textareaController.insertTranscript("please", true)).toBe("ship please it today");
+    expect(composerTextarea.insertTranscript("please", true)).toBe("ship please it today");
     expect(textarea.value).toBe("ship please it today");
   });
 
   it("replaces the range the writer had highlighted", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship the thing" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship the thing" });
     draftTextarea(composer, "ship the thing", 5, 14);
-    textareaController.captureSelection();
+    composerTextarea.captureSelection();
 
-    expect(textareaController.insertTranscript("it now")).toBe("ship it now");
+    expect(composerTextarea.insertTranscript("it now")).toBe("ship it now");
   });
 
   it("appends when no caret was captured", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship" });
     draftTextarea(composer, "ship", 0);
 
-    expect(textareaController.insertTranscript("it")).toBe("ship it");
+    expect(composerTextarea.insertTranscript("it")).toBe("ship it");
   });
 
   it("reads uncommitted keystrokes from the draft rather than the committed value", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship" });
     // The writer kept typing after the last commit upward; the element holds it.
     draftTextarea(composer, "ship the", 8);
-    textareaController.captureSelection();
+    composerTextarea.captureSelection();
 
-    expect(textareaController.insertTranscript("thing")).toBe("ship the thing");
+    expect(composerTextarea.insertTranscript("thing")).toBe("ship the thing");
   });
 
   it("reports nothing to insert for a blank transcript so the draft is left alone", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship it" });
     const textarea = draftTextarea(composer, "ship it", 7);
-    textareaController.captureSelection();
+    composerTextarea.captureSelection();
 
-    expect(textareaController.insertTranscript("   ")).toBeNull();
+    expect(composerTextarea.insertTranscript("   ")).toBeNull();
     expect(textarea.value).toBe("ship it");
   });
 
   it("spends a captured caret once, so a later transcript appends instead of reusing it", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship it" });
     draftTextarea(composer, "ship it", 0);
-    textareaController.captureSelection();
+    composerTextarea.captureSelection();
 
-    expect(textareaController.insertTranscript("please")).toBe("please ship it");
-    expect(textareaController.insertTranscript("now")).toBe("please ship it now");
+    expect(composerTextarea.insertTranscript("please")).toBe("please ship it");
+    expect(composerTextarea.insertTranscript("now")).toBe("please ship it now");
   });
 
   it("previews from the captured draft without consuming or mutating it", () => {
-    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const { composer, composerTextarea } = renderComposer({ message: "ship it" });
     const textarea = draftTextarea(composer, "ship it", 4);
-    textareaController.captureSelection();
+    composerTextarea.captureSelection();
 
-    expect(textareaController.previewTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.previewTranscript("please")).toBe("ship please it");
     expect(textarea.value).toBe("ship it");
-    expect(textareaController.insertTranscript("please")).toBe("ship please it");
+    expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
   });
 
   it("has nothing to insert into once the draft is gone", () => {
-    const { textareaController } = renderComposer({ message: "ship it" });
-    textareaController.captureSelection();
-    textareaController.disconnect();
+    const { composerTextarea } = renderComposer({ message: "ship it" });
+    composerTextarea.captureSelection();
+    composerTextarea.disconnect();
 
-    expect(textareaController.insertTranscript("it")).toBeNull();
+    expect(composerTextarea.insertTranscript("it")).toBeNull();
   });
 });

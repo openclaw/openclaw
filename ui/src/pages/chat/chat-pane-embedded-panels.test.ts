@@ -34,7 +34,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
 import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
 } from "./components/chat-message-media.ts";
 import {
@@ -307,7 +307,7 @@ describe("chat pane embedded panels", () => {
               revision();
               return {
                 connectionEpoch: 1,
-                onRequestUpdate: rerender,
+                mediaOwner: rerender,
                 resolveArtifactDownload: firstResolver,
               };
             },
@@ -319,7 +319,7 @@ describe("chat pane embedded panels", () => {
         },
         { container },
       );
-      onTestFinished(() => releaseChatMediaResourceSubscriber(rerender));
+      onTestFinished(() => releaseChatMediaResourceOwner(rerender));
       const open = await vi.waitFor(() =>
         expectDefined(
           container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand"),
@@ -448,7 +448,7 @@ describe("chat pane embedded panels", () => {
         fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
         loadFullAssistantMessage: createSidebarFullMessageLoader(state, context.gateway),
         connectionEpoch: state.connectionEpoch,
-        onRequestUpdate: renderAttachment,
+        mediaOwner: renderAttachment,
       } as ChatProps;
       const [current, setCurrent] = createSignal(chat);
       const application = createSolidApplicationContextProvider(context);
@@ -465,9 +465,9 @@ describe("chat pane embedded panels", () => {
       function renderAttachment() {
         setCurrent({ ...chat });
         flush();
-        controller.hostUpdated();
+        controller.update();
       }
-      controller.hostConnected();
+      controller.start();
       try {
         renderAttachment();
         const open = await vi.waitFor(() => {
@@ -489,7 +489,6 @@ describe("chat pane embedded panels", () => {
               chat,
               content,
               host: state,
-              requestUpdate: vi.fn(),
             }),
           { container: mount, wrapper: application.wrapper },
         );
@@ -526,9 +525,9 @@ describe("chat pane embedded panels", () => {
         }
       } finally {
         view.unmount();
-        controller.hostDisconnected();
+        controller.dispose();
         mount.remove();
-        releaseChatMediaResourceSubscriber(renderAttachment);
+        releaseChatMediaResourceOwner(renderAttachment);
         resetTranscriptTestDom();
       }
     },

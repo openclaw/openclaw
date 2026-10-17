@@ -68,12 +68,16 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       sandboxed: false,
       hits: [visible, privateHit, archived],
     };
-    expect(await filterMemorySearchHitsBySessionVisibility(request)).toEqual([visible]);
-    combinedSessionStore[sibling] = { ...stored("past", "channel:c111"), space: undefined };
     expect(await filterMemorySearchHitsBySessionVisibility(request)).toEqual([]);
+    const capturedTargets = vi.fn();
+    const ownedRequest = { ...request, captureChannelTargets: capturedTargets };
+    expect(await filterMemorySearchHitsBySessionVisibility(ownedRequest)).toEqual([visible]);
+    expect(capturedTargets).toHaveBeenCalledWith([expect.objectContaining({ hit: visible })]);
+    combinedSessionStore[sibling] = { ...stored("past", "channel:c111"), space: undefined };
+    expect(await filterMemorySearchHitsBySessionVisibility(ownedRequest)).toEqual([]);
     combinedSessionStore[sibling] = stored("past", "channel:c111");
     combinedSessionStore[other] = stored("past", "channel:c222");
-    expect(await filterMemorySearchHitsBySessionVisibility(request)).toEqual([]);
+    expect(await filterMemorySearchHitsBySessionVisibility(ownedRequest)).toEqual([]);
   });
 
   it("rechecks channel routes after the guard boundary", async () => {

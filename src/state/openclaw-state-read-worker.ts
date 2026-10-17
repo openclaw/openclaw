@@ -10,6 +10,7 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -57,12 +58,11 @@ export function decodeOpenClawStateReadReply(
   };
 }
 
-type ReadOperation = { service(): void; close(): Promise<void> };
+type ReadOperation = { close(): Promise<void> };
 type ReadRuntime = {
   nativeSource: RetainedNativeWorkerSource;
   workerUrl: URL;
   operations: Set<ReadOperation>;
-  servicing: boolean;
   sealed: boolean;
   pool?: ReadPool;
   awaitedPool?: ReadPool;
@@ -195,7 +195,6 @@ export function captureOpenClawStateReadSource() {
       nativeSource,
       workerUrl: captured.moduleUrl,
       operations: new Set(),
-      servicing: false,
       sealed: false,
     };
     nativeSource.retain(created, () => {
@@ -241,13 +240,12 @@ export function captureOpenClawStateReadSource() {
         onChunkAsync,
         awaitedOnly,
       ),
-    own(service: () => void, close: () => Promise<void>): () => void {
+    own(close: () => Promise<void>): () => void {
       if (state.sealed || state.closing) {
         throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
       }
       const inContext = AsyncLocalStorage.snapshot();
       const operation: ReadOperation = {
-        service: () => inContext(service),
         close: () => inContext(close),
       };
       state.operations.add(operation);
@@ -257,29 +255,6 @@ export function captureOpenClawStateReadSource() {
         state.operations.delete(operation);
         admitted.delete(operation);
       };
-    },
-    service() {
-      if (state.servicing) {
-        return;
-      }
-      state.servicing = true;
-      const errors: unknown[] = [];
-      try {
-        // Reentrant admission belongs to the next service pass, not this captured frontier.
-        const operations = Array.from(state.operations);
-        for (const operation of operations) {
-          if (state.operations.has(operation)) {
-            try {
-              operation.service();
-            } catch (error) {
-              errors.push(error);
-            }
-          }
-        }
-      } finally {
-        state.servicing = false;
-      }
-      throwSqliteLifecycleErrors(errors, "Shared-state reader source cleanup failed");
     },
   };
 }
@@ -323,6 +298,7 @@ function createReadTransport(
     authority: OpenClawStateReadAuthority,
     expectedIdentity?: string,
     snapshotRoot?: string,
+    postgresSnapshot?: string,
   ) => {
     const inContext = AsyncLocalStorage.snapshot();
     let task: ReadTask | undefined;
@@ -372,6 +348,7 @@ function createReadTransport(
         checkFreshAdmission,
         expectedIdentity,
         snapshotRoot,
+        postgresSnapshot,
         command: { ...readCommand },
       };
       const pool = readPool(state, ownsAdmission(), awaitedOnly);
@@ -380,16 +357,23 @@ function createReadTransport(
       task = startReadTask(
         pool,
         () => {
-          const turn = acquireSqliteDatabaseAdmissionTurn(resolveSqliteDatabaseFilePath(location));
-          if (!turn) {
+          const physicalLocation = resolveSqliteDatabaseFilePath(location);
+          const requestForDispatch = () => {
             authority.assertCurrent();
+            // Queue admission can outlive the captured file at this pathname.
+            if (expectedIdentity !== undefined) {
+              assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
+            }
             return request;
+          };
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+          if (!turn) {
+            return requestForDispatch();
           }
           return turn.then((release) => {
             releaseAdmission = release;
             try {
-              authority.assertCurrent();
-              return request;
+              return requestForDispatch();
             } catch (error) {
               releaseAdmission();
               releaseAdmission = undefined;
@@ -475,6 +459,7 @@ function createReadTransport(
       authority,
       source.expectedIdentity,
       source.snapshotRoot,
+      source.postgresSnapshot,
     ).operation;
   const startClose = (): RetainedOperation<void> => {
     closed = true;

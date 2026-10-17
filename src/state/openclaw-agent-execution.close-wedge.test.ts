@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as backoff from "../infra/backoff.js";
@@ -9,8 +10,9 @@ import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-cont
 import {
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
-  type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolveSqliteBrokerWorkerCount } from "../infra/worker-pool-sizing.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
@@ -176,13 +178,11 @@ it.each(["retry", "deadline", "shutdown"] as const)(
 
 function executionSource(
   observe?: (authority: SqliteWorkerExecutionAuthority) => void,
-  beforeAuthorize?: (request: SqliteWorkerAdmissionRequest) => void,
 ): AgentDatabaseRequestExecutionSource {
   return {
     assertCurrent: () => undefined,
     createAdmission: (binding) => () => {
       const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-        beforeAuthorize?.(request);
         binding.authorize(request);
         const authority = readSqliteWorkerExecutionAuthority(admission);
         if (authority) {
@@ -350,20 +350,19 @@ it("keeps another agent's admitted database usable after a deleted agent refuses
   );
   const refused = capture(env, "removed");
   let survivors: Promise<PromiseSettledResult<unknown>[]> | undefined;
-  const refusingSource = executionSource(undefined, (request) => {
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
     if (
       !survivors &&
-      request.stage === "prepare" &&
-      request.facts &&
-      typeof request.facts === "object" &&
-      "kind" in request.facts &&
-      request.facts.kind === "shared-owner"
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === refused.path
     ) {
       survivors = Promise.allSettled(admitted.map((survivor) => readEntries(survivor, [])));
     }
+    admit(request, grant);
   });
   try {
-    await expect(refused.prepare(refusingSource)).rejects.toThrow("agent removed is deleted");
+    await expect(refused.prepare(source)).rejects.toThrow("agent removed is deleted");
     expect(survivors).toBeDefined();
     const results = await survivors;
     for (const survivor of admitted) {
@@ -382,6 +381,7 @@ it("keeps another agent's admitted database usable after a deleted agent refuses
       await repeated.release();
     }
   } finally {
+    observed.mockRestore();
     await Promise.allSettled([
       retained.release(),
       refused.release(),

@@ -1379,7 +1379,13 @@ describe("loadChatHistory filtering", () => {
           type: "hello-ok",
           protocol: 4,
           auth: { role: "operator", scopes: [] },
-          snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+              mainKey: "main",
+              mainSessionKey: "agent:ops:main",
+            },
+          },
         },
       },
     );
@@ -1768,19 +1774,20 @@ describe("loadChatHistory retry handling", () => {
     const thirdLoad = loadChatHistory(state);
 
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
     ]);
     expect(state.chatMessages).toEqual([pending]);
 
     staleHistory.resolve(createAssistantHistory("stale history"));
     await firstLoad;
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
       [
         "chat.history",
         {
           sessionKey: "main",
           ...historyBudget,
+          knownState: {},
           inputRunIds: ["same-session-pending-run"],
         },
       ],

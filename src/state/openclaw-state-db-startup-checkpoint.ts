@@ -86,7 +86,7 @@ const STARTUP_CHECKPOINT_SCHEMA = `
     ON state_leases(expires_at, scope, lease_key)
     WHERE expires_at IS NOT NULL;
   CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-    ON state_leases(owner, updated_at DESC);
+    ON state_leases(owner);
 `;
 const checkpointAdmission = createStateSchemaAdmission("state.startup-checkpoint", (value) =>
   value === true ? true : undefined,

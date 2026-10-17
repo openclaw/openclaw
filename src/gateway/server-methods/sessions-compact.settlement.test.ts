@@ -12,6 +12,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import * as settlementOwner from "./session-run-settlement.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
@@ -54,14 +55,20 @@ it.each(["committed", "failed"] as const)(
         },
       );
       const respond = vi.fn();
-      const compact = sessionCompactHandlers["sessions.compact"]!({
-        req: { type: "req", id: "compact", method: "sessions.compact" },
-        params: { key: scope.sessionKey, maxLines: 2 },
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-      });
+      const compact = sessionCompactHandlers["sessions.compact"]!(
+        bindInProcessRequestMutationAuthority(
+          {
+            req: { type: "req", id: "compact", method: "sessions.compact" },
+            params: { key: scope.sessionKey, maxLines: 2 },
+            client: null,
+            isWebchatConnect: () => false,
+            respond,
+            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          },
+          undefined,
+          undefined,
+        ),
+      );
       try {
         await awaitGateBeforeSettlement(
           waiting.promise,

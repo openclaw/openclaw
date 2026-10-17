@@ -10,7 +10,6 @@ import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import type { MigrationsMemoryPlanResult } from "../../../packages/gateway-protocol/src/schema/migrations.ts";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
@@ -907,9 +906,8 @@ function normalizeScenario(
     ],
     hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities ?? false,
     featureCapabilities: scenario.featureCapabilities ?? [],
-    connectCapabilities: scenario.connectCapabilities ?? [
-      GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
-    ],
+    // This fixture answers catalog RPCs; snapshot scenarios publish their own events.
+    connectCapabilities: scenario.connectCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     deferredRequests: scenario.deferredRequests ?? [],
@@ -1641,7 +1639,7 @@ function installControlUiMockGateway(
     if (socket && !socket.sessionMessageSubscriptions.allows(event, payload)) {
       return;
     }
-    socket?.deliver({ event, payload, seq: ++seq, type: "event" });
+    socket?.deliver(presence.eventFrame(socket.sessionMessageSubscriptions, event, payload, ++seq));
   }
 
   function stopRepeatingSessionEvents(): void {

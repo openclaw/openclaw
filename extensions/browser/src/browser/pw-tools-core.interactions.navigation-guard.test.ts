@@ -1,5 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { heldAction, managedDownload, withFakeTimers } from "./pw-tools-core.guard-test-support.js";
 import {
   getPwToolsCoreNavigationGuardMocks,
   getPwToolsCoreSessionMocks,
@@ -23,6 +24,12 @@ const localPageUrl = "http://127.0.0.1:9222/json/version";
 const strictClick = () => mod.clickViaPlaywright({ ...strict(), ref: "1" });
 const hoverAction = { kind: "hover", ref: "1" } as const;
 const downloadGrace = { firstEventGraceMs: 250, maxWaitMs: 1_000, quietMs: 250 };
+function act(
+  action: Parameters<typeof executeActViaPlaywright>[0]["action"],
+  options: Pick<Parameters<typeof executeActViaPlaywright>[0], "signal" | "evaluateEnabled"> = {},
+) {
+  return executeActViaPlaywright({ ...strict(), action, ...options });
+}
 
 function install(page: Record<string, unknown>, locator?: Record<string, unknown>) {
   setPwToolsCoreCurrentPage(page);
@@ -43,9 +50,15 @@ function captureDownloads(
   session.beginActionDownloadCaptureOnPage.mockReturnValueOnce({ drain, dispose });
   return dispose;
 }
-async function withFakeTimers<T>(run: () => Promise<T>): Promise<T> {
-  vi.useFakeTimers();
-  return await run().finally(() => vi.useRealTimers());
+function holdClick(options: Partial<Parameters<typeof mod.clickViaPlaywright>[0]> = {}) {
+  const hover = vi.fn(async () => {});
+  const click = vi.fn(async () => {});
+  install({ url: vi.fn(() => "https://example.test/hold") }, { hover, click });
+  return {
+    hover,
+    click,
+    task: mod.clickViaPlaywright({ ...target, ref: "1", delayMs: 5_000, ...options }),
+  };
 }
 async function settle<T>(run: () => Promise<T>): Promise<T> {
   return await withFakeTimers(async () => {
@@ -64,30 +77,17 @@ async function settle<T>(run: () => Promise<T>): Promise<T> {
 }
 function navigationPage(initialUrl = localPageUrl, mainFrame: object = {}) {
   let url = initialUrl;
-  const listeners = new Set<(frame: object) => void>();
+  const events = new EventEmitter();
   const page = {
     mainFrame: vi.fn(() => mainFrame),
-    on: vi.fn((event: string, listener: (frame: object) => void) => {
-      if (event === "framenavigated") {
-        listeners.add(listener);
-      }
-    }),
-    off: vi.fn((event: string, listener: (frame: object) => void) => {
-      if (event === "framenavigated") {
-        listeners.delete(listener);
-      }
-    }),
+    on: vi.fn(events.on.bind(events)),
+    off: vi.fn(events.off.bind(events)),
     url: vi.fn(() => url),
-  };
-  const emit = (frame: object = mainFrame) => {
-    for (const listener of listeners) {
-      listener(frame);
-    }
   };
   return {
     page,
-    listeners,
-    emit,
+    listenerCount: () => events.listenerCount("framenavigated"),
+    emit: (frame: object = mainFrame) => events.emit("framenavigated", frame),
     setUrl: (next: string) => {
       url = next;
     },
@@ -126,31 +126,30 @@ function subframeClick(
 
 describe("pw-tools-core interaction navigation guard", () => {
   it.each([
-    { phase: "delayed", duration: 0 },
-    { phase: "in-flight", duration: 30 },
+    { phase: "delayed", duration: 0, blocked: false },
+    { phase: "in-flight", duration: 30, blocked: false },
+    { phase: "delayed", duration: 0, blocked: true },
+    { phase: "in-flight", duration: 30, blocked: true },
   ])(
-    "snapshots $phase subframe URLs before later rewrites make them look safe",
-    async ({ duration }) => {
-      subframeClick({ duration, rewrite: true });
-      await settle(strictClick);
-      expect(checkFrame).toHaveBeenCalledWith({
-        ssrfPolicy: { allowPrivateNetwork: false },
-        url: privateFrameUrl,
+    "checks $phase subframe URLs before rewrite or main-frame blocking (blocked=$blocked)",
+    async ({ duration, blocked }) => {
+      const page = subframeClick({
+        duration,
+        rewrite: !blocked,
+        mainUrl: blocked ? "http://127.0.0.1:8080/internal" : undefined,
       });
-    },
-  );
-
-  it.each([
-    { phase: "a delayed", duration: 0 },
-    { phase: "an in-flight", duration: 30 },
-  ])(
-    "still quarantines the main frame when $phase subframe block fires first",
-    async ({ duration }) => {
-      const page = subframeClick({ duration, mainUrl: "http://127.0.0.1:8080/internal" });
-      checkFrame.mockRejectedValueOnce(new Error("subframe blocked"));
-      complete.mockRejectedValueOnce(new Error("main frame blocked"));
-      await expect(settle(strictClick)).rejects.toThrow("main frame blocked");
-      expectComplete(page);
+      if (blocked) {
+        checkFrame.mockRejectedValueOnce(new Error("subframe blocked"));
+        complete.mockRejectedValueOnce(new Error("main frame blocked"));
+        await expect(settle(strictClick)).rejects.toThrow("main frame blocked");
+        expectComplete(page);
+      } else {
+        await settle(strictClick);
+        expect(checkFrame).toHaveBeenCalledWith({
+          ssrfPolicy: { allowPrivateNetwork: false },
+          url: privateFrameUrl,
+        });
+      }
     },
   );
 
@@ -179,64 +178,47 @@ describe("pw-tools-core interaction navigation guard", () => {
     ).rejects.toThrow("SSRF blocked: private network");
     expect(complete).toHaveBeenCalledTimes(1);
     expectComplete(page);
-    expect(
-      expectDefined(
-        session.withPageNavigationRequestGuard.mock.invocationCallOrder[0],
-        "request guard invocation",
-      ),
-    ).toBeLessThan(
-      expectDefined(page.evaluate.mock.invocationCallOrder[0], "page evaluation invocation"),
-    );
+    expect(session.withPageNavigationRequestGuard).toHaveBeenCalledBefore(page.evaluate);
   });
 
   it("deduplicates delayed navigation guards across repeated interactions and a same-URL reload", async () => {
     await withFakeTimers(async () => {
-      const { page, listeners, emit } = navigationPage();
+      const { page, listenerCount, emit } = navigationPage();
       install(page, { click: vi.fn(async () => {}) });
       const first = strictClick();
       await vi.advanceTimersByTimeAsync(0);
-      expect(listeners.size).toBe(1);
+      expect(listenerCount()).toBe(1);
       const second = strictClick();
       await vi.advanceTimersByTimeAsync(0);
-      expect(listeners.size).toBe(1);
+      expect(listenerCount()).toBe(1);
       emit();
       await vi.advanceTimersByTimeAsync(250);
       await Promise.all([first, second]);
       expect(complete).toHaveBeenCalledTimes(3);
-      expect(listeners.size).toBe(0);
+      expect(listenerCount()).toBe(0);
     });
   });
 
-  it("runs statement-body page evaluate sources", async () => {
-    const page = {
-      evaluate: vi.fn(async (fn: (args: unknown) => unknown, args: unknown) => fn(args)),
-      url: vi.fn(() => localPageUrl),
-    };
-    install(page);
+  it.each([false, true])("runs statement-body evaluate sources (ref=%s)", async (ref) => {
+    const source = ref
+      ? "const text = el.textContent; return text;"
+      : "const value = 41; return value + 1;";
+    const evaluate = ref
+      ? vi.fn(async (fn: (el: Element, args: unknown) => unknown, args: unknown) =>
+          fn({ textContent: "Ada" } as Element, args),
+        )
+      : vi.fn(async (fn: (args: unknown) => unknown, args: unknown) => fn(args));
+    install(
+      { url: vi.fn(() => localPageUrl), ...(!ref && { evaluate }) },
+      ref ? { evaluate } : undefined,
+    );
     expect(
-      await mod.evaluateViaPlaywright({ ...target, fn: "const value = 41; return value + 1;" }),
-    ).toBe(42);
-    expect(page.evaluate.mock.calls[0]?.[1]).toMatchObject({
-      fnSource: "async () => {\nconst value = 41; return value + 1;\n}",
-    });
-  });
-
-  it("runs statement-body ref evaluate sources", async () => {
-    const locator = {
-      evaluate: vi.fn(async (fn: (el: Element, args: unknown) => unknown, args: unknown) =>
-        fn({ textContent: "Ada" } as Element, args),
-      ),
-    };
-    install({ url: vi.fn(() => localPageUrl) }, locator);
-    expect(
-      await mod.evaluateViaPlaywright({
-        ...target,
-        ref: "1",
-        fn: "const text = el.textContent; return text;",
-      }),
-    ).toBe("Ada");
-    expect(locator.evaluate.mock.calls[0]?.[1]).toMatchObject({
-      fnSource: "async (el) => {\nconst text = el.textContent; return text;\n}",
+      await mod.evaluateViaPlaywright({ ...target, ref: ref ? "1" : undefined, fn: source }),
+    ).toBe(ref ? "Ada" : 42);
+    expect(evaluate.mock.calls[0]?.[1]).toMatchObject({
+      fnSource: ref
+        ? "async (el) => {\nconst text = el.textContent; return text;\n}"
+        : "async () => {\nconst value = 41; return value + 1;\n}",
     });
   });
 
@@ -255,7 +237,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     await expect(
       settle(() => mod.typeViaPlaywright({ ...strict(), ref: "1", text: "hello", submit: true })),
     ).rejects.toThrow("blocked delayed interaction navigation");
-    expect(navigation.listeners.size).toBe(0);
+    expect(navigation.listenerCount()).toBe(0);
   });
 
   it("runs the final committed-URL check after a same-document hash change", async () => {
@@ -272,17 +254,11 @@ describe("pw-tools-core interaction navigation guard", () => {
 
   it("returns click downloads without adding a second policy grace", async () => {
     const page = { url: vi.fn(() => "https://example.com") };
-    const download = {
-      url: "https://example.com/report.pdf",
-      suggestedFilename: "report.pdf",
-      path: "/tmp/openclaw/downloads/report.pdf",
-    };
+    const download = managedDownload("report.pdf");
     const drain = vi.fn(async () => [download]);
     const dispose = captureDownloads(drain);
     install(page, { click: vi.fn(async () => {}) });
-    const result = await settle(() =>
-      executeActViaPlaywright({ ...strict(), action: { kind: "click", ref: "1" } }),
-    );
+    const result = await settle(() => act({ kind: "click", ref: "1" }));
     expect(result.downloads).toEqual([download]);
     expect(drain).toHaveBeenCalledWith({ ...downloadGrace, firstEventGraceMs: 0 });
     expect(dispose).toHaveBeenCalledOnce();
@@ -300,33 +276,18 @@ describe("pw-tools-core interaction navigation guard", () => {
     session.wasBrowserNavigationSourcePreservedAfterPolicyDenial
       .mockReturnValueOnce(true)
       .mockReturnValueOnce(true);
-    await expect(executeActViaPlaywright({ ...strict(), action: hoverAction })).rejects.toBe(
-      blocked,
-    );
+    await expect(act(hoverAction)).rejects.toBe(blocked);
     expect(session.quarantineBlockedNavigationTarget).not.toHaveBeenCalled();
   });
 
   it("retains the pre-existing download grace when a guarded hover aborts", async () => {
     const ctrl = new AbortController();
-    const started = Promise.withResolvers<void>();
-    const hover = Promise.withResolvers<void>();
+    const hover = heldAction();
     const drain = vi.fn(async () => undefined);
     const dispose = captureDownloads(drain);
-    install(
-      { url: vi.fn(() => "https://example.com") },
-      {
-        hover: vi.fn(() => {
-          started.resolve();
-          return hover.promise;
-        }),
-      },
-    );
-    const task = executeActViaPlaywright({
-      ...strict(),
-      action: hoverAction,
-      signal: ctrl.signal,
-    });
-    await started.promise;
+    install({ url: vi.fn(() => "https://example.com") }, { hover: hover.run });
+    const task = act(hoverAction, { signal: ctrl.signal });
+    await hover.started;
     ctrl.abort(new Error("aborted by test"));
     expect(drain).not.toHaveBeenCalled();
     expect(dispose).not.toHaveBeenCalled();
@@ -347,12 +308,13 @@ describe("pw-tools-core interaction navigation guard", () => {
     const dispose = captureDownloads(drain);
     install(page);
     await expect(
-      executeActViaPlaywright({
-        ...strict(),
-        action: { kind: "wait", fn: "() => false" },
-        evaluateEnabled: true,
-        signal: ctrl.signal,
-      }),
+      act(
+        { kind: "wait", fn: "() => false" },
+        {
+          evaluateEnabled: true,
+          signal: ctrl.signal,
+        },
+      ),
     ).rejects.toThrow("aborted by test");
     expect(drain).toHaveBeenCalledWith(downloadGrace);
     expect(dispose).toHaveBeenCalledOnce();
@@ -377,9 +339,7 @@ describe("pw-tools-core interaction navigation guard", () => {
       await session.quarantineBlockedNavigationTarget({ ...target, page });
       throw blocked;
     });
-    await expect(
-      settle(() => executeActViaPlaywright({ ...strict(), action: hoverAction })),
-    ).rejects.toBe(blocked);
+    await expect(settle(() => act(hoverAction))).rejects.toBe(blocked);
     expect(complete).toHaveBeenCalledTimes(2);
     expectQuarantine(page);
   });
@@ -422,45 +382,33 @@ describe("resident interaction authority", () => {
         waitForFunction: effect,
       });
       const opts = {
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
+        ...target,
         assertCurrent: () => {
           events.push("assert");
           queueMicrotask(() => events.push("yield"));
         },
       };
-      switch (kind) {
-        case "type":
-          await mod.typeViaPlaywright({ ...opts, ref: "1", text: "review", submit: true });
-          break;
-        case "wait":
-          await waitForViaPlaywright({ ...opts, fn: "() => true" });
-          break;
-        case "resize":
-          await resizeViewportViaPlaywright({ ...opts, width: 800, height: 600 });
-          break;
-      }
+      await {
+        type: () => mod.typeViaPlaywright({ ...opts, ref: "1", text: "review", submit: true }),
+        wait: () => waitForViaPlaywright({ ...opts, fn: "() => true" }),
+        resize: () => resizeViewportViaPlaywright({ ...opts, width: 800, height: 600 }),
+      }[kind]();
       expect(effect).toHaveBeenCalledTimes(kind === "resize" ? 1 : 2);
     },
   );
 
   it("still awaits an asynchronous authority and preserves its rejection", async () => {
-    const entered = Promise.withResolvers<void>();
-    const admission = Promise.withResolvers<void>();
+    const admission = heldAction();
     const click = vi.fn(async () => {});
     setPwToolsCoreCurrentPage({});
     setPwToolsCoreCurrentRefLocator({ click });
     const pending = mod.clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
+      ...target,
       ref: "1",
-      assertCurrent: () => {
-        entered.resolve();
-        return admission.promise;
-      },
+      assertCurrent: admission.run,
     });
     const rejected = expect(pending).rejects.toThrow("actor revoked");
-    await entered.promise;
+    await admission.started;
     expect(click).not.toHaveBeenCalled();
     admission.reject(new Error("actor revoked"));
     await rejected;
@@ -481,8 +429,7 @@ describe("resident interaction authority", () => {
     });
     await expect(
       resizeViewportViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
+        ...target,
         width: 800,
         height: 600,
         assertCurrent: () => {
@@ -499,26 +446,13 @@ describe("resident interaction authority", () => {
 
 describe("clickViaPlaywright (hold-delay abort)", () => {
   it("unwinds the hold-delay action chain promptly when aborted mid-delay", async () => {
-    vi.useFakeTimers();
-    try {
-      const hover = vi.fn(async () => {});
-      const click = vi.fn(async () => {});
-      setPwToolsCoreCurrentRefLocator({ hover, click });
-      setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.test/hold") });
-
+    await withFakeTimers(async () => {
       const ctrl = new AbortController();
-      const task = mod.clickViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ref: "1",
-        delayMs: 5_000,
+      const { task, hover, click } = holdClick({
         ssrfPolicy: { allowPrivateNetwork: false },
         signal: ctrl.signal,
       });
-      const settled = task.then(
-        () => ({ status: "fulfilled" as const }),
-        (reason: unknown) => ({ status: "rejected" as const, reason }),
-      );
+      const rejected = expect(task).rejects.toThrow("aborted by test");
 
       // Enter the click-and-hold delay, then abort 100ms into the 5s hold.
       await vi.advanceTimersByTimeAsync(100);
@@ -527,38 +461,17 @@ describe("clickViaPlaywright (hold-delay abort)", () => {
 
       // Join the aborted hold and navigation grace without waiting out the hold.
       await vi.advanceTimersByTimeAsync(1_000);
-      const outcome = await settled;
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status === "rejected") {
-        expect(outcome.reason).toBeInstanceOf(Error);
-        expect((outcome.reason as Error).message).toContain("aborted by test");
-      }
+      await rejected;
+      await expect(task).rejects.toBeInstanceOf(Error);
       expect(click).not.toHaveBeenCalled();
-      expect(
-        getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget,
-      ).not.toHaveBeenCalled();
-      expect(
-        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
-      ).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+      expect(session.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("still waits the full hold delay before clicking when not aborted", async () => {
-    vi.useFakeTimers();
-    try {
-      const hover = vi.fn(async () => {});
-      const click = vi.fn(async () => {});
-      setPwToolsCoreCurrentRefLocator({ hover, click });
-      setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.test/hold") });
-
-      const task = mod.clickViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ref: "1",
-        delayMs: 5_000,
-      });
+    await withFakeTimers(async () => {
+      const { task, hover, click } = holdClick();
 
       await vi.advanceTimersByTimeAsync(4_999);
       expect(hover).toHaveBeenCalledTimes(1);
@@ -567,8 +480,6 @@ describe("clickViaPlaywright (hold-delay abort)", () => {
       await vi.advanceTimersByTimeAsync(1);
       await task;
       expect(click).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 });

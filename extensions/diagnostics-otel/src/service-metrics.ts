@@ -29,6 +29,14 @@ export function createDiagnosticsMetrics(
     createHistogram(name, description, "ms", AGENT_DURATION_MS_BUCKETS);
 
   return {
+    sessionsListBaselineRetirementsCounter: createCounter(
+      "sessions.list.baseline_retirements",
+      "Session list baseline retirement events by cause, not rows or views retired",
+    ),
+    sessionsListBaseMissesCounter: createCounter(
+      "sessions.list.base_misses",
+      "Successful full sidebar responses with a supplied base, by miss reason",
+    ),
     gcDurationHistogram: createDurationHistogram(
       "gc.duration_ms",
       "Elapsed garbage collection duration for the hosting JavaScript isolate",
@@ -45,6 +53,54 @@ export function createDiagnosticsMetrics(
     gatewayRpcRequestsCounter: createCounter(
       "gateway.rpc.requests",
       "Authenticated Gateway WebSocket requests received",
+    ),
+    gatewayWsSessionEventFramesCounter: createCounter(
+      "gateway.ws.session_event_frames",
+      "Outbound session event frames by reason and exact message subscription per socket",
+    ),
+    gatewayWsSessionEventBytesCounter: createCounter(
+      "gateway.ws.session_event_bytes",
+      "Encoded outbound session event bytes by reason and exact message subscription per socket",
+      "By",
+    ),
+    gatewayWsEventsCounter: createCounter(
+      "gateway.ws.events",
+      "Outbound Gateway WebSocket event frames accepted by the sender per socket",
+    ),
+    gatewayWsEventBytesCounter: createCounter(
+      "gateway.ws.event_bytes",
+      "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket",
+      "By",
+    ),
+    gatewayWsOperatorConnectionsGauge: meter.createGauge(
+      `${metricNamePrefix}gateway.ws.operator_connections`,
+      { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },
+    ),
+    sessionsListRetainedViewsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_views`,
+      { unit: "1", description: "Retained session-list views across all publications" },
+    ),
+    sessionsListRetainedRefsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_refs`,
+      {
+        unit: "1",
+        description: "Row references and selection entries retained by session-list views",
+      },
+    ),
+    sessionsListRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-list views" },
+    ),
+    sessionEventRowsRetainedEntriesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_entries`,
+      {
+        unit: "1",
+        description: "Session-event field-hash vectors retained across all connections",
+      },
+    ),
+    sessionEventRowsRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-event field-hash vectors" },
     ),
     gatewayRpcOutcomesCounter: createCounter(
       "gateway.rpc.outcomes",

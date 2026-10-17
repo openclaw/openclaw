@@ -135,7 +135,7 @@ describe("AppSidebar session mutation feedback", () => {
       }),
       run,
     });
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const publish = (rows: GatewaySessionRow[]) => {
       publishSidebarSessionList(sidebar.sessionData, {

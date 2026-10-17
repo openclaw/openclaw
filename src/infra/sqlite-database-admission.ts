@@ -24,9 +24,11 @@ import {
   readSqliteDatabaseGeneration,
   advanceSqliteDatabaseGeneration,
   publishSqliteDatabaseFact,
+  admitSqliteDatabaseFactValue,
   revokeSqliteDatabaseAdmissionFacts,
   isSqliteDatabaseAdmissionRetired as isRetired,
   type Admission,
+  type AdmissionFactValue,
   type SqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissionKey,
   type SqliteDatabaseAdmissionExchange as Exchange,
@@ -440,7 +442,7 @@ function releaseReference(record: Admission): void {
 function publishFact<T>(
   record: Admission,
   key: Pick<SqliteDatabaseAdmissionKey<T>, "name" | "schemaDependent" | "lifetime" | "writer">,
-  value: T,
+  value: AdmissionFactValue,
   revision: number,
 ): void {
   if (key.writer === "host" && threadId !== 0) {
@@ -564,12 +566,13 @@ export function publishSqliteDatabaseAdmission<T>(
   const native = isPostgresSqlConnection(database)
     ? undefined
     : getSqliteNativeAdmissionFacts(database);
+  const admitted = admitSqliteDatabaseFactValue(key, value);
   if (!native && !database.isTransaction) {
-    publishFact(record, key, value, revision);
+    publishFact(record, key, admitted, revision);
     return;
   }
   const staged: StagedAdmissionFact = {
-    value,
+    ...admitted,
     revision,
     schemaDependent: key.schemaDependent === true,
     ddlRevision: state.ddlRevisions.get(anchor) ?? 0,
@@ -601,7 +604,7 @@ export function publishSqliteDatabaseAdmission<T>(
           staged.revision === readSqliteDatabaseFactRevision(record, staged.schemaDependent) &&
           (!staged.schemaDependent || staged.ddlRevision === (state.ddlRevisions.get(anchor) ?? 0))
         ) {
-          publishFact(record, key, value, staged.revision);
+          publishFact(record, key, staged, staged.revision);
         }
       }
     },

@@ -28,6 +28,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
+  createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -193,7 +194,7 @@ describe("SQLite transcript archive sessions", () => {
     }
   });
 
-  it("reuses one archive worker across deletion generations and joins it before returning", async () => {
+  it("reuses one archive worker across deletion generations and joins it at database close", async () => {
     const sessionKey = "agent:main:durable-delete";
     const sessionIds = ["durable-delete-first", "durable-delete-second", "durable-delete-current"];
     const events = await prepareGenerations(sessionKey, sessionIds, "你好 🦞\narchive");
@@ -217,7 +218,8 @@ describe("SQLite transcript archive sessions", () => {
       "done",
       "published",
     ]);
-    archiveWorkers.expectJoined(1);
+    expect(new Set(archiveWorkers.replies.map(({ worker }) => worker)).size).toBe(1);
+    expect(archiveWorkers.replies.every(({ worker }) => worker.threadId > 0)).toBe(true);
     expect(publicationRows).toEqual(sessionIds.map(() => ({ session_key: sessionKey })));
     expect(result.deleted).toBe(true);
     expect(result.archivedTranscripts).toHaveLength(sessionIds.length);
@@ -236,6 +238,37 @@ describe("SQLite transcript archive sessions", () => {
     ).toEqual(
       sessionIds.map(() => ({ published_at: expect.any(Number), session_key: sessionKey })),
     );
+    await closeAgentDatabase(database.path);
+    archiveWorkers.expectJoined(1);
+  });
+
+  it("reuses one archive worker across sequential deletions of newly created sessions", async () => {
+    const database = openLifecycleTestDatabase(storePath);
+    using archiveWorkers = observeArchiveSessionWorkers();
+    for (const sessionId of ["empty-first", "empty-second"]) {
+      const scope = sessionScope(sessionId);
+      await createSessionEntryWithTranscript(scope, () => ({
+        ok: true,
+        entry: { sessionId, updatedAt: Date.now() },
+      }));
+      const events = await loadTranscriptEvents(scope);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "session", id: sessionId });
+      const result = await deleteArchivedSession(scope.sessionKey);
+      expect(result.deleted).toBe(true);
+      expect(result.archivedTranscripts).toHaveLength(1);
+      expectArchivedEvent(result.archivedTranscripts[0]?.archivedPath, events[0]);
+    }
+    expect(archiveWorkers.replies.map(({ message }) => message.type)).toEqual([
+      "done",
+      "published",
+      "done",
+      "published",
+    ]);
+    expect(new Set(archiveWorkers.replies.map(({ worker }) => worker)).size).toBe(1);
+    expect(archiveWorkers.replies.every(({ worker }) => worker.threadId > 0)).toBe(true);
+    await closeAgentDatabase(database.path);
+    archiveWorkers.expectJoined(1);
   });
 
   it("publishes archive metadata off the main thread even inside a native deletion scope", async () => {
@@ -385,7 +418,7 @@ describe("SQLite transcript archive sessions", () => {
       }
       secondDeletion = deleteScope(second);
       const secondResult = await secondDeletion;
-      expect(firstWorker?.threadId).toBe(-1);
+      expect(firstWorker?.threadId === -1).toBe(exited);
       expectArchivedEvent(secondResult.archivedTranscripts[0]?.archivedPath, events[1]);
 
       // Require fresh publication admission after the earlier deletion work has settled.
@@ -409,8 +442,10 @@ describe("SQLite transcript archive sessions", () => {
         ["published", second.sessionId],
         ["published", first.sessionId],
       ]);
-      archiveWorkers.expectJoined(exited ? 3 : 2);
+      expect(observedWorkers.size).toBe(exited ? 2 : 1);
       expect(activeWorkersAtReply).toEqual([1, 1, 1, 1]);
+      await closeOpenClawAgentDatabasesAsync(tempDir);
+      archiveWorkers.expectJoined(exited ? 2 : 1);
     } finally {
       releasePublication.resolve();
       await Promise.allSettled([firstDeletion, secondDeletion]);

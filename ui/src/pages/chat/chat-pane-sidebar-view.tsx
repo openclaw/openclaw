@@ -34,7 +34,6 @@ export type SidebarRegionParams = {
   header?: SolidJSX.Element;
   background?: SolidJSX.Element;
   primary?: SolidJSX.Element;
-  requestUpdate: () => void;
 };
 
 export type SidebarRegionViewProps = SidebarRegionParams & {

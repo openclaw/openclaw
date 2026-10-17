@@ -32,7 +32,7 @@ function resolveMinimaxMediaBaseUrl(
   providerId: string,
 ): string {
   const configured = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
-  return URL.parse(configured ?? "")?.origin ?? DEFAULT_MINIMAX_MEDIA_BASE_URL;
+  return new URL(configured ?? DEFAULT_MINIMAX_MEDIA_BASE_URL).origin;
 }
 
 export async function resolveMinimaxMediaRequestConfig(params: {
@@ -76,7 +76,7 @@ export function normalizeMinimaxHexAudio(data: string, label: string): string {
 
 function resolveMinimaxGuardedRequestOptions(
   policy: MinimaxRequestPolicy,
-): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {
+): Parameters<typeof fetchWithTimeoutGuarded>[4] {
   return policy.allowPrivateNetwork || policy.dispatcherPolicy
     ? {
         ...(policy.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),

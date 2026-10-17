@@ -2,10 +2,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import {
-  GitHubPublicationBodySchema,
   GitHubBaseRefreshSchema,
   type SessionGitHubBaseRefreshResult,
   GitHubPublicationActionSchema,
+  GitHubPublicationEditSchema,
+  type GitHubPublicationEdit,
   GitHubPublicationTitleSchema,
   type GitHubPublicationAction,
   type SessionGitHubActionResult,
@@ -31,7 +32,11 @@ function describeGitHubPublishTool(
     ? 'schedule a continuation into this conversation before ending the turn (automations: at + agentTurn + sessionTarget "session:<this session key from Runtime>")'
     : "continue that work before ending the turn, or explain that a scheduled continuation is unavailable";
   const publication = publicationAvailable
-    ? `Publish the current session's repository changes as a draft pull request. Supports local workspaces and cloud repository sessions without a Gateway checkout. Call when the source changes are ready, then finish the turn so its changes can be saved. The Gateway publishes the accepted workspace, creates or reuses the draft pull request, and posts the result into the session transcript without resuming the agent. If review, CI, or landing remains in the authorized task, ${continuation}; a publication receipt is not completion of that work. Requests wait while the workspace is busy or recovering. Publication credentials stay on the Gateway. Before tests and Auto Review, refresh_base explicitly integrates the selected repository base into an existing local managed sandbox workspace. It preserves saved work and returns changed/conflicting paths. Resolve conflicts, then repeat refresh_base with conflictsResolved: true and its returned baseCommit to acknowledge that exact integration, including an unchanged binary choice. A retry without acknowledgment keeps conflicts pending. Refresh never publishes, changes GitHub PR state, or accepts another repository/ref/session selector. A completed refresh imports only the selected base snapshot and stages the current source inside the sandbox while preserving guest HEAD, branches and commits. Run tests, then Auto Review with the returned review target (mode local and exact base), before publication; default review against the old guest HEAD includes upstream-only changes.`
+    ? `Publish or edit the current session's PR through Gateway-held credentials, for local or cloud repository workspaces.
+- Omitted action: publish accepted workspace changes as a draft PR; title/body are used only when creating a PR. Finish the turn so changes can be saved. Busy/recovering workspaces wait; the receipt arrives in this conversation without resuming the agent. If authorized review, CI or landing remains, ${continuation}; a receipt does not complete it.
+- edit: omit title/body to read current metadata. To change either field, send requestId, expectedHeadCommit, and its new value with the observed expectedTitle/expectedBody. Keep attribution, marker and footer unchanged in the full body. Omitted fields stay unchanged. Edit never synchronizes, stages, commits or pushes files or changes PR state. Read with edit after an uncertain response before retrying.
+- refresh_base: integrate the selected base into this local managed sandbox before tests and Auto Review. Resolve returned conflicts, then acknowledge with conflictsResolved: true and the returned baseCommit, including unchanged binary choices. Tests and Auto Review use the returned exact review base (mode local). Refresh stages source but preserves guest HEAD/branches/commits and never publishes.
+Edit and refresh accept no other repository, PR, ref or publishing session.`
     : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
   return actionsAvailable
     ? `${publication} For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected requestId and expectedHeadCommit; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Guest requests cannot use these privileged actions. Actions do not change session sandboxing.`
@@ -62,17 +67,19 @@ export function createGitHubPublishTool(
                 }
               : {}),
             ...GitHubBaseRefreshSchema.properties,
+            ...GitHubPublicationEditSchema.properties,
             action: actionsAvailable
               ? Type.Optional(
                   Type.Union([
                     Type.Literal("publish"),
                     Type.Literal("refresh_base"),
+                    Type.Literal("edit"),
                     ...GitHubPublicationActionSchema.properties.action.anyOf,
                   ]),
                 )
-              : Type.Optional(Type.Literal("refresh_base")),
+              : Type.Optional(Type.Union([Type.Literal("refresh_base"), Type.Literal("edit")])),
             title: Type.Optional(GitHubPublicationTitleSchema),
-            body: Type.Optional(GitHubPublicationBodySchema),
+            body: GitHubPublicationEditSchema.properties.body,
           },
           { additionalProperties: false },
         )
@@ -80,14 +87,43 @@ export function createGitHubPublishTool(
     execute: async (toolCallId, rawArgs) => {
       // SAFETY: the tool runtime validates rawArgs against the closed schema above.
       const input = rawArgs as Omit<SessionGitHubPublishParams, "idempotencyKey" | "sessionKey"> &
-        Omit<GitHubPublicationAction, "action"> & {
-          action?: "publish" | "refresh_base" | GitHubPublicationAction["action"];
+        Omit<GitHubPublicationAction, "action"> &
+        Omit<GitHubPublicationEdit, "action"> & {
+          action?: "publish" | "refresh_base" | "edit" | GitHubPublicationAction["action"];
           conflictsResolved?: boolean;
           baseCommit?: string;
         };
       const caller = getGatewayToolCallerIdentity();
       if (!caller?.sessionKey) {
         throw new Error("GitHub publication requires the current Gateway session.");
+      }
+      if (input.action === "edit") {
+        if (
+          !publicationAvailable ||
+          input.publishingSessionKey !== undefined ||
+          input.mergeMethod !== undefined ||
+          input.conflictsResolved !== undefined ||
+          input.baseCommit !== undefined
+        ) {
+          throw new Error("edit only reads or changes the current session PR's title and body.");
+        }
+        return jsonResult(
+          await callGateway<SessionGitHubActionResult>("sessions.github.action", {
+            sessionKey: caller.sessionKey,
+            action: "edit",
+            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+            ...(input.expectedHeadCommit !== undefined
+              ? { expectedHeadCommit: input.expectedHeadCommit }
+              : {}),
+            ...(input.title !== undefined ? { title: input.title } : {}),
+            ...(input.body !== undefined ? { body: input.body } : {}),
+            ...(input.expectedTitle !== undefined ? { expectedTitle: input.expectedTitle } : {}),
+            ...(input.expectedBody !== undefined ? { expectedBody: input.expectedBody } : {}),
+          }),
+        );
+      }
+      if (input.expectedTitle !== undefined || input.expectedBody !== undefined) {
+        throw new Error("Use action edit for PR metadata preconditions; publish changes source.");
       }
       if (input.action === "refresh_base") {
         if (
@@ -96,8 +132,8 @@ export function createGitHubPublishTool(
           input.requestId ||
           input.expectedHeadCommit ||
           input.mergeMethod ||
-          input.title ||
-          input.body
+          input.title !== undefined ||
+          input.body !== undefined
         ) {
           throw new Error(
             "refresh_base only prepares the current workspace; it accepts no publication target or PR action fields.",
@@ -143,7 +179,7 @@ export function createGitHubPublishTool(
         sessionKey: caller.sessionKey,
         idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
         ...(input.title ? { title: input.title } : {}),
-        ...(input.body ? { body: input.body } : {}),
+        ...(input.body !== undefined ? { body: input.body } : {}),
       });
       return jsonResult(result);
     },

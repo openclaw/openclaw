@@ -13,21 +13,13 @@ import {
 } from "./channel-health-monitor.test-support.js";
 import type { ChannelManager } from "./server-channels.js";
 
-const DEFAULT_CHECK_INTERVAL_MS = 5_000;
+const CHECK_INTERVAL_MS = 5 * 60_000;
+const STARTUP_GRACE_MS = 60_000;
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
-function startDefaultMonitor(
-  manager: ChannelManager,
-  overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
-) {
-  return startChannelHealthMonitor({
-    scheduler,
-    channelManager: manager,
-    checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS,
-    ...overrides,
-    timing: { monitorStartupGraceMs: 0, ...overrides.timing },
-  });
+function startDefaultMonitor(manager: ChannelManager) {
+  return startChannelHealthMonitor({ scheduler, channelManager: manager });
 }
 
 function markRestartPending(account: Partial<ChannelAccountSnapshot>) {
@@ -38,13 +30,9 @@ function markRestartPending(account: Partial<ChannelAccountSnapshot>) {
   return new Map();
 }
 
-async function startAndRunCheck(
-  manager: ChannelManager,
-  overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
-) {
-  const monitor = startDefaultMonitor(manager, overrides);
-  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? 0;
-  await clock.advanceBy(startupGraceMs + 1);
+async function startAndRunCheck(manager: ChannelManager) {
+  const monitor = startDefaultMonitor(manager);
+  await clock.advanceBy(STARTUP_GRACE_MS + 1);
   return monitor;
 }
 
@@ -135,7 +123,7 @@ async function expectNoRestart(manager: ChannelManager) {
 }
 
 async function advanceHealthCheck() {
-  await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS);
+  await clock.advanceBy(CHECK_INTERVAL_MS);
 }
 
 describe("channel-health-monitor", () => {
@@ -161,10 +149,10 @@ describe("channel-health-monitor", () => {
     });
     const monitor = startDefaultMonitor(manager);
 
-    await clock.advanceBy(1);
+    await clock.advanceBy(STARTUP_GRACE_MS + 1);
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
-    await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS + 1);
+    await clock.advanceBy(CHECK_INTERVAL_MS + 1);
 
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     expect(manager.startChannel).not.toHaveBeenCalled();
@@ -178,17 +166,14 @@ describe("channel-health-monitor", () => {
     const reloadingChannels = new Map<ChannelId, string | undefined>([["discord", "default"]]);
     snapshot.reloadingChannels = reloadingChannels;
     const manager = createMockChannelManager({ getRuntimeSnapshot: vi.fn(() => snapshot) });
-    const monitor = startDefaultMonitor(manager, {
-      cooldownCycles: 0,
-      maxRestartsPerHour: 1,
-    });
+    const monitor = startDefaultMonitor(manager);
     try {
-      await clock.advanceBy(2 * DEFAULT_CHECK_INTERVAL_MS + 1);
+      await clock.advanceBy(STARTUP_GRACE_MS + 2 * CHECK_INTERVAL_MS + 1);
       expect(manager.startChannel).not.toHaveBeenCalled();
       expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
 
       reloadingChannels.clear();
-      await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS);
+      await clock.advanceBy(CHECK_INTERVAL_MS);
       expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("discord", "default", {
         reason: "health-monitor",
       });
@@ -205,7 +190,7 @@ describe("channel-health-monitor", () => {
       }),
     });
 
-    const monitor = await startAndRunCheck(manager, { cooldownCycles: 0 });
+    const monitor = await startAndRunCheck(manager);
 
     expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
     expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
@@ -232,19 +217,13 @@ describe("channel-health-monitor", () => {
         recoverAutostartSuppression,
       },
     );
-    const monitor = startDefaultMonitor(manager, {
-      checkIntervalMs: 100,
-      cooldownCycles: 0,
-      maxRestartsPerHour: 1,
-    });
-
-    await clock.advanceBy(350);
+    const monitor = await startAndRunCheck(manager);
 
     expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
 
     allowRecovery = true;
-    await clock.advanceBy(101);
+    await advanceHealthCheck();
 
     expect(recoverAutostartSuppression).toHaveBeenCalled();
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
@@ -364,7 +343,7 @@ describe("channel-health-monitor", () => {
     await expectRestartedChannel(manager, "discord");
   });
 
-  it("caps an account stuck in pending restart instead of thrashing forever", async () => {
+  it("throttles an account stuck in pending restart at the production cadence", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
       {
@@ -377,25 +356,22 @@ describe("channel-health-monitor", () => {
         startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
-    const monitor = startDefaultMonitor(manager, {
-      checkIntervalMs: 1_000,
-      cooldownCycles: 1,
-      maxRestartsPerHour: 3,
-    });
-    for (let check = 0; check < 20; check += 1) {
-      await clock.advanceBy(1_000);
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    // With exact virtual wakes, one free continuation is followed by one
+    // cooldown-limited restart every three checks. Real wakes can arrive late.
+    for (let check = 2; check < 12; check += 1) {
+      await advanceHealthCheck();
     }
-    // Budgeted restart, one free continuation, then two more budgeted restarts
-    // before the hourly cap closes; a stuck account must not restart per check.
-    expect(manager.startChannel).toHaveBeenCalledTimes(4);
-    for (let check = 0; check < 10; check += 1) {
-      await clock.advanceBy(1_000);
-    }
-    expect(manager.startChannel).toHaveBeenCalledTimes(4);
+    expect(manager.startChannel).toHaveBeenCalledTimes(6);
     monitor.stop();
   });
 
-  it("runs the free continuation even when the hourly budget is exhausted", async () => {
+  it("runs one free continuation inside the production cooldown", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
       {
@@ -407,9 +383,7 @@ describe("channel-health-monitor", () => {
         startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
-    // The budgeted restart consumes the only hourly slot; the continuation that
-    // finishes that same recovery must still run.
-    const monitor = await startAndRunCheck(manager, { maxRestartsPerHour: 1 });
+    const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
@@ -428,7 +402,7 @@ describe("channel-health-monitor", () => {
         startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
-    const monitor = await startAndRunCheck(manager, { cooldownCycles: 10 });
+    const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
@@ -440,7 +414,8 @@ describe("channel-health-monitor", () => {
     account.reconnectAttempts = 0;
     await advanceHealthCheck();
     await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    // A normal budgeted restart at the expired cooldown does not re-arm the pass.
+    expect(manager.startChannel).toHaveBeenCalledTimes(3);
     monitor.stop();
   });
 
@@ -469,9 +444,7 @@ describe("channel-health-monitor", () => {
         }),
       },
     );
-    // Long cooldown proves later continuations run on the free pass, not on an
-    // expired cooldown window.
-    const monitor = await startAndRunCheck(manager, { cooldownCycles: 10 });
+    const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
 
     startBehavior = "healthy";
@@ -482,14 +455,17 @@ describe("channel-health-monitor", () => {
     await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
 
-    // A new timed-out recovery marks pending again; its continuation must not
-    // wait behind the still-active cooldown.
+    // A new timed-out recovery earns a free continuation, without advancing the
+    // last budgeted restart: the following check can use the expired cooldown.
+    startBehavior = "pending";
     account.running = false;
     account.connected = false;
     account.restartPending = true;
     account.reconnectAttempts = 0;
     await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(4);
     monitor.stop();
   });
 
@@ -527,7 +503,7 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("counts failed restart attempts toward cooldown and hourly caps", async () => {
+  it("counts failed restart attempts toward the production cooldown", async () => {
     const manager = createSnapshotManager(
       {
         discord: {
@@ -540,17 +516,26 @@ describe("channel-health-monitor", () => {
         }),
       },
     );
-    const monitor = startDefaultMonitor(manager, {
-      checkIntervalMs: 1_000,
-      cooldownCycles: 1,
-      maxRestartsPerHour: 1,
-    });
-
-    for (let check = 0; check < 6; check += 1) {
-      await clock.advanceBy(1_000);
-    }
-
+    const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await advanceHealthCheck();
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("retries after the production cooldown when scheduler wakes arrive slightly late", async () => {
+    const manager = createSlackSnapshotManager(managedStoppedAccount("stopped"));
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    for (let starts = 2; starts <= 6; starts += 1) {
+      await clock.advanceBy(CHECK_INTERVAL_MS + 1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(starts - 1);
+      await clock.advanceBy(CHECK_INTERVAL_MS + 1);
+      expect(manager.startChannel).toHaveBeenCalledTimes(starts);
+    }
     monitor.stop();
   });
 
@@ -569,11 +554,11 @@ describe("channel-health-monitor", () => {
         }),
       },
     );
-    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
-    const check = clock.advanceBy(120);
+    const monitor = startDefaultMonitor(manager);
+    const check = clock.advanceBy(STARTUP_GRACE_MS + 1);
     try {
       expect(manager.startChannel).toHaveBeenCalledTimes(1);
-      await clock.advanceBy(500);
+      await clock.advanceBy(2 * CHECK_INTERVAL_MS);
       expect(manager.startChannel).toHaveBeenCalledTimes(1);
     } finally {
       releaseStart();
@@ -582,25 +567,20 @@ describe("channel-health-monitor", () => {
     }
   });
 
-  it("does not resume an in-flight restart after abort signal", async () => {
+  it("does not resume an in-flight restart after shutdown", async () => {
     const { promise: stopGate, resolve: releaseStop } = createDeferred();
-    const abort = new AbortController();
     const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
       stopChannel: vi.fn(async () => {
         await stopGate;
       }),
     });
-    const monitor = startDefaultMonitor(manager, {
-      abortSignal: abort.signal,
-      checkIntervalMs: 100,
-      cooldownCycles: 0,
-    });
+    const monitor = startDefaultMonitor(manager);
 
-    const check = clock.advanceBy(101);
+    const check = clock.advanceBy(STARTUP_GRACE_MS + 1);
     try {
       expect(manager.stopChannel).toHaveBeenCalledTimes(1);
 
-      abort.abort();
+      monitor.shutdown();
       releaseStop();
       await monitor.waitForIdle();
 
@@ -624,9 +604,9 @@ describe("channel-health-monitor", () => {
         }),
       },
     );
-    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+    const monitor = startDefaultMonitor(manager);
 
-    const check = clock.advanceBy(101);
+    const check = clock.advanceBy(STARTUP_GRACE_MS + 1);
     try {
       expect(manager.stopChannel).toHaveBeenCalledTimes(1);
 
@@ -658,9 +638,9 @@ describe("channel-health-monitor", () => {
         }),
       },
     );
-    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+    const monitor = startDefaultMonitor(manager);
 
-    const check = clock.advanceBy(101);
+    const check = clock.advanceBy(STARTUP_GRACE_MS + 1);
     try {
       expect(manager.stopChannel).toHaveBeenCalledTimes(1);
 
@@ -690,9 +670,9 @@ describe("channel-health-monitor", () => {
         await stopGate;
       }),
     });
-    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+    const monitor = startDefaultMonitor(manager);
 
-    const check = clock.advanceBy(101);
+    const check = clock.advanceBy(STARTUP_GRACE_MS + 1);
     try {
       monitor.stop();
       const handoff = monitor.waitForIdle();
@@ -725,18 +705,15 @@ describe("channel-health-monitor", () => {
       await expectNoRestart(manager);
     });
 
-    it("respects custom staleEventThresholdMs", async () => {
-      const customThreshold = 10 * 60_000;
+    it("restarts channels past the production stale transport threshold", async () => {
       const now = Date.now();
       const manager = createSlackSnapshotManager(
         runningConnectedSlackAccount({
-          lastStartAt: now - customThreshold - 60_000,
-          lastTransportActivityAt: now - customThreshold - 30_000,
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastTransportActivityAt: now - STALE_THRESHOLD - 30_000,
         }),
       );
-      const monitor = await startAndRunCheck(manager, {
-        timing: { staleEventThresholdMs: customThreshold },
-      });
+      const monitor = await startAndRunCheck(manager);
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default", {
         reason: "health-monitor",

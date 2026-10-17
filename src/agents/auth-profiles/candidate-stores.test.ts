@@ -10,7 +10,7 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesAsync,
@@ -21,7 +21,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   listCandidateAuthProfileStores,
-  loadCandidateAuthProfileStore,
+  loadCandidateAuthProfileStoreAsync,
   updateCandidateAuthProfileStore,
 } from "./candidate-stores.js";
 import { closeAuthProfileReadPool } from "./sqlite.js";
@@ -109,8 +109,10 @@ describe("candidate auth profile stores", () => {
       } finally {
         sql.restore();
       }
-      closeOpenClawAgentDatabaseByPath(customDatabasePath, "custom");
-      expect(loadCandidateAuthProfileStore(custom!)?.profiles["openai:default"]).toMatchObject({
+      await closeOpenClawAgentDatabaseByPathAsync(customDatabasePath, "custom");
+      expect(
+        (await loadCandidateAuthProfileStoreAsync(custom!))?.profiles["openai:default"],
+      ).toMatchObject({
         access: "custom-access",
         refresh: "custom-refresh",
       });

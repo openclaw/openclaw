@@ -315,7 +315,9 @@ export function* loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
+  const beforeConfigValidation = performance.now();
   const validatedConfig = prepareRuntimePluginConfig(params);
+  const configValidationMs = performance.now() - beforeConfigValidation;
   if (!validatedConfig.ok) {
     params.logger.error(
       `[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`,
@@ -328,6 +330,7 @@ export function* loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const beforeArtifactPreparation = performance.now();
   const artifactParams = {
     pluginId,
     rootDir: pluginRoot,
@@ -485,6 +488,7 @@ export function* loadRuntimePluginCandidate(params: {
   let failurePhase: "load" | "register" = "load";
   let failed = false;
   const beforeModuleLoad = performance.now();
+  const artifactPreparationMs = beforeModuleLoad - beforeArtifactPreparation;
   try {
     // Top-level code may execute before module evaluation throws, so record the
     // import attempt before invoking the loader.
@@ -681,6 +685,8 @@ export function* loadRuntimePluginCandidate(params: {
     const registerMs =
       beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
     detailPluginStartupTrace(params.options.startupTrace, record.id, [
+      ["configValidationMs", configValidationMs],
+      ["artifactPreparationMs", artifactPreparationMs],
       ["loadMs", moduleLoadMs || elapsed],
       ["loadFailedCount", failed && failurePhase === "load" ? 1 : 0],
       ...(registerMs === undefined

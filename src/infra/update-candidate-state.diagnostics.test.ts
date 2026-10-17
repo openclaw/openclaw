@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createUpdateStateInspectionDiagnostics,
-  createUpdateStateIoReporter,
   formatUpdateStateInspectionError,
   UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
 } from "./update-candidate-state.diagnostics.js";
@@ -36,22 +35,7 @@ it.each(["SIGILL"])("reports the active worker step for %s without blaming stora
   expect(message).toContain("terminated by a signal");
   expect(message).not.toMatch(/Check access|free space|storage performance/);
 });
-it("coalesces completed filesystem work without generating timer heartbeats", () => {
-  vi.useFakeTimers();
-  const progress = vi.fn();
-  const completed = createUpdateStateIoReporter("/private/copy", "plugin snapshot", progress);
-  completed();
-  vi.advanceTimersByTime(499);
-  completed();
-  expect(progress).toHaveBeenCalledTimes(1);
-  vi.advanceTimersByTime(1);
-  completed();
-  expect(progress.mock.calls.map(([value]) => value.completedIo)).toEqual([1, 3]);
-  vi.advanceTimersByTime(10_000);
-  expect(progress).toHaveBeenCalledTimes(2);
-});
-
-it("streams valid I/O receipts separately from the diagnostic stderr budget", () => {
+it("streams valid snapshot progress separately from the diagnostic stderr budget", () => {
   const progress = vi.fn();
   const exceeded = vi.fn();
   const diagnostics = createUpdateStateInspectionDiagnostics({
@@ -61,10 +45,10 @@ it("streams valid I/O receipts separately from the diagnostic stderr budget", ()
     onProgress: progress,
     stderrLimit: { bytes: 128, onExceeded: exceeded },
   });
-  for (let completedIo = 1; completedIo <= 200; completedIo++) {
+  for (let copiedPages = 1; copiedPages <= 200; copiedPages++) {
     diagnostics.onOutputChunk(
       Buffer.from(
-        `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "plugin snapshot", completedIo })}\n`,
+        `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "database snapshot", snapshot: { status: "copying", copiedPages, totalPages: 200, elapsedMs: copiedPages } })}\n`,
       ),
       "stderr",
     );
@@ -74,12 +58,12 @@ it("streams valid I/O receipts separately from the diagnostic stderr budget", ()
   expect(exceeded).not.toHaveBeenCalled();
   diagnostics.onOutputChunk(
     Buffer.from(
-      `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "plugin snapshot", completedIo: -1 })}\n`,
+      `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "database snapshot", snapshot: { status: "copying", copiedPages: -1, totalPages: 200, elapsedMs: 200 } })}\n`,
     ),
     "stderr",
   );
   expect(progress).toHaveBeenCalledTimes(200);
-  expect(diagnostics.stderr()).toContain("completedIo");
+  expect(diagnostics.stderr()).toContain("copiedPages");
 });
 
 it.each([""])("does not promote private worker prose (%j)", (prefix) => {

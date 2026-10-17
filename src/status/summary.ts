@@ -494,8 +494,20 @@ export async function getStatusSummary(
       ).inspectHostDesktop({ config: cfg.desktop?.host })
     ).status;
   const sqliteWal = readOpenClawStateWalHealth();
+  const databaseStores = options.includeCliProjection
+    ? (
+        await import("../infra/database-engine/admitted-diagnostics.js")
+      ).describeAdmittedDatabaseStores(cfg)
+    : undefined;
   return {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    ...(databaseStores
+      ? {
+          databaseStores: includeSensitive
+            ? databaseStores
+            : databaseStores.map((store) => Object.assign({}, store, { path: null })),
+        }
+      : {}),
     ...(options.includeCliProjection
       ? { cliProjection: buildStatusCliProjection(cfg, agentList) }
       : {}),

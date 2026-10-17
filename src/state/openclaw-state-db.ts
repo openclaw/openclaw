@@ -16,7 +16,10 @@ import {
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  invalidateSqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import {
   openSqliteReadOnlyDatabase,
   prepareSqliteReadOnlyLocation,
@@ -127,7 +130,9 @@ function repairDoctorStateDatabase(
   scope: "doctor" | "indexes" | "readability" | "version",
 ): { changes: string[]; warnings: string[] } {
   if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "repair");
+    // The engine owner admits PostgreSQL's catalog; SQLite file repairs do not apply.
+    openOpenClawStateDatabase(options);
+    return { changes: [], warnings: [] };
   }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -182,7 +187,8 @@ export async function prepareOpenClawStateDatabaseSchema(
   warnings: string[];
 }> {
   if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "repair");
+    openOpenClawStateDatabase(options);
+    return { changes: [], warnings: [] };
   }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -637,6 +643,13 @@ export function runOpenClawStateWriteTransaction<T>(
               }
               if (database) {
                 assertTransactionUsable(database.db);
+                // A schema owner interrupted first admission. Reopen after it settles;
+                // the schema admitted before the wait no longer describes that handoff.
+                if (!isPostgresSqlConnection(database.db)) {
+                  invalidateSqliteSchemaFacts(database.db);
+                }
+                stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
+                database = undefined;
               }
               return true;
             },
@@ -700,7 +713,6 @@ function assertStateDatabaseSchemaAdmission(database: OpenClawStateDatabase): vo
 }
 
 export {
-  recordOpenClawStateDatabaseOpenFailure,
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabase,

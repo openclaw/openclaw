@@ -1,3 +1,4 @@
+import type { ControlUiSettingsPlacement } from "../../packages/gateway-protocol/src/plugin-control-ui-settings.js";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { err, ok, type Result } from "../../packages/normalization-core/src/result.js";
 import type { PluginManifestControlUi } from "./manifest-types.js";
@@ -33,16 +34,27 @@ export function normalizeManifestControlUi(
   if (value.activation !== undefined && value.activation !== "settings-only") {
     return err("controlUi.activation must be settings-only when specified");
   }
-  if (
-    value.settingsViews !== undefined &&
-    (!Array.isArray(value.settingsViews) ||
-      value.settingsViews.length !== 1 ||
-      !isRecord(value.settingsViews[0]) ||
-      Object.keys(value.settingsViews[0]).length !== 2 ||
-      value.settingsViews[0].section !== "memory" ||
-      value.settingsViews[0].panel !== "overview")
-  ) {
-    return err("controlUi.settingsViews must declare the Memory overview placement once");
+  const settingsViews: ControlUiSettingsPlacement[] = [];
+  if (value.settingsViews !== undefined) {
+    if (
+      !Array.isArray(value.settingsViews) ||
+      value.settingsViews.length === 0 ||
+      value.settingsViews.length > 2
+    ) {
+      return err("controlUi.settingsViews must declare unique Memory Settings placements");
+    }
+    for (const placement of value.settingsViews) {
+      if (
+        !isRecord(placement) ||
+        Object.keys(placement).length !== 2 ||
+        placement.section !== "memory" ||
+        (placement.panel !== "overview" && placement.panel !== "memories") ||
+        settingsViews.some((previous) => previous.panel === placement.panel)
+      ) {
+        return err("controlUi.settingsViews must declare unique Memory Settings placements");
+      }
+      settingsViews.push({ section: "memory", panel: placement.panel });
+    }
   }
   if (value.activation === "settings-only" && !value.settingsViews) {
     return err("settings-only Control UI requires a Settings placement");
@@ -75,6 +87,6 @@ export function normalizeManifestControlUi(
     entry,
     ...(styles.length > 0 ? { styles } : {}),
     ...(value.activation === "settings-only" ? { activation: value.activation } : {}),
-    ...(value.settingsViews ? { settingsViews: [{ section: "memory", panel: "overview" }] } : {}),
+    ...(settingsViews.length > 0 ? { settingsViews } : {}),
   });
 }

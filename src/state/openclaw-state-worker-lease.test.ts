@@ -28,6 +28,7 @@ const physical = vi.hoisted(() => ({
     | undefined,
   events: [] as unknown[],
   beforeDispatch: undefined as (() => void) | undefined,
+  commandCompletion: undefined as Promise<void> | undefined,
   openGate: undefined as Promise<void> | undefined,
   onOpen: undefined as (() => void) | undefined,
   databaseAdmission: undefined as OpenClawStateWorkerContext["admission"] | undefined,
@@ -114,6 +115,7 @@ afterEach(() => {
   physical.client = undefined;
   physical.events = [];
   physical.beforeDispatch = undefined;
+  physical.commandCompletion = undefined;
   physical.openGate = undefined;
   physical.onOpen = undefined;
   physical.databaseAdmission = undefined;
@@ -156,6 +158,7 @@ function createLeaseFixture() {
       assertCurrent?.();
       const command: unknown = deserialize(payload);
       physical.events.push(command);
+      await physical.commandCompletion;
     },
     release: async () => {
       physical.events.push("physical-close");
@@ -238,7 +241,10 @@ it("closes fresh callback admission while accepted callbacks and terminal writes
 
 it("drains a command accepted before cold acquisition after its callback returns", async () => {
   const openGate = createDeferredCore();
+  const commandStarted = createDeferredCore();
+  const finishCommand = createDeferredCore();
   physical.openGate = openGate.promise;
+  physical.beforeDispatch = commandStarted.resolve;
   const { maintenance, context } = createLeaseFixture();
   const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
   const callbackResult = createDeferredCore<string>();
@@ -246,6 +252,9 @@ it("drains a command accepted before cold acquisition after its callback returns
     type: "capture.endSession" as const,
     input: { sessionId: "accepted-before-open", endedAt: 1 },
   };
+  physical.commandCompletion = finishCommand.promise.then(() => {
+    expect(physical.events).toEqual([acceptedCommand]);
+  });
   let invocation: DomainScope | undefined;
   const commands: Promise<void>[] = [];
   const operation = lease.runOperation((scope) => {
@@ -277,11 +286,15 @@ it("drains a command accepted before cold acquisition after its callback returns
 
     openGate.resolve();
     await lease.ready;
+    await commandStarted.promise;
+    expect(operationSettled).toBe(false);
+    expect(physical.events).toEqual([acceptedCommand]);
+    finishCommand.resolve();
     await expect(commands[0]).resolves.toBeUndefined();
     await expect(operation).resolves.toBe("callback-complete");
-    expect(physical.events).toEqual([acceptedCommand]);
   } finally {
     openGate.resolve();
+    finishCommand.resolve();
     await Promise.allSettled([operation, ...commands]);
     await closing;
   }

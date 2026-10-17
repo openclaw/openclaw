@@ -1298,14 +1298,10 @@ describe("gateway server chat", () => {
         key: "agent:main:main",
         sessionId: "sess-main",
       });
-      expect(startup.payload?.metadata?.models).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "gpt-main",
-            provider: "openai",
-          }),
-        ]),
-      );
+      expect(startup.payload?.metadata).not.toHaveProperty("models");
+      expect(startup.payload?.metadata).not.toHaveProperty("accountSelection");
+      expect(startup.payload?.metadata).not.toHaveProperty("runtimeSelectionLocked");
+      expect(startup.payload?.metadata).not.toHaveProperty("revision");
       expect(startup.payload?.metadata?.commands).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1860,19 +1856,13 @@ describe("gateway server chat", () => {
                 return authStore;
               };
               const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-              const models = await import("./server-methods/models-list-result.js");
               const projectionByKey = new Map<
                 string,
                 Promise<{
                   modelCatalog: ModelCatalogEntry[];
-                  metadata: {
-                    models: import("../../packages/gateway-protocol/src/index.js").ModelChoice[];
-                    swarmEnabled: boolean;
-                  };
                 }>
               >();
               const projectAgent = (
-                context: GatewayRequestContext,
                 agentId: string,
                 sessionEntry?: Parameters<
                   GatewayRequestContext["readChatMetadata"]
@@ -1903,24 +1893,9 @@ describe("gateway server chat", () => {
                     ? { pinnedProfileId: profileId }
                     : {}),
                 });
-                const projection = Promise.all([
-                  projector.projectCatalog(),
-                  models.buildModelsListResult({
-                    source: { kind: "gateway", context },
-                    agentId,
-                    params: { view: "configured" },
-                    preloadedCatalog: {
-                      agentId,
-                      config: initialConfig,
-                      snapshot: catalogSnapshot,
-                    },
-                    preloadedOnly: true,
-                    catalogProjector: projector,
-                  }),
-                ]).then(([modelCatalog, metadata]) => ({
-                  modelCatalog,
-                  metadata: { ...metadata, swarmEnabled: false },
-                }));
+                const projection = projector
+                  .projectCatalog()
+                  .then((modelCatalog) => ({ modelCatalog }));
                 projectionByKey.set(key, projection);
                 return projection;
               };
@@ -1939,8 +1914,8 @@ describe("gateway server chat", () => {
                 readPreparedGatewayModelCatalog: async () => catalogSnapshot,
                 readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
                   const [neutralProjection, sessionProjection] = await Promise.all([
-                    projectAgent(context, agentId),
-                    projectAgent(context, agentId, sessionEntry),
+                    projectAgent(agentId),
+                    projectAgent(agentId, sessionEntry),
                   ]);
                   preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
                     (entry) => entry.reasoning === true,
@@ -1948,7 +1923,7 @@ describe("gateway server chat", () => {
                     ? "base"
                     : "off";
                   return {
-                    metadata: sessionProjection.metadata,
+                    metadata: { swarmEnabled: false },
                     sessionModelCatalog: sessionProjection.modelCatalog,
                     defaultModelCatalog: neutralProjection.modelCatalog,
                   };
@@ -2004,27 +1979,10 @@ describe("gateway server chat", () => {
               expect(responses[0]?.ok).toBe(true);
               const payload = responses[0]?.payload as
                 | {
-                    metadata?: { models?: unknown[] };
                     sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
                     defaults?: { thinkingLevels?: Array<{ id?: string }> };
                   }
                 | undefined;
-              expect(payload?.metadata?.models).toEqual([
-                expect.objectContaining({
-                  id: "gpt-5.5",
-                  name: "GPT-5.5",
-                  provider: "openai",
-                  agentRuntime: {
-                    id: "codex",
-                    cloudPlacementSupported: false,
-                    devicePlacementSupported: false,
-                    source: "implicit",
-                  },
-                  contextWindow: 400_000,
-                  reasoning: false,
-                  available: true,
-                }),
-              ]);
               expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual([
                 "off",
               ]);
@@ -2074,7 +2032,6 @@ describe("gateway server chat", () => {
                 expect(responses[0]?.ok).toBe(true);
                 const preferredPayload = responses[0]?.payload as
                   | {
-                      metadata?: { models?: Array<{ contextWindow?: number }> };
                       defaults?: GatewaySessionsDefaults;
                       sessionInfo?: {
                         agentRuntime?: unknown;
@@ -2085,9 +2042,6 @@ describe("gateway server chat", () => {
                       };
                     }
                   | undefined;
-                expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
-                  expectedRoute === "subscription" ? 400_000 : 1_000_000,
-                );
                 const thinkingLevels = preferredPayload?.sessionInfo?.thinkingLevels?.map(
                   (level) => level.id,
                 );
@@ -2222,7 +2176,7 @@ describe("gateway server chat", () => {
           swarmEnabled: false,
         };
         const readChatStartupProjection = vi.fn(async () => ({
-          metadata,
+          metadata: { swarmEnabled: false },
           sessionModelCatalog: metadata.models,
           defaultModelCatalog: metadata.models,
         }));
@@ -2277,7 +2231,7 @@ describe("gateway server chat", () => {
         const payload = responses[0]?.payload as
           | {
               metadata?: {
-                models?: Array<{ id?: string; provider?: string }>;
+                swarmEnabled?: boolean;
               };
               sessionInfo?: { key?: string; sessionId?: string };
               defaults?: { modelProvider?: string; model?: string };
@@ -2292,14 +2246,7 @@ describe("gateway server chat", () => {
           modelProvider: "minimax",
         });
         if (method === "chat.startup") {
-          expect(payload?.metadata?.models).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                id: "MiniMax-M2.7-highspeed",
-                provider: "minimax",
-              }),
-            ]),
-          );
+          expect(payload?.metadata).toEqual({ swarmEnabled: false });
         } else {
           expect(payload).not.toHaveProperty("metadata");
         }

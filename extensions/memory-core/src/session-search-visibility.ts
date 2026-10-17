@@ -532,16 +532,33 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!allowed) {
       continue;
     }
-    if (visibility === "channel" && params.captureChannelTargets) {
-      channelTargets.push({
-        hit,
-        aliases: expandRecallAliasKeys(keys).map((key) => ({
-          key,
-          agentId: scopedAgentId ?? requesterAgentId ?? "",
-          expectedSessionId: combinedSessionStore[key]?.sessionId ?? "",
-          storePath,
-        })),
-      });
+    if (visibility === "channel") {
+      const requesterEntry = params.requesterSessionKey
+        ? combinedSessionStore[params.requesterSessionKey]
+        : undefined;
+      const crossSession = !keys.some(
+        (key) =>
+          key === params.requesterSessionKey ||
+          isSameStoredTranscript(requesterEntry, combinedSessionStore[key]),
+      );
+      // Channel authorization is an owner-held final-disclosure capability, not
+      // a reusable predicate result. Consumers that cannot carry that capability
+      // may keep self-transcript and ordinary memory results, but must fail closed
+      // for sibling transcript snippets and citations.
+      if (crossSession && !params.captureChannelTargets) {
+        continue;
+      }
+      if (params.captureChannelTargets) {
+        channelTargets.push({
+          hit,
+          aliases: expandRecallAliasKeys(keys).map((key) => ({
+            key,
+            agentId: scopedAgentId ?? requesterAgentId ?? "",
+            expectedSessionId: combinedSessionStore[key]?.sessionId ?? "",
+            storePath,
+          })),
+        });
+      }
     }
     next.push(hit);
   }

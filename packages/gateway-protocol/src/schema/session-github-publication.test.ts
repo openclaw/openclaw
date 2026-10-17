@@ -31,6 +31,34 @@ describe("session GitHub publication protocol", () => {
       expect(Value.Check(SessionGitHubActionParamsSchema, { ...refresh, ...extra })).toBe(false);
     }
   });
+  it("keeps metadata edits bound to the session without target or lifecycle selectors", () => {
+    const edit = { sessionKey: "agent:main:publication", action: "edit" };
+    expect(Value.Check(SessionGitHubActionParamsSchema, edit)).toBe(true);
+    expect(
+      Value.Check(SessionGitHubActionParamsSchema, {
+        ...edit,
+        title: "New title",
+        expectedTitle: "Old title",
+        body: "Full description",
+        expectedBody: "Previous description",
+        requestId: "a1111111-1111-4111-8111-111111111111",
+        expectedHeadCommit: "a".repeat(40),
+      }),
+    ).toBe(true);
+    for (const extra of [
+      { publishingSessionKey: "other" },
+      { repository: "other/repo" },
+      { url: "https://github.com/other/repo/pull/1" },
+      { mergeMethod: "squash" },
+      { draft: false },
+      { state: "closed" },
+      { token: "synthetic" },
+      { conflictsResolved: true },
+      { body: "x".repeat(65537) },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...edit, ...extra })).toBe(false);
+    }
+  });
   it("keeps session PR actions closed to arbitrary targets, credentials and auto-merge", () => {
     const inspect = { sessionKey: "agent:main:publication", action: "inspect" };
     expect(Value.Check(SessionGitHubActionParamsSchema, inspect)).toBe(true);

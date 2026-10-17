@@ -4,7 +4,6 @@ import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-se
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
-  releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -72,23 +71,15 @@ import {
 import { REPLY_WORK_ADMISSION_OWNER } from "./reply-turn-admission-owner.js";
 import type { ReplyTurnAdmission, ReplyTurnAdmissionParams } from "./reply-turn-admission.types.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
-import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
+import {
+  reconcileOrWaitForReplyRecovery,
+  releaseReplyRecoveryOwner,
+  waitForRestartRecoveryProgress,
+} from "./reply-turn-recovery.js";
 
 class QueuedFollowupLifecycleInvalidatedError extends Error {}
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
-
-async function releaseReplyRecoveryOwner(lease: MainSessionRecoveryOwnerLease | undefined) {
-  try {
-    return await releaseMainSessionRecoveryOwner(lease);
-  } catch (error) {
-    log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
-    // The durable owner schedules exact-token retries. A completed reply must
-    // not keep its successor barrier and lifecycle admission until that
-    // background repair wins a contested SQLite write.
-    return undefined;
-  }
-}
 
 /** Runs owner work with its admission marked as the initiating lifecycle context. */
 export async function runWithReplyOperationLifecycleAdmission<T>(
@@ -478,6 +469,32 @@ export async function admitReplyTurn(
               target: { agentId: params.agentId, sessionKey: params.sessionKey, storePath },
             });
             if (ownerClaim.kind === "invalidated") {
+              if (
+                ownerClaim.reason === "recovery_pending" &&
+                !params.adoptOperation &&
+                gatewayContext?.recoveryRuntime
+              ) {
+                // Release our admission so recovery can reclaim an orphan.
+                admission?.release();
+                await reconcileOrWaitForReplyRecovery({
+                  agentId: params.agentId,
+                  sessionKey: params.sessionKey,
+                  storePath,
+                  entry: ownerClaim.entry,
+                  gatewayContext,
+                  signal: params.upstreamAbortSignal,
+                  assertCurrent: () => {
+                    params.upstreamAbortSignal?.throwIfAborted();
+                    params.assertRequestCurrent?.();
+                    workspaceReadiness?.assertCurrent();
+                    assertDatabaseOwnerCurrent();
+                    if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+                      rejectSessionChange();
+                    }
+                  },
+                });
+                continue;
+              }
               rejectSessionChange();
             }
             recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;

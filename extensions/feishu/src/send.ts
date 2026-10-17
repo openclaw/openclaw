@@ -43,7 +43,6 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
-/** Check whether a thrown error indicates a withdrawn/not-found reply target. */
 function isWithdrawnReplyError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) {
     return false;

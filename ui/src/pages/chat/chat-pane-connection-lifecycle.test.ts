@@ -116,7 +116,12 @@ describe("chat pane connection lifecycle", () => {
         ...snapshot,
         hello: {
           ...snapshot.hello!,
-          snapshot: { presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] },
+          snapshot: {
+            presence: [
+              { ts: 0, user: { id: "owner" } },
+              { ts: 0, user: { id: "alice" } },
+            ],
+          },
         },
       };
 
@@ -338,8 +343,8 @@ describe("chat pane connection lifecycle", () => {
     expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
     expect(state.chatStreamRenderFrame).toBeNull();
     expect(requestUpdate).toHaveBeenCalledOnce();
-    lifecycle.requestUpdate();
-    lifecycle.requestUpdate();
+    lifecycle.invalidate();
+    lifecycle.invalidate();
     await Promise.resolve();
     expect(performUpdate).not.toHaveBeenCalled();
 
@@ -351,7 +356,7 @@ describe("chat pane connection lifecycle", () => {
     const addVisibilityListener = vi.spyOn(document, "addEventListener");
     const removeVisibilityListener = vi.spyOn(document, "removeEventListener");
     visibilityState = "hidden";
-    lifecycle.requestUpdate();
+    lifecycle.invalidate();
     await Promise.resolve();
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
@@ -370,7 +375,7 @@ describe("chat pane connection lifecycle", () => {
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
     addVisibilityListener.mockClear();
-    lifecycle.requestUpdate();
+    lifecycle.invalidate();
     await lifecycle.updateComplete;
     expect(addVisibilityListener).not.toHaveBeenCalledWith(
       "visibilitychange",
@@ -402,21 +407,27 @@ describe("chat pane connection lifecycle", () => {
     state.renderLifecycle.afterCommit = () => cancelCommit;
     scheduleChatScroll(state);
     const stop = vi.fn(() => {
-      expect(state.realtimeTalkSession).toBeNull();
+      expect(state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
     });
-    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
-    state.realtimeTalkActive = true;
-    state.realtimeTalkStatus = "listening";
-    state.realtimeTalkDetail = "live";
-    state.realtimeTalkInputLevel.set(0.7);
-    state.realtimeTalkConversationState.entries = [
+    state.realtimeTalk.update({
+      realtimeTalkSession: {
+        stop,
+      } as unknown as ChatPageHost["realtimeTalk"]["snapshot"]["realtimeTalkSession"],
+    });
+    state.realtimeTalk.update({ realtimeTalkActive: true });
+    state.realtimeTalk.update({ realtimeTalkStatus: "listening" });
+    state.realtimeTalk.update({ realtimeTalkDetail: "live" });
+    state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(0.7);
+    state.realtimeTalk.snapshot.realtimeTalkConversationState.entries = [
       { id: "utterance", role: "user", text: "stale", isStreaming: true },
     ];
-    state.realtimeTalkVideoStream = {} as MediaStream;
-    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
-    state.realtimeTalkVideoCapable = true;
-    state.realtimeTalkVideoPending = true;
-    state.realtimeTalkCameraError = true;
+    state.realtimeTalk.update({ realtimeTalkVideoStream: {} as MediaStream });
+    state.realtimeTalk.update({
+      realtimeTalkCameraDevices: [{ deviceId: "camera", label: "Camera" }],
+    });
+    state.realtimeTalk.update({ realtimeTalkVideoCapable: true });
+    state.realtimeTalk.update({ realtimeTalkVideoPending: true });
+    state.realtimeTalk.update({ realtimeTalkCameraError: true });
 
     disconnect(pane);
 
@@ -427,16 +438,16 @@ describe("chat pane connection lifecycle", () => {
     expect(state.chatSending).toBe(false);
     expect(state.chatSendingScopeKey).toBeNull();
     expect(stop).toHaveBeenCalledOnce();
-    expect(state.realtimeTalkActive).toBe(false);
-    expect(state.realtimeTalkStatus).toBe("idle");
-    expect(state.realtimeTalkDetail).toBeNull();
-    expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversationState.entries).toEqual([]);
-    expect(state.realtimeTalkVideoStream).toBeNull();
-    expect(state.realtimeTalkCameraDevices).toEqual([]);
-    expect(state.realtimeTalkVideoCapable).toBe(false);
-    expect(state.realtimeTalkVideoPending).toBe(false);
-    expect(state.realtimeTalkCameraError).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalk.snapshot.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalk.snapshot.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalk.snapshot.realtimeTalkConversationState.entries).toEqual([]);
+    expect(state.realtimeTalk.snapshot.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalk.snapshot.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalk.snapshot.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkCameraError).toBe(false);
   });
 
   it("preserves owner-qualified model and identity state when global selection changes", () => {
@@ -698,9 +709,11 @@ describe("chat pane connection lifecycle", () => {
       },
     } as unknown as ApplicationContext;
     state.loadAssistantIdentity = vi.fn(async () => {});
-    state.realtimeTalkInputLevel = {
-      set: vi.fn(),
-    } as unknown as ChatPageHost["realtimeTalkInputLevel"];
+    state.realtimeTalk.update({
+      realtimeTalkInputLevel: {
+        set: vi.fn(),
+      } as unknown as ChatPageHost["realtimeTalk"]["snapshot"]["realtimeTalkInputLevel"],
+    });
     state.resetToolStream = vi.fn();
     const snapshot = {
       ...pane.context.gateway.snapshot,

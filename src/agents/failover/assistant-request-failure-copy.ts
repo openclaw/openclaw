@@ -116,7 +116,7 @@ export function renderAssistantRequestFailureCopy(
     return `⚠️ ${copy}`;
   }
   const hasStatus =
-    typeof facts.status === "number" &&
+    facts.status !== undefined &&
     Number.isInteger(facts.status) &&
     facts.status >= 100 &&
     facts.status <= 599;

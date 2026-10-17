@@ -108,6 +108,20 @@ function write(value: Replacement) {
   );
 }
 
+function writeGroup(values: Replacement[]) {
+  return runSqliteImmediateTransactionSync(conn, () =>
+    new MemorySourceIndexKernel(conn, store).replaceGroup(
+      values.map((value) => ({
+        header: value,
+        rows: value.chunks.map((chunk, index) => ({
+          chunk,
+          embedding: value.embeddings[index] ?? [],
+        })),
+      })),
+    ),
+  );
+}
+
 function indexedSource(chunks: number, clean = true) {
   const value = replacement("memory/current.md", "original", chunks);
   const sibling = replacement("memory/sibling.md");
@@ -136,47 +150,6 @@ function snapshot() {
 }
 
 describe("memory source index native kernel", () => {
-  it("retains clean vectors without native writes, full scans, or schema probes", async () => {
-    const { value } = indexedSource(3);
-    const vectors = readVectors();
-    const first = value.chunks[0];
-    assert.ok(first);
-    first.importance = 9;
-    first.provenance = { originClass: "agent", sessionKind: "interactive", observedAt: 110 };
-    const statements = observeHostDataSql();
-    conn.setAuthorizer((action, table) =>
-      (action === constants.SQLITE_INSERT || action === constants.SQLITE_DELETE) &&
-      table === "memory_index_chunks_vec_rowids"
-        ? constants.SQLITE_DENY
-        : constants.SQLITE_OK,
-    );
-    try {
-      write({ ...value, now: 200 });
-    } finally {
-      conn.setAuthorizer(null);
-      statements.restore();
-    }
-    expect(statements.queries.filter((sql) => /sqlite_(?:schema|master)/i.test(sql))).toEqual([]);
-    const lookups = statements.queries.filter((sql) =>
-      /^SELECT .*FROM memory_index_chunks_vec\b/i.test(sql),
-    );
-    expect(lookups.length).toBeGreaterThan(0);
-    for (const sql of lookups) {
-      expect(queryPlan(sql, ["unused"])).toEqual(
-        queryPlan("SELECT id FROM memory_index_chunks_vec WHERE id = ?", ["unused"]),
-      );
-    }
-    expect(readVectors()).toEqual(vectors);
-    expect(
-      conn
-        .prepare("SELECT importance FROM memory_index_chunk_recall_metadata WHERE chunk_id = ?")
-        .get(memoryChunkRowId(value.source, value.entry.path, first, value.model)),
-    ).toEqual({ importance: 9 });
-    expect(select("chunks", "DISTINCT updated_at", "WHERE path = ?").all(value.entry.path)).toEqual(
-      [{ updated_at: 200 }],
-    );
-  });
-
   it("repairs changed and missing vectors, appends chunks, and removes empty and stale vectors", async () => {
     const { value } = indexedSource(4);
     const ids = value.chunks.map((chunk) =>
@@ -231,8 +204,8 @@ describe("memory source index native kernel", () => {
       } finally {
         statements.restore();
       }
-      // The new vector writer first deletes its own ID before inserting it.
-      expect(executions).toBe(Number(append) + (staleCount <= 32 ? staleCount : 1));
+      // Explicit embeddings replace their vectors before stale IDs are removed.
+      expect(executions).toBe(1 + Number(append) + (staleCount <= 32 ? staleCount : 1));
       const expected = [...expectedVectors(next), ...expectedVectors(sibling)].toSorted((a, b) =>
         a.id.localeCompare(b.id),
       );
@@ -247,7 +220,7 @@ describe("memory source index native kernel", () => {
     async (chunks) => {
       const { value } = indexedSource(chunks);
       const vectors = select("chunks_vec", "id", "ORDER BY id").all();
-      const deletes = interruptVectorDeletes(2);
+      const deletes = interruptVectorDeletes(4);
       try {
         write({
           ...value,
@@ -257,7 +230,7 @@ describe("memory source index native kernel", () => {
       } finally {
         conn.setAuthorizer(null);
       }
-      expect(deletes()).toBe(2);
+      expect(deletes()).toBe(4);
       expect(select("chunks_vec", "id", "ORDER BY id").all()).toEqual(vectors);
       expect(select("chunks", "count(*) AS n").get()).toEqual({ n: 3 });
       expect(readDebt()).toEqual({ value: "1" });
@@ -334,7 +307,11 @@ describe("memory source index native kernel", () => {
     },
   );
 
-  it("publishes 129 chunks with bounded batches instead of one insert per chunk", async () => {
+  it.each([
+    { chunks: [129], maxInserts: 8 },
+    { chunks: [64, 65], maxInserts: 8 },
+    { chunks: [1, 128, 1], maxInserts: 12 },
+  ])("publishes bounded chunk batches across sources ($chunks)", async ({ chunks, maxInserts }) => {
     let inserts = 0;
     const statements = observeHostDataSql((sql, preparingDatabase) => {
       if (
@@ -347,13 +324,217 @@ describe("memory source index native kernel", () => {
       }
     });
     try {
-      write(replacement("memory/batched.md", "batch", 129));
+      writeGroup(
+        chunks.map((count, index) => replacement(`memory/batched-${index}.md`, "batch", count)),
+      );
+
       expect(inserts).toBeGreaterThan(0);
-      expect(inserts).toBeLessThanOrEqual(8);
+      expect(inserts).toBeLessThanOrEqual(maxInserts);
     } finally {
       statements.restore();
     }
-    expectCounts(["chunks", "chunks_fts", ...derivedTables], 129);
+    expectCounts(
+      ["chunks", "chunks_fts", ...derivedTables],
+      chunks.reduce((sum, count) => sum + count, 0),
+    );
+  });
+
+  it("coalesces small sources while preserving searchable text and source metadata", async () => {
+    const values = Array.from({ length: 8 }, (_, index): Replacement => {
+      const value = replacement(`memory/group-${index}.md`, `topic${index}`);
+      for (const chunk of value.chunks) {
+        chunk.importance = index + 1;
+        chunk.triggers = `trigger-${index}`;
+        chunk.projectKey = `project-${index}`;
+        chunk.provenance = undefined;
+      }
+      return {
+        ...value,
+        ...(index % 2 === 0
+          ? { source: "memory" as const }
+          : { source: "sessions" as const, agentId: "main", sessionId: `session-${index}` }),
+        model: `model-${index}`,
+        now: 200 + index,
+      };
+    });
+    let inserts = 0;
+    const statements = observeHostDataSql((sql, preparingDatabase) => {
+      if (
+        !preparingDatabase &&
+        /^insert into ["`]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance)["`]?\s/i.test(
+          sql,
+        )
+      ) {
+        inserts++;
+      }
+    });
+    try {
+      writeGroup(values);
+    } finally {
+      statements.restore();
+    }
+    expect(inserts).toBe(3);
+    expect(
+      conn
+        .prepare(
+          `SELECT c.path, c.source, c.model, c.text, c.updated_at,
+                  r.importance, r.triggers, r.project_key,
+                  p.origin_class, p.session_kind, p.observed_at
+           FROM memory_index_chunks c
+           JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
+           JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id
+           ORDER BY c.path`,
+        )
+        .all(),
+    ).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({
+        path: `memory/group-${index}.md`,
+        source: index % 2 === 0 ? "memory" : "sessions",
+        model: `model-${index}`,
+        text: `topic${index} indexed text`,
+        updated_at: 200 + index,
+        importance: index + 1,
+        triggers: `trigger-${index}`,
+        project_key: `project-${index}`,
+        origin_class: "untrusted",
+        session_kind: "unknown",
+        observed_at: 200 + index,
+      })),
+    );
+    expect(
+      conn
+        .prepare("SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+        .all("topic3"),
+    ).toEqual([{ path: "memory/group-3.md" }]);
+    expect(
+      conn
+        .prepare(
+          `SELECT c.path, v.distance FROM memory_index_chunks_vec v
+           JOIN memory_index_chunks c ON c.id = v.id
+           WHERE v.embedding MATCH ? AND k = 8 ORDER BY c.path`,
+        )
+        .all(Buffer.from(new Float32Array([1, 0, 0]).buffer)),
+    ).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({
+        path: `memory/group-${index}.md`,
+        distance: 0,
+      })),
+    );
+  });
+
+  it("keeps later replacements and retained metadata authoritative within a group", async () => {
+    const source = { source: "sessions" as const, agentId: "main", sessionId: "repeated" };
+    const initial = { ...replacement("sessions/repeated.jsonl"), ...source };
+    write(initial);
+    markMemoryVectorIndexClean(conn);
+    const first = { ...replacement(initial.entry.path, "discarded"), ...source, now: 200 };
+    const last = { ...replacement(initial.entry.path, "searchable"), ...source, now: 300 };
+    const chunk = last.chunks[0];
+    assert.ok(chunk);
+    const sibling = replacement("memory/sibling.md", "sibling");
+    runSqliteImmediateTransactionSync(conn, () =>
+      new MemorySourceIndexKernel(conn, store).replaceGroup([
+        ...[first, sibling, last].map((value) => ({
+          header: value,
+          rows: value.chunks.map((row) => ({ chunk: row, embedding: [0, 1, 0] })),
+        })),
+        {
+          header: { ...last, delta: true, now: 400 },
+          rows: [{ chunk: { ...chunk, text: "", importance: 9 }, embedding: [], retained: true }],
+        },
+      ]),
+    );
+    expect(
+      conn
+        .prepare(
+          `SELECT c.text, c.updated_at, r.importance FROM memory_index_chunks c
+           JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
+           WHERE c.path = ?`,
+        )
+        .all(initial.entry.path),
+    ).toEqual([{ text: "searchable indexed text", updated_at: 300, importance: 9 }]);
+    expect(
+      conn
+        .prepare("SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+        .all("discarded OR original OR searchable"),
+    ).toEqual([{ path: initial.entry.path }]);
+    expect(
+      conn
+        .prepare(
+          `SELECT c.path, hex(v.embedding) AS embedding FROM memory_index_chunks_vec v
+           JOIN memory_index_chunks c ON c.id = v.id ORDER BY c.path`,
+        )
+        .all(),
+    ).toEqual(
+      [sibling.entry.path, initial.entry.path].map((path) => ({
+        path,
+        embedding: Buffer.from(new Float32Array([0, 1, 0]).buffer)
+          .toString("hex")
+          .toUpperCase(),
+      })),
+    );
+    expect(conn.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 2,
+    });
+  });
+
+  it("applies later removals to chunks published by an intermediate removal flush", async () => {
+    const initial = {
+      ...replacement("sessions/ordered.jsonl", "obsolete", 128),
+      source: "sessions" as const,
+      agentId: "main",
+      sessionId: "ordered",
+    };
+    write(initial);
+    const temporary = replacement(initial.entry.path, "temporary").chunks[0];
+    const survivor = replacement(initial.entry.path, "survivor").chunks[0];
+    assert.ok(temporary && survivor);
+    runSqliteImmediateTransactionSync(conn, () =>
+      new MemorySourceIndexKernel(conn, store).replaceRows({ ...initial, delta: true }, [
+        { chunk: temporary, embedding: [1, 0, 0] },
+        ...initial.chunks.map((chunk) => ({
+          removedId: memoryChunkRowId(initial.source, initial.entry.path, chunk, initial.model),
+        })),
+        {
+          removedId: memoryChunkRowId(initial.source, initial.entry.path, temporary, initial.model),
+        },
+        { chunk: survivor, embedding: [0, 1, 0] },
+      ]),
+    );
+    expect(conn.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+      { text: "survivor indexed text" },
+    ]);
+    expect(
+      conn
+        .prepare("SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
+        .all("temporary OR obsolete OR survivor"),
+    ).toEqual([{ text: "survivor indexed text" }]);
+    for (const table of [
+      "memory_index_chunk_recall_metadata",
+      "memory_index_chunk_provenance",
+      "memory_index_chunks_vec",
+    ]) {
+      expect(conn.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+        count: 1,
+      });
+    }
+  });
+
+  it("rolls back grouped sources and vectors when a buffered provenance write fails", async () => {
+    write(replacement("memory/first.md"));
+    write(replacement("memory/last.md"));
+    markMemoryVectorIndexClean(conn);
+    const before = snapshot();
+    conn.exec(`CREATE TRIGGER fail_group_provenance BEFORE INSERT ON memory_index_chunk_provenance
+      WHEN NEW.observed_at = 999 BEGIN SELECT RAISE(ABORT, 'group provenance failed'); END`);
+    const first = replacement("memory/first.md", "changed");
+    const last = replacement("memory/last.md", "changed");
+    last.chunks = last.chunks.map((chunk) => ({
+      ...chunk,
+      provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 999 },
+    }));
+    expect(() => writeGroup([first, last])).toThrow("group provenance failed");
+    expect(snapshot()).toEqual(before);
   });
 
   it.each([

@@ -179,7 +179,7 @@ merge_outcome_load_local() {
             $record.route == "admin" and $record.priorCiAdmin.dispatchTransport == "rest"
            else true end) and
           (if has("staleHeadRetirement") then (.staleHeadRetirement | type == "object") and
-            has("replacementHead") and $record.route == "auto" and
+            has("replacementHead") and ($record.route | IN("auto", "immediate")) and
             ($record | has("priorCiAdmin") | not)
            else true end) and
           (if has("asyncFailure") then $record.route == "immediate" and
@@ -276,7 +276,7 @@ merge_outcome_load_local() {
              .accepted == true and .route == "immediate" and .transport == "rest" and
              .head == $next.head and .asyncMerge == $next.recovery.asyncFailure
            elif $next.recovery.staleHeadRetirement != null then
-             .accepted == false and .route == "admin" and $next.route == "auto" and
+             .accepted == false and .route == "admin" and ($next.route | IN("auto", "immediate")) and
              .priorCiAdmin.dispatchTransport == "rest" and
              $next.recovery.replacementHead == $next.head and .head != $next.head
            elif $next.route == "admin" then
@@ -300,7 +300,7 @@ merge_outcome_load_local() {
       local provider_rejection original
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
       original=$(GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json") || return 1
-      provider_rejection=$(printf '%s\n' "$original" | node "${BASH_SOURCE[0]%/*}/merge-prior-ci.mjs" provider-rejection "git:$MERGE_OUTCOME_OID") || return 1
+      provider_rejection=$(printf '%s\n' "$original" | node "${BASH_SOURCE[0]%/*}/merge-prior-ci.mjs" provider-rejection "$retained" "git:$MERGE_OUTCOME_OID") || return 1
       [ "$provider_rejection" = "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.recovery.providerRejection')" ] || {
         merge_outcome_stop "invalid retained provider rejection qualification"; return 1;
       }
@@ -1020,7 +1020,7 @@ merge_outcome_stable() {
           [ "$prior_ci_round" = false ] || MERGE_PRIOR_CI_UNKNOWN_DELAY="$settle_delay"
           continue
         fi
-        verify_merge_route_projection "$1" "$reread" "$route" "${qualified_refusal:-false}" || return 1
+        verify_merge_route_projection "$1" "$reread" "$route" "${strict_immediate_recovery:-false}" || return 1
         if ! printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" '
           .pr.mergeable == $observed.pr.mergeable and .pr.mergeStateStatus == $observed.pr.mergeStateStatus
         ' >/dev/null; then

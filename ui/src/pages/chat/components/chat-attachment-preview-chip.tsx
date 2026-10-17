@@ -23,9 +23,10 @@ export function AttachmentPreviewChip(props: {
     <>
       <span aria-hidden="true">{props.icon}</span>
       <span
-        class={
-          props.removal ? "chat-selection-annotations__label" : "chat-attachment-preview-label"
-        }
+        class={{
+          "chat-selection-annotations__label": Boolean(props.removal),
+          "chat-attachment-preview-label": !props.removal,
+        }}
         dir="auto"
       >
         {props.label}

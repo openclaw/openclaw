@@ -184,9 +184,11 @@ export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
   assertCurrent: () => void;
+  onProgress?: (item: RecoveryCleanupArtifact, index: number) => void;
 }): Promise<void> {
-  for (const item of params.selected) {
+  for (const [index, item] of params.selected.entries()) {
     try {
+      params.onProgress?.(item, index);
       params.assertCurrent();
       const expected = params.identities.get(item.path);
       const current = fs.lstatSync(item.path, { bigint: true });

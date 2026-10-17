@@ -10,9 +10,9 @@ import {
   readProviderCatalogResultEntries,
 } from "./provider-catalog-result.js";
 import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
+import { PROVIDER_CATALOG_ORDERS as DISCOVERY_ORDER } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
-const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
 const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
 );

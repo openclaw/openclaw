@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, getOwner, runWithOwner } from "solid-js";
+import { createMemo, getOwner, runWithOwner, Show } from "solid-js";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -24,12 +24,14 @@ export function SessionMenuShortcut(props: {
   return (
     <span class="session-menu__shortcut" aria-hidden="true">
       <Kbd keys={props.shortcut.toUpperCase()} inline />
-      {props.alias ? (
-        <>
-          {" "}
-          / <KeyboardShortcut combo={props.alias} inline />
-        </>
-      ) : undefined}
+      <Show when={props.alias} keyed>
+        {(alias) => (
+          <>
+            {" "}
+            / <KeyboardShortcut combo={alias} inline />
+          </>
+        )}
+      </Show>
     </span>
   );
 }

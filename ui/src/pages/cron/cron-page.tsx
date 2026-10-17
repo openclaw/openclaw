@@ -4,12 +4,11 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { i18n } from "../../i18n/index.ts";
 import { hasCronFormErrors } from "../../lib/cron/index.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
 import {
@@ -22,20 +21,16 @@ import type { CronProps } from "./view-types.ts";
 import { CronView } from "./view.tsx";
 
 export function CronPageContent(props: { page: ReturnType<typeof createCronPage> }) {
-  const translations = projectI18n(i18n);
-  const revision = () => {
-    translations.revision();
-    return props.page.revision();
-  };
+  const revision = () => i18nRevision() + props.page.revision();
   const viewProps = createMemo<CronProps>(() => {
     revision();
     const page = props.page;
-    const channels = page.context().channels.state;
+    const channels = page.inventories.channels.read();
     const suggestions = buildCronSuggestions({
       channels,
-      runtimeConfig: page.context().runtimeConfig.state,
+      runtimeConfig: page.inventories.runtimeConfig.read(),
       cron: page.cron(),
-      agentsList: page.agentsList(),
+      agentsList: page.inventories.agents.read().agentsList,
       modelSuggestions: page.cronModelSuggestions(),
       conversationTargets: resolveConversationTargetSuggestions(
         page.deliveryDirectory.conversations,
@@ -95,7 +90,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       runsSortDir: page.cron().cronRunsSortDir,
       eventSource,
       fieldErrors,
-      canSubmit: !hasCronFormErrors(fieldErrors),
+      canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
       agentSuggestions: suggestions.agentSuggestions,
       modelSuggestions: suggestions.modelSuggestions,
       thinkingSuggestions: THINKING_SUGGESTIONS,
@@ -114,7 +109,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
         ? t("cron.list.sessionFilter")
         : subtitleForRoute("cron"),
       filtered: Boolean(page.cron().cronSessionFilter),
-      agents: page.agentsList()?.agents ?? [],
+      agents: page.inventories.agents.read().agentsList?.agents ?? [],
       selectedAgentId: page.context().agentSelection.state.scopeId,
     };
   });

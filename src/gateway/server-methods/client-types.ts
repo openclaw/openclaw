@@ -37,6 +37,7 @@ export type GatewayClient = Pick<
   | "remoteControlUiIngress"
   | "browserOrigin"
   | "presenceKey"
+  | "presenceSnapshot"
   | "clientIp"
   | "pairedClientId"
   | "authenticatedUserId"
@@ -82,10 +83,7 @@ export type GatewayClient = Pick<
     agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
-    /** Host-owned exact media set for a scoped automatic recovery delivery. */
-    internalDeliveryMediaUrls?: string[];
     runtimeContextFragments?: RuntimeContextFragment[];
-    internalDeliverySuppressText?: boolean;
     /** Host-owned: deliver only authored output, never runtime error payloads. */
     internalDeliverySuppressErrors?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */

@@ -12,12 +12,71 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 
 ## Presence
 
-- `system-presence` returns entries keyed by device identity, including
-  `deviceId`, `roles`, and `scopes`, so UIs can show one row per device even
-  when it connects as both operator and node.
+- `system-presence` returns one row per live operator connection, including
+  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  facts. Reconnecting removes offline rows for the same identity: device ID,
+  then client instance ID, then connection ID. When the last connection closes,
+  at most one offline row for that identity remains until the five-minute TTL.
+  Node connections retain device-keyed rows. UIs can group rows by device or person.
 - `node.list` includes optional `lastSeenAtMs` and `lastSeenReason`. Connected
   nodes report current connection time with reason `connect`; paired nodes can
   also report durable background presence via a trusted node event.
+
+### Opt-in presence deltas
+
+Operator clients can advertise `presence-deltas` in connect `caps`. The Control
+UI does so; native clients retain the existing `presence` event payload
+`{ presence: [...] }` and the ordinary `system-presence` array response.
+
+For opted-in readers, the same `presence` event carries one of two payloads:
+
+```json
+{
+  "reset": true,
+  "version": 12,
+  "presence": [{ "connectionId": "connection-a", "ts": 1000 }],
+  "keys": ["entry:connection-a"]
+}
+```
+
+```json
+{
+  "base": 12,
+  "version": 13,
+  "upsert": [
+    { "key": "entry:connection-a", "presence": { "connectionId": "connection-a", "ts": 2000 } }
+  ],
+  "remove": [],
+  "order": ["entry:connection-a"]
+}
+```
+
+Keys are opaque, stable identities assigned by the presence owner, independent
+of display names and recipient visibility. A reset replaces the complete roster;
+`keys` parallels `presence`. Each upsert replaces a whole row, including omitted
+fields. Apply removals and upserts, then select rows in the complete `order` array.
+This preserves the full snapshot's ordering even when only one row changes.
+All rows are projected for that recipient before comparison, including watched
+session visibility changes.
+
+`version` uses `stateVersion.presence`. Apply a delta only when `base` matches
+the last accepted version. On mismatch, request `system-presence` with
+`{ "snapshot": true }`; an opted-in client receives the reset shape above.
+Ordinary calls still return the existing array. The Control UI reconciles these
+updates in its Gateway store so downstream consumers receive full rosters.
+
+The hello snapshot remains `snapshot.presence` with `snapshot.stateVersion.presence`.
+This implementation sends a reset on the first post-hello presence event instead
+of assuming the hello roster is a recorded delivery baseline. Reconnects start
+the same way. A reset is also sent when there is no baseline, after a recovery
+RPC, or when encoding a delta would not save bytes.
+
+Presence remains best effort with `dropIfSlow`. Each connection retains only
+references to its last sent projected rows and their version. A dropped frame
+invalidates that baseline, so the next presence event is a reset. The baseline
+advances only after the socket accepts a frame; send failures and disconnects
+clear it. Ordered WebSocket delivery makes successfully sent deltas composable;
+this is not a peer acknowledgment or a durable delivery guarantee.
 
 Native macOS nodes can also send authenticated `node.presence.activity` events
 with bounded input idle time and an optional `source`: `app` for interaction

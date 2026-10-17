@@ -50,6 +50,7 @@ import {
 } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
 import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 import {
   hasVisibleStreamParts,
@@ -73,7 +74,6 @@ export async function hydrateChatHistory(
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
-  deltaCursor: string | undefined,
   inputRunIds: string[],
   requestKeyPrefix: string,
 ): Promise<ObservedChatHistoryResult | undefined> {
@@ -100,11 +100,19 @@ export async function hydrateChatHistory(
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  const request = (cursor?: string) =>
-    requestSharedHistory(
+  const requests = chatHistoryRequests(state);
+  const request = (cursor?: string) => {
+    const historyState = readChatHistoryState(state, cursor);
+    const key = `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}${JSON.stringify(historyState?.stateRevision ?? null)}`;
+    const load = requests.historyLoad;
+    // Keep pane-level coalescing aligned with the cursor actually sent.
+    if (load.phase === "in-flight") {
+      load.key = key;
+    }
+    return requestSharedHistory(
       sessions,
       client,
-      `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}`,
+      key,
       method,
       sessionKey,
       requestAgentId,
@@ -120,9 +128,11 @@ export async function hydrateChatHistory(
       },
       cursor,
       inputRunIds,
+      undefined,
+      historyState,
     );
+  };
   try {
-    const requests = chatHistoryRequests(state);
     let admission = requests.subscriptionReady;
     while (admission) {
       const ready = await admission;
@@ -140,7 +150,6 @@ export async function hydrateChatHistory(
               message: requests.subscriptionError,
               retryable: requests.historyLoad.phase === "failed" && requests.historyLoad.retryable,
             });
-            state.requestUpdate?.();
           }
           return undefined;
         }
@@ -151,7 +160,8 @@ export async function hydrateChatHistory(
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
     setChatError(state, null);
-    let response = await request(deltaCursor);
+    // The cached transcript can finish hydrating while stream admission is pending.
+    let response = await request(readChatHistoryCursor(state));
     if (!isCurrent()) {
       return undefined;
     }
@@ -172,7 +182,19 @@ export async function hydrateChatHistory(
     const previousPagination = state.chatHistoryPagination;
     const previousSessionId = state.currentSessionId ?? null;
     const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
+    // Preserve wire metadata before the display and roster owners derive their projections.
+    const historyState =
+      !(isHistoryCursor(response) && response.kind === "reset") && response.stateRevision
+        ? {
+            stateRevision: response.stateRevision,
+            pendingInputs: response.pendingInputs,
+            sessionInfo: response.sessionInfo,
+          }
+        : null;
     if (isHistoryCursor(response) && response.kind === "delta") {
+      if (!response.sessionInfo) {
+        throw new Error("chat history delta omitted uncached session metadata");
+      }
       const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
       const runActive = isSessionRunActive(response.sessionInfo);
       for (const payload of response.messages) {
@@ -209,7 +231,12 @@ export async function hydrateChatHistory(
         currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
       });
-      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null, response.sessionInfo);
+      commitCurrentChatHistorySnapshot(
+        state,
+        response.deltaCursor ?? null,
+        response.sessionInfo,
+        historyState,
+      );
       return {
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
@@ -293,7 +320,7 @@ export async function hydrateChatHistory(
       receipts:
         !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });
-    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null, res.sessionInfo);
+    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null, res.sessionInfo, historyState);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId
@@ -416,7 +443,6 @@ export async function hydrateChatHistory(
         isRetryableChatReadError(err, method) ||
         (err instanceof GatewayRequestError && err.retryable),
     });
-    state.requestUpdate?.();
   } finally {
     if (ownsHistoryRequest(state, ownership)) {
       setChatHistoryRetrying(state, "history", false);

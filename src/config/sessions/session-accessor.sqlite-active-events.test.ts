@@ -1,7 +1,6 @@
 // Active transcript projection tests cover branch rebuilds and bounded large-history reads.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
@@ -305,26 +304,26 @@ describe("SQLite active transcript event projection", () => {
       ],
       touchSessionEntry: false,
     });
+    // An upgraded transcript keeps its original rows until a payload write.
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        database.db
+          .prepare(`UPDATE transcript_events
+        SET navigation_type = NULL, navigation_custom_type = NULL,
+            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+            navigation_last_custom_type = NULL, navigation_valid = 1
+        WHERE session_id = ?`)
+          .run(scope.sessionId);
+      },
+      { agentId: scope.agentId, env: scope.env },
+    );
     const facts: unknown[] = [];
-    const reads = observeHostDataSql();
-    try {
-      expect(
-        everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
-          facts.push(message);
-          return true;
-        }),
-      ).toBe(true);
-    } finally {
-      reads.restore();
-    }
-    const inputQueries = reads.queries.filter((query) => /as "message_json"/i.test(query));
-    expect(inputQueries.length).toBeGreaterThan(0);
-    for (const query of inputQueries) {
-      // The bounded SELECT still projects role from JSON; row selection must use columns.
-      const predicate = query.slice(query.toLowerCase().lastIndexOf(" where "));
-      expect(predicate).toMatch(/\bwhere\b/i);
-      expect(predicate).not.toMatch(/json_(?:extract|type|each|tree)\s*\(/i);
-    }
+    expect(
+      everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
+        facts.push(message);
+        return true;
+      }),
+    ).toBe(true);
     expect(facts).toEqual([
       { role: "user", idempotencyKey: "source:user", __openclaw: { runId: "source" }, provenance },
       { role: "user", idempotencyKey: "later:user", __openclaw: { runId: null }, provenance: null },

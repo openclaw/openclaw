@@ -13,6 +13,11 @@ on:
       - "!apps/linux/README.md"
       - "!apps/linux/omarchy/README.md"
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: "Run only Windows desktop validation and installer packaging"
+        type: boolean
+        default: false
 
 concurrency:
   # Passive draft events must not cancel useful validation; conversion intentionally does.
@@ -30,7 +35,7 @@ permissions:
 
 jobs:
   build:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || !inputs.windows_only) }}
     name: Build Linux companion
     # Match the release build base for native tests and manually built bundles.
     runs-on: ubuntu-22.04
@@ -344,7 +349,7 @@ jobs:
             apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage
 
   test-macos:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || !inputs.windows_only) }}
     name: Test macOS companion
     # This app also ships macOS desktop-test bundles, but the only job that
     # compiles them (linux-app-release.yml build_macos) runs behind a manual
@@ -436,7 +441,13 @@ jobs:
 
       - name: Verify native Windows power lifecycle
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
+        shell: pwsh
+        # This fixture needs only std and kernel32; Cargo also builds an unused app binary.
+        run: |
+          $nativePowerTest = Join-Path $env:RUNNER_TEMP "native-keep-awake.exe"
+          rustc +stable --edition=2021 --test tests/native_keep_awake.rs -o $nativePowerTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $nativePowerTest native_power_lifecycle --nocapture
 
       - name: Verify Windows runtime, installer, and desktop boundaries
         working-directory: apps/linux/src-tauri
@@ -450,7 +461,8 @@ jobs:
           npm_config_cache: ${{ runner.temp }}/openclaw-desktop-npm-cache
           # Cold Windows declarations can exceed the package builder's 45-minute default.
           OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        # Favor packaging speed for validation; release installers keep the default compression.
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false,"windows":{"nsis":{"compression":"zlib"}}}}'
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

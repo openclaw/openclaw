@@ -7,9 +7,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
-  runGuidedOnboarding as runGuidedOnboardingImpl,
-  type GuidedOnboardingDeps,
-} from "./onboard-guided.js";
+  runGuidedOnboardingWithFixtures as runGuidedOnboardingImpl,
+  type GuidedOrchestrationFixture as GuidedOnboardingDeps,
+} from "./onboard-guided-runtime.test-support.js";
 
 const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
   runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
@@ -246,7 +246,9 @@ function setupDeps(params: {
     createPrompter: () => params.prompter,
     persistAccessMode: vi.fn(async () => undefined),
     applySetup: params.applySetup ?? vi.fn(async () => setupApplyResult()),
-    launchHatchTui: vi.fn(async () => undefined),
+    launchHatchTui: vi.fn<typeof import("../tui/tui-launch.js").launchTuiCli>(
+      async () => undefined,
+    ),
     runForegroundGateway: vi.fn(async () => undefined),
     listManualOptions: vi.fn(async () => ({
       manualProviders: [],
@@ -280,7 +282,7 @@ function setupDeps(params: {
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) })),
     runBrowserHandoff: params.runBrowserHandoff ?? vi.fn(async () => false),
     runSystemAgentChat,
-    platform: "linux",
+    observeHandoff: vi.fn(),
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
   } satisfies GuidedOnboardingDeps;
 }

@@ -2,11 +2,10 @@ import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-j
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { registerPluginManagementEnglish } from "../../../i18n/locales/en-plugin-management.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { loadPluginDiscoveryDetail } from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
@@ -17,8 +16,6 @@ import {
 } from "../../plugins/plugin-icon-controller.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
 import "../../../styles/chat/clawhub-card.css";
-
-registerEnglishCatalog(registerPluginManagementEnglish);
 
 type CardPresentation = Pick<
   ClawHubRecommendation,
@@ -222,6 +219,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     () => void load(),
   );
   onSettled(() => {
+    // Connection edges retire request generations and icon URLs before later replies arrive.
     const stop = context.gateway.subscribe(() => void load());
     const activate = () => {
       if (

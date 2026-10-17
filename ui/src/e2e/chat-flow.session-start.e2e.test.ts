@@ -111,8 +111,8 @@ suite.define(() => {
       .getByText("First token visible.", { exact: true })
       .waitFor({ timeout: 10_000 });
     await expect
-      .poll(() => page.locator('[data-chat-model-option="openai/startup-model"]').count())
-      .toBe(1);
+      .poll(() => page.locator("[data-chat-model-select]").textContent())
+      .toContain("Startup Model");
     await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
     await transcript.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
     await composer.fill("/");
@@ -159,6 +159,7 @@ suite.define(() => {
       scope: "agent",
     });
     await gateway.resolveDeferred("chat.metadata", { commands: [] });
+    await gateway.waitForRequest("models.list");
     await gateway.resolveDeferred("models.list", {
       models: [
         {

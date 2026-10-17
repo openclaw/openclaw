@@ -43,6 +43,7 @@ export function createSettingsStatus<T>(
   };
   let connection = connectionKey();
   onCleanup(
+    // Every connection receipt retires requests before a same-turn reconnect can settle them.
     gatewayProjection.subscribe(() => {
       const next = connectionKey();
       if (connection.some((value, index) => value !== next[index])) {

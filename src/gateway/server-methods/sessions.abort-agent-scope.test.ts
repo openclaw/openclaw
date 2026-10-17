@@ -423,7 +423,11 @@ describe("sessions.abort agent scope", () => {
         reason: "abort",
       }),
       new Set(["conn-1"]),
-      { agentId: "work", dropIfSlow: true },
+      {
+        agentId: "work",
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:work:global"],
+      },
     );
   });
 
@@ -486,6 +490,7 @@ describe("sessions.abort agent scope", () => {
           agentId: "main",
           dropIfSlow: true,
           sessionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
+          sessionEventSubscriptionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
           prepareSessionProjection: expect.any(Function),
         },
       );

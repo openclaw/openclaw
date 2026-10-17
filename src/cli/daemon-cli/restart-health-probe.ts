@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewayProtocolResponseError } from "../../gateway/client.js";
+import type { ExplicitGatewayAuth as GatewayRestartProbeAuth } from "../../gateway/credentials.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import {
   createConfiguredGatewayLocalProbe,
@@ -63,11 +64,6 @@ export async function readGatewayStartupPhase(params: {
     return undefined;
   }
 }
-
-type GatewayRestartProbeAuth = {
-  token?: string;
-  password?: string;
-};
 
 export type GatewayReachability = {
   reachable: boolean;

@@ -17,8 +17,8 @@ import {
   nativeControlNavigationCases,
 } from "../test-helpers/chat-scroll-input.tsx";
 import { mountTestTranscript, render } from "../test-helpers/chat-transcript-native.tsx";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
-import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
@@ -35,19 +35,10 @@ import {
 
 function createPolicyTranscript(paneId: string) {
   const policy = makeChatHost({ chatHasAutoScrolled: true });
-  const transcript = createTranscriptTestOwner(
-    {
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    },
-    () => paneId,
-    {
-      canFollowEnd: () => !policy.chatFollowLocked,
-      onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
-    },
-  );
+  const transcript = createChatTranscript(() => paneId, {
+    canFollowEnd: () => !policy.chatFollowLocked,
+    onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+  });
   return { policy, transcript };
 }
 
@@ -62,17 +53,11 @@ describe("chat transcript scroll ownership", () => {
       anchorToEnd: false,
     });
     transcriptDomState.measuredRowHeight = 1000;
-    const requestUpdate = vi.fn();
-    const transcript = createTranscriptTestOwner(
-      {
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate,
-        updateComplete: Promise.resolve(true),
-      },
-      () => paneId,
-      { canFollowEnd: () => false },
-    );
+    const invalidate = vi.fn();
+    const transcript = createChatTranscript(() => paneId, {
+      canFollowEnd: () => false,
+    });
+    const stop = transcript.subscribe(invalidate);
     const rows: TestContentRow[] = [
       { kind: "content", key: "long-run", content: <div>Long transcript run</div> },
     ];
@@ -93,14 +78,15 @@ describe("chat transcript scroll ownership", () => {
       renderRows(rows);
       expect(session["endAnchor"].atEnd).toBe(false);
       const geometry = vi.spyOn(session["virtualizer"].options, "onChange");
-      requestUpdate.mockClear();
+      invalidate.mockClear();
 
       container.scrollTop = 600;
       container.dispatchEvent(new Event("scroll"));
       expect(session["endAnchor"].atEnd).toBe(true);
-      expect(requestUpdate).toHaveBeenCalledTimes(geometry.mock.calls.length);
+      expect(invalidate).toHaveBeenCalledTimes(geometry.mock.calls.length);
     } finally {
-      transcript.hostDisconnected();
+      stop();
+      transcript.dispose();
     }
   });
 
@@ -167,18 +153,13 @@ describe("chat transcript scroll ownership", () => {
       };
       let updateRequested = true;
       const onReaderScroll = vi.fn();
-      const transcript = createTranscriptTestOwner(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: () => {
-            updateRequested = true;
-          },
-          updateComplete: Promise.resolve(true),
-        },
-        () => `composer-reader-${movement}`,
-        { canFollowEnd: () => false, onReaderScroll },
-      );
+      const transcript = createChatTranscript(() => `composer-reader-${movement}`, {
+        canFollowEnd: () => false,
+        onReaderScroll,
+      });
+      const stop = transcript.subscribe(() => {
+        updateRequested = true;
+      });
       const rows: TestContentRow[] = [
         { kind: "content", key: "long-run", content: <div>Long transcript run</div> },
       ];
@@ -199,14 +180,14 @@ describe("chat transcript scroll ownership", () => {
             }),
             container,
           );
-          transcript.hostUpdated();
+          transcript.update();
         }
         // Connected row refs measure after their two owned microtask checkpoints.
         await Promise.resolve();
         await Promise.resolve();
         flushFrames();
       };
-      transcript.hostConnected();
+      transcript.start();
       try {
         await commitRequestedUpdate();
         await commitRequestedUpdate();
@@ -241,7 +222,8 @@ describe("chat transcript scroll ownership", () => {
           expect(onReaderScroll).toHaveBeenCalledExactlyOnceWith(true);
         }
       } finally {
-        transcript.hostDisconnected();
+        stop();
+        transcript.dispose();
         vi.useRealTimers();
       }
     },
@@ -310,7 +292,7 @@ describe("chat transcript scroll ownership", () => {
           );
         }
         Object.defineProperty(container, "scrollHeight", { configurable: true, value: 2087 });
-        transcript.hostUpdated();
+        transcript.update();
         if (intent === "wheel") {
           container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
         } else if (intent === "key") {
@@ -346,7 +328,7 @@ describe("chat transcript scroll ownership", () => {
         expect(policy.chatFollowLocked).toBe(intent !== "following");
         expect(policy.chatReadingHistory).toBe(intent !== "following");
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -408,7 +390,7 @@ describe("chat transcript scroll ownership", () => {
       expect(container.scrollTop).toBe(1170);
     } finally {
       container.removeEventListener("scroll", onScroll);
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -475,23 +457,16 @@ describe("chat transcript scroll ownership", () => {
       expect(container.scrollTop).toBe(1240);
     } finally {
       container.removeEventListener("scroll", onScroll);
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
   it("cancels the active native target when the reader locks following", async () => {
     const flushFrames = stubAnimationFrames();
     const policy = makeChatHost({ chatHasAutoScrolled: true });
-    const transcript = createTranscriptTestOwner(
-      {
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: Promise.resolve(true),
-      },
-      () => "retired-end-index",
-      { canFollowEnd: () => !policy.chatFollowLocked },
-    );
+    const transcript = createChatTranscript(() => "retired-end-index", {
+      canFollowEnd: () => !policy.chatFollowLocked,
+    });
     Object.assign(policy, {
       chatCancelScroll: () => transcript.cancelScroll(),
     });
@@ -548,26 +523,17 @@ describe("chat transcript scroll ownership", () => {
         before,
       );
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
   it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
     transcriptDomState.measuredRowHeight = 120;
     const policy = makeChatHost({ chatHasAutoScrolled: true });
-    const transcript = createTranscriptTestOwner(
-      {
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: Promise.resolve(true),
-      },
-      () => "measurement-reader",
-      {
-        canFollowEnd: () => !policy.chatFollowLocked,
-        onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
-      },
-    );
+    const transcript = createChatTranscript(() => "measurement-reader", {
+      canFollowEnd: () => !policy.chatFollowLocked,
+      onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+    });
     const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
       kind: "content",
       key: `row:${index}`,
@@ -633,7 +599,7 @@ describe("chat transcript scroll ownership", () => {
       expect(policy.chatFollowLocked).toBe(false);
       expect(transcript.isProgrammaticScroll).toBe(false);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       vi.useRealTimers();
     }
   });
@@ -784,7 +750,7 @@ describe("chat transcript scroll ownership", () => {
         expect(writes.some((write) => write.top === 420)).toBe(false);
         expect(container.scrollTop).toBe(inputOffset);
       }
-      transcript.hostDisconnected();
+      transcript.dispose();
     },
   );
 
@@ -829,7 +795,7 @@ describe("chat transcript scroll ownership", () => {
       expect(container.scrollTop).toBe(300);
       expect(writes.some((write) => write.top === 420)).toBe(false);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 });

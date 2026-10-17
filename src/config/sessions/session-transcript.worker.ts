@@ -180,15 +180,14 @@ serveOwnedWorkerTasks(
       if (request.kind === "historical-eviction-candidates") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
+        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const {
           readHistoricalSessionIdsInDatabase,
           readDiskEvictableArchivedSessionBatchInDatabase,
         } = await import("./session-history-eviction-candidates.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
+            runSqliteReadSnapshotSync(database.db, () =>
               "archived" in request
                 ? {
                     batch: readDiskEvictableArchivedSessionBatchInDatabase(
@@ -445,13 +444,12 @@ serveOwnedWorkerTasks(
       if (request.kind === "projection-status") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
+        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const { sessionTranscriptIndexNeedsReconcile } =
           await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           ({ db }) =>
-            runSqliteDeferredTransactionSync(db, () =>
+            runSqliteReadSnapshotSync(db, () =>
               sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
             ),
           { ...request.database, env: request.env },
@@ -665,7 +663,8 @@ serveOwnedWorkerTasks(
           : value.kind === "artifacts" && value.result.kind === "download-response"
             ? value.result.response?.body
             : undefined;
-      return body ? [body.buffer] : [];
+      const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
+      return [...(body ? [body.buffer] : []), ...(deflated ? [deflated.buffer] : [])];
     },
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);

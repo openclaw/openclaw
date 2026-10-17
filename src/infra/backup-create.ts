@@ -19,10 +19,7 @@ import {
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
-import {
-  backupManifestSizeError,
-  type BackupManifest,
-} from "../commands/backup-verify-manifest.js";
+import { encodeBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -281,6 +278,9 @@ function buildManifest(
     paths: {
       stateDir: plan.resources.stateDir,
       configPath: plan.configPath,
+      ...(plan.configCapture?.files[0]
+        ? { configSourcePath: plan.configCapture.files[0].canonicalPath }
+        : {}),
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
       ...(result.agentRoots ? { agentRoots: [...result.agentRoots] } : {}),
@@ -329,6 +329,7 @@ async function createConsistentStateSnapshotPlan(params: {
         ? {
             inventory: sealBackupResourceInventory(params.resources, []),
             snapshots: [],
+            postgresSnapshots: [],
             discoveredSourcePaths: new Set<string>(),
           }
         : await captureSqlite(params.tempDir),
@@ -527,10 +528,13 @@ async function createBackupArchiveInScope(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const skippedEntries = new Map<string, "volatile" | "vanished">();
     const opaqueSqliteSourcePaths = new Map<string, "archived" | "skipped">();
+    // Linked state roots can have distinct configured and canonical capture siblings.
+    // Otherwise the inventory owns privacy admission, except for config-only exports.
+    const checkConfiguredCaptureRoot = onlyConfig || plan.stateDir !== inventory.stateDir;
     const tarFilter = (entryPath: string, entryStat: import("node:fs").Stats): boolean => {
       const resolvedEntryPath = path.resolve(entryPath);
       const inventoryPath = sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath;
-      if (isUpdateCapturePath(inventoryPath, plan.stateDir)) {
+      if (checkConfiguredCaptureRoot && isUpdateCapturePath(inventoryPath, plan.stateDir)) {
         return false;
       }
       const isDirectory = entryStat.isDirectory();
@@ -669,23 +673,13 @@ async function createBackupArchiveInScope(
                     ? { sourcePath: snapshot.sourcePath, role: "agent", agentId: snapshot.agentId }
                     : { sourcePath: snapshot.sourcePath, role: "global" },
                 );
-                const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
-                const sizeError = backupManifestSizeError(contents.length);
-                if (sizeError) {
-                  throw sizeError;
-                }
-                const header = Buffer.alloc(512);
-                new tar.Header({
-                  path: archiveRoot + "/manifest.json",
-                  type: "File",
-                  mode: 0o644,
-                  size: contents.length,
-                }).encode(header);
-                return Buffer.concat([
-                  header,
-                  contents,
-                  Buffer.alloc(((512 - (contents.length % 512)) % 512) + 1024),
-                ]);
+                manifest.postgresSnapshots = stateSqliteBackup.postgresSnapshots.map(
+                  (snapshot) => ({
+                    archivePath: `${buildBackupArchivePath(archiveRoot, snapshot.sourcePath)}.postgres`,
+                    manifestSha256: snapshot.manifestSha256,
+                  }),
+                );
+                return encodeBackupManifest(manifest);
               },
             ),
           onPartialArchive: (partialArchive) => {
@@ -705,13 +699,9 @@ async function createBackupArchiveInScope(
     }).catch((error: unknown) => {
       throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
-    const skippedVolatileCount = [...skippedEntries.values()].filter(
+    result.skippedVolatileCount = [...skippedEntries.values()].filter(
       (reason) => reason === "volatile",
     ).length;
-    result.skippedVolatileCount = skippedVolatileCount;
-    const vanishedWarnings = [...skippedEntries]
-      .filter(([, reason]) => reason === "vanished")
-      .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`);
     const archiveWarnings = [
       ...[...opaqueSqliteSourcePaths]
         .toSorted(([left], [right]) => left.localeCompare(right))
@@ -720,7 +710,9 @@ async function createBackupArchiveInScope(
             ? `Skipped unresolvable opaque SQLite link: ${sourcePath}`
             : `SQLite file archived as opaque bytes without a live snapshot or integrity checks: ${sourcePath}`,
         ),
-      ...vanishedWarnings,
+      ...[...skippedEntries]
+        .filter(([, reason]) => reason === "vanished")
+        .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`),
     ];
     if (archiveWarnings.length) {
       result.warnings = [...(result.warnings ?? []), ...archiveWarnings];
@@ -728,10 +720,10 @@ async function createBackupArchiveInScope(
     if (externalSymbolicLinks.length) {
       result.externalSymbolicLinks = externalSymbolicLinks;
     }
-    if (skippedVolatileCount > 0) {
+    if (result.skippedVolatileCount > 0) {
       opts.log?.(
-        `Backup skipped ${skippedVolatileCount} volatile file${
-          skippedVolatileCount === 1 ? "" : "s"
+        `Backup skipped ${result.skippedVolatileCount} volatile file${
+          result.skippedVolatileCount === 1 ? "" : "s"
         } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
       );
     }

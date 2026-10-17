@@ -280,7 +280,7 @@ describe("chat pane header state", () => {
   });
 
   it("surfaces a rejected workspace clipboard action", async () => {
-    const { pane, requestUpdate, state } = createTestChatPane({
+    const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
     });
@@ -295,7 +295,6 @@ describe("chat pane header state", () => {
 
     await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
     expect(state.lastError).toBe(state.chatError);
-    expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("does not query gateway-local branches for exec-node sessions", async () => {
@@ -1026,7 +1025,7 @@ describe("chat pane history pagination intent", () => {
 
     thread.scrollTop = 120;
     pane.handleTranscriptScroll(event);
-    pane.loadingOlder = true;
+    pane.history.loadingOlder = true;
     thread.scrollTop = 80;
     pane.handleTranscriptScroll(event);
 

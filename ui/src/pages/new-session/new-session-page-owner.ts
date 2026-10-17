@@ -17,7 +17,6 @@ import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraft } from "./draft-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   activateDraft,
@@ -29,9 +28,9 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { createNewSessionTitle } from "./draft-title.ts";
+import { NewSessionDraft } from "./draft.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { closeAgentPicker } from "./new-session-runtime.ts";
 
 const attachmentPanelElement = {
   tagName: "openclaw-chat-detail-panel",
@@ -116,6 +115,7 @@ export class NewSessionPageOwner {
   };
   imageLightbox: ImageLightboxItem | null = null;
   agentPickerOpen = false;
+  agentPicker: HTMLSpanElement | undefined;
   readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
   readonly browser: DraftPlaceBrowser;
@@ -135,9 +135,7 @@ export class NewSessionPageOwner {
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         changed: this.changed,
-        querySelector: (selector) => this.host.querySelector(selector),
         activeElement: () => this.host.ownerDocument.activeElement,
-        body: () => this.host.ownerDocument.body,
         onInvalidate: () => {
           this.closeAttachmentPanel();
           this.connectMachine?.close();
@@ -324,7 +322,9 @@ export class NewSessionPageOwner {
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);
-    closeAgentPicker(this.host);
+    if (this.agentPicker) {
+      closeMenusWithin(this.agentPicker);
+    }
     this.browser.close();
     this.connectMachine.close();
     this.place.adoptAgentDefaults();
@@ -391,7 +391,7 @@ export class NewSessionPageOwner {
       get submitting() {
         return submission.submitting;
       },
-      textareaController: submission.composerTextarea,
+      composerTextarea: submission.composerTextarea,
 
       get messageLocked() {
         return Boolean(submission.pendingPlacement.sessionKey);

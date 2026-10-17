@@ -13,11 +13,9 @@ import { expect, it } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
-import "./test-runtime-mocks.js";
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
-
-it("reads the previous custom-auth identity without re-embedding indexed documents", async () => {
+it("retains the previous custom-auth index and cache after credential rotation", async () => {
+  const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
   const { acquireTestPortBlock } = await import("openclaw/plugin-sdk/test-env");
   const requests: string[][] = [];
   const claim = await acquireTestPortBlock({ offsets: [0] });
@@ -53,31 +51,33 @@ it("reads the previous custom-auth identity without re-embedding indexed documen
       async (state) => {
         const baseUrl = `http://127.0.0.1:${claim.port}/v1`;
         const model = "fixture-embedding";
-        const cfg = isolateMemoryManagerTestConfig({
-          agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
-          memory: {
-            search: {
-              provider: "openai-compatible",
-              model,
-              fallback: "none",
-              store: { vector: { enabled: false } },
-              query: { minScore: 0 },
-              cache: { enabled: true },
-            },
-          },
-          models: {
-            providers: {
-              "openai-compatible": {
-                baseUrl,
-                headers: { "X-oMLX-Key": "fixture-old-key" },
-                request: {
-                  auth: { mode: "header", headerName: "X-oMLX-Key", value: "fixture-old-key" },
-                },
-                models: [],
+        const configure = (key: string) =>
+          isolateMemoryManagerTestConfig({
+            agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+            memory: {
+              search: {
+                provider: "openai-compatible",
+                model,
+                fallback: "none",
+                store: { vector: { enabled: false } },
+                query: { minScore: 0 },
+                cache: { enabled: true },
               },
             },
-          },
-        });
+            models: {
+              providers: {
+                "openai-compatible": {
+                  baseUrl,
+                  headers: { "X-oMLX-Key": key },
+                  request: {
+                    auth: { mode: "header", headerName: "X-oMLX-Key", value: key },
+                  },
+                  models: [],
+                },
+              },
+            },
+          });
+        let cfg = configure("fixture-old-key");
         setRuntimeConfigSnapshot(cfg);
         await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
         await fs.writeFile(
@@ -88,8 +88,14 @@ it("reads the previous custom-auth identity without re-embedding indexed documen
           getMemorySearchManager({
             cfg,
             agentId: "main",
+            purpose: "cli",
             runInBackgroundContext: runInMemoryTestBackgroundContext,
           });
+        const closeManagers = async () => {
+          await closeAllMemorySearchManagers();
+          await closeOpenClawAgentDatabasesAsync();
+          closeOpenClawAgentDatabasesForTest();
+        };
         try {
           const seeded = (await openManager()).manager;
           if (!seeded?.sync) {
@@ -100,9 +106,7 @@ it("reads the previous custom-auth identity without re-embedding indexed documen
           if (!dbPath) {
             throw new Error("fixture database path is missing");
           }
-          await closeAllMemorySearchManagers();
-          await closeOpenClawAgentDatabasesAsync();
-          closeOpenClawAgentDatabasesForTest();
+          await closeManagers();
 
           // Before custom auth was excluded, this exact header map formed the persisted key.
           const legacyProviderKey = hashText(
@@ -118,6 +122,7 @@ it("reads the previous custom-auth identity without re-embedding indexed documen
             }),
           );
           const db = new DatabaseSync(dbPath);
+          const indexedChunks = db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all();
           try {
             const row = db
               .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
@@ -146,10 +151,32 @@ it("reads the previous custom-auth identity without re-embedding indexed documen
           );
           expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
           expect(documentRequests()).toBe(indexedDocuments);
+          await closeManagers();
+          const upgraded = new DatabaseSync(dbPath, { readOnly: true });
+          try {
+            expect(upgraded.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all()).toEqual(
+              indexedChunks,
+            );
+          } finally {
+            upgraded.close();
+          }
+
+          cfg = configure("fixture-rotated-key");
+          setRuntimeConfigSnapshot(cfg);
+          const rotated = (await openManager()).manager;
+          if (!rotated?.sync) {
+            throw new Error("rotated memory index manager did not reopen");
+          }
+          expect(await rotated.search("alpha")).toEqual(
+            expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+          );
+          expect(rotated.status().custom?.indexIdentity).toEqual({ status: "valid" });
+          expect(documentRequests()).toBe(indexedDocuments);
+          // Explicit rebuilding must retain the cache after the credential-dependent key is gone.
+          await rotated.sync({ reason: "test", force: true });
+          expect(documentRequests()).toBe(indexedDocuments);
         } finally {
-          await closeAllMemorySearchManagers();
-          await closeOpenClawAgentDatabasesAsync();
-          closeOpenClawAgentDatabasesForTest();
+          await closeManagers();
         }
       },
     );

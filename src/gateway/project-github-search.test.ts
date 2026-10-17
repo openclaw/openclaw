@@ -33,6 +33,21 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
+function trackedTasks() {
+  const tasks: Promise<unknown>[] = [];
+  return {
+    tasks,
+    trackExecution: <T>(run: () => Promise<T>) => {
+      const task = run();
+      tasks.push(task);
+      return task;
+    },
+  };
+}
+
+const affiliatedRequest = ([input]: Parameters<typeof fetch>) =>
+  new URL(requestUrl(input)).pathname === "/user/repos";
+
 describe("project GitHub search", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -185,11 +200,7 @@ describe("project GitHub search", () => {
     await expect(second).resolves.toMatchObject({
       projects: [{ fullName: "acme/public-project" }],
     });
-    expect(
-      fetchImpl.mock.calls.filter(
-        ([input]) => new URL(requestUrl(input)).pathname === "/user/repos",
-      ),
-    ).toHaveLength(1);
+    expect(fetchImpl.mock.calls.filter(affiliatedRequest)).toHaveLength(1);
   });
 
   it("returns anonymous public results with a typed missing-credential state", async () => {
@@ -266,7 +277,7 @@ describe("project GitHub search", () => {
   it("shares affiliated pages across queries, conditionally refreshes, and isolates credentials", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const tasks: Promise<unknown>[] = [];
+    const { tasks, trackExecution } = trackedTasks();
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       const url = new URL(requestUrl(input));
       const headers = new Headers(init?.headers);
@@ -282,11 +293,7 @@ describe("project GitHub search", () => {
     const options = {
       token: "synthetic-shared-project-token",
       fetchImpl,
-      trackExecution: <T>(run: () => Promise<T>) => {
-        const task = run();
-        tasks.push(task);
-        return task;
-      },
+      trackExecution,
     };
     const results = await Promise.all(
       ["shared", "project"].map((query) => searchRemoteProjects(query, options)),
@@ -295,10 +302,7 @@ describe("project GitHub search", () => {
       ["acme/shared-project"],
       ["acme/shared-project"],
     ]);
-    const affiliatedCalls = () =>
-      fetchImpl.mock.calls.filter(
-        ([input]) => new URL(requestUrl(input)).pathname === "/user/repos",
-      );
+    const affiliatedCalls = () => fetchImpl.mock.calls.filter(affiliatedRequest);
     expect(affiliatedCalls()).toHaveLength(1);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     now += 60_001;
@@ -435,7 +439,7 @@ describe("project GitHub search", () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const gate = createDeferredCore<Response>();
-    const refreshes: Promise<unknown>[] = [];
+    const { tasks: refreshes, trackExecution } = trackedTasks();
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(json({ items: [repository("acme/cache-query", "2026-08-10")] }))
@@ -443,11 +447,7 @@ describe("project GitHub search", () => {
     const options = {
       env: {},
       fetchImpl,
-      trackExecution: <T>(run: () => Promise<T>) => {
-        const task = run();
-        refreshes.push(task);
-        return task;
-      },
+      trackExecution,
     };
     const first = await searchRemoteProjects("Cache-Query", options);
     now = 60_999;

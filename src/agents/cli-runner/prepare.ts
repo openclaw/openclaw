@@ -88,7 +88,6 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   resolvePromptBuildHookResult,
   type ResolvedPromptBuildHookResult,
@@ -106,6 +105,7 @@ import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -265,7 +265,7 @@ async function prepareCliRunContextWithinReadFence(
   // Every prompt/history read must observe prior deferred rewrites. Caller-owned
   // memory remains independent of durable work sharing its correlation key.
   if (!params.isolatedCompletion && !isControlOperation && !params.sessionManager) {
-    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
+    await waitForSessionMaintenance(params.sessionKey ?? params.sessionId);
   }
   const policySessionKey = params.runtimePolicySessionKey ?? params.sessionKey;
   // Capture the requester before admission replaces agentId with the execution owner.
@@ -1469,11 +1469,13 @@ async function prepareCliRunContextWithinReadFence(
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
     const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
     // Native compatibility and transcript account ownership are independent gates.
+    // A session-less backend starts every turn fresh, so the account-owned transcript is
+    // its only continuity; the backend's raw-reseed opt-in still decides delivery.
     const rawTranscriptReseedReason = !historyAllowed
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
-        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
+        : (invalidatedReason ?? (ignoreCliSessionCandidate ? "stateless" : "missing-transcript"));
     const sessionPromptContext =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined

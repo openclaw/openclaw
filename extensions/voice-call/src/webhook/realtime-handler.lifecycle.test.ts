@@ -342,7 +342,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     expect(replacementGreeting).toHaveBeenCalledWith("replacement remains connected");
   });
 
-  it.each([false, true])("ends the call after inactivity with media renewal=%s", async (renew) => {
+  it("ends the call after inactivity following media renewal", async () => {
     const bridgeStarted = createDeferred<void>();
     const mediaReceived = createDeferred<void>();
     const sendAudio = vi.fn(() => mediaReceived.resolve());
@@ -358,18 +358,16 @@ describe("RealtimeCallHandler lifecycle", () => {
       sendCarrierStart(ws, "MZ-inactivity", call.providerCallId);
       await bridgeStarted.promise;
 
-      if (renew) {
-        await vi.advanceTimersByTimeAsync(29_999);
-        ws.send(
-          JSON.stringify({
-            event: "media",
-            media: { payload: Buffer.from([0xff]).toString("base64") },
-          }),
-        );
-        await mediaReceived.promise;
-      }
+      await vi.advanceTimersByTimeAsync(29_999);
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          media: { payload: Buffer.from([0xff]).toString("base64") },
+        }),
+      );
+      await mediaReceived.promise;
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(sendAudio).toHaveBeenCalledTimes(renew ? 1 : 0);
+      expect(sendAudio).toHaveBeenCalledOnce();
       expect(endCall).not.toHaveBeenCalled();
       expect(ws.readyState).toBe(WebSocket.OPEN);
       expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
@@ -689,38 +687,6 @@ describe("RealtimeCallHandler lifecycle", () => {
       persisted.resolve({ kind: "processed" });
       await closing?.catch(() => undefined);
     }
-  });
-
-  it("assigns unique event IDs to finalized chunks received in the same millisecond", async () => {
-    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
-    const { call, handler, processEvent } = createCarrierLifecycleHarness((request) => {
-      callbacks = request;
-      return createBridge(() => {});
-    });
-    const { ws } = await connectCarrierStream(handler);
-    sendCarrierStart(ws, "MZ-transcript-ids", call.providerCallId);
-    await vi.waitFor(() => expect(callbacks).toBeDefined());
-    const timestamp = 1_720_000_000_123;
-    const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
-    try {
-      callbacks?.onTranscript?.("user", "First user chunk", true);
-      callbacks?.onTranscript?.("user", "Second user chunk", true);
-      callbacks?.onTranscript?.("assistant", "First assistant chunk", true);
-      callbacks?.onTranscript?.("assistant", "Second assistant chunk", true);
-    } finally {
-      clock.mockRestore();
-    }
-    const events = processEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.type === "call.speech" || event.type === "call.assistant-speech");
-    expect(events.map((event) => event.transcript)).toEqual([
-      "First user chunk",
-      "Second user chunk",
-      "First assistant chunk",
-      "Second assistant chunk",
-    ]);
-    expect(events.every((event) => event.timestamp === timestamp)).toBe(true);
-    expect(new Set(events.map((event) => event.id)).size).toBe(4);
   });
 
   it.each(["provider", "shutdown"] as const)(

@@ -22,6 +22,7 @@ import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "./stream-resolution.js";
@@ -62,9 +63,11 @@ const llmRuntime = {
 } as LlmRuntime;
 
 function resolveEmbeddedAgentStream(
-  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime">,
+  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime"> & {
+    llmRuntime?: LlmRuntime;
+  },
 ) {
-  return resolveEmbeddedAgentStreamImpl({ ...params, llmRuntime });
+  return resolveEmbeddedAgentStreamImpl({ llmRuntime, ...params });
 }
 
 const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
@@ -160,7 +163,7 @@ describe("resolveEmbeddedAgentStream", () => {
       const events = await streamFn(
         model,
         {
-          systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          systemPrompt: `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`,
           messages: [{ role: "user", content: "Hello", timestamp: 0 }],
         },
         {
@@ -176,14 +179,10 @@ describe("resolveEmbeddedAgentStream", () => {
       const request = requireRecord(payload, "registered provider payload");
       expect(request.system).toEqual(
         providerId === "amazon-bedrock"
-          ? [
-              { text: "Stable workspace" },
-              { cachePoint: { type: "default" } },
-              { text: "Dynamic suffix" },
-            ]
+          ? [{ text: "stable" }, { cachePoint: { type: "default" } }, { text: "dynamic" }]
           : [
-              { type: "text", text: "Stable workspace", cache_control: { type: "ephemeral" } },
-              { type: "text", text: "Dynamic suffix" },
+              { type: "text", text: "stable", cache_control: { type: "ephemeral" } },
+              { type: "text", text: "dynamic" },
             ],
       );
       expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
@@ -452,53 +451,40 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(streamFn).toBe(currentStreamFn);
   });
 
-  it("cancels anthropic-vertex streams when their run owner aborts", async () => {
-    const currentStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
-    streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
+  it.each([
+    { api: "anthropic-messages", provider: "anthropic-vertex", id: "custom-model" },
+    { api: "openai-chatgpt-responses", provider: "openai", id: "gpt-5.5" },
+  ])("cancels $provider streams when the run owner aborts", async (model) => {
+    const inner = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const vertex = model.provider === "anthropic-vertex";
+    if (vertex) {
+      streamMocks.anthropicVertex.mockReturnValueOnce(inner);
+    } else {
+      useNativeStreamFn(inner);
+    }
     const runController = new AbortController();
     const callerController = new AbortController();
-    const model = {
-      api: "anthropic-messages",
-      provider: "anthropic-vertex",
-      id: "custom-model",
-    } as never;
     const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn,
+      currentStreamFn: vertex ? inner : undefined,
       sessionId: "session-1",
       signal: runController.signal,
-      model,
-    });
-    await streamFn(model, {} as never, { signal: callerController.signal });
-    const signal = currentStreamFn.mock.calls[0]?.[2]?.signal;
-    expect(signal).toMatchObject({ aborted: false });
-    const abortReason = new Error("run canceled");
-    runController.abort(abortReason);
-    expect(signal).toMatchObject({ aborted: true, reason: abortReason });
-  });
-
-  it("cancels the authenticated OpenClaw native fallback when the run signal aborts", async () => {
-    const nativeStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
-    const runController = new AbortController();
-    const callerController = new AbortController();
-    useNativeStreamFn(nativeStreamFn);
-    const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: undefined,
-      sessionId: "session-1",
-      signal: runController.signal,
-      model: { api: "openai-chatgpt-responses", provider: "openai", id: "gpt-5.5" } as never,
-      resolvedApiKey: "oauth-bearer-token",
+      model: model as never,
+      ...(!vertex && { resolvedApiKey: "oauth-bearer-token" }),
     });
     await streamFn(
-      { provider: "openai", id: "gpt-5.5" } as never,
-      { systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` } as never,
+      model as never,
+      { messages: [], systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` },
       { signal: callerController.signal },
     );
-    expect(nativeStreamFn.mock.calls[0]?.[1].systemPrompt).toBe("intro\ntail");
-    const options = nativeStreamFn.mock.calls[0]?.[2];
-    expect(options?.apiKey).toBe("oauth-bearer-token");
+    const options = inner.mock.calls[0]?.[2];
+    if (!vertex) {
+      expect(inner.mock.calls[0]?.[1].systemPrompt).toBe("intro\ntail");
+      expect(options?.apiKey).toBe("oauth-bearer-token");
+    }
     expect(options?.signal).toMatchObject({ aborted: false });
-    runController.abort();
-    expect(options?.signal).toMatchObject({ aborted: true });
+    const abortReason = new Error("run canceled");
+    runController.abort(abortReason);
+    expect(options?.signal).toMatchObject({ aborted: true, reason: abortReason });
   });
 });
 
@@ -513,7 +499,7 @@ describe("embedded provider stream activity", () => {
     providerStreamFn: Parameters<typeof resolveEmbeddedAgentStreamImpl>[0]["providerStreamFn"],
     runSignal: AbortSignal,
   ) {
-    return resolveEmbeddedAgentStreamImpl({
+    return resolveEmbeddedAgentStream({
       llmRuntime: defaultLlmRuntime,
       currentStreamFn: undefined,
       providerStreamFn,
@@ -527,7 +513,7 @@ describe("embedded provider stream activity", () => {
     const credentials = createDeferredCore<string>();
     let current = true;
     const providerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
-    const streamFn = resolveEmbeddedAgentStreamImpl({
+    const streamFn = resolveEmbeddedAgentStream({
       llmRuntime: defaultLlmRuntime,
       currentStreamFn: undefined,
       providerStreamFn,
@@ -558,23 +544,23 @@ describe("embedded provider stream activity", () => {
         requestSignals.push(options.signal);
         const stream = createAssistantMessageEventStream();
         stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
-        stream.end({
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          api: "openai-completions",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
-          timestamp: 1,
-        });
+        stream.end(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "done" }],
+            api: "openai-completions",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: 1,
+          }),
+        );
         return stream;
       },
     );

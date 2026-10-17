@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -16,6 +17,8 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
@@ -152,6 +155,20 @@ it("exposes a prepared generation only after registration publication and keeps 
   await execution.release();
   expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
   expect(() => claim!.assertCurrent()).toThrow(/released/);
+});
+
+it("refuses writable preparation after its captured physical file disappears", async () => {
+  const options = fixture();
+  openOpenClawAgentDatabase(options);
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  const execution = capture(options);
+  await using _ = onExit(() => execution.release());
+  fs.unlinkSync(options.path);
+
+  await expect(execution.prepare(source())).rejects.toThrow(
+    "Captured agent database file disappeared before writable preparation",
+  );
+  expect(fs.existsSync(options.path)).toBe(false);
 });
 
 it("retains both borrowers when config changes after a completed native open", async () => {
@@ -697,7 +714,7 @@ it("retains a creator that joins while a refused generation closes", async () =>
   );
 });
 
-it("keeps another captured borrower live after a caller-specific native open refusal", async () => {
+it("keeps another captured borrower live when the initiating caller is revoked during native open", async () => {
   const options = fixture();
   openOpenClawAgentDatabase(options);
   await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
@@ -715,12 +732,20 @@ it("keeps another captured borrower live after a caller-specific native open ref
   const refusal = new Error("Original caller revoked at native open admission");
   let current = true;
   let reachedNativeOpen = false;
-  const revoked = source((request) => {
-    if (request.stage === "open") {
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === options.path
+    ) {
       reachedNativeOpen = true;
       current = false;
     }
+    admit(request, grant);
   });
+  using observation = { [Symbol.dispose]: () => observed.mockRestore() };
+  void observation;
+  const revoked = source();
   revoked.assertCurrent = () => {
     if (!current) {
       throw refusal;

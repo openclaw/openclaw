@@ -240,9 +240,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         : null;
       const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
       const hasTargetArchiveFiles = targetArchiveFiles !== null;
-      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
-        return;
-      }
       if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
         await this.markSessionStartupCatchupDirtyFiles();
       }
@@ -270,6 +267,27 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         hasIndexedChunks,
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
+      if (
+        indexIdentity.status === "valid" &&
+        syncProvider &&
+        meta?.model === syncProvider.model &&
+        meta.providerKey &&
+        syncProviderKey &&
+        meta.providerKey !== syncProviderKey
+      ) {
+        // Validate the full legacy identity before retiring its credential-dependent key.
+        const database = this.database;
+        const upgraded = await database.updateIndexStructure(
+          { type: "index.upgradeProviderKey", input: { meta, providerKey: syncProviderKey } },
+          () => this.assertDatabaseMutationCurrent(database),
+        );
+        if (!upgraded) {
+          return MEMORY_SYNC_DEFERRED;
+        }
+      }
+      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
+        return;
+      }
       if (
         indexIdentity.status === "mismatched" &&
         indexIdentity.owner === "openclaw" &&

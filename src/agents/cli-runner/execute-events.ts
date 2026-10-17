@@ -1,5 +1,5 @@
 import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentEventStream } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -404,16 +404,15 @@ export function createCliEventHandlers(params: {
       observedCliActivity = true;
       signalExecutionPhase("assistant_output_started");
     }
-    const candidate = text.trimStart();
+    const candidate = text.trimStart().toUpperCase();
+    const stripped = stripMixedSilentReplyTokens(text);
     if (
-      !text.startsWith(`${SILENT_REPLY_TOKEN}\n`) &&
-      (SILENT_REPLY_TOKEN.startsWith(candidate) ||
-        (candidate.startsWith(SILENT_REPLY_TOKEN) &&
-          !candidate.slice(SILENT_REPLY_TOKEN.length).trim()))
+      stripped === null &&
+      (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate))
     ) {
       return;
     }
-    const sourceText = stripMixedSilentReplyTokens(text) ?? text;
+    const sourceText = stripped ?? text;
     const sourceDelta = sourceText.startsWith(assistantVisibleText)
       ? sourceText.slice(assistantVisibleText.length)
       : sourceText;

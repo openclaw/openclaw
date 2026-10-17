@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createRoot, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillLibraryFile,
@@ -8,16 +8,15 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
-import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 /* @vitest-environment jsdom */
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { createSkillLibrary } from "./library-state.ts";
-import { SkillLibrary } from "./library-view.tsx";
+import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
 
-const bindings = new Set<GatewayPageBinding>();
 const disposals: Array<() => void> = [];
 
 function harness() {
@@ -35,17 +34,14 @@ function harness() {
     lastError: null,
     lastErrorCode: null,
   });
-  const gateway = new GatewayPageBinding(() => {}, {
-    getGateway: () => connection.gateway,
-  });
-  gateway.connect();
-  bindings.add(gateway);
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
   const library = createRoot((dispose) => {
     disposals.push(dispose);
+    const gateway = useGatewayPage({ getGateway: () => connection.gateway });
     return createSkillLibrary(gateway, () => config);
   });
+  flush();
   library.state.list = {
     entries: [],
     profileId: "alice",
@@ -101,14 +97,24 @@ afterEach(() => {
   for (const dispose of disposals.splice(0)) {
     dispose();
   }
-  for (const binding of bindings) {
-    binding.dispose();
-  }
-  bindings.clear();
   document.body.replaceChildren();
 });
 
 describe("skill library upload policy", () => {
+  it("disables import while disconnected without losing the local selection", () => {
+    const { library, connection } = harness();
+    library.setImportOpen(true);
+    library.state.importSelection = [new File(["# Skill"], "SKILL.md")];
+    const view = mountSolid(() => <SkillLibraryDialogs library={library} />);
+    flush();
+    const submit = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(submit.disabled).toBe(false);
+    connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
+    flush();
+    expect(submit.disabled).toBe(true);
+    expect(library.state.importSelection).toHaveLength(1);
+  });
+
   it("keeps a replacement save locked when a previous connection's save fails", async () => {
     const { library, request, connection } = harness();
     const oldSave = createDeferred<SkillsLibraryReceipt>();
@@ -158,7 +164,7 @@ describe("skill library upload policy", () => {
       await library.open(read.entry.skillId);
       const draft = library.state.draft!;
       const original = { ...draft.files[0]! };
-      Object.assign(draft.files[0]!, change);
+      draft.files = draft.files.map((file, index) => (index === 0 ? { ...file, ...change } : file));
       config.current.uploadsEnabled = false;
       await library.save();
       expect(request).toHaveBeenCalledTimes(1);
@@ -175,10 +181,13 @@ describe("skill library upload policy", () => {
     request.mockResolvedValueOnce(read);
     await library.open(read.entry.skillId);
     const draft = library.state.draft!;
-    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
-    draft.files[1]!.content = "Updated notes";
     const newFile = { path: "new.txt", content: "New notes", encoding: "utf8" as const };
-    draft.files.push(newFile);
+    draft.files = [
+      ...draft.files.map((file) =>
+        file.path === "notes.txt" ? { ...file, content: "Updated notes" } : file,
+      ),
+      newFile,
+    ];
     config.current.uploadsEnabled = false;
     await library.save();
     expect(request).toHaveBeenCalledTimes(1);
@@ -197,7 +206,6 @@ describe("skill library upload policy", () => {
       }),
     );
     expect(draft.baseFiles).toEqual(draft.files);
-    expect(draft.baseFiles[1]).not.toBe(draft.files[1]);
 
     config.current.uploadsEnabled = false;
     draft.content = "# Next edit";

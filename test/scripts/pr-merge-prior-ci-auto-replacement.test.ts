@@ -8,6 +8,10 @@ const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
   createMergeOutcomeFixtureHarness();
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const uncertainGatewayResponse = '{\n  "message": "Server Error"\n}\ngh: Server Error (HTTP 502)\n';
+const providerRejection = readFileSync(
+  new URL("../fixtures/pr-admin-base-modified-405.txt", import.meta.url),
+  "utf8",
+);
 
 const cancelledAutoReplacement = reuseCompletedSetup(function (
   options: { cancellation?: "confirmed" | "missing" | "uncertain"; replace?: boolean } = {},
@@ -73,7 +77,7 @@ const cancelledAutoReplacement = reuseCompletedSetup(function (
   return { f, originalOid, originalRecord, retiredOid, retiredRecord, replacement, captures };
 });
 
-const staleAdminReplacement = reuseCompletedSetup(function () {
+const staleAdminReplacement = reuseCompletedSetup(function (ready = false) {
   const cancelled = cancelledAutoReplacement({ replace: false });
   const { f, retiredOid } = cancelled;
   f.save({ ...f.state(), restMergeRefusal: uncertainGatewayResponse });
@@ -101,12 +105,12 @@ const staleAdminReplacement = reuseCompletedSetup(function () {
   );
   f.save({
     ...f.state(),
-    mode: "pending",
-    gates: "pending",
+    mode: ready ? "success" : "pending",
+    gates: ready ? "pass" : "pending",
     requiredCheckName: "openclaw/ci-gate",
     restContexts: ["openclaw/ci-gate", "Security Review"],
     restMergeRefusal: "",
-    pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+    pr: { ...f.state().pr, mergeStateStatus: ready ? "CLEAN" : "BLOCKED" },
   });
   return {
     ...cancelled,
@@ -116,6 +120,19 @@ const staleAdminReplacement = reuseCompletedSetup(function () {
     adminCapture,
     replacement,
   };
+});
+
+const rejectedCancelledAutoAdmin = reuseCompletedSetup(function () {
+  const cancelled = cancelledAutoReplacement({ replace: false });
+  const { f, retiredOid } = cancelled;
+  f.save({ ...f.state(), restMergeRefusal: providerRejection });
+  const rejected = f.adminPriorCi(f.path, true, retiredOid, f.head);
+  expect(rejected.status, rejected.output).toBe(1);
+  const adminOid = f.git(["rev-parse", outcomeRef]);
+  const adminRecord = f.record();
+  expect(adminRecord).toMatchObject({ phase: "intent", route: "admin", accepted: false });
+  expect(f.recover()).toBe(false);
+  return { ...cancelled, adminOid, adminRecord };
 });
 
 const recoveredStaleAdminAuto = reuseCompletedSetup(function () {
@@ -153,6 +170,166 @@ function rewriteRecord(
 }
 
 describePosix("prior-CI admin recovery after auto cancellation", () => {
+  it("lands a clean replacement immediately while retaining the retired admin history", () => {
+    const { f, originalOid, retiredOid, adminOid, adminRecord, replacement } =
+      staleAdminReplacement(true);
+    const captures = f.captures();
+
+    const recovered = f.run(true, f.repo, "squash", adminOid, replacement);
+    expect(recovered.status, recovered.output).toBe(0);
+    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 1 });
+    expect(f.state().pr.autoMergeRequest).toBeNull();
+    expect(f.record()).toMatchObject({
+      phase: "complete",
+      route: "immediate",
+      accepted: true,
+      head: replacement,
+      recovery: {
+        outcome: adminOid,
+        attempt: adminRecord.attempt,
+        replacementHead: replacement,
+        staleHeadRetirement: { kind: "github-rest-sha-head-fenced" },
+      },
+    });
+    expect(f.record()).not.toHaveProperty("priorCiAdmin");
+    expect(f.record().recovery).not.toHaveProperty("providerRejection");
+    for (const oid of [originalOid, retiredOid, adminOid]) {
+      expect(f.git(["merge-base", "--is-ancestor", oid, outcomeRef])).toBe("");
+    }
+    for (const [name, bytes] of captures) {
+      expect(f.git(["rev-parse", `${outcomeRef}:${name}`])).toBe(
+        f.git(["hash-object", "--stdin"], bytes),
+      );
+    }
+    expect(existsSync(f.worktree)).toBe(false);
+  });
+
+  it.each([
+    ["pending required check", "passing required checks for immediate admission"],
+    ["failed required check", "Required checks are failing"],
+    ["final projection drift", "requires MERGEABLE/CLEAN immediate admission"],
+    ["final capture mutation", "inherited stale-head capture changed"],
+  ])("refuses clean replacement with %s", (fault, diagnostic) => {
+    const { f, adminOid, replacement, captures } = staleAdminReplacement(true);
+    const state = f.state();
+    if (fault === "pending required check" || fault === "failed required check") {
+      state.gates = fault === "pending required check" ? "pending" : "fail";
+    } else {
+      state.observationReads = 0;
+      state.observations = [
+        {},
+        fault === "final projection drift"
+          ? { advanceMain: true, pr: { mergeStateStatus: "UNSTABLE" } }
+          : { tamperProviderCapture: captures[0]![0] },
+      ];
+    }
+    f.save(state);
+    const recovered = f.run(true, f.repo, "squash", adminOid, replacement);
+    expect(recovered.status, recovered.output).toBe(1);
+    expect(recovered.output).toContain(diagnostic);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(adminOid);
+    expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 0 });
+    expect(f.state().pr.autoMergeRequest).toBeNull();
+  });
+
+  it("recovers repeated provider rejections while retaining the cancelled auto capture", () => {
+    const { f, originalOid, retiredOid, adminOid, adminRecord } = rejectedCancelledAutoAdmin();
+    const firstCaptures = f.captures();
+    expect(firstCaptures).toHaveLength(2);
+    expect(firstCaptures.some(([, bytes]) => bytes === "")).toBe(true);
+
+    const rejectedAgain = f.adminPriorCi(f.path, true, adminOid);
+    expect(rejectedAgain.status, rejectedAgain.output).toBe(1);
+    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
+    const secondOid = f.git(["rev-parse", outcomeRef]);
+    expect(secondOid).not.toBe(adminOid);
+    expect(f.record()).toMatchObject({
+      phase: "intent",
+      accepted: false,
+      recovery: {
+        outcome: adminOid,
+        providerRejection: { capture: `merge-output.${adminRecord.attempt}.log` },
+      },
+    });
+    expect(f.recover()).toBe(false);
+    const captures = f.captures();
+    expect(captures).toHaveLength(3);
+    f.save({ ...f.state(), restMergeRefusal: "" });
+
+    const recovered = f.adminPriorCi(f.path, true, secondOid);
+    expect(recovered.status, recovered.output).toBe(0);
+    expect(f.state()).toMatchObject({ mutations: 4, cancellations: 1, posts: 1 });
+    expect(f.record()).toMatchObject({ phase: "complete", accepted: true, head: f.head });
+    expect(Object.keys(f.record().recovery.providerRejection.files).toSorted()).toEqual(
+      captures.map(([name]) => name).toSorted(),
+    );
+    for (const [name, bytes] of captures) {
+      expect(f.git(["rev-parse", `${outcomeRef}:${name}`])).toBe(
+        f.git(["hash-object", "--stdin"], bytes),
+      );
+    }
+    for (const oid of [originalOid, retiredOid, adminOid, secondOid]) {
+      expect(f.git(["merge-base", "--is-ancestor", oid, outcomeRef])).toBe("");
+    }
+    expect(JSON.parse(f.git(["show", `${retiredOid}:outcome.json`]))).toMatchObject({
+      accepted: true,
+      cancellation: { state: "confirmed" },
+    });
+    expect(existsSync(f.worktree)).toBe(false);
+  });
+
+  it.each([
+    ["changed inherited", "inherited provider-rejection capture changed"],
+    ["missing inherited", "exactly the expected captures"],
+    ["symlink inherited", "regular nonsymlink files"],
+    ["extra", "exactly the expected captures"],
+    ["missing current", "exactly the expected captures"],
+    ["changed current", "complete exact GitHub base-modified HTTP 405 rejection"],
+  ])("refuses provider recovery with %s capture", (fault, diagnostic) => {
+    const { f, adminOid, adminRecord, captures } = rejectedCancelledAutoAdmin();
+    const inheritedPath = join(f.worktree, ".local", captures[0]![0]);
+    const currentPath = join(f.worktree, ".local", `merge-output.${adminRecord.attempt}.log`);
+    if (fault === "changed inherited") {
+      writeFileSync(inheritedPath, "changed\n");
+    } else if (fault === "missing inherited" || fault === "symlink inherited") {
+      rmSync(inheritedPath);
+      if (fault === "symlink inherited") {
+        const target = join(f.root, "original-auto-capture.txt");
+        writeFileSync(target, captures[0]![1]);
+        symlinkSync(target, inheritedPath);
+      }
+    } else if (fault === "extra") {
+      writeFileSync(join(f.worktree, ".local/merge-output.extra.log"), "extra\n");
+    } else if (fault === "missing current") {
+      rmSync(currentPath);
+    } else {
+      writeFileSync(currentPath, uncertainGatewayResponse);
+    }
+    const recovered = f.adminPriorCi(f.path, true, adminOid);
+    expect(recovered.status, recovered.output).toBe(1);
+    expect(recovered.output).toContain(diagnostic);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(adminOid);
+    expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 0 });
+  });
+
+  it("rechecks inherited provider recovery captures after final admission", () => {
+    const { f, adminOid, adminRecord, captures } = rejectedCancelledAutoAdmin();
+    f.save({
+      ...f.state(),
+      observationReads: 0,
+      observations: [{}, {}, {}, {}, { tamperProviderCapture: captures[0]![0] }],
+    });
+    const recovered = f.adminPriorCi(f.path, true, adminOid);
+    expect(recovered.status, recovered.output).toBe(1);
+    expect(f.state().providerCaptureTampered).toBe(true);
+    expect(recovered.output).toContain("inherited provider-rejection capture changed");
+    expect(
+      readFileSync(join(f.worktree, ".local", `merge-output.${adminRecord.attempt}.log`), "utf8"),
+    ).toBe(providerRejection);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(adminOid);
+    expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 0 });
+  });
+
   it("retires a recovered auto request at an observed head and preserves the complete capture chain", () => {
     const { f, originalOid, retiredOid, adminOid, adminRecord, adminCapture, replacement } =
       staleAdminReplacement();
@@ -286,8 +463,8 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     );
   });
 
-  it("reconciles an interrupted recovered merge from the canonical checkout", () => {
-    const { f, adminOid, replacement } = staleAdminReplacement();
+  it.each([false, true])("reconciles an interrupted recovered merge (ready=%s)", (ready) => {
+    const { f, adminOid, replacement } = staleAdminReplacement(ready);
     f.save({ ...f.state(), mode: "success", crash: "dispatch" });
 
     const attempted = f.run(true, f.repo, "squash", adminOid, replacement);
@@ -296,7 +473,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     const recoveredRecord = f.record();
     expect(recoveredRecord).toMatchObject({
       phase: "intent",
-      route: "auto",
+      route: ready ? "immediate" : "auto",
       accepted: false,
       recovery: { outcome: adminOid },
     });
@@ -311,7 +488,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     expect(reconciled.status, reconciled.output).toBe(0);
     expect(f.record()).toMatchObject({
       phase: "merged",
-      route: "auto",
+      route: ready ? "immediate" : "auto",
       accepted: false,
       recovery: { outcome: adminOid },
       landed,

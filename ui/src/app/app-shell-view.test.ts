@@ -16,7 +16,7 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
-import { renderApplicationShell } from "./app-shell-view.tsx";
+import { ApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 
@@ -36,7 +36,7 @@ async function mountShell() {
         host: owner.element,
         value: runtime.context,
         get children() {
-          return renderApplicationShell(owner);
+          return createComponent(ApplicationShell, { host: owner });
         },
       }),
     {
@@ -178,11 +178,32 @@ it("preserves notice padding when a session route resolves without a chat pane",
   }
 });
 
+it("keeps pages interactive through transport loss and fences reload-required", async () => {
+  const { owner, runtime, view } = await mountShell();
+  owner.routeState = { routeId: "logs" };
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
+  const initial = runtime.context.gateway.snapshot;
+  for (const phase of ["reconnecting", "offline", "reload-required"] as const) {
+    snapshot.mockReturnValue({ ...initial, phase });
+    owner.invalidate();
+    flush();
+    expect(view.container.querySelector("#control-ui-main")?.hasAttribute("inert"), phase).toBe(
+      false,
+    );
+    const outlet = view.container.querySelector("openclaw-router-outlet")!;
+    expect(outlet.hasAttribute("inert"), phase).toBe(phase === "reload-required");
+    expect(outlet.getAttribute("aria-disabled"), phase).toBe(
+      phase === "reload-required" ? "true" : null,
+    );
+    expect(view.container.querySelector(".connection-action-block"), phase).toBeNull();
+  }
+});
+
 it("keeps one sidebar and outlet while navigation moves between desktop and drawer", async () => {
   let mobile = false;
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({ matches: mobile })),
+    vi.fn(() => Object.assign(new EventTarget(), { matches: mobile })),
   );
   const { owner, view } = await mountShell();
   const sidebar = view.container.querySelector("openclaw-app-sidebar");
@@ -198,11 +219,13 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   expect(drawer?.getAttribute("role")).toBe("dialog");
   expect(drawer?.getAttribute("aria-modal")).toBe("true");
   expect(drawer?.contains(sidebar)).toBe(true);
+  expect(view.container.querySelector("#control-ui-main")?.hasAttribute("inert")).toBe(true);
   expect(view.container.querySelector("openclaw-router-outlet")).toBe(outlet);
 
   owner.navDrawerOpen = false;
   flush();
   expect(drawer?.getAttribute("aria-hidden")).toBe("true");
+  expect(view.container.querySelector("#control-ui-main")?.hasAttribute("inert")).toBe(false);
   expect(view.container.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   mobile = false;
@@ -217,7 +240,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
 it("keeps the mobile New Session action live across selection and access changes", async () => {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({ matches: true })),
+    vi.fn(() => Object.assign(new EventTarget(), { matches: true })),
   );
   const { owner, runtime, view } = await mountShell();
   owner.routeState = { routeId: "sessions" };
@@ -314,7 +337,7 @@ it("clears navigation resize feedback when the drag ends or its divider disconne
 it("keeps the focused gateway retry button across shell and error updates", async () => {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({ matches: true })),
+    vi.fn(() => Object.assign(new EventTarget(), { matches: true })),
   );
   const { owner, runtime, view } = await mountShell();
   const disconnected = {

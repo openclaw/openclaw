@@ -448,8 +448,10 @@ describe("tool-cards", () => {
     expect(rawToggle?.getAttribute("aria-expanded")).toBe("false");
     expect(rawBody?.hidden).toBe(true);
     rawToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(rawBody?.hidden).toBe(false);
+    await waitForSolid(() => {
+      expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
+      expect(rawBody?.hidden).toBe(false);
+    });
 
     const code = container.querySelector("code.markdown-block-art");
     expect(code).not.toBeNull();

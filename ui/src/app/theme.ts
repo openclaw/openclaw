@@ -6,6 +6,7 @@ import {
   type ThemeId,
   type ThemeMode,
 } from "../../../packages/gateway-protocol/src/theme-ids.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 export type ThemeName = ThemeId | "custom";
 export type { ThemeMode };
@@ -54,8 +55,7 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
   }
   const link = existing instanceof HTMLLinkElement ? existing : document.createElement("link");
   const finish = (event: Event) => {
-    link.removeEventListener("load", finish);
-    link.removeEventListener("error", finish);
+    stops.forEach((stop) => stop());
     if (event.type === "error") {
       // Failed assets must not strand startup; normal CSS defaults stay readable.
       // Remove the failed link so a later selection can retry rather than wait forever.
@@ -64,8 +64,7 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
     }
     ready();
   };
-  link.addEventListener("load", finish);
-  link.addEventListener("error", finish);
+  const stops = [listen(link, "load", finish), listen(link, "error", finish)];
   if (!existing) {
     link.id = id;
     link.rel = "stylesheet";

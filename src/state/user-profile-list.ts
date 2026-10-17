@@ -11,9 +11,9 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { readUserProfileCatalogSnapshot } from "./user-profile-catalog-read.js";
 import {
   captureUserProfileAuthorityRead,
   emitUserProfilesChanged,
@@ -25,6 +25,7 @@ import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
   projectHasMultipleSessionSharingIdentities,
+  readCatalogUserProfileAuthority,
   resolveUserProfileReferenceInCatalog,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
@@ -539,10 +540,9 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
   ) {
     const profileRevision = readUserProfileVersion();
     const bindingRevision = readUserProfileEmailBindingRevision();
-    const reply = await executeExistingOpenClawStateRead(
+    const reply = await readUserProfileCatalogSnapshot(
       { ...options, path: pathname },
-      { type: "userProfiles.catalog" },
-      { current: true },
+      { identityKey: context.admission.identity.key, profileRevision, bindingRevision },
     );
     context.admission.assertCurrent();
     if (
@@ -650,6 +650,9 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
         catalog.assertCurrent(profile.profileId);
       }
       return profile;
+    },
+    readCurrentAuthority(this: void, profileId: string, includeProfile = false) {
+      return readCatalogUserProfileAuthority(catalog, profileId, includeProfile);
     },
     release: catalog.release,
   };

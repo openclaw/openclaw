@@ -663,12 +663,13 @@ it("retains physical sentinels and stable store precedence after a primary updat
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
     try {
-      expect(projection.selectEntries().filter(ready).length).toBe(2);
+      projection.describe({ agentId: "main", key: "global", storePath: primary });
       expect(
         projection.snapshot({ agentId: "main", key: "global", storePath: secondary }).row
           ?.sessionId,
       ).toBe("secondary");
       const selected = projection.describe({ agentId: "main", key: "global" })!;
+      expect(projection.selectEntries().filter(ready).length).toBe(2);
       expect(
         projection
           .findBySessionId({

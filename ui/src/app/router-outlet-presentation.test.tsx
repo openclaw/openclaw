@@ -131,8 +131,7 @@ describe("router outlet pending presentation", () => {
     expect(outlet.querySelector("section")).toBeNull();
   });
 
-  it("cancels the pending delay on disposal and starts a full delay for a new owner", async () => {
-    vi.useFakeTimers();
+  it("shows the pending destination when its outlet is replaced before the module loads", async () => {
     const routeModule = createDeferredCore<TestModule>();
     const routeData = createDeferredCore<TestData>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
@@ -148,14 +147,10 @@ describe("router outlet pending presentation", () => {
     onTestFinished(() => router.stop());
     let outlet = mountRouterOutlet({ router });
     const navigation = router.navigate("first", { label: "test" });
-    await vi.advanceTimersByTimeAsync(500);
-    outlet.dispose();
-    await vi.advanceTimersByTimeAsync(1_000);
-    outlet = mountRouterOutlet({ router });
-    await vi.advanceTimersByTimeAsync(999);
     await settleRouterOutlet(outlet);
-    expect(outlet.querySelector('[role="status"]')).toBeNull();
-    await vi.advanceTimersByTimeAsync(1);
+    expect(outlet.querySelector(".loading-skeleton")).not.toBeNull();
+    outlet.dispose();
+    outlet = mountRouterOutlet({ router });
     await settleRouterOutlet(outlet);
     expect(outlet.querySelector('[role="status"]')).not.toBeNull();
     routeModule.resolve(module("first"));

@@ -6,6 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorFailureKind,
@@ -263,6 +264,7 @@ export function createModelLifecycle(params: {
   createObserver: (capturePromptStats: boolean) => ModelCallObserver;
 }) {
   const callId = params.ctx.nextCallId();
+  const runContext = getAgentRunContext(params.ctx.runId);
   const transportContext = {
     sessionKey: params.ctx.sessionKey,
     runId: params.ctx.runId,
@@ -348,6 +350,13 @@ export function createModelLifecycle(params: {
       return;
     }
     waitReason = reason;
+    if (runContext) {
+      if (reason) {
+        runContext.localModelWait = { requestId: callId };
+      } else if (runContext.localModelWait?.requestId === callId) {
+        delete runContext.localModelWait;
+      }
+    }
     reportStatus(reason ? { phase: "waiting_for_model", reason } : { phase: "starting_model" });
     params.options?.onProviderWait?.(reason);
   };

@@ -11,27 +11,19 @@ import (
 	"testing"
 )
 
-type behaviorReplacePair struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
 type behaviorRule struct {
-	Method       string                `json:"method"`
-	MatchAll     []string              `json:"match_all"`
-	ResponseFile string                `json:"response_file,omitempty"`
-	ReplacePairs []behaviorReplacePair `json:"replace_pairs,omitempty"`
+	Method       string   `json:"method"`
+	MatchAll     []string `json:"match_all"`
+	ResponseFile string   `json:"response_file,omitempty"`
 }
 
 type behaviorFixture struct {
-	Name                      string         `json:"name"`
-	Mode                      string         `json:"mode"`
-	RelPath                   string         `json:"rel_path"`
-	SourceFile                string         `json:"source_file"`
-	ExpectedFile              string         `json:"expected_file,omitempty"`
-	ExpectedOutputContains    []string       `json:"expected_output_contains,omitempty"`
-	ExpectedOutputNotContains []string       `json:"expected_output_not_contains,omitempty"`
-	Rules                     []behaviorRule `json:"rules"`
+	Name         string         `json:"name"`
+	Mode         string         `json:"mode"`
+	RelPath      string         `json:"rel_path"`
+	SourceFile   string         `json:"source_file"`
+	ExpectedFile string         `json:"expected_file"`
+	Rules        []behaviorRule `json:"rules"`
 }
 
 type behaviorFixtureTranslator struct {
@@ -57,18 +49,10 @@ func (tr *behaviorFixtureTranslator) run(method, text string) string {
 		if !matchesAll(text, rule.MatchAll) {
 			continue
 		}
-		switch {
-		case rule.ResponseFile != "":
+		if rule.ResponseFile != "" {
 			return readFixtureTextInDir(tr.t, tr.dir, rule.ResponseFile)
-		case len(rule.ReplacePairs) > 0:
-			out := text
-			for _, pair := range rule.ReplacePairs {
-				out = strings.ReplaceAll(out, pair.From, pair.To)
-			}
-			return out
-		default:
-			return text
 		}
+		return text
 	}
 	return text
 }
@@ -164,22 +148,9 @@ func runBehaviorFixture(t *testing.T, dir string, fixture behaviorFixture) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if fixture.ExpectedFile != "" {
-		want := readFixtureTextInDir(t, dir, fixture.ExpectedFile)
-		if normalizeBehaviorText(got) != normalizeBehaviorText(want) {
-			t.Fatalf("unexpected output\nwant:\n%s\n\ngot:\n%s", want, got)
-		}
-	}
-
-	for _, fragment := range fixture.ExpectedOutputContains {
-		if !strings.Contains(got, fragment) {
-			t.Fatalf("expected output to contain %q\noutput:\n%s", fragment, got)
-		}
-	}
-	for _, fragment := range fixture.ExpectedOutputNotContains {
-		if strings.Contains(got, fragment) {
-			t.Fatalf("expected output to exclude %q\noutput:\n%s", fragment, got)
-		}
+	want := readFixtureTextInDir(t, dir, fixture.ExpectedFile)
+	if normalizeBehaviorText(got) != normalizeBehaviorText(want) {
+		t.Fatalf("unexpected output\nwant:\n%s\n\ngot:\n%s", want, got)
 	}
 }
 

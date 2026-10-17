@@ -289,6 +289,58 @@ it("keeps a synchronous reply cancellation when an older stored draft has a high
   expect(state).toMatchObject({ chatMessage: "", chatReplyTarget: null });
 });
 
+it.each([false, true])(
+  "restores and publishes a winning durable draft after conflict (pending edit: %s)",
+  async (pendingEdit) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let stored: ReadResult = missing;
+    draftRead().mockImplementation(async () => stored);
+    const pendingWrite =
+      createDeferred<Awaited<ReturnType<typeof draftStore.writeDurableComposerDraft>>>();
+    vi.mocked(write)
+      .mockReturnValueOnce(pendingWrite.promise)
+      .mockResolvedValue({ status: "conflict" });
+    const state = createState();
+    const restored = vi.fn();
+    const persistence = new ChatComposerPersistence(() => state, restored);
+    try {
+      persistence.start();
+      await settleStorage();
+      restored.mockClear();
+      state.chatMessage = "First local draft";
+      persistence.schedule();
+      persistence.persistNow();
+      await settleStorage();
+      expectWrite(ownerScope, { text: "First local draft" });
+      if (pendingEdit) {
+        state.chatMessage = "Second local draft";
+        persistence.schedule();
+      }
+      stored = foundDraft("Winning durable draft", {
+        revision: persistence.draftRevision + 100,
+      });
+      pendingWrite.resolve({ status: "conflict" });
+      await settleStorage();
+      expect(state.chatMessage).toBe("Winning durable draft");
+      expect(load(state, state.sessionKey).snapshot?.draft).toBe("Winning durable draft");
+      expect(restored).toHaveBeenCalledOnce();
+      if (pendingEdit) {
+        expectWrite(ownerScope, { text: "Second local draft" });
+      }
+      const settledWrites = vi.mocked(write).mock.calls.length;
+      vi.runAllTimers();
+      await settleStorage();
+      expect(write).toHaveBeenCalledTimes(settledWrites);
+      expect(state.chatMessage).toBe("Winning durable draft");
+      expect(restored).toHaveBeenCalledOnce();
+    } finally {
+      persistence.stop();
+      pendingWrite.resolve({ status: "conflict" });
+      vi.useRealTimers();
+    }
+  },
+);
+
 it("persists empty goal selection and versions cancellation", () => {
   const state = createState({ client: null, connected: false });
   const persistence = new ChatComposerPersistence(() => state);

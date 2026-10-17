@@ -319,20 +319,45 @@ harnesses must retain the attributed assistant tool-call entry in
 `messagesSnapshot`; the host fallback can use that settled-batch identity when
 visible-assistant fields are absent.
 
+A harness can defer projection acquisition with the optional
+`attempt.onSettledTurn(settledAttempt, captureContext)` callback. Await it after
+mirroring the settled result and before releasing the attempt's binding or model
+authority. Core uses its reply-delivery facts and finalization policy to decide
+whether to call `captureContext`; a delivered reply does not need a projection.
+The capture function returns the same context union described above. Core stores
+that result on `settledAttempt.settledTurnFinalizationContext` for the later,
+tool-free finalization operation. An eligible attempt may initially mark the
+context `source: "unavailable"`; this records eligibility without reading history.
+
+The callback shares the attempt's revocable host capability scope. Calls after
+the attempt closes, aborts, or loses its admitted lifecycle are rejected before
+core observes delivery or changes the result. Context capture that finishes
+after revocation is also rejected before its result is stored.
+
+The capture function belongs only to this awaited callback. It must check the
+original attempt's live binding and model authority, honor cancellation, and
+finish identity and source-evidence verification before returning frozen,
+detached context. Do not retain the function beyond the callback, put deferred
+work in `data`, or reuse released authority. Harnesses that omit this callback
+keep supplying context before returning their attempt, as before.
+
+Existing code that removes `hostCapabilities` from an attempt remains compatible
+with the finalization parameter type. Core removes `onSettledTurn` when preparing
+the isolated finalization parameters; it is not a finalization capability.
+
 Enforce projection limits while acquiring messages, rather than cloning the
-whole transcript before checking its size. Successful capture must finish all
-identity and source-evidence checks before returning the attempt. Do not retain
-an open transcript reader in `data`. The finalizer must reject a missing,
+whole transcript before checking its size. Do not retain an open transcript
+reader in `data`. The finalizer must reject a missing,
 unsupported, ambiguous, or oversized context. It must not truncate messages,
 drop earlier history, or describe an application projection as exact native
 history. Harnesses that resume one restricted native session do not need this
 projection field.
 
-Do not implement this callback by calling `runAttempt` with a best-effort
+Do not implement `finalizeSettledTurn` by calling `runAttempt` with a best-effort
 `disableTools` hint. The harness owner must enforce the complete native
 capability boundary. OpenClaw does not provide a generic fallback because it
 cannot attest that an arbitrary native runtime honored those restrictions.
 
-The callback remains optional for experimental third-party harness
+`finalizeSettledTurn` remains optional for experimental third-party harness
 compatibility. When the selected harness omits it, OpenClaw preserves the
 existing incomplete-turn error instead of risking repeated side effects.

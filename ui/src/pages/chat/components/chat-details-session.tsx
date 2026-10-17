@@ -3,8 +3,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import { projectSubagentStatus } from "../chat-subagent-wait.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import {
@@ -12,7 +12,6 @@ import {
   hasChatPullRequests,
   type ChatPullRequestsProps,
 } from "./chat-pull-requests.tsx";
-import "./chat-subagent-activity-live.ts";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 type Props = { props?: ChatDetailsProps; presented: boolean; dismissed?: boolean };
@@ -38,9 +37,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const owner = () => session()?.owner?.actor;
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
-          const subagents = createMemo(() =>
-            props.props ? projectSubagentStatus(props.props, false).activity : [],
-          );
           const pullRequests = createMemo<ChatPullRequestsProps | null>(() => {
             const snapshot = props.props;
             if (!snapshot) {
@@ -139,23 +135,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 </Show>
                 <ChatDetailsEnvironment details={props.props!} presented={active()} />
                 <ChatDetailsContext details={props.props!} presented={active()} />
-                {subagents().length > 0 && (
-                  <details class="chat-details__group chat-details__subagents">
-                    <summary class="chat-details__caption">
-                      {t("chat.sessionDetails.backgroundTasks")}
-                      <span>{subagents().length}</span>
-                      <Icon name="chevronDown" />
-                    </summary>
-                    {active() && (
-                      <openclaw-chat-subagent-activity
-                        prop:rows={subagents()}
-                        prop:compact={true}
-                        prop:onOpenSubagent={props.props?.onOpenSubagent}
-                        prop:onOpenSession={props.props?.onSessionSelect}
-                      />
-                    )}
-                  </details>
-                )}
+                <ChatDetailsBackground details={props.props!} presented={active()} />
                 <Show when={pullRequests()}>
                   {(requests) => (
                     <Show
@@ -163,38 +143,37 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                         Boolean(props.props?.onOpenSessionDiff) || hasChatPullRequests(requests())
                       }
                     >
-                      <details
-                        class="chat-details__group"
-                        data-details-group="pull-requests"
-                        open
-                        onToggle={(event) => {
-                          if (event.currentTarget.isConnected) {
-                            setPullRequestsOpen(event.currentTarget.open);
-                          }
-                        }}
-                      >
-                        <summary class="chat-details__caption">
-                          {t("chat.sessionDetails.changes")}
-                          <span>{props.props?.pullRequests?.length || null}</span>
-                          <Icon name="chevronDown" />
-                        </summary>
+                      <div class="chat-details__group chat-details__changes">
+                        <details
+                          data-details-group="pull-requests"
+                          open
+                          onToggle={(event) => {
+                            if (event.currentTarget.isConnected) {
+                              setPullRequestsOpen(event.currentTarget.open);
+                            }
+                          }}
+                        >
+                          <summary class="chat-details__caption">
+                            {t("chat.sessionDetails.changes")}
+                            <span>{props.props?.pullRequests?.length || null}</span>
+                            <Icon name="chevronDown" />
+                          </summary>
+                          <ChatPullRequests {...requests()} />
+                        </details>
                         {props.props?.onOpenSessionDiff && (
                           <button
                             type="button"
-                            class="chat-details__row chat-details__navigation"
+                            class="chat-details__all-changes"
                             onClick={() => {
                               if (host.isConnected && props.presented) {
                                 props.props?.onOpenSessionDiff?.();
                               }
                             }}
                           >
-                            <Icon name="diff" />
-                            <span>{t("chat.sessionDetails.allChanges")}</span>
-                            <Icon name="chevronRight" />
+                            {t("chat.sessionDetails.allChanges")}
                           </button>
                         )}
-                        <ChatPullRequests {...requests()} />
-                      </details>
+                      </div>
                     </Show>
                   )}
                 </Show>

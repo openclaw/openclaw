@@ -62,11 +62,11 @@ export function LabsPage() {
     () => context.gateway,
     (gateway) => {
       lifecycle.transition(gateway.snapshot);
+      // A same-tick reconnect must retire a save before Solid's next flush.
       const unsubscribe = gateway.subscribe((snapshot) => {
         if (context.gateway !== gateway) {
           return;
         }
-        // A same-tick reconnect must retire a save before Solid's next flush.
         if (lifecycle.transition(snapshot)) {
           pending = null;
           saveError = null;

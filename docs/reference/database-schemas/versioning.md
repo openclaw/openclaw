@@ -114,6 +114,19 @@ keys. Their SQLite rebuilds and PostgreSQL forward steps advance schema metadata
 atomically. These versions are bundled for one upgrade; older binaries require
 the verified pre-upgrade backup for rollback.
 
+Agent [schema 29](/reference/database-schemas/agent-schema-history#agent-schema-29)
+and shared-state [schema 27](/reference/database-schemas/state-schema-history#state-schema-27)
+retire four unused or redundant indexes and narrow the shared lease-owner index.
+The bundle preserves every table's columns, keys, and retained rows. Index DDL
+and version publication remain atomic on both engines; verified backups retain
+the predecessor index definitions for rollback.
+
+Agent [schema 31](/reference/database-schemas/agent-schema-history#agent-schema-31)
+moves memory index revision advancement from six row triggers into the batch
+writer's transaction. SQLite and PostgreSQL drop the triggers without changing
+retained rows or revision values. Older writers require the verified pre-upgrade
+backup because they rely on those triggers to invalidate readers.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports
@@ -289,6 +302,14 @@ drops the redundant index after legacy storage validation; agent-only and read-o
 admission tolerate either state without recreating it. Older writable builds may
 rebuild it on downgrade or rollback. Rows and constraints are unchanged; see the
 [storage decision](/reference/database-schemas/storage-changes#memory-chunk-path-index-retirement).
+
+Agent schema 30 adds per-row trajectory payload codecs and nullable compressed
+storage. Old text rows remain readable without a full-table rewrite. Retention
+uses logical bytes, and exports decode transparently. PostgreSQL mirrors the
+columns and keeps native text/TOAST storage. The version fence prevents older
+writers from ignoring compressed payloads; rollback requires the verified
+pre-upgrade backup. See the
+[trajectory storage migration](/reference/database-schemas/agent-schema-history#trajectory-payload-storage).
 
 Trajectory retention replaces the existing `idx_agent_trajectory_runtime_run`
 definition with a full covering index on `(session_id, run_id, created_at,
@@ -605,9 +626,13 @@ but disables the new structured controls; upgrading can read retained receipts.
 
 The mutable JSON predicate projections require
 [agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns).
-Older writers must be fenced because they update canonical JSON without maintaining
-the promoted columns. The forward migration backfills every retained row once;
-NULL-only repair on reopen cannot make a downgrade and re-upgrade safe.
+The forward migration eagerly backfills session-node and existing outbox rows;
+SQLite transcript predicates remain lazy until a canonical payload write or rewrite
+materializes them. Existing beta stores with materialized predicates remain valid,
+and this lazy classification requires no schema bump. Older writers must still be
+fenced because they update canonical JSON without maintaining the promoted columns.
+Already-materialized values are trusted, so lazy fallback for unclassified rows
+cannot make a downgrade and re-upgrade safe.
 
 ### Schema bumps and older updaters
 

@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { Command, Option } from "commander";
 import { afterAll, describe, expect, it } from "vitest";
-import { getCompletionScript } from "./completion-cli.js";
+import { registerAcpCli } from "./acp-cli.js";
+import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 import {
   createAliasedCompletionProgram,
   createCompletionProgram,
@@ -188,6 +189,84 @@ _openclaw_root_completion
       expect(result.stdout).toContain("two\\ words");
       expect(result.stdout).toContain('say\\ \\"hello\\"');
       expect(result.stdout).toContain("OPENCLAW_COMPLETION_VALUE_EXECUTED");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "completes grouped short options in zsh command groups and leaves",
+    async (ctx) => {
+      const probe = spawnSync("zsh", ["-fc", "zmodload zsh/zpty"], { encoding: "utf8" });
+      if (probe.error && "code" in probe.error && probe.error.code === "ENOENT") {
+        ctx.skip();
+      }
+      expect(probe.error).toBeUndefined();
+      expect(probe.status).toBe(0);
+
+      const program = new Command().name("openclaw");
+      registerCompletionCli(program);
+      registerAcpCli(program);
+      const cases = [
+        ["openclaw completion -ys f", "openclaw completion -ys fish"],
+        ["openclaw completion -s f", "openclaw completion -s fish"],
+        ["openclaw completion -yi --shell f", "openclaw completion -yi --shell fish"],
+        ["openclaw acp -vv cl", "openclaw acp -vv client"],
+      ];
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zsh-completion-"));
+      try {
+        await fs.writeFile(
+          path.join(tempDir, ".zshrc"),
+          `autoload -Uz compinit
+compinit -u -D
+${getCompletionScript("zsh", program)}
+PROMPT='OPENCLAW_READY> '
+openclaw_capture_completion() {
+  print -r -- "OPENCLAW_RESULT:$BUFFER"
+  print -r -- OPENCLAW_RESULT_END
+  zle reset-prompt
+}
+zle -N openclaw_capture_completion
+bindkey -e
+bindkey '^X' openclaw_capture_completion
+`,
+          "utf8",
+        );
+        const result = spawnSync(
+          "zsh",
+          [
+            "-fc",
+            `zmodload zsh/zpty
+zpty completion zsh -di
+{
+  zpty -r completion output '*OPENCLAW_READY>*'
+${cases
+  .map(
+    ([line]) => `  zpty -w -n completion '${line}'$'\t\x18'
+  zpty -r completion output '*OPENCLAW_RESULT_END*'
+  print -r -- "$output"
+  zpty -w -n completion $'\x15'`,
+  )
+  .join("\n")}
+} always {
+  zpty -d completion
+}
+`,
+          ],
+          {
+            encoding: "utf8",
+            timeout: 15_000,
+            env: { ...process.env, HOME: tempDir, ZDOTDIR: tempDir, TERM: "xterm" },
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        const completed = [...result.stdout.matchAll(/OPENCLAW_RESULT:([^\r\n]*)/g)].map((match) =>
+          match[1]?.trimEnd(),
+        );
+        expect(completed).toEqual(cases.map(([, expected]) => expected));
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     },
   );
 

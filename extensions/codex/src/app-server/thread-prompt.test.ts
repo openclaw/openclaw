@@ -4,6 +4,7 @@ import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
+  type JsonObject,
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
 
@@ -12,7 +13,10 @@ const delegationTools: CodexDynamicToolSpec[] = [
     type: "function",
     name: "sessions_spawn",
     description: "Spawn an OpenClaw session",
-    inputSchema: { type: "object" },
+    inputSchema: {
+      type: "object",
+      properties: { runtime: { type: "string", enum: ["subagent", "acp"] } },
+    },
   },
   {
     type: "function",
@@ -98,6 +102,84 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it.each(["prefer", "suggest"] as const)(
+    "routes new helpers by tool requirements in %s mode without moving existing children",
+    (delegationMode) => {
+      const instructions = buildDeveloperInstructions(
+        createParams({ config: { agents: { defaults: { subagents: { delegationMode } } } } }),
+        {
+          dynamicTools: [
+            {
+              type: "namespace",
+              name: "openclaw",
+              description: "OpenClaw tools",
+              tools: [
+                {
+                  type: "function",
+                  name: "sessions_spawn",
+                  description: "Spawn a helper",
+                  inputSchema: {
+                    type: "object",
+                    properties: { runtime: { type: "string", enum: ["subagent", "acp"] } },
+                  },
+                },
+                {
+                  type: "function",
+                  name: "sessions_create",
+                  description: "Create a session",
+                  inputSchema: { type: "object" },
+                },
+              ],
+            },
+          ],
+        },
+      );
+
+      expect(instructions).toContain("`spawn_agent` for work that only needs Codex-native tools");
+      expect(instructions).toContain("native collaboration tools may be deferred");
+      expect(instructions).toContain(
+        'For new delegated work that needs OpenClaw tools, use `openclaw.sessions_spawn` with `runtime="subagent"` from the start.',
+      );
+      expect(instructions).toContain(
+        'Actual delegated helpers use native `spawn_agent` for Codex-native work, or `openclaw.sessions_spawn` with `runtime="subagent"` for new work needing OpenClaw tools',
+      );
+      expect(instructions).toContain(
+        "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
+      );
+      expect(instructions).toContain("Do not respawn existing work to switch tool routes");
+    },
+  );
+
+  it("does not invent a managed route when only native delegation is available", () => {
+    const instructions = buildDeveloperInstructions(createParams());
+
+    expect(instructions).toContain("`spawn_agent` for work that only needs Codex-native tools");
+    expect(instructions).not.toContain("sessions_spawn");
+    expect(instructions).toContain("Keep work needing OpenClaw tools in this session");
+  });
+
+  it.each<{ properties: JsonObject; expected: string }>([
+    { properties: {}, expected: "use `sessions_spawn` from the start." },
+    {
+      properties: { runtime: { type: "string", enum: ["acp"] } },
+      expected: "Keep work needing OpenClaw tools in this session",
+    },
+  ])("respects the advertised managed runtime schema: %j", ({ properties, expected }) => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "sessions_spawn",
+          description: "Spawn a worker",
+          inputSchema: { type: "object", properties },
+        },
+      ],
+    });
+
+    expect(instructions).toContain(expected);
+    expect(instructions).not.toContain('runtime="subagent"');
+  });
+
   it.each([{ requireWorkspaceOnly: true }, { delegationCapability: "host_only" }] as const)(
     "does not advertise native helpers for restricted runs (%j)",
     (overrides) => {
@@ -105,8 +187,19 @@ describe("buildDeveloperInstructions delegation guidance", () => {
       expect(instructions).not.toContain("spawn_agent");
       expect(instructions).not.toContain("wait_agent");
       expect(instructions).toContain("sessions_spawn");
+      expect(instructions).toContain('`sessions_spawn` with `runtime="subagent"`');
     },
   );
+
+  it.each<Partial<EmbeddedRunAttemptParams>>([
+    { delegationCapability: "report_only" },
+    { disableTools: true },
+    { toolsAllow: [] },
+  ])("does not advertise either delegation route when delegation is disabled (%j)", (overrides) => {
+    const instructions = buildInstructions(overrides);
+    expect(instructions).not.toContain("spawn_agent");
+    expect(instructions).not.toContain("sessions_spawn");
+  });
 
   it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
     const params = createParams({ toolsAllow: [] });

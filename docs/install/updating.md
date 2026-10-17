@@ -41,6 +41,18 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+After a Doctor child settles, the updater drains its retained handles for the
+affected shared-state database and revokes their schema admission, even when
+Doctor exits unsuccessfully. The next parent access admits the resulting schema
+again and refuses a version newer than the running updater supports.
+
+After Doctor backs up and admits shared-state maintenance reads, native Codex
+assignment detection reads one database transaction snapshot. Lease renewals and
+other maintenance writes can continue without requiring the database files to
+stop changing for a private copy. Inspection without that admission still uses
+an artifact-preserving copy and refuses an inconsistent source. This is
+candidate-side behavior; the installed updater runs first with its shipped checks.
+
 ### Migration integrity checks
 
 SQLite upgrades default to a whole-database `quick_check`, a full
@@ -81,6 +93,10 @@ Doctor's held-store warning remains visible. Configured agents required by the
 Gateway must still pass runtime admission: Doctor fails if a recovery hold
 leaves a required store unusable. Active databases and pending deletions require
 the candidate schema, and held stores remain part of rollback verification.
+Retained plugin databases, including plugin shared-state stores, are not checked
+against the agent schema. Their plugin owns migration; they remain in the
+snapshot and rollback inventory even when the plugin is disabled. The primary
+shared-state database is checked against the shared-state schema.
 
 OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
 the app owns Gateway activation. This aligns managed official npm plugins with the new
@@ -592,8 +608,12 @@ its `--timeout` option cannot increase this cap.
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
 If a copy fails, active copies finish before cleanup; link publication and
-verification run only after all file copies succeed. Stored state and recovery backups
-retain their existing durability guarantees. An older installed updater keeps
+verification run only after all file copies succeed. Each private copy or inspection
+uses one generous absolute allowance derived from its inventoried size, with the
+caller's larger allowance preserved. Progress remains diagnostic and does not renew
+the allowance. Exceptionally slow storage may require another update attempt after
+a visible timeout. Stored state and recovery backups retain their existing
+durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
 Runtime retention looks for hoisted dependencies within the package manager's
@@ -661,6 +681,18 @@ directory. `status` reads the operation, `repair` resumes only its recorded
 package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
+
+If an updater-owned recovery directory, helper, or journal gains group or other
+permissions, the updater restores owner-only access and warns with the path,
+observed mode, and link count. On Linux, this also clears the effective POSIX ACL
+mask; named ACL entries can remain but no longer grant access. When `getfacl` is
+available, the warning identifies detected ACL entries. Foreign ownership,
+symlinks, unexpected object types, multiply linked files, and permissions that
+cannot be repaired still require intervention. Repairing these private objects
+does not change package-content fingerprints or authorize recovery of modified
+package files.
+If recovery still refuses, automatic update and managed-service handoff reports
+retain its reason code and diagnostic message in the failed phase.
 
 On FreeBSD, `repair` and `retire` read process identity through the recorded
 installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform

@@ -21,7 +21,7 @@ import {
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -54,7 +54,7 @@ describe("stored chat snapshot hydration", () => {
       "openclaw-chat-runtime-test",
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+    vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
     pane.context = createInitializationContext(
@@ -177,14 +177,14 @@ describe("stored chat snapshot hydration", () => {
           pendingInputs: getChatPendingInputs(remounted.state)?.page.items,
           assistantAttachmentAuthToken: "test-auth-token",
           connectionEpoch: 1,
-          onRequestUpdate: renderPane,
+          mediaOwner: renderPane,
         };
         if (view) {
           view.update(props);
         } else {
           view = mountChatThread(props, transcript);
         }
-        transcript.hostUpdated();
+        transcript.update();
         return view;
       };
       try {
@@ -196,7 +196,7 @@ describe("stored chat snapshot hydration", () => {
           ).not.toBeNull(),
         );
         const { container } = renderPane();
-        transcript.hostConnected();
+        transcript.start();
         flush();
         const displayed = expectDefined(
           container.querySelector<HTMLImageElement>(".chat-message-image"),
@@ -265,8 +265,8 @@ describe("stored chat snapshot hydration", () => {
         expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
       } finally {
         view?.unmount();
-        releaseChatMediaResourceSubscriber(renderPane);
-        transcript.hostDisconnected();
+        releaseChatMediaResourceOwner(renderPane);
+        transcript.dispose();
         remounted.disconnectedCallback();
         await store.flush();
         await clearStoredChatSnapshots();
@@ -381,7 +381,7 @@ describe("stored chat snapshot hydration", () => {
       "openclaw-chat-runtime-test",
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+    vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     const sharedMessages: ChatMessageCache = new Map();
     pane.chatMessagesBySession = sharedMessages;

@@ -70,12 +70,12 @@ class SuggestionRecoveryPane extends ChatPaneRuntime {
     this.context = context;
     this.connectedClient = state.client;
     Object.defineProperty(this, "isConnected", { value: true });
-    this.presencePayload = {
+    this.presence.update({
       presence: [
         { user: { id: "owner" }, ts: 1 },
         { user: { id: "viewer" }, ts: 1 },
       ],
-    };
+    });
     onTestFinished(() => disposeQuestionPromptState(this.questionPromptState));
   }
 

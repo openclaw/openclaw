@@ -20,8 +20,6 @@ import { readOpenClawAgentDatabaseIdentity } from "openclaw/plugin-sdk/sqlite-ru
 import {
   bindSqliteWorkerDatabase,
   admitSqliteSchema,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
   getAdmittedSqliteSchemaFacts,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
@@ -37,6 +35,7 @@ import {
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
@@ -45,6 +44,10 @@ import {
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import {
+  upgradeMemoryIndexProviderKey,
+  writeMemoryIndexMetadata,
+} from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
 import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
 import type {
@@ -59,7 +62,7 @@ import {
   MEMORY_EMBEDDING_CACHE_WRITE_SCOPE,
   MEMORY_INDEX_WRITE_SCOPE,
 } from "./manager-publication-task.js";
-import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
+import { readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { admitMemoryVectorIndex } from "./manager-search-knn.js";
 import { memoryVectorSearchSchema } from "./manager-search-schema.js";
 import {
@@ -359,15 +362,6 @@ function createPublicationBackend(
     });
     return { ...result, value: true };
   };
-  const writeMeta = (value: string) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<{ memory_index_meta: { key: string; value: string } }>(db)
-        .insertInto("memory_index_meta")
-        .values({ key: MEMORY_INDEX_META_KEY, value })
-        .onConflict((conflict) => conflict.column("key").doUpdateSet({ value })),
-    );
-  };
   return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
     async prepare(command) {
       if (command.type !== "vector.prepare") {
@@ -448,13 +442,26 @@ function createPublicationBackend(
           }
         }
       }
+      if (command.type === "index.upgradeProviderKey") {
+        return withFacts(
+          write(
+            () => upgradeMemoryIndexProviderKey(db, command.input),
+            [MEMORY_INDEX_WRITE_SCOPE, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE],
+          ),
+        );
+      }
       if (command.type === "index.writeMetadata") {
-        const serialized = JSON.stringify(command.input);
-        return withFacts(writeSingleStatement(() => writeMeta(serialized)));
+        return withFacts(writeSingleStatement(() => writeMemoryIndexMetadata(db, command.input)));
       }
       if (command.type === "source.refresh") {
         return withFacts(
-          writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
+          write(() => {
+            const changed = refreshMemorySessionSourceState(db, command.input);
+            if (changed) {
+              advanceMemoryIndexRevision(db);
+            }
+            return changed;
+          }),
         );
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
@@ -567,7 +574,7 @@ function createPublicationBackend(
               extension: "memory.vector",
             });
             if (meta && !meta.vectorDims && !hasIndexedChunks) {
-              writeMeta(JSON.stringify({ ...meta, vectorDims: dimensions }));
+              writeMemoryIndexMetadata(db, { ...meta, vectorDims: dimensions });
             }
           }),
         );
@@ -592,25 +599,36 @@ function createPublicationBackend(
       }
       if (command.type === "source.delete") {
         return withFacts(
-          write(() =>
-            new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
-          ),
+          write(() => {
+            const changed = new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
+              command.input,
+            );
+            if (changed) {
+              advanceMemoryIndexRevision(db);
+            }
+            return changed;
+          }),
         );
       }
       if (command.type === "source.replace.group") {
         const outcome = write(() => {
           const kernel = new MemorySourceIndexKernel(db, command.input.state);
-          for (const { header, fragments } of command.input.sources) {
-            if (
-              header.source === "sessions" &&
-              hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-            ) {
-              throw new Error(
-                "A session was forgotten while memory indexing was running; retry the memory index.",
-              );
+          const inputs = command.input.sources;
+          function* sources() {
+            for (const { header, fragments } of inputs) {
+              if (
+                header.source === "sessions" &&
+                hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+              ) {
+                throw new Error(
+                  "A session was forgotten while memory indexing was running; retry the memory index.",
+                );
+              }
+              yield { header, rows: readPublicationRows<MemorySourceIndexRow>(fragments) };
             }
-            kernel.replaceRows(header, readPublicationRows<MemorySourceIndexRow>(fragments));
           }
+          kernel.replaceGroup(sources());
+          advanceMemoryIndexRevision(db);
           return true;
         });
         return outcome.ok
@@ -640,6 +658,7 @@ function createPublicationBackend(
           );
         }
         new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
+        advanceMemoryIndexRevision(db);
         facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);
         return true;
       });

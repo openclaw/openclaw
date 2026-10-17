@@ -10,7 +10,7 @@
     "./worker-api.js": "./worker-api.ts"
   },
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.6",
+    "@openclaw/fs-safe": "0.26.7",
     "@solidjs/web": "2.0.0-rc.14",
     "solid-js": "2.0.0-rc.14",
     "json5": "2.2.3",

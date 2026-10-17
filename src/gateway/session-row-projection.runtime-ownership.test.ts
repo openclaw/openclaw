@@ -189,6 +189,20 @@ it.for(["change", "failure"] as const)(
       try {
         projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
         await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+        const initialReads = reads;
+        const sql = observeHostDataSql();
+        try {
+          expect(projection.snapshot({ agentId: "main", key })).toEqual({ row: null });
+          expect(sql.queries).toEqual([]);
+          expect(reads).toBe(initialReads);
+        } finally {
+          sql.restore();
+        }
+        expect((await listProjectedSessions({ projection, opts: {} })).sessions[0]).toMatchObject({
+          sessionId: "changing",
+          model: "gpt-5.6-sol",
+        });
         changing = true;
         reads = 0;
         sessionChanges.emit({ agentId: "main", sessionKey: key, factsInvalidated: true });
@@ -317,6 +331,7 @@ it("prepares native model ownership in workers and invalidates only its committe
       });
       await projection.ensureMaterialized();
       const snapshot = () => projection!.snapshot({ agentId: "main", key }).row;
+      snapshot();
       const sql = observeHostDataSql();
       try {
         expect(snapshot()).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });

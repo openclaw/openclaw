@@ -432,6 +432,7 @@ export function createSessionPrefetch(
       clearSubscriptions();
       context = next;
       if (context) {
+        // Retire obsolete request scopes on each publication, even while rendering is parked.
         subscriptions = [
           context.gateway.subscribe(syncSnapshot),
           context.sessions.subscribe(syncSnapshot),

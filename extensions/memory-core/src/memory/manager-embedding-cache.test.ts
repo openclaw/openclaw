@@ -264,55 +264,12 @@ describe("memory embedding cache", () => {
     },
   );
 
-  it("reserves space before replacing cached vectors at capacity", () => {
-    const db = createDb();
-    const provider = { id: "local", model: "fixture" };
-    try {
-      upsertMemoryEmbeddingCache({
-        db,
-        cacheSize: countMemoryEmbeddingCache(db),
-        provider,
-        providerKey: "fixture",
-        entries: () => [
-          { hash: "a", embedding: [1] },
-          { hash: "b", embedding: [2] },
-        ],
-        now: 1,
-      });
-      db.exec(`CREATE TEMP TRIGGER reject_cache_overflow BEFORE INSERT ON memory_embedding_cache
-        WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= 2
-        BEGIN SELECT RAISE(ABORT, 'cache overflow'); END;`);
-      db.exec("BEGIN IMMEDIATE");
-      upsertMemoryEmbeddingCache({
-        db,
-        cacheSize: countMemoryEmbeddingCache(db),
-        provider,
-        providerKey: "fixture",
-        maxEntries: 2,
-        entries: () => [
-          { hash: "a", embedding: [3] },
-          { hash: "a", embedding: [4] },
-        ],
-        now: 2,
-      });
-      db.exec("COMMIT");
-      expect(
-        db.prepare("SELECT hash, embedding FROM memory_embedding_cache ORDER BY hash").all(),
-      ).toEqual([
-        { hash: "a", embedding: encodeMemoryEmbedding([4]) },
-        { hash: "b", embedding: encodeMemoryEmbedding([2]) },
-      ]);
-    } finally {
-      db.close();
-    }
-  });
-
   it.each([
     { name: "below capacity", maxEntries: 7, oldRows: 2, evicted: 0 },
     { name: "exact capacity", maxEntries: 6, oldRows: 2, evicted: 0 },
     { name: "overflow with equal timestamps", maxEntries: 5, oldRows: 2, evicted: 1 },
     { name: "overflow beyond a prune batch", maxEntries: 5, oldRows: 102, evicted: 101 },
-  ])("reserves only missing capacity: $name", ({ maxEntries, oldRows, evicted }) => {
+  ])("reserves capacity before replacement: $name", ({ maxEntries, oldRows, evicted }) => {
     const db = createDb();
     const provider = { id: "local", model: "fixture" };
     const readCache = () => db.prepare("SELECT * FROM memory_embedding_cache ORDER BY rowid").all();
@@ -342,6 +299,7 @@ describe("memory embedding cache", () => {
         BEGIN SELECT RAISE(ABORT, 'cache overflow'); END;`);
       db.exec("BEGIN IMMEDIATE");
       const cacheSize = before.length;
+      const reserved = cacheSize + 2 > maxEntries;
       const executions = (["get", "all", "run", "iterate"] as const).map((method) =>
         vi.spyOn(StatementSync.prototype, method),
       );
@@ -370,25 +328,31 @@ describe("memory embedding cache", () => {
           execution.mockRestore();
         }
       }
-      expect(readCache()).toEqual([
-        ...before.slice(1 + evicted),
-        ...[
-          { hash: "c", embedding: encodeMemoryEmbedding([3]) },
-          { hash: "a", embedding: encodeMemoryEmbedding([4]) },
-        ].map(({ hash, embedding }) => ({
-          provider: "local",
-          model: "fixture",
-          provider_key: "fixture",
-          hash,
-          embedding,
-          dims: 1,
-          updated_at: 2,
-        })),
-      ]);
+      const written = (hash: string, value: number) => ({
+        provider: "local",
+        model: "fixture",
+        provider_key: "fixture",
+        hash,
+        embedding: encodeMemoryEmbedding([value]),
+        dims: 1,
+        updated_at: 2,
+      });
+      // Below capacity the UPSERT replaces in place; at capacity replaced rows are reinserted.
+      expect(readCache()).toEqual(
+        reserved
+          ? [...before.slice(1 + evicted), written("c", 3), written("a", 4)]
+          : [
+              { ...before[0], embedding: encodeMemoryEmbedding([4]), updated_at: 2 },
+              ...before.slice(1),
+              written("c", 3),
+            ],
+      );
       const deletes = queries.filter((query) => /^delete\b/iu.test(query));
-      expect(deletes).toHaveLength(evicted > 0 ? 2 : 1);
+      expect(deletes).toHaveLength((reserved ? 1 : 0) + (evicted > 0 ? 1 : 0));
       expect(queries.filter((query) => /^insert\b/iu.test(query))).toHaveLength(1);
-      expect(queries.filter((query) => /^select count\(\*\)/iu.test(query))).toEqual([]);
+      expect(queries.filter((query) => /^select count\(\*\)/iu.test(query))).toHaveLength(
+        reserved ? 1 : 0,
+      );
       if (evicted) {
         const eviction = deletes.find((query) => /\browid\b/iu.test(query));
         expect(eviction).toBeDefined();

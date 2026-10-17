@@ -56,6 +56,7 @@ export type UsageCostWorkerOperation =
       endMs?: number;
       includeUntimestamped?: boolean;
       reportBudgetBytes?: number;
+      committedOnly?: boolean;
       dayBucket: UsageDailyBucket;
     }
   | {

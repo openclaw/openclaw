@@ -171,9 +171,30 @@ export function withPluginRuntimeGatewayContextResolver<T>(
   scoped.resolveGatewayContext = resolveGatewayContext;
   delete scoped.context;
   return withAgentDatabasePreparationContext(
-    () => resolveGatewayContext?.()?.agentDatabaseStartup,
+    resolveAgentDatabasePreparation(resolveGatewayContext),
     () => runWithPluginGatewayScope(scoped, run),
   );
+}
+
+const resolveUnboundAgentDatabasePreparation = () => undefined;
+const agentDatabasePreparationResolvers = new WeakMap<
+  GatewayContextResolver,
+  () => GatewayRequestContext["agentDatabaseStartup"]
+>();
+
+// One owner callback per resolver lets nested work reuse the preparation async frame.
+function resolveAgentDatabasePreparation(
+  resolveGatewayContext: GatewayContextResolver | undefined,
+) {
+  if (!resolveGatewayContext) {
+    return resolveUnboundAgentDatabasePreparation;
+  }
+  let resolve = agentDatabasePreparationResolvers.get(resolveGatewayContext);
+  if (!resolve) {
+    resolve = () => resolveGatewayContext()?.agentDatabaseStartup;
+    agentDatabasePreparationResolvers.set(resolveGatewayContext, resolve);
+  }
+  return resolve;
 }
 
 /** Runs work against an owned registry handle while preserving any gateway request facts. */

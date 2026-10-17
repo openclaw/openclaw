@@ -9,11 +9,13 @@ import {
   WebSocket,
   WebSocketServer,
 } from "../../../../packages/gateway-client/src/websocket.test-support.js";
+import { writeConfigFile } from "../../../config/config.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
+import { SerializedJsonArray } from "../../serialized-json.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import {
   connectOk,
@@ -27,15 +29,20 @@ import {
   resetTestPluginRegistry,
   setTestPluginRegistry,
 } from "../../test-helpers.plugin-registry.js";
+import { registerDeflatedSegment } from "../ws-compression.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-async function openOperatorSocket(port: number, token: string): Promise<WebSocket> {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+async function openOperatorSocket(
+  port: number,
+  token: string,
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
   trackConnectChallengeNonce(socket);
   await once(socket, "open");
   try {
-    await connectOk(socket, { token });
+    await connectOk(socket, { token, prePairDevice: headers !== undefined });
     return socket;
   } catch (error) {
     socket.terminate();
@@ -114,6 +121,7 @@ describe("authenticated operator request starts", () => {
   });
 
   it("starts a coalesced authenticated operator burst before an immediate while completions overlap", async () => {
+    await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
     const ids = Array.from({ length: 33 }, (_, index) => `burst-${index}`);
     const starts: string[] = [];
     const completed: string[] = [];
@@ -158,7 +166,9 @@ describe("authenticated operator request starts", () => {
         controlUiEnabled: false,
       });
       capture = captureGatewayConnection(portClaim.port);
-      ws = await openOperatorSocket(portClaim.port, token);
+      ws = await openOperatorSocket(portClaim.port, token, {
+        "x-forwarded-for": "198.51.100.10",
+      });
       await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
       const { stream } = capture.get();
       expect(ws.extensions).toContain("permessage-deflate");
@@ -424,11 +434,34 @@ describe("authenticated operator request starts", () => {
     },
   );
 
-  it("compresses large frames both ways without stalling on ws zlib streams", async () => {
+  it("keeps local frames raw and compresses remote frames both ways without stalling", async () => {
+    await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
     const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.echo"] = async ({ req, respond }) => {
-      respond(true, { echoed: (req.params as { text: string }).text });
+    const sharedMessages = [
+      { text: 'Escaped "segment" 漢字🦞\n'.repeat(4096) },
+      { text: randomBytes(1536).toString("base64").repeat(16) },
+    ];
+    const sharedBytes = Buffer.from(JSON.stringify(sharedMessages));
+    registerDeflatedSegment(
+      sharedBytes,
+      deflateRawSync(sharedBytes, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
+    );
+    registry.gatewayHandlers["test.echo"] = async ({ req, respond, acceptsDeflatedSegments }) => {
+      respond(true, {
+        echoed: (req.params as { text: string }).text,
+        acceptsDeflatedSegments: acceptsDeflatedSegments === true,
+      });
     };
+    registry.gatewayHandlers["test.segments"] = async ({ respond }) => {
+      respond(true, { messages: new SerializedJsonArray(sharedBytes) });
+    };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-start-proof",
+        name: "test.segments",
+        handler: registry.gatewayHandlers["test.segments"],
+      }),
+    );
     registry.gatewayMethodDescriptors.push(
       createPluginGatewayMethodDescriptor({
         pluginId: "request-start-proof",
@@ -459,9 +492,43 @@ describe("authenticated operator request starts", () => {
         controlUiEnabled: false,
       });
       capture = captureGatewayConnection(portClaim.port);
+      const local = new WebSocket(`ws://127.0.0.1:${portClaim.port}`);
+      ws = local;
+      await once(local, "open");
+      expect(local.extensions).toBe("");
+      const localClosed = once(local, "close");
+      local.close();
+      await localClosed;
+      for (const perMessageDeflate of [false, {}]) {
+        const peer = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
+          perMessageDeflate,
+          headers: { "x-forwarded-for": "198.51.100.10" },
+        });
+        try {
+          trackConnectChallengeNonce(peer);
+          await once(peer, "open");
+          await connectOk(peer, { token, prePairDevice: true });
+          const response = onceMessage(peer, (value) => value.id === "capability");
+          peer.send(
+            JSON.stringify({
+              type: "req",
+              id: "capability",
+              method: "test.echo",
+              params: { text: "capability" },
+            }),
+          );
+          await expect(response).resolves.toMatchObject({
+            ok: true,
+            payload: { acceptsDeflatedSegments: perMessageDeflate !== false },
+          });
+        } finally {
+          peer.terminate();
+        }
+      }
       // Peers may cap the server window; its inflater rejects farther back-references.
       const socket = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
         perMessageDeflate: { serverMaxWindowBits: 10 },
+        headers: { "x-forwarded-for": "198.51.100.10" },
       });
       ws = socket;
       trackConnectChallengeNonce(socket);
@@ -472,7 +539,7 @@ describe("authenticated operator request starts", () => {
       const { stream } = capture.get();
       // Device tokens ride in hello; secrets never share a compressed frame.
       const beforeHello = stream.bytesWritten;
-      const hello = JSON.stringify(await connectOk(socket, { token }));
+      const hello = JSON.stringify(await connectOk(socket, { token, prePairDevice: true }));
       expect(hello.length).toBeGreaterThan(16 * 1024);
       expect(stream.bytesWritten - beforeHello).toBeGreaterThan(hello.length);
       const echo = async (id: string, text: string, send = () => {}) => {
@@ -484,16 +551,39 @@ describe("authenticated operator request starts", () => {
         }>(socket, (value) => value.type === "res" && value.id === id);
         const before = stream.bytesWritten;
         send();
-        await expect(response).resolves.toMatchObject({ ok: true, payload: { echoed: text } });
+        await expect(response).resolves.toMatchObject({
+          ok: true,
+          payload: { echoed: text, acceptsDeflatedSegments: false },
+        });
         return stream.bytesWritten - before;
       };
       const request = (id: string, text: string) =>
         JSON.stringify({ type: "req", id, method: "test.echo", params: { text } });
+      // A worker's window-15 cache must not bypass this peer's window-10 limit.
+      // The second response reuses the same segment with a fresh RPC envelope.
+      for (const id of ["segments-first", "segments-again"]) {
+        const response = once(socket, "message");
+        const before = stream.bytesWritten;
+        socket.send(JSON.stringify({ type: "req", id, method: "test.segments", params: {} }));
+        const [data] = await response;
+        const expected = JSON.stringify({
+          type: "res",
+          id,
+          ok: true,
+          payload: { messages: sharedMessages },
+        });
+        expect(rawDataToString(data)).toBe(expected);
+        expect(stream.bytesWritten - before).toBeLessThan(Buffer.byteLength(expected) / 4);
+      }
       // Live session/tool events stay raw below the threshold.
-      const smallText = "x".repeat(6 * 1024);
+      const smallText = "x".repeat(2 * 1024);
       expect(
         await echo("small", smallText, () => socket.send(request("small", smallText))),
       ).toBeGreaterThan(smallText.length);
+      const mediumText = "x".repeat(6 * 1024);
+      expect(
+        await echo("medium", mediumText, () => socket.send(request("medium", mediumText))),
+      ).toBeLessThan(mediumText.length / 4);
       // Compressed requests and replies above the preauth cap.
       const inlineText = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
       expect(

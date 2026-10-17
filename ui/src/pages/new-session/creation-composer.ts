@@ -10,6 +10,7 @@ import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts"
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { trimHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { MAX_STORED_QUEUE_ITEMS } from "../../lib/chat/outbox-store-codec.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -100,14 +101,14 @@ export class CreationComposer {
         event.returnValue = "";
       }
     };
-    window.addEventListener("beforeunload", onBeforeUnload);
+    const stopBeforeUnload = listen(window, "beforeunload", onBeforeUnload);
     const unregister = registerControlUiReloadGuard(
       () => !this.hasInput,
       () => showToast({ message: t("newSession.followUpReloadBlocked") }),
     );
     this.unregisterReload = () => {
       unregister();
-      window.removeEventListener("beforeunload", onBeforeUnload);
+      stopBeforeUnload();
     };
   }
 
@@ -341,18 +342,20 @@ export function retainCreatedComposer(
         registry?.release();
       }
     });
+    const stopLifetime = context.lifecycleAbortSignal
+      ? listen(context.lifecycleAbortSignal, "abort", dispose, { once: true })
+      : undefined;
     registry = {
       entries,
       release: () => {
         unsubscribe();
-        context.lifecycleAbortSignal?.removeEventListener("abort", dispose);
+        stopLifetime?.();
         if (acceptedComposers.get(context) === registry) {
           acceptedComposers.delete(context);
         }
       },
     };
     acceptedComposers.set(context, registry);
-    context.lifecycleAbortSignal?.addEventListener("abort", dispose, { once: true });
   }
   const previous = registry.entries.get(key);
   if (previous && previous !== composer) {

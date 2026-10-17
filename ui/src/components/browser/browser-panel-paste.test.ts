@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createBrowserClient,
-  createView,
+  createBrowserPanelTestMetrics,
+  createBrowserPanelTestTab,
   flushBrowserResponses,
+  stubScreenshotMedia,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanel } from "./browser-panel-owner.ts";
 import "./browser-panel.ts";
 
 function paste(text: string, types = ["text/plain"]) {
@@ -34,7 +37,7 @@ function textInput(
 }
 
 function setStageSize(panel: HTMLElementTagNameMap["openclaw-browser-panel"], size = 100) {
-  vi.spyOn(panel.renderRoot.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
+  vi.spyOn(panel.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
     new DOMRect(0, 0, size, size),
   );
 }
@@ -53,25 +56,55 @@ describe("Browser panel text and touch input", () => {
     vi.restoreAllMocks();
   });
 
-  async function mount() {
-    const { client, request } = createBrowserClient(async () => ({ ok: true }));
+  async function mount(evaluateDisabled = false) {
+    stubScreenshotMedia();
+    // Only input RPCs are deferred by these tests; page setup and refresh still
+    // cross the actual Gateway request adapter and native panel lifecycle.
+    const request = vi.fn(async (_method: string, _params?: unknown): Promise<unknown> => ({
+      ok: true,
+    }));
+    const url = "https://example.test/page";
+    const gateway = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/tabs") {
+        return {
+          running: true,
+          tabs: [
+            createBrowserPanelTestTab("form-tab", url, "Form"),
+            createBrowserPanelTestTab("previous-tab", url, "Other"),
+          ],
+        };
+      }
+      if (envelope.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: envelope.body?.targetId, url };
+      }
+      if (envelope.path === "/act" && envelope.body?.kind === "evaluate") {
+        if (evaluateDisabled) {
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "Evaluation disabled",
+            details: { code: "ACT_EVALUATE_DISABLED" },
+          });
+        }
+        return createBrowserPanelTestMetrics(url, "Form");
+      }
+      if (envelope.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      return request("browser.request", envelope);
+    });
     const panel = document.createElement("openclaw-browser-panel");
     panel.available = true;
     panel.embedded = true;
     panel.presented = true;
-    panel.refreshOnPresentation = false;
-    panel.client = client;
+    panel.client = gateway.client;
+    panel.preferredTab = {
+      tab: { profile: "work", target: "node", node: "browser-node", targetId: "form-tab" },
+      revision: "initial",
+    };
     mountSolid(() => panel);
-    await panel.updateComplete;
-    const controller = (panel as unknown as { browserPanelController: BrowserPanel })
-      .browserPanelController;
-    controller.activeTargetId = "form-tab";
-    controller.view = createView("form-tab");
-    controller.operations.resetRoute({ profile: "work", target: "node", node: "browser-node" });
-    panel.invalidate();
-    await panel.updateComplete;
-    const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input")!;
-    return { panel, controller, request, input };
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+    const input = panel.querySelector<HTMLTextAreaElement>(".bp-input")!;
+    return { panel, request, input };
   }
 
   it.each([
@@ -80,15 +113,17 @@ describe("Browser panel text and touch input", () => {
   ])(
     "consumes a remote paste and keeps its content out of $outcome errors",
     async ({ outcome, text }) => {
-      const { panel, controller, request } = await mount();
-      controller.evaluateUnavailable = true;
+      const { panel, request } = await mount(true);
+      expect(
+        panel.querySelector<HTMLButtonElement>('[aria-label="Inspect element"]')?.disabled,
+      ).toBe(true);
       if (outcome === "failed") {
         request.mockRejectedValueOnce(new Error(`Request failed: ${text}`));
       }
       const event = paste(text, ["text/plain", "text/html"]);
       const bubbled = vi.fn();
       panel.addEventListener("paste", bubbled);
-      panel.renderRoot.querySelector(".bp-viewport")!.dispatchEvent(event);
+      panel.querySelector(".bp-viewport")!.dispatchEvent(event);
       await flushBrowserResponses();
 
       expect(event.defaultPrevented).toBe(true);
@@ -103,10 +138,8 @@ describe("Browser panel text and touch input", () => {
       });
       if (outcome === "failed") {
         await panel.updateComplete;
-        expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
-          "Could not paste",
-        );
-        expect(panel.renderRoot.textContent).not.toContain(text);
+        expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Could not paste");
+        expect(panel.textContent).not.toContain(text);
       }
     },
   );
@@ -143,15 +176,13 @@ describe("Browser panel text and touch input", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(input.value).toBe("");
     expect(input.getAttribute("autocorrect")).toBe("off");
-    expect(panel.renderRoot.querySelector('[role="status"]')?.textContent).toContain(
-      "Edit the text directly",
-    );
+    expect(panel.querySelector('[role="status"]')?.textContent).toContain("Edit the text directly");
   });
 
   it.each(["committed", "route changed", "capture mode"])(
     "sends composition once only to its original field (%s)",
     async (outcome) => {
-      const { controller, request, input } = await mount();
+      const { panel, request, input } = await mount();
       input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
       input.dispatchEvent(
         new KeyboardEvent("keydown", { key: "a", isComposing: true, bubbles: true }),
@@ -161,9 +192,12 @@ describe("Browser panel text and touch input", () => {
       expect(input.value).toBe("に");
       expect(request).not.toHaveBeenCalled();
       if (outcome === "route changed") {
-        controller.operations.resetRoute({ profile: "other", target: "host" });
+        panel.sessionKey = "replacement-session";
+        panel.handleToggleRequest(
+          new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
+        );
       } else if (outcome === "capture mode") {
-        controller.setMode("annotate");
+        panel.querySelector<HTMLButtonElement>('[aria-label="Annotate page"]')!.click();
       }
       input.value = "日本語";
       input.dispatchEvent(
@@ -208,7 +242,7 @@ describe("Browser panel text and touch input", () => {
   it.each(["failure", "route change", "new click"])(
     "waits for the remote click before pasting (%s)",
     async (outcome) => {
-      const { panel, controller, request, input } = await mount();
+      const { panel, request, input } = await mount();
       const click = createDeferred<unknown>();
       request.mockImplementationOnce(async () => click.promise);
       setStageSize(panel);
@@ -217,7 +251,8 @@ describe("Browser panel text and touch input", () => {
       expect(request).toHaveBeenCalledTimes(1);
       expect(request.mock.calls[0]?.[1]).toMatchObject({ body: { kind: "clickCoords" } });
       if (outcome === "route change") {
-        controller.operations.resetRoute();
+        panel.sessionKey = "replacement-session";
+        await panel.updateComplete;
       }
       if (outcome === "new click") {
         input.click();
@@ -296,22 +331,22 @@ describe("Browser panel text and touch input", () => {
     });
   });
 
-  it.each(["empty", "files", "disconnected", "stale view", "captured view"])(
+  it.each(["empty", "files", "disconnected", "changing tab", "captured view"])(
     "does not send %s clipboard input",
     async (reason) => {
-      const { panel, controller, request } = await mount();
+      const { panel, request } = await mount();
       if (reason === "disconnected") {
         panel.remove();
       }
-      if (reason === "stale view") {
-        controller.view = createView("previous-tab");
+      if (reason === "changing tab") {
+        panel.selectHostedTab("previous-tab");
       }
       if (reason === "captured view") {
-        controller.setMode("annotate");
+        panel.querySelector<HTMLButtonElement>('[aria-label="Annotate page"]')!.click();
         await panel.updateComplete;
-        expect(panel.renderRoot.querySelector(".bp-input")).toBeNull();
+        expect(panel.querySelector(".bp-input")).toBeNull();
       }
-      panel.renderRoot
+      panel
         .querySelector(".bp-viewport")!
         .dispatchEvent(
           paste(

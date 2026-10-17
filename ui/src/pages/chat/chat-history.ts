@@ -21,7 +21,7 @@ import {
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
-import { readChatHistoryCursor } from "./session-message-cache.ts";
+import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
@@ -47,7 +47,6 @@ export async function loadChatHistory(
   if (!state.client || !state.connected) {
     setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
     state.chatLoading = true;
-    state.requestUpdate?.();
     return undefined;
   }
   const method = startup ? "chat.startup" : "chat.history";
@@ -70,7 +69,7 @@ export async function loadChatHistory(
     CHAT_HISTORY_REQUEST_LIMIT,
     inputRunIds,
   ]);
-  const requestKey = `${requestKeyPrefix}${requestModeKey}`;
+  const requestKey = `${requestKeyPrefix}${requestModeKey}${JSON.stringify(readChatHistoryState(state, deltaCursor)?.stateRevision ?? null)}`;
   const inFlight = requests.historyLoad;
   // Retire stale publication immediately, but let its raw read settle before
   // issuing one fresh snapshot for all changes observed while it was pending.
@@ -118,7 +117,6 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
-    deltaCursor,
     inputRunIds,
     requestKeyPrefix,
   ).then((result) => {
@@ -164,7 +162,6 @@ export async function loadChatHistory(
         setChatHistoryLoad(state, { phase: "idle" });
         state.chatLoading = false;
       }
-      state.requestUpdate?.();
     }
     return result;
   });
@@ -232,5 +229,6 @@ export type ChatEventPayload = {
   errorKind?: Extract<ChatEvent, { state: "error" }>["errorKind"];
   errorDetail?: ChatErrorDetail;
   stopReason?: string;
+  localModelMayStillBeFinishing?: boolean;
   yielded?: true;
 };

@@ -20,7 +20,6 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   loadPluginCatalog,
   runPluginConfigMutation,
@@ -41,7 +40,6 @@ import { AgentMemoryPanel } from "../agents/memory/memory-panel.tsx";
 import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
 import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
 import { CuratedSettingsPanel } from "./curated-settings.tsx";
-import { MemoryMemories } from "./memory-memories.tsx";
 import {
   canonicalMemoryRouteLocation,
   memoryTabForRoute,
@@ -122,7 +120,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   let settingsEpoch = 0;
   const settingsListeners = new Set<() => void>();
   const [settingsRevision, setSettingsRevision] = createSignal(0, { ownedWrite: true });
-  function retireOverviewReads() {
+  function retireSettingsReads() {
     settingsEpoch += 1;
     setSettingsRevision(settingsEpoch);
     for (const notify of settingsListeners) {
@@ -213,7 +211,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     setEngineOutcome(null);
     setAddonBusy(new Set<string>());
     setAddonRefreshWarnings(new Map());
-    retireOverviewReads();
+    retireSettingsReads();
     if (!client || !connected) {
       setCatalog({
         kind: "unavailable",
@@ -232,7 +230,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   function refreshPluginReads(client: GatewayClient, connection: CatalogConnection) {
     // Publication supersedes reads, not the connection or a mutation waiting on its receipt.
-    retireOverviewReads();
+    retireSettingsReads();
     pageSupportPluginId = null;
     pageSupportProbe = null;
     syncSupport(application.runtimeConfig);
@@ -508,20 +506,17 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       syncCanonicalLocation();
     },
   );
-  // Owner notifications are synchronous: a disconnect/reconnect pair must retire
-  // pending reads even when Solid batches both publications into one render.
   onSettled(() => {
     const unsubscribe = [
+      // Retire pending reads on every connection transition, even within one render.
       gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
-      // A config event samples the current probe state; it must not subscribe its publisher.
+      // Config receipts retire obsolete support probes before their results can settle.
       runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))),
     ];
     syncRouteAgent();
     syncGateway(gateway.read().snapshot);
     return () => {
-      for (const stop of unsubscribe) {
-        stop();
-      }
+      unsubscribe.forEach((stop) => stop());
     };
   });
   onCleanup(() => {
@@ -534,7 +529,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);
   const currentEngineState = () => engineState(engineSelection());
   const agentId = () => agentSelection.read().state.selectedId;
-  function readOverviewSettingsSnapshot(): ControlUiSettingsSnapshot {
+  function readSettingsSnapshot(): ControlUiSettingsSnapshot {
     // Track the projections, but read authority directly from each live owner.
     agentSelection.read();
     gateway.read();
@@ -559,6 +554,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             : engineState(selection),
       },
       connected: application.gateway.snapshot.phase === "connected",
+      advertisedMethods: application.gateway.snapshot.hello?.features?.methods,
       connectionEpoch: settingsEpoch,
       routeIntent: JSON.stringify([
         props.routeData?.pathname,
@@ -569,20 +565,15 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     };
   }
 
-  function subscribeOverviewSettings(listener: () => void) {
+  function subscribeSettings(listener: () => void) {
     settingsListeners.add(listener);
-    const stops = [
-      agentSelection.subscribe(listener),
-      gateway.subscribe(listener),
-      runtime.subscribe(listener),
-      agents.subscribe(listener),
-      i18n.subscribe(listener),
-    ];
+    // The plugin bridge must retire its request scope synchronously, before a batched render.
+    const stops = [agentSelection, gateway, runtime, agents, i18n].map((source) =>
+      source.subscribe(listener),
+    );
     return () => {
       settingsListeners.delete(listener);
-      for (const stop of stops) {
-        stop();
-      }
+      stops.forEach((stop) => stop());
     };
   }
 
@@ -617,8 +608,8 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             <ControlUiSettingsPresentation
               application={application}
               placement={{ section: "memory", panel: "overview" }}
-              readSnapshot={readOverviewSettingsSnapshot}
-              subscribe={subscribeOverviewSettings}
+              readSnapshot={readSettingsSnapshot}
+              subscribe={subscribeSettings}
               navigate={navigateTab}
               refreshAgents={() => {
                 void application.agents.ensureList();
@@ -627,14 +618,18 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
           </ShellLayoutBoundary>
         }
         memories={
-          <MemoryMemories
-            client={gateway.read().snapshot.client}
-            connected={gateway.read().snapshot.phase === "connected"}
-            methodAdvertised={
-              isGatewayMethodAdvertised(gateway.read().snapshot, "memory.search") === true
-            }
-            agentId={agentId()}
-          />
+          <ShellLayoutBoundary traits={{ settingsPage: true }}>
+            <ControlUiSettingsPresentation
+              application={application}
+              placement={{ section: "memory", panel: "memories" }}
+              readSnapshot={readSettingsSnapshot}
+              subscribe={subscribeSettings}
+              navigate={navigateTab}
+              refreshAgents={() => {
+                void application.agents.ensureList();
+              }}
+            />
+          </ShellLayoutBoundary>
         }
         dreams={
           <Show when={agentId()} keyed>

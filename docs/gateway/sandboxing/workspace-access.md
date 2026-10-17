@@ -63,6 +63,13 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+At the checkout root, `.cache/vitest/` caches and `.artifacts/dist-artifacts.lock/`
+runtime ownership files stay with the runtime that produced them. Synchronization
+and recovery of older pending results exclude these exact paths. Other
+guest-created files under `.cache/` and `.artifacts/` still reconcile; an ignore
+rule alone does not make a file disposable. Source changes cannot remove a
+runtime-owned lock subtree by replacing its parent directory.
+
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
 workspace. The Gateway fetches with its host identity and preserves saved guest
@@ -76,8 +83,9 @@ with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges
 that exact pending integration, including a deliberate choice to keep an unchanged
 binary file. Without acknowledgment, a retry keeps reporting conflicts. Remaining
 text conflict markers block completion. On completion, the calling sandbox imports
-only the selected base commit and source tree through bounded stdin, then stages
-its current source. Guest HEAD, branches, and commit history remain unchanged.
+only the selected base commit and source tree through bounded stdin, reusing
+available objects from host-selected snapshots when possible, then stages its
+current source. Guest HEAD, branches, and commit history remain unchanged.
 The result includes `review: { mode: "local", base: "<commit>" }`. Run tests and
 normal Auto Review with that exact target after refresh or conflict resolution,
 then publish to update the same draft. Reviewing against the old guest HEAD would

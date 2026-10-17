@@ -24,6 +24,7 @@ import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
+import { prepareCliGatewayStateAccess } from "../cli/gateway-rpc.runtime.js";
 import { withProgress } from "../cli/progress.js";
 import {
   readGatewayDispatchConfig,
@@ -224,6 +225,7 @@ function usesRemoteGateway(cfg: OpenClawConfig): boolean {
 async function loadRemoteGatewayRoster(cfg: OpenClawConfig): Promise<RemoteGatewayRoster> {
   const result = await callGateway<AgentsListResult>({
     method: "agents.list",
+    beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
     params: {},
     config: cfg,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
@@ -859,6 +861,7 @@ async function agentViaGatewayCommand(
       async () =>
         await callGateway({
           method: "agent",
+          beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
           requiredCapabilities: deferSessionId
             ? [GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE]
             : undefined,
@@ -922,8 +925,9 @@ async function agentViaGatewayCommand(
         await abortGatewayRun((method, params, requestOpts) =>
           callGateway({
             method,
+            beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
             params,
-            timeoutMs: requestOpts?.timeoutMs ?? undefined,
+            timeoutMs: requestOpts?.timeoutMs,
             expectFinal: requestOpts?.expectFinal,
             config: cfg,
             ...gatewayIdentity,

@@ -109,7 +109,9 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
           saved = asNullableRecord(
             JSON.parse(getSafeLocalStorage()?.getItem(targetStorageKey()) ?? "null"),
           );
-        } catch {}
+        } catch {
+          // Missing or invalid saved presentation preferences use the default destination.
+        }
         destination = saved?.destination === "home" ? "home" : "custodian";
         builtInDestination = destination;
       }
@@ -225,7 +227,9 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
     }
     try {
       getSafeLocalStorage()?.setItem(targetStorageKey(), JSON.stringify({ destination }));
-    } catch {}
+    } catch {
+      // Storage can be unavailable; the current panel selection still takes effect.
+    }
   }
 
   function homeTarget() {

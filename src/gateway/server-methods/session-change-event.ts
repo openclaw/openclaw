@@ -20,7 +20,10 @@ import {
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
-import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "../session-subscription-keys.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -224,6 +227,14 @@ function broadcastSessionsChanged(
   const projection = getSessionRowProjection(context);
   const broadcastOptions = {
     ...routingOptions,
+    sessionEventSubscriptionKeys:
+      payload.sessionKey && routingAgentId
+        ? resolveSessionSubscriptionKeys(
+            payload.sessionKey,
+            routingAgentId,
+            compatibilityOwnerAgentId,
+          )
+        : [],
     ...resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope),
     ...(read && projection
       ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }

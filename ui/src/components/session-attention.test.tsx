@@ -11,6 +11,7 @@ import { createSessionAttention } from "./session-attention.ts";
 afterEach(() => {
   cleanupSolid();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function mountSnoozedSession(deadline: number) {
@@ -22,10 +23,13 @@ function mountSnoozedSession(deadline: number) {
   );
   const host = document.body.appendChild(document.createElement("section"));
   let setDeadline!: Setter<number>;
+  let refresh!: () => void;
   const view = mountSolid(
     () => {
       const [snoozedUntil, updateDeadline] = createSignal(deadline);
       setDeadline = updateDeadline;
+      const [revision, setRevision] = createSignal(0);
+      refresh = () => setRevision((value) => value + 1);
       const attention = createSessionAttention(
         context,
         createQuestionPromptState(() => {}),
@@ -33,6 +37,7 @@ function mountSnoozedSession(deadline: number) {
         () => true,
       );
       const visible = createMemo(() => {
+        revision();
         attention.resolve();
         const row = { snoozedUntil: snoozedUntil() };
         attention.scheduleSessionSnoozeWake([row]);
@@ -47,7 +52,7 @@ function mountSnoozedSession(deadline: number) {
     { container: host },
   );
   flush();
-  return { ...view, setDeadline, host };
+  return { ...view, setDeadline, refresh, host };
 }
 
 describe("session snooze deadline presentation", () => {
@@ -65,6 +70,24 @@ describe("session snooze deadline presentation", () => {
     flush();
     expect(view.queryByText("Resurfaced session")).toBeNull();
     vi.advanceTimersByTime(1);
+    flush();
+    expect(view.getByText("Resurfaced session")).toBeTruthy();
+    expect(vi.getTimerCount()).toBe(0);
+    view.unmount();
+    view.host.remove();
+  });
+
+  it("keeps the earliest wake armed across unrelated session events", () => {
+    const view = mountSnoozedSession(200);
+    const clear = vi.spyOn(globalThis, "clearTimeout");
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    for (let index = 0; index < 24; index += 1) {
+      view.refresh();
+      flush();
+    }
+    expect(clear).not.toHaveBeenCalled();
+    expect(schedule).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(101);
     flush();
     expect(view.getByText("Resurfaced session")).toBeTruthy();
     expect(vi.getTimerCount()).toBe(0);

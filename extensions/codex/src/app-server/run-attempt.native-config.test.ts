@@ -485,6 +485,9 @@ describe("Codex native configuration", () => {
       });
       params.hostCapabilities = { ...params.hostCapabilities, bindModelExecution };
       params.registerPluginRuntimeRefreshConsumer = vi.fn();
+      params.onSettledTurn = async (attempt, captureContext) => {
+        attempt.settledTurnFinalizationContext = await captureContext();
+      };
       params.agentDir = agentDir;
       params.provider = "anthropic";
       params.modelId = "claude-opus-4-6";

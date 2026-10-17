@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY } from "../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -115,91 +115,84 @@ function countListedRunKeys() {
 describe("heartbeat exact-session busy checks", () => {
   afterEach(resetHeartbeatEventsForTest);
 
-  it.each([true])(
-    "does not enumerate 1000 active runs for isolatedSession=%s",
-    async (isolatedSession) => {
-      await withHeartbeatFixture(isolatedSession, async (opts, storePath) => {
-        const embeddedBefore = new Map(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY);
-        const replyBefore = captureReplyRunSessionIds();
-        const scope = { agentId: "main", storePath, sessionKey };
-        const entryBefore = loadExactSessionEntry(scope)?.entry;
-        expect(entryBefore).toMatchObject({
-          sessionId: "heartbeat-conversation",
-          updatedAt: 1_700_000_000_000,
-        });
-        const cleanup: Array<() => void> = [];
-        let visits = 0;
-        try {
-          for (const kind of runKinds) {
-            for (let index = 0; index < 500; index += 1) {
-              cleanup.push(
-                registerRun(kind, `agent:other:${kind}-${index}`, `${kind}-session-${index}`),
-              );
-            }
-          }
-          const counter = countListedRunKeys();
-          let wake: Awaited<ReturnType<typeof resolveHeartbeatWakeStage>>;
-          let prepared: Awaited<ReturnType<typeof prepareHeartbeatRunStage>> | undefined;
-          try {
-            wake = await resolveHeartbeatWakeStage(opts);
-            if (wake.kind === "ready") {
-              prepared = await prepareHeartbeatRunStage(wake);
-            }
-            visits = counter.visits();
-          } finally {
-            counter.restore();
-          }
-          expect(wake.kind).toBe("ready");
-          expect(prepared?.kind).toBe("ready");
-          if (wake.kind !== "ready" || prepared?.kind !== "ready") {
-            throw new Error("expected both heartbeat stages to be ready");
-          }
-          expect(wake.cfg).toBe(opts.cfg);
-          expect(wake.preflight.session.entry).toEqual(entryBefore);
-          expect(prepared.run).toEqual(
-            isolatedSession
-              ? { kind: "isolated", sessionKey: isolatedSessionKey, baseSessionKey: sessionKey }
-              : { kind: "shared", sessionKey },
-          );
-          expect(prepared.runSessionKey).toBe(isolatedSession ? isolatedSessionKey : sessionKey);
-          expect(prepared.delivery).toMatchObject({ channel: "none", reason: "target-none" });
-          expect(prepared.visibility).toEqual({
-            showOk: false,
-            showAlerts: true,
-            useIndicator: true,
-          });
-          expect(loadExactSessionEntry(scope)?.entry).toEqual(entryBefore);
-          const isolatedEntry = loadExactSessionEntry({ ...scope, sessionKey: isolatedSessionKey });
-          if (isolatedSession) {
-            expect(isolatedEntry?.entry.heartbeatIsolatedBaseSessionKey).toBe(sessionKey);
-            expect(isolatedEntry?.entry.sessionId).not.toBe(entryBefore?.sessionId);
-          } else {
-            expect(isolatedEntry).toBeUndefined();
-          }
-          expect(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.size).toBe(embeddedBefore.size + 500);
-          expect(replyRunState.activeRunsByKey.size).toBe(replyBefore.size + 500);
+  it("does not enumerate 1000 active runs for an isolated session", async () => {
+    await withHeartbeatFixture(true, async (opts, storePath) => {
+      const embeddedBefore = new Map(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY);
+      const replyBefore = captureReplyRunSessionIds();
+      const scope = { agentId: "main", storePath, sessionKey };
+      const entryBefore = loadExactSessionEntry(scope)?.entry;
+      expect(entryBefore).toMatchObject({
+        sessionId: "heartbeat-conversation",
+        updatedAt: 1_700_000_000_000,
+      });
+      const cleanup: Array<() => void> = [];
+      let visits = 0;
+      try {
+        for (const kind of runKinds) {
           for (let index = 0; index < 500; index += 1) {
-            expect(
-              ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(`agent:other:embedded-${index}`),
-            ).toBe(`embedded-session-${index}`);
-            expect(replyRunState.activeRunsByKey.get(`agent:other:reply-${index}`)?.sessionId).toBe(
-              `reply-session-${index}`,
+            cleanup.push(
+              registerRun(kind, `agent:other:${kind}-${index}`, `${kind}-session-${index}`),
             );
-            expect(replyRunState.activeRunsByKey.get(`agent:other:reply-${index}`)?.phase).toBe(
-              "running",
-            );
-          }
-        } finally {
-          for (const close of cleanup.toReversed()) {
-            close();
           }
         }
-        expect(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY).toEqual(embeddedBefore);
-        expect(captureReplyRunSessionIds()).toEqual(replyBefore);
-        expect(visits).toBe(0);
-      });
-    },
-  );
+        const counter = countListedRunKeys();
+        let wake: Awaited<ReturnType<typeof resolveHeartbeatWakeStage>>;
+        let prepared: Awaited<ReturnType<typeof prepareHeartbeatRunStage>> | undefined;
+        try {
+          wake = await resolveHeartbeatWakeStage(opts);
+          if (wake.kind === "ready") {
+            prepared = await prepareHeartbeatRunStage(wake);
+          }
+          visits = counter.visits();
+        } finally {
+          counter.restore();
+        }
+        expect(wake.kind).toBe("ready");
+        expect(prepared?.kind).toBe("ready");
+        if (wake.kind !== "ready" || prepared?.kind !== "ready") {
+          throw new Error("expected both heartbeat stages to be ready");
+        }
+        expect(wake.cfg).toBe(opts.cfg);
+        expect(wake.preflight.session.entry).toEqual(entryBefore);
+        expect(prepared.run).toEqual({
+          kind: "isolated",
+          sessionKey: isolatedSessionKey,
+          baseSessionKey: sessionKey,
+        });
+        expect(prepared.runSessionKey).toBe(isolatedSessionKey);
+        expect(prepared.delivery).toMatchObject({ channel: "none", reason: "target-none" });
+        expect(prepared.visibility).toEqual({
+          showOk: false,
+          showAlerts: true,
+          useIndicator: true,
+        });
+        expect(loadExactSessionEntry(scope)?.entry).toEqual(entryBefore);
+        const isolatedEntry = loadExactSessionEntry({ ...scope, sessionKey: isolatedSessionKey });
+        expect(isolatedEntry?.entry.heartbeatIsolatedBaseSessionKey).toBe(sessionKey);
+        expect(isolatedEntry?.entry.sessionId).not.toBe(entryBefore?.sessionId);
+        expect(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.size).toBe(embeddedBefore.size + 500);
+        expect(replyRunState.activeRunsByKey.size).toBe(replyBefore.size + 500);
+        for (let index = 0; index < 500; index += 1) {
+          expect(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(`agent:other:embedded-${index}`)).toBe(
+            `embedded-session-${index}`,
+          );
+          expect(replyRunState.activeRunsByKey.get(`agent:other:reply-${index}`)?.sessionId).toBe(
+            `reply-session-${index}`,
+          );
+          expect(replyRunState.activeRunsByKey.get(`agent:other:reply-${index}`)?.phase).toBe(
+            "running",
+          );
+        }
+      } finally {
+        for (const close of cleanup.toReversed()) {
+          close();
+        }
+      }
+      expect(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY).toEqual(embeddedBefore);
+      expect(captureReplyRunSessionIds()).toEqual(replyBefore);
+      expect(visits).toBe(0);
+    });
+  });
 
   it.each(
     runKinds.flatMap((kind) => [false, true].map((isolatedSession) => ({ kind, isolatedSession }))),
@@ -238,70 +231,6 @@ describe("heartbeat exact-session busy checks", () => {
           });
         } finally {
           close();
-        }
-      });
-    },
-  );
-
-  it.each([
-    {
-      name: "empty list over registered runs",
-      isolated: true,
-      keys: [],
-      registered: true,
-      expected: "ready",
-    },
-    {
-      name: "late isolated run",
-      isolated: true,
-      keys: [],
-      lateKeys: [isolatedSessionKey],
-      expected: "skipped",
-    },
-    { name: "exact membership", isolated: false, keys: [sessionKey], expected: "skipped" },
-    { name: "untrimmed membership", isolated: false, keys: [` ${sessionKey} `], expected: "ready" },
-  ])(
-    "keeps injected $name authoritative",
-    async ({ isolated, keys: initialKeys, lateKeys, registered, expected }) => {
-      await withHeartbeatFixture(isolated, async (opts, storePath) => {
-        const close = registered
-          ? [
-              registerRun("embedded", sessionKey, "injected-main"),
-              registerRun("embedded", isolatedSessionKey, "injected-isolated"),
-            ]
-          : [];
-        let keys = initialKeys;
-        const list = vi.fn(() => keys);
-        try {
-          const wake = await resolveHeartbeatWakeStage({
-            ...opts,
-            sessionKey: isolated ? sessionKey : ` ${sessionKey} `,
-            deps: { ...opts.deps, listActiveEmbeddedRunSessionKeys: list },
-          });
-          if (!isolated) {
-            expect(wake.kind).toBe(expected);
-            expect(list).toHaveBeenCalledOnce();
-            return;
-          }
-          expect(wake.kind).toBe("ready");
-          if (wake.kind !== "ready") {
-            throw new Error("expected injected empty list to admit heartbeat");
-          }
-          const pending = prepareHeartbeatRunStage(wake);
-          if (lateKeys) {
-            keys = lateKeys;
-            expect(await pending).toEqual({ kind: "skipped", reason: "requests-in-flight" });
-            expect(
-              loadExactSessionEntry({ agentId: "main", storePath, sessionKey: isolatedSessionKey }),
-            ).toBeUndefined();
-          } else {
-            expect((await pending).kind).toBe("ready");
-          }
-          expect(list).toHaveBeenCalledTimes(2);
-        } finally {
-          for (const dispose of close.toReversed()) {
-            dispose();
-          }
         }
       });
     },

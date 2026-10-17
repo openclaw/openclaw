@@ -11,6 +11,7 @@ import {
   onCleanup,
   type Accessor,
   untrack,
+  refresh,
 } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -23,7 +24,7 @@ import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
-import "../../../components/person-reference.ts";
+import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatPermissionCard } from "./chat-divider.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
@@ -43,7 +44,12 @@ import "./chat-clawhub-card.ts";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
-import { type AttachmentItem, schedulePairingQrExpiryRefresh } from "./chat-message-media.ts";
+import {
+  type AttachmentItem,
+  schedulePairingQrExpiryRefresh,
+  observeChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
+} from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -77,9 +83,16 @@ type ContentProps = {
 
 /** Message identity owns text/media DOM; option refreshes only publish new facts. */
 export function GroupedMessage(props: GroupedMessageProps) {
-  const state = createMemo(() =>
-    prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
-  );
+  const refreshMedia = () => void refresh(state);
+  const state = createMemo(() => {
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshMedia);
+    return prepareGroupedMessage(
+      props.preparation,
+      props.messageKey,
+      props.options,
+      props.onOpenSidebar,
+    );
+  });
   let element: Element | undefined;
   // Snapshot the initial arrival callback so the DOM ref binds before transcript commit.
   let currentEntryRef = untrack(() => props.options.entryRef);
@@ -98,12 +111,13 @@ export function GroupedMessage(props: GroupedMessageProps) {
   );
   // Expiring pairing QR attachments schedule a timer at their resource owner.
   createEffect(
-    () =>
-      [props.messageKey, state().nextPairingQrExpiresAt, props.options.onRequestUpdate] as const,
-    ([key, expiresAt, requestUpdate]) =>
-      schedulePairingQrExpiryRefresh(key, expiresAt, requestUpdate),
+    () => [props.messageKey, state().nextPairingQrExpiresAt] as const,
+    ([key, expiresAt]) => schedulePairingQrExpiryRefresh(key, expiresAt, refreshMedia),
   );
-  onCleanup(() => currentEntryRef?.(undefined));
+  onCleanup(() => {
+    currentEntryRef?.(undefined);
+    releaseChatMediaResourceOwner(refreshMedia);
+  });
   const entryRef = (next: Element) => {
     element = next;
     currentEntryRef?.(next);

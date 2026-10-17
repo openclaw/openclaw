@@ -7,6 +7,7 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import {
   activePlacementSession,
@@ -72,7 +73,7 @@ function mountIntegratedPresenceHeader(params: {
     sessions: [session],
   };
   pane.context.gateway.snapshot.selfUser = { id: "profile-self" };
-  pane.presencePayload = { presence: params.presence };
+  pane.presence.update({ presence: params.presence });
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
@@ -155,22 +156,35 @@ describe("chat pane header", () => {
 
   it("keeps available panels in the narrow Layout menu while omitting split actions", async () => {
     const onTerminal = vi.fn();
-    const { container } = mountHeader({
+    const readShortcut = vi.fn(() => KEYBOARD_SHORTCUT_COMBOS.terminalPanel);
+    const action = (label: string) => ({
+      id: "terminal",
+      label,
+      icon: "copy" as const,
+      onActivate: onTerminal,
+      get shortcut() {
+        return readShortcut();
+      },
+    });
+    const { container, update } = mountHeader({
       narrow: true,
       mergedChrome: true,
-      panelMenuActions: [
-        { id: "terminal", label: "Terminal", icon: "copy", onActivate: onTerminal },
-      ],
+      panelMenuActions: [action("Terminal")],
       sessionMenuAction: chatPaneHeaderSessionMenu(),
       onOpenSplitView: vi.fn(),
       onSplitDown: vi.fn(),
       onSplitRight: vi.fn(),
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
+    expect(readShortcut).not.toHaveBeenCalled();
     await openNativeMenu(menu);
-    expect(
-      container.querySelector('.chat-pane__layout-menu [data-value="terminal"]'),
-    ).not.toBeNull();
+    const shortcut = menu.querySelector('[data-value="terminal"] kbd');
+    expect(shortcut).not.toBeNull();
+    update({ panelMenuActions: [action("Open terminal")] });
+    expect(menu.querySelector('[data-value="terminal"] kbd')).toBe(shortcut);
+    expect(menu.querySelector('[data-value="terminal"]')?.getAttribute("aria-label")).toBe(
+      "Open terminal",
+    );
     expect(container.querySelector(".chat-pane__split-down")).toBeNull();
     expect(container.querySelector(".chat-pane__split-right")).toBeNull();
     expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
@@ -467,7 +481,7 @@ describe("chat pane header", () => {
     mounted.renderHeader();
     await facepile.updateComplete;
     expect(updates).toHaveLength(0);
-    mounted.pane.presencePayload = {
+    mounted.pane.presence.update({
       presence: [
         ...presence,
         {
@@ -477,7 +491,7 @@ describe("chat pane header", () => {
           watchedSessions: ["agent:main:current"],
         },
       ],
-    };
+    });
     mounted.renderHeader();
     await facepile.updateComplete;
     expect(updates.length).toBeGreaterThan(0);
@@ -510,7 +524,7 @@ describe("chat pane header", () => {
       "session-owner-chip--away",
     );
     for (const identity of [undefined, { type: "profile" as const, id: "profile-ada" }]) {
-      mounted.pane.presencePayload = {
+      mounted.pane.presence.update({
         presence: [
           {
             instanceId: "profile-ada-instance",
@@ -520,7 +534,7 @@ describe("chat pane header", () => {
           },
           guest,
         ],
-      };
+      });
       mounted.renderHeader();
       await ownerChip?.updateComplete;
       expect(

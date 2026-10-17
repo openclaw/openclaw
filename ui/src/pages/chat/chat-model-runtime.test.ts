@@ -39,6 +39,7 @@ function renderControls(
     modelCatalog: models,
     modelCatalogState: { hasSnapshot: true, status: "ready" },
     modelSwitching: false,
+    modelPickerOpen: true,
     sending: false,
     sessionKey: "main",
     selectedSession: result.sessions[0],
