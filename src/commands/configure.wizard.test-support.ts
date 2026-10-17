@@ -33,7 +33,7 @@ const wizardTestMocks = vi.hoisted(() => {
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
         await writeConfigFile(params.nextConfig);
-        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
+        return committedConfigFiles.write(params.nextConfig);
       },
     ),
     resolveGatewayPort: vi.fn(),
@@ -48,7 +48,6 @@ const wizardTestMocks = vi.hoisted(() => {
     inspectWindowsGatewayFirewall: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     healthCommand: vi.fn(),
-    formatHealthCheckFailure: vi.fn<typeof import("./health-format.js").formatHealthCheckFailure>(),
     maybeInstallDaemon: vi.fn<typeof import("./configure.daemon.js").maybeInstallDaemon>(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -90,29 +89,27 @@ vi.mock("../flows/memory-setup.js", async (importOriginal) => ({
   runMemorySetupFlow: wizardTestMocks.runMemorySetupFlow,
 }));
 
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "~/.openclaw/openclaw.json",
-  createConfigIO: () => ({
-    readConfigFileSnapshotForWrite: async () => ({
-      snapshot: await wizardTestMocks.readConfigFileSnapshot(),
-      writeOptions: {
-        assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
-        expectedConfigPath: "/tmp/openclaw.json",
-        ownedConfigPathForWrite: "/tmp/openclaw.json",
-      },
-    }),
-  }),
-  readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => ({
+async function snapshotForWrite(extra = {}) {
+  return {
     snapshot: await wizardTestMocks.readConfigFileSnapshot(),
     writeOptions: {
       assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
-      envSnapshotForRestore: { SECRET: "resolved-secret" },
       expectedConfigPath: "/tmp/openclaw.json",
-      includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
       ownedConfigPathForWrite: "/tmp/openclaw.json",
+      ...extra,
     },
-  }),
+  };
+}
+
+vi.mock("../config/config.js", () => ({
+  CONFIG_PATH: "~/.openclaw/openclaw.json",
+  createConfigIO: () => ({ readConfigFileSnapshotForWrite: () => snapshotForWrite() }),
+  readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite: () =>
+    snapshotForWrite({
+      envSnapshotForRestore: { SECRET: "resolved-secret" },
+      includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
+    }),
   resolveConfigWriteAfterWrite: (afterWrite?: { mode: string }) => afterWrite ?? { mode: "auto" },
   transformConfigFileWithRetry: async (
     params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
@@ -191,12 +188,6 @@ vi.mock("./health.js", async (importOriginal) => ({
   healthCommandNonExiting: wizardTestMocks.healthCommand,
 }));
 
-vi.mock("./health-format.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./health-format.js")>();
-  wizardTestMocks.formatHealthCheckFailure = vi.fn(actual.formatHealthCheckFailure);
-  return { ...actual, formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure };
-});
-
 vi.mock("./configure.gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./configure.gateway.js")>()),
   promptGatewayConfig: wizardTestMocks.promptGatewayConfig,
@@ -248,18 +239,7 @@ export function setupWizardTestDefaults() {
   committedConfigFiles.clear();
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
-  wizardTestMocks.resolveSearchProviderOptions.mockReturnValue([
-    {
-      id: "firecrawl",
-      label: "Firecrawl Search",
-      hint: "Structured results with optional result scraping",
-      credentialLabel: "Firecrawl API key",
-      envVars: ["FIRECRAWL_API_KEY"],
-      placeholder: "fc-...",
-      signupUrl: "https://www.firecrawl.dev/",
-      credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-    },
-  ]);
+  wizardTestMocks.resolveSearchProviderOptions.mockReturnValue([{ id: "firecrawl" }]);
   wizardTestMocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
     outcome: "completed",
     config: cfg,
@@ -298,16 +278,7 @@ export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
     details: [],
   });
   wizardTestMocks.summarizeExistingConfig.mockReturnValue("");
-  wizardTestMocks.createClackPrompter.mockReturnValue({
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: vi.fn(async () => "firecrawl"),
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => true),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-  });
+  wizardTestMocks.createClackPrompter.mockReturnValue({});
 }
 
 export function queueWizardTestPrompts(params: {

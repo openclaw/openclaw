@@ -91,10 +91,7 @@ vi.mock("../plugins/manifest-registry.js", async (importActual) => {
     params?: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
   ) =>
     Object.values(params?.config?.secrets?.providers ?? {}).some(
-      (provider) =>
-        provider?.source === "exec" &&
-        typeof provider === "object" &&
-        "pluginIntegration" in provider,
+      (provider) => provider?.source === "exec" && "pluginIntegration" in provider,
     );
   return {
     ...actual,
@@ -118,13 +115,8 @@ vi.mock("../plugins/plugin-registry.js", async (importActual) => {
 import { stageLaunchAgent } from "../daemon/launchd.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 
-beforeEach(() => {
-  mockNodeGatewayPlanFixture();
-});
-
-afterEach(() => {
-  vi.resetAllMocks();
-});
+beforeEach(() => mockNodeGatewayPlanFixture());
+afterEach(() => vi.resetAllMocks());
 
 function buildNodePlan(
   params: Omit<Parameters<typeof buildGatewayInstallPlan>[0], "port" | "runtime">,
@@ -246,6 +238,7 @@ async function readGeneratedLaunchAgentFixture(params: {
   const envFilePath = path.join(envDir, `${label}.env`);
   const wrapperPath = path.join(envDir, `${label}-env-wrapper.sh`);
   const plistPath = path.join(params.root, `${label}.plist`);
+  const gatewayArgs = ["/opt/node", "openclaw.mjs", "gateway", "run"];
   fs.mkdirSync(envDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(
     envFilePath,
@@ -262,15 +255,7 @@ async function readGeneratedLaunchAgentFixture(params: {
     plistPath,
     buildLaunchAgentPlist({
       label,
-      programArguments: [
-        "/bin/sh",
-        wrapperPath,
-        envFilePath,
-        "/opt/node",
-        "openclaw.mjs",
-        "gateway",
-        "run",
-      ],
+      programArguments: ["/bin/sh", wrapperPath, envFilePath, ...gatewayArgs],
       stdoutPath: path.join(params.root, "gateway.log"),
       stderrPath: "/dev/null",
     }),
@@ -342,15 +327,12 @@ describe("buildGatewayInstallPlan", () => {
     vi.clearAllMocks();
   });
 
-  // Prevent tests from reading the developer's real ~/.openclaw/.env when
-  // passing `env: {}` (which falls back to os.homedir for state-dir resolution).
+  // Isolate state-dir fallback from the developer's real ~/.openclaw/.env.
   let isolatedHome: string;
   beforeEach(() => {
     isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-test-"));
   });
-  afterEach(() => {
-    fs.rmSync(isolatedHome, { recursive: true, force: true });
-  });
+  afterEach(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
   const isolatedPlanEnv = (env: Record<string, string | undefined> = {}) => ({
     HOME: isolatedHome,
     ...env,
@@ -834,10 +816,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-dotenv-"));
   });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
   it("retains active gateway auth and channel SecretRefs through real LaunchAgent regeneration", async () => {
     mockLaunchAgentPlanFixture();
@@ -1002,14 +981,10 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
   });
 });
 
-describe("gatewayInstallErrorHint", () => {
-  it("returns platform-specific hints", () => {
-    expect(gatewayInstallErrorHint("win32")).toContain("Startup-folder login item");
-    expect(gatewayInstallErrorHint("win32")).toContain("elevated PowerShell");
-    expect(gatewayInstallErrorHint("linux")).toMatch(
-      /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
-    );
-  });
+it("returns platform-specific gateway install hints", () => {
+  expect(gatewayInstallErrorHint("win32")).toContain("Startup-folder login item");
+  expect(gatewayInstallErrorHint("win32")).toContain("elevated PowerShell");
+  expect(gatewayInstallErrorHint("linux")).toMatch(
+    /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
+  );
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
