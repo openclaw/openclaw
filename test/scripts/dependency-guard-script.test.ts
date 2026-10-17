@@ -181,57 +181,41 @@ describe("dependency guard script", () => {
   });
 
   it("requires current maintainer authority for dependency approval", () => {
-    const cases: Array<{
-      name: string;
-      comment?: typeof approval;
-      role: string;
-      allowed: boolean;
-      author?: boolean;
-    }> = [
-      { name: "maintainer author", role: "maintain", allowed: true, author: true },
-      { name: "admin author", role: "admin", allowed: true, author: true },
-      { name: "current maintainer command", comment: approval, role: "maintain", allowed: true },
-      { name: "current admin command", comment: approval, role: "admin", allowed: true },
-      { name: "write-only commenter", comment: approval, role: "write", allowed: false },
-      {
-        name: "command before the current request",
-        comment: {
+    const cases: Array<[string, typeof approval | undefined, string, boolean, boolean?]> = [
+      ["maintainer author", undefined, "maintain", true, true],
+      ["admin author", undefined, "admin", true, true],
+      ["current maintainer command", approval, "maintain", true],
+      ["current admin command", approval, "admin", true],
+      ["write-only commenter", approval, "write", false],
+      [
+        "command before the current request",
+        {
           ...approval,
           created_at: "2025-12-31T00:00:00Z",
           updated_at: "2025-12-31T00:00:00Z",
         },
-        role: "maintain",
-        allowed: false,
-      },
-      {
-        name: "edited comment",
-        comment: { ...approval, updated_at: "2026-01-01T00:00:02Z" },
-        role: "maintain",
-        allowed: false,
-      },
-      {
-        name: "bot command",
-        comment: { ...approval, user: { ...approval.user, type: "Bot" } },
-        role: "maintain",
-        allowed: false,
-      },
-      {
-        name: "security-only command",
-        comment: { ...approval, body: "/allow-security-sensitive-change" },
-        role: "maintain",
-        allowed: false,
-      },
-      {
-        name: "both commands on separate lines",
-        comment: {
+        "maintain",
+        false,
+      ],
+      ["edited comment", { ...approval, updated_at: "2026-01-01T00:00:02Z" }, "maintain", false],
+      ["bot command", { ...approval, user: { ...approval.user, type: "Bot" } }, "maintain", false],
+      [
+        "security-only command",
+        { ...approval, body: "/allow-security-sensitive-change" },
+        "maintain",
+        false,
+      ],
+      [
+        "both commands on separate lines",
+        {
           ...approval,
           body: "/allow-security-sensitive-change\n/allow-dependencies-change",
         },
-        role: "maintain",
-        allowed: true,
-      },
+        "maintain",
+        true,
+      ],
     ];
-    for (const { name, comment, role, allowed, author } of cases) {
+    for (const [name, comment, role, allowed, author] of cases) {
       const result = runDependencyGuard({
         [`GET /repos/openclaw/openclaw/collaborators/${author ? "contributor" : "maintainer"}/permission`]:
           { role_name: role },

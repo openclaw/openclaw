@@ -22,25 +22,38 @@ const writeJson = (root: string, file: string, value: unknown) => {
   writeFileSync(target, JSON.stringify(value));
 };
 const git = (root: string, ...args: string[]) =>
-  execFileSync("git", ["-C", root, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  execFileSync(
+    "git",
+    ["-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
+const readJson = (root: string, file: string) =>
+  JSON.parse(readFileSync(path.join(root, file), "utf8"));
+function writePlugin(root: string, id: string, named = false) {
+  writeJson(root, `dist/extensions/${id}/package.json`, {
+    ...(named ? { name: `@openclaw/${id}` } : {}),
+    openclaw: { extensions: ["./index.mjs"] },
+  });
+  writeFileSync(path.join(root, `dist/extensions/${id}/index.mjs`), "export {};\n");
+}
+function largeDependency(root: string) {
+  writeJson(root, "extensions/extra/package.json", {
+    name: "@openclaw/extra",
+    dependencies: { large: "1.0.0" },
+  });
+  writeJson(root, "node_modules/large/package.json", { name: "large", version: "1.0.0" });
+  const payload = path.join(root, "node_modules/large/payload");
+  writeFileSync(payload, "");
+  truncateSync(payload, 301 * 1024 * 1024);
+}
 
 function fixture() {
   const root = temps.make("desktop-runtime-plugins-");
   git(root, "init", "--quiet");
-  git(
-    root,
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "commit",
-    "--allow-empty",
-    "-qm",
-    "fixture",
-  );
+  git(root, "commit", "--allow-empty", "-qm", "fixture");
   const commit = git(root, "rev-parse", "HEAD");
   writeJson(root, "package.json", {
     name: "openclaw",
@@ -53,11 +66,7 @@ function fixture() {
   });
   for (const id of ["codex", "extra"]) {
     writeJson(root, `extensions/${id}/package.json`, { name: `@openclaw/${id}` });
-    writeJson(root, `dist/extensions/${id}/package.json`, {
-      name: `@openclaw/${id}`,
-      openclaw: { extensions: ["./index.mjs"] },
-    });
-    writeFileSync(path.join(root, `dist/extensions/${id}/index.mjs`), "export {};\n");
+    writePlugin(root, id, true);
   }
   return { root, commit };
 }
@@ -65,29 +74,9 @@ function fixture() {
 function shallowRelease(tag = "v2026.10.2") {
   const { root: origin } = fixture();
   git(origin, "add", ".");
-  git(
-    origin,
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "commit",
-    "-qm",
-    "release",
-  );
+  git(origin, "commit", "-qm", "release");
   const commit = git(origin, "rev-parse", "HEAD");
-  git(
-    origin,
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "tag",
-    "-a",
-    tag,
-    "-m",
-    "release",
-  );
+  git(origin, "tag", "-a", tag, "-m", "release");
   const root = temps.make("desktop-release-clone-");
   git(origin, "clone", "--quiet", "--depth=1", "--no-tags", pathToFileURL(origin).href, root);
   expect(git(root, "rev-parse", "--is-shallow-repository")).toBe("true");
@@ -163,10 +152,7 @@ describe("desktop runtime source plugins", () => {
       const root = temps.make("desktop-runtime-codex-native-");
       const commit = "a".repeat(40);
       writeJson(root, "dist/build-info.json", { commit });
-      writeJson(root, "dist/extensions/codex/package.json", {
-        openclaw: { extensions: ["./index.mjs"] },
-      });
-      writeFileSync(path.join(root, "dist/extensions/codex/index.mjs"), "export {};\n");
+      writePlugin(root, "codex");
       for (const name of ["codex", "codex-darwin-arm64"]) {
         writeJson(root, `node_modules/@openai/${name}/package.json`, { name: `@openai/${name}` });
       }
@@ -231,20 +217,15 @@ describe("desktop runtime source plugins", () => {
     const installed = path.join(root, "installed");
     writeJson(installed, "dist/build-info.json", { commit, buildId: "fixture" });
     for (const id of plan.pluginIds) {
-      writeJson(installed, `dist/extensions/${id}/package.json`, {
-        openclaw: { extensions: ["./index.mjs"] },
-      });
-      writeFileSync(path.join(installed, `dist/extensions/${id}/index.mjs`), "export {};\n");
+      writePlugin(installed, id);
     }
     stampDesktopRuntimePlugins(installed, plan);
-    expect(JSON.parse(readFileSync(path.join(installed, "dist/build-info.json"), "utf8"))).toEqual({
+    expect(readJson(installed, "dist/build-info.json")).toEqual({
       commit,
       buildId: "fixture",
       stagedOfficialPlugins: { commit, pluginIds: ["codex", "extra"] },
     });
-    expect(
-      JSON.parse(readFileSync(path.join(root, "dist/build-info.json"), "utf8")),
-    ).not.toHaveProperty("stagedOfficialPlugins");
+    expect(readJson(root, "dist/build-info.json")).not.toHaveProperty("stagedOfficialPlugins");
   });
 
   it("lets a desktop stage only Codex without requiring other plugins' builds", () => {
@@ -260,14 +241,7 @@ describe("desktop runtime source plugins", () => {
 
   it("counts additional transitive dependencies and falls back to first-run Codex above 300 MiB", () => {
     const { root } = fixture();
-    writeJson(root, "extensions/extra/package.json", {
-      name: "@openclaw/extra",
-      dependencies: { large: "1.0.0" },
-    });
-    writeJson(root, "node_modules/large/package.json", { name: "large", version: "1.0.0" });
-    const payload = path.join(root, "node_modules/large/payload");
-    writeFileSync(payload, "");
-    truncateSync(payload, 301 * 1024 * 1024);
+    largeDependency(root);
     expect(planDesktopRuntimePlugins(root)).toMatchObject({
       pluginIds: ["codex"],
       releaseTag: null,
@@ -282,14 +256,7 @@ describe("desktop runtime source plugins", () => {
       files: ["!dist/extensions/codex/**", "!dist/extensions/extra/**"],
       dependencies: { large: "1.0.0" },
     });
-    writeJson(root, "extensions/extra/package.json", {
-      name: "@openclaw/extra",
-      dependencies: { large: "1.0.0" },
-    });
-    writeJson(root, "node_modules/large/package.json", { name: "large", version: "1.0.0" });
-    const payload = path.join(root, "node_modules/large/payload");
-    writeFileSync(payload, "");
-    truncateSync(payload, 301 * 1024 * 1024);
+    largeDependency(root);
     expect(planDesktopRuntimePlugins(root).pluginIds).toEqual(["codex", "extra"]);
   });
 

@@ -1,7 +1,5 @@
-// Dependency Ownership Surface Report tests cover dependency ownership surface report script behavior.
 import { execFileSync } from "node:child_process";
-import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,26 +9,18 @@ import {
   parseArgs,
   renderDependencyOwnershipSurfaceMarkdownReport,
 } from "../../scripts/dependency-ownership-surface-report.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
-
-function makeTempRepo() {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-ownership-surface-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const makeTempRepo = () => tempDirs.make("openclaw-ownership-surface-");
 
 function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
   const filePath = path.join(repoRoot, relativePath);
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, value, "utf8");
 }
+const writeRepoJson = (root: string, file: string, value: unknown) =>
+  writeRepoFile(root, file, JSON.stringify(value));
 
 describe("packageNameFromLockKey", () => {
   it("extracts scoped and unscoped names from pnpm snapshot keys", () => {
@@ -65,72 +55,48 @@ describe("parseArgs", () => {
 describe("collectDependencyOwnershipSurfaceReport", () => {
   it("reports ownership and install surface with toolchain metadata", () => {
     const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({
-        dependencies: {
-          "core-lib": "1.0.0",
-          "missing-owner": "2.0.0",
-        },
-      }),
-    );
+    writeRepoJson(repoRoot, "package.json", {
+      dependencies: { "core-lib": "1.0.0", "missing-owner": "2.0.0" },
+    });
     writeRepoFile(
       repoRoot,
       "pnpm-lock.yaml",
-      `
+      `---
+lockfileVersion: '9.0'
+packages:
+  toolchain@12.0.0: {hasBin: true}
+snapshots:
+  toolchain@12.0.0: {}
+---
 lockfileVersion: '9.0'
 importers:
   .:
     dependencies:
-      core-lib:
-        specifier: 1.0.0
-        version: 1.0.0
-      missing-owner:
-        specifier: 2.0.0
-        version: 2.0.0
-      alias-domexception:
-        specifier: npm:@nolyfill/domexception@1.0.0
-        version: npm:@nolyfill/domexception@1.0.0
+      core-lib: {specifier: 1.0.0, version: 1.0.0}
+      missing-owner: {specifier: 2.0.0, version: 2.0.0}
+      alias-domexception: {specifier: 'npm:@nolyfill/domexception@1.0.0', version: 'npm:@nolyfill/domexception@1.0.0'}
 packages:
   core-lib@1.0.0: {}
-  transitive-native@1.0.0:
-    requiresBuild: true
+  transitive-native@1.0.0: {requiresBuild: true}
   missing-owner@2.0.0: {}
   '@nolyfill/domexception@1.0.0': {}
 snapshots:
   core-lib@1.0.0:
-    dependencies:
-      transitive-native: 1.0.0
-      alias-domexception: '@nolyfill/domexception@1.0.0'
+    dependencies: {transitive-native: 1.0.0, alias-domexception: '@nolyfill/domexception@1.0.0'}
   transitive-native@1.0.0: {}
   missing-owner@2.0.0: {}
   '@nolyfill/domexception@1.0.0': {}
 `,
     );
-    writeRepoFile(
-      repoRoot,
-      "scripts/lib/dependency-ownership.json",
-      JSON.stringify({
-        schemaVersion: 1,
-        dependencies: {
-          "alias-domexception": {
-            owner: "core:test",
-            class: "core-runtime",
-            risk: ["compat"],
-          },
-          "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
-        },
-      }),
-    );
+    writeRepoJson(repoRoot, "scripts/lib/dependency-ownership.json", {
+      schemaVersion: 1,
+      dependencies: {
+        "alias-domexception": { owner: "core:test", class: "core-runtime", risk: ["compat"] },
+        "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
+      },
+    });
     writeRepoFile(repoRoot, "src/index.ts", 'import "core-lib";\n');
 
-    const lockPath = path.join(repoRoot, "pnpm-lock.yaml");
-    writeFileSync(
-      lockPath,
-      "---\nlockfileVersion: '9.0'\npackages:\n  toolchain@12.0.0:\n    hasBin: true\nsnapshots:\n  toolchain@12.0.0: {}\n---\n" +
-        readFileSync(lockPath, "utf8"),
-    );
     const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
     const cliReport = JSON.parse(
       execFileSync(
@@ -198,15 +164,7 @@ snapshots:
 
   it("does not mark plugin importer dependencies as stale ownership records", () => {
     const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({
-        dependencies: {
-          "core-lib": "1.0.0",
-        },
-      }),
-    );
+    writeRepoJson(repoRoot, "package.json", { dependencies: { "core-lib": "1.0.0" } });
     writeRepoFile(
       repoRoot,
       "pnpm-lock.yaml",
@@ -215,14 +173,10 @@ lockfileVersion: '9.0'
 importers:
   .:
     dependencies:
-      core-lib:
-        specifier: 1.0.0
-        version: 1.0.0
+      core-lib: {specifier: 1.0.0, version: 1.0.0}
   extensions/web-readability:
     dependencies:
-      plugin-readable:
-        specifier: 2.0.0
-        version: 2.0.0
+      plugin-readable: {specifier: 2.0.0, version: 2.0.0}
 packages:
   core-lib@1.0.0: {}
   plugin-readable@2.0.0: {}
@@ -231,22 +185,18 @@ snapshots:
   plugin-readable@2.0.0: {}
 `,
     );
-    writeRepoFile(
-      repoRoot,
-      "scripts/lib/dependency-ownership.json",
-      JSON.stringify({
-        schemaVersion: 1,
-        dependencies: {
-          "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
-          "plugin-readable": {
-            owner: "plugin:web-readability",
-            class: "plugin-runtime",
-            risk: ["html"],
-          },
-          "removed-lib": { owner: "core:test", class: "core-runtime", risk: ["unused"] },
+    writeRepoJson(repoRoot, "scripts/lib/dependency-ownership.json", {
+      schemaVersion: 1,
+      dependencies: {
+        "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
+        "plugin-readable": {
+          owner: "plugin:web-readability",
+          class: "plugin-runtime",
+          risk: ["html"],
         },
-      }),
-    );
+        "removed-lib": { owner: "core:test", class: "core-runtime", risk: ["unused"] },
+      },
+    });
 
     const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
 

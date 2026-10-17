@@ -66,6 +66,27 @@ const assets = {
   "desktop-panel-fixture.js": "f".repeat(64),
   "novnc-fixture.js": "a".repeat(64),
 };
+const writeJson = (file: string, value: unknown) => writeFile(file, JSON.stringify(value));
+const gitFixture = (cwd: string) => (args: string[], input?: string) =>
+  execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+    cwd,
+    input,
+    timeout: 10_000,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Test Author",
+      GIT_AUTHOR_EMAIL: "author@example.invalid",
+      GIT_COMMITTER_NAME: "Test Committer",
+      GIT_COMMITTER_EMAIL: "committer@example.invalid",
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_NO_REPLACE_OBJECTS: "1",
+    },
+  });
+const phaseResult = (status: string, lastObservedPhase: string | null = null) => ({
+  status,
+  lastObservedPhase,
+  owners: null,
+});
 function sourceAdmissionFixture(status: string, tracked: string[]) {
   const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
   const replies: Record<string, string> = {
@@ -666,36 +687,16 @@ describe("desktop proof identity and public evidence", () => {
   it("projects only known phases from bounded regular checkpoints", async () => {
     const root = dirs.make("desktop-private-phase-");
     const file = path.join(root, "desktop-phase.json");
-    expect(await readDesktopProofPhase(file)).toEqual({
-      status: "unavailable",
-      lastObservedPhase: null,
-      owners: null,
-    });
-    await writeFile(file, JSON.stringify({ lastObservedPhase: "file-loaded", secret: "private" }));
-    expect(await readDesktopProofPhase(file)).toEqual({
-      status: "available",
-      lastObservedPhase: "file-loaded",
-      owners: null,
-    });
+    expect(await readDesktopProofPhase(file)).toEqual(phaseResult("unavailable"));
+    await writeJson(file, { lastObservedPhase: "file-loaded", secret: "private" });
+    expect(await readDesktopProofPhase(file)).toEqual(phaseResult("available", "file-loaded"));
     const link = path.join(root, "linked-phase.json");
     await symlink(file, link);
-    expect(await readDesktopProofPhase(link)).toEqual({
-      status: "invalid",
-      lastObservedPhase: null,
-      owners: null,
-    });
-    expect(await readDesktopProofPhase(root)).toEqual({
-      status: "invalid",
-      lastObservedPhase: null,
-      owners: null,
-    });
+    expect(await readDesktopProofPhase(link)).toEqual(phaseResult("invalid"));
+    expect(await readDesktopProofPhase(root)).toEqual(phaseResult("invalid"));
     for (const content of ["{", '{"lastObservedPhase":"private-token"}', "x".repeat(1025)]) {
       await writeFile(file, content);
-      expect(await readDesktopProofPhase(file)).toEqual({
-        status: "invalid",
-        lastObservedPhase: null,
-        owners: null,
-      });
+      expect(await readDesktopProofPhase(file)).toEqual(phaseResult("invalid"));
     }
   });
 
@@ -703,14 +704,11 @@ describe("desktop proof identity and public evidence", () => {
     const root = dirs.make("desktop-process-ownership-");
     const file = path.join(root, "desktop-phase.json");
     for (const gateway of ["not-started", "owned", "closed"] as const) {
-      await writeFile(
-        file,
-        JSON.stringify({
-          lastObservedPhase: "gateway-start",
-          owners: { gateway, endpointTap: "owned", privatePath: "/private/fixture" },
-          startupAtAbort: { currentPhase: "private-token" },
-        }),
-      );
+      await writeJson(file, {
+        lastObservedPhase: "gateway-start",
+        owners: { gateway, endpointTap: "owned", privatePath: "/private/fixture" },
+        startupAtAbort: { currentPhase: "private-token" },
+      });
       expect(await readDesktopProofPhase(file)).toEqual({
         status: "available",
         lastObservedPhase: "gateway-start",
@@ -722,7 +720,7 @@ describe("desktop proof identity and public evidence", () => {
       { gateway: "closed" },
       { gateway: "private", endpointTap: "closed" },
     ]) {
-      await writeFile(file, JSON.stringify({ lastObservedPhase: "gateway-start", owners }));
+      await writeJson(file, { lastObservedPhase: "gateway-start", owners });
       expect((await readDesktopProofPhase(file)).owners).toBeNull();
     }
   });
@@ -730,7 +728,7 @@ describe("desktop proof identity and public evidence", () => {
   it("accepts only bounded regular reporter files", async () => {
     const root = dirs.make("desktop-private-report-");
     const file = path.join(root, "report.json");
-    await writeFile(file, JSON.stringify(rawTestReport()));
+    await writeJson(file, rawTestReport());
     expect((await readDesktopProofTestReport(file)).failedTests).toBe(1);
     const link = path.join(root, "report-link.json");
     await symlink(file, link);
@@ -861,20 +859,7 @@ describe("desktop proof identity and public evidence", () => {
 
   it("uses real NUL status without leaking either private additions or a rename destination", async () => {
     const root = dirs.make("desktop-source-status-");
-    const git = (args: string[]) =>
-      execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
-        cwd: root,
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: "Test Author",
-          GIT_AUTHOR_EMAIL: "author@example.invalid",
-          GIT_COMMITTER_NAME: "Test Committer",
-          GIT_COMMITTER_EMAIL: "committer@example.invalid",
-          GIT_NO_LAZY_FETCH: "1",
-          GIT_NO_REPLACE_OBJECTS: "1",
-        },
-      });
+    const git = gitFixture(root);
     git(["init", "--quiet"]);
     await writeFile(path.join(root, "tracked.txt"), "tracked contents\n");
     git(["add", "--", "tracked.txt"]);
@@ -935,22 +920,8 @@ describe("desktop proof identity and public evidence", () => {
 
   it("reads actual merge parents at a depth-one Git boundary without conflating the event base", async () => {
     const root = dirs.make("desktop-shallow-source-");
-    const git = (args: string[], input?: string) =>
-      execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
-        cwd: root,
-        input,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: "Test Author",
-          GIT_AUTHOR_EMAIL: "author@example.invalid",
-          GIT_COMMITTER_NAME: "Test Committer",
-          GIT_COMMITTER_EMAIL: "committer@example.invalid",
-          GIT_NO_LAZY_FETCH: "1",
-          GIT_NO_REPLACE_OBJECTS: "1",
-        },
-      }).trim();
+    const runGit = gitFixture(root);
+    const git = (args: string[], input?: string) => runGit(args, input).toString().trim();
     git(["init", "--quiet"]);
     const objectTree = git(["mktree"], "");
     const eventBase = git(["commit-tree", objectTree, "-m", "event base"]);
@@ -1034,20 +1005,17 @@ describe("desktop proof identity and public evidence", () => {
     await writeFile(path.join(nested, "01-fit.png"), png);
     for (const stage of desktopResizeStages) {
       await writeFile(path.join(nested, `${stage}.png`), png);
-      await writeFile(
-        path.join(nested, `${stage}-geometry.json`),
-        JSON.stringify({
-          stage,
-          expected: size,
-          guest: size,
-          canvas: size,
-          matchOffered: true,
-          hello: { token: "private" },
-        }),
-      );
+      await writeJson(path.join(nested, `${stage}-geometry.json`), {
+        stage,
+        expected: size,
+        guest: size,
+        canvas: size,
+        matchOffered: true,
+        hello: { token: "private" },
+      });
     }
-    await writeFile(path.join(nested, "served-assets.json"), JSON.stringify(assets));
-    await writeFile(path.join(nested, "resize-proof.json"), JSON.stringify(proof()));
+    await writeJson(path.join(nested, "served-assets.json"), assets);
+    await writeJson(path.join(nested, "resize-proof.json"), proof());
     await writeFile(path.join(nested, "connection-diagnostics.json"), "private-token");
     const exported = await exportDesktopResizeProof(input, output, "node");
     expect(exported.complete).toBe(true);
