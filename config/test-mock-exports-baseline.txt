@@ -1410,7 +1410,6 @@
 ["extensions/synology-chat/src/outbound-media.test.ts","openclaw/plugin-sdk/web-media","a2862c74bffa52e38f56429bd7f76ce19e17fd7ee0d3500ab6d236d98ba77e14",1]
 ["extensions/synthetic/provider-catalog.test.ts","openclaw/plugin-sdk/ssrf-runtime","d54633f7291e30b519428967b389f66781264f350c4357efb952ded77a701a69",1]
 ["extensions/talk-voice/index.test.ts","openclaw/plugin-sdk/agent-harness-runtime","fbcfa0c844dca8f21bf83b8cdc802a232051d2111e34a7160b41351dfe3f6aff",1]
-["extensions/tavily/src/tavily-client.test.ts","./config.js","a934fdf586f6588937aab7999a5ef3a48e4cf18d64db8f9ea86e8fa763fb3fe4",1]
 ["extensions/tavily/src/tavily-client.test.ts","openclaw/plugin-sdk/secret-input-runtime","7c3fc8eb65bd84c798175e2d77e083546154c6d323c6de56f17cfcf7c4ca11c8",1]
 ["extensions/tavily/src/tavily-tools.test.ts","./tavily-client.js","4f012c09ba0ff05b3694ae0fff55634405227d8c5786c97bce5ea1f76deaf464",1]
 ["extensions/team-reports/src/http.test.ts","openclaw/plugin-sdk/gateway-method-runtime","582c1f3a654cd86d2299cc6c511433c3d6aa394677d74f159d5ef8559c9b44f8",1]
