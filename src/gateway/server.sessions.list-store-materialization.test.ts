@@ -123,19 +123,25 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
   const backfilled = observeSessionRowBackfill(agentIds.map((agentId) => `agent:${agentId}:main`));
   const projection = await createSessionRowProjection({ cfg });
+  const context = {
+    getRuntimeConfig: () => cfg,
+    ...bindSessionRowProjection({}, () => projection),
+  };
   try {
+    const initial = await directSessionReq<SessionsListResult>(
+      "sessions.list",
+      { includeDerivedTitles: true, includeLastMessage: true, limit: agentIds.length },
+      { context },
+    );
+    expect(initial.ok).toBe(true);
+    expect(initial.payload?.sessions).toHaveLength(agentIds.length);
     await backfilled;
     await projection.ensureMaterialized();
     for (const limit of [undefined, 100]) {
       const result = await directSessionReq<SessionsListResult>(
         "sessions.list",
         { includeDerivedTitles: true, includeLastMessage: true, limit },
-        {
-          context: {
-            getRuntimeConfig: () => cfg,
-            ...bindSessionRowProjection({}, () => projection),
-          },
-        },
+        { context },
       );
 
       expect(result.ok).toBe(true);

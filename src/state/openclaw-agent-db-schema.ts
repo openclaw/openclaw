@@ -45,7 +45,6 @@ import {
 } from "./openclaw-agent-canonical-validation-migration.js";
 import {
   adoptCanonicalSessionValidationSchema,
-  assertCanonicalSessionValidationSchema,
   canonicalSessionValidationSchemaSql,
 } from "./openclaw-agent-canonical-validation-schema.js";
 import {
@@ -62,13 +61,13 @@ import {
   type OpenClawAgentDatabaseOptions,
   type OpenClawAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
-import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
 import { migrateOpenClawAgentSchema } from "./openclaw-agent-db-legacy-schema.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
+import { admitOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-admission.js";
 import {
   getOpenClawAgentMigrationSchema,
   assertExistingAgentSchemaOwner,
@@ -100,7 +99,6 @@ import { migrateSessionNodesAndWindows } from "./openclaw-agent-db-session-nodes
 import {
   hasRevokedOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
-  setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   isPersistentOpenClawAgentDatabasePath,
@@ -630,8 +628,10 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   const databaseOptions = { ...options, agentId };
   // The opened file owns its identity; lexical resolution can change a symlink/.. locator.
   const pathname = db.location() ?? resolveOpenClawAgentSqlitePath(databaseOptions);
-  // Explicit maintenance inspects current bytes even when this process previously admitted them.
-  revokeSqliteDatabaseAdmissions(db);
+  // The version prelude already revoked and verified this source under the same custody.
+  if (!options.versionMigrationOnly) {
+    revokeSqliteDatabaseAdmissions(db);
+  }
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
   const version = assertSupportedAgentSchemaVersion(db, pathname);
   if (version < OPENCLAW_AGENT_SCHEMA_VERSION) {
@@ -661,7 +661,7 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   };
   // Check admission now; hold shared state only for commit so maintenance heartbeats can run.
   withRegistrationFence(() => undefined);
-  if (db.location()) {
+  if (db.location() && !options.versionMigrationOnly) {
     maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   }
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
@@ -722,14 +722,7 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
     return;
   }
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
-  let admittedDb: DatabaseSync | undefined;
-  if (db.location() && (isSqliteSchemaAdmissionCold(db) || getAdmittedSqliteSchemaFacts(db))) {
-    admitSqliteSchema(db);
-    assertCanonicalSessionValidationSchema(db);
-    registerOpenClawAgentDatabaseIdentity(db);
-    setOpenClawAgentDatabaseValidation({ db, path: pathname, agentId });
-    admittedDb = db;
-  }
+  const admittedDb = admitOpenClawAgentDatabaseSchema(db, { agentId, path: pathname });
   if (databaseOptions.register === true) {
     registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env, admittedDb });
   }

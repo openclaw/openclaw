@@ -19,6 +19,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "../../state/openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { withLegacyAgentPostgresIndexes } from "../../state/openclaw-agent-index-retirement-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
@@ -27,7 +28,13 @@ import metadata from "../../state/postgres-schema.generated/agent-port.json" wit
 import { agentPostgresRuntime } from "../../state/postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "../../state/postgres-schema.generated/agent-search-runtime.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { LEGACY_USAGE_COST_PARTITION_SCOPE } from "../session-cost-usage-partitions.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
@@ -240,11 +247,20 @@ export async function loadAgentPortDescriptor(
         version < 23 ? "legacy" : "current",
         true,
       );
+      const hasRetiredUsagePartitions = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "cache_entries">>(db)
+          .selectFrom("cache_entries")
+          .select("scope")
+          .where("scope", "=", LEGACY_USAGE_COST_PARTITION_SCOPE)
+          .limit(1),
+      );
       return {
         version,
         migrationRequired:
           version !== OPENCLAW_AGENT_SCHEMA_VERSION ||
           needsIndexRepair ||
+          Boolean(hasRetiredUsagePartitions) ||
           hasPendingCurrentVersionAgentDatabaseMigration(db),
         pendingColumns: {},
       };
@@ -266,7 +282,16 @@ export async function loadAgentPortDescriptor(
               renew: assertCurrent,
             },
             file,
-            async () => ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false }),
+            async () => {
+              ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false });
+              // Retired partitions are rebuilt from retained transcripts; their NUL keys cannot port.
+              executeSqliteQuerySync(
+                db,
+                getNodeSqliteKysely<Pick<DB, "cache_entries">>(db)
+                  .deleteFrom("cache_entries")
+                  .where("scope", "=", LEGACY_USAGE_COST_PARTITION_SCOPE),
+              );
+            },
           ),
       );
     },

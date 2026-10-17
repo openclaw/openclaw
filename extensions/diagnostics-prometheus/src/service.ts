@@ -86,6 +86,21 @@ function recordDiagnosticEvent(
         labels,
         evt.bytes,
       );
+      if (evt.sessionEvent) {
+        const sessionLabels = { event: evt.event, ...evt.sessionEvent };
+        store.counter(
+          "openclaw_gateway_ws_session_event_frames_total",
+          "Outbound session event frames by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.count,
+        );
+        store.counter(
+          "openclaw_gateway_ws_session_event_bytes_total",
+          "Encoded outbound session event bytes by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.bytes,
+        );
+      }
       return;
     }
     case "gateway.ws.connections":
@@ -98,6 +113,28 @@ function recordDiagnosticEvent(
         );
       }
       return;
+    case "sessions.list.retention":
+      if (metadata.trusted) {
+        store.gauge(
+          "openclaw_sessions_list_retained_views",
+          "Retained session-list views across all publications.",
+          {},
+          evt.views,
+        );
+        store.gauge(
+          "openclaw_sessions_list_retained_refs",
+          "Row references and selection entries retained by session-list views.",
+          {},
+          evt.refs,
+        );
+        store.gauge(
+          "openclaw_sessions_list_retained_bytes",
+          "Estimated memory retained by session-list views.",
+          {},
+          evt.estimatedBytes,
+        );
+      }
+      return;
     case "worker.request":
       if (metadata.trusted) {
         recordWorkerRequest(store, evt);
@@ -107,6 +144,7 @@ function recordDiagnosticEvent(
     case "secret.egress":
     case "tool.catalog":
     case "gateway.rpc":
+    case "sessions.list.baseline.retired":
     case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "gateway.event_loop.sample":

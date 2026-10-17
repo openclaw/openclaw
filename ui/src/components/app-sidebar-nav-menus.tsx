@@ -41,7 +41,7 @@ export function renderSidebarMenuAction(
 
 export type SidebarDropdownProps = {
   position: SidebarMenuPosition;
-  class: string;
+  class: JSX.ClassValue;
   label: string;
   anchor?: HTMLElement;
   items: readonly MenuEntry[];

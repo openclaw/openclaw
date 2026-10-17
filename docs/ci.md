@@ -12,6 +12,13 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+Gateway server tests use the same 16-file process bound in local full-suite runs
+and CI config/include selections. This retires the shared worker before retained
+module graphs exhaust a 16 GB runner on Bun. The CI shard keeps its original file
+membership, runtime selection, and outer timing key; the project runner executes
+its chunks sequentially. Native `--shard` and suite-wide state or output options
+retain their single-invocation semantics.
+
 The existing `live-cache` release job has a 30-minute budget for three sequential
 eight-minute checks on one runner: stored cache floors, transport prefixes, and
 agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
@@ -46,7 +53,9 @@ job. Open the page that matches your task.
 Storage-engine PRs, scheduled main runs, and manual CI validations include two hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 The infrastructure/state and integration groups run in parallel with separate
-databases and 30-minute budgets. Their combined inventory matches the local full
+databases and 30-minute budgets. Database-engine `*.integration.test.ts` suites
+run with integrations, balancing the real command/recovery work across the two jobs.
+Inspect either assignment with the conformance runner's `--list` option. Their combined inventory matches the local full
 suite; a failure in either shard leaves the other running and fails the aggregate gate.
 
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).

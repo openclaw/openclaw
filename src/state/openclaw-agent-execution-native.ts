@@ -193,13 +193,6 @@ export function createAgentDatabaseNativeGeneration(
         if (cleanup?.authorize(request)) {
           return undefined;
         }
-        if (
-          request.stage === "prepare" &&
-          isRecord(facts) &&
-          facts.kind === "agent-registration-committed"
-        ) {
-          return undefined;
-        }
         assertCurrent();
         cleanup?.assertCurrent();
         if (!nativeIdentity || creatingIdentity) {
@@ -337,6 +330,14 @@ export function createAgentDatabaseNativeGeneration(
         nativeLocations,
         assertCurrent,
         authorize(request) {
+          if (
+            request.stage === "prepare" &&
+            isRecord(request.facts) &&
+            request.facts.kind === "agent-registration-committed"
+          ) {
+            // observeNative records this past COMMIT; subsequent work still requires live authority.
+            return;
+          }
           const identity = authorizeNative(request);
           if (request.stage === "open" && registration) {
             assertSourceCurrent();

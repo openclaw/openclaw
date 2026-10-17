@@ -313,7 +313,10 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
   });
   return (
     <section
-      class={`sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop ? "sidebar-sessions--removal-drop" : ""}`}
+      class={[
+        "sidebar-sessions",
+        host.sessionOrganizer.sessionListRemovalDrop && "sidebar-sessions--removal-drop",
+      ]}
       onDragOver={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragOver(event)}
       onDragLeave={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragLeave(event)}
       onDrop={(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}

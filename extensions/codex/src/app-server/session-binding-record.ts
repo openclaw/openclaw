@@ -147,10 +147,15 @@ export async function prepareCurrentCodexAppServerBindingRead(
 ) {
   const key = bindingStoreKey(identity);
   const current = await state.prepareRead(key);
+  let released = false;
   return current
     ? {
-        read: () => decodeCurrentCodexAppServerBinding(key, current.read(), identity),
-        release: () => current.release(),
+        read: () =>
+          released ? undefined : decodeCurrentCodexAppServerBinding(key, current.read(), identity),
+        release: () => {
+          released = true;
+          current.release();
+        },
       }
     : undefined;
 }

@@ -69,6 +69,40 @@ export async function updateCommand(
   });
 }
 
+async function withUpdateDatabaseEngine<T>(
+  env: NodeJS.ProcessEnv,
+  run: () => Promise<T>,
+): Promise<T> {
+  const [
+    { cloneEnvWithPlatformSemantics },
+    { createConfigIO },
+    { isConfigReadFailure },
+    { resolveDatabaseEngineSelection },
+    { withDatabaseEngineSelection },
+    { loadDotEnvAsync },
+  ] = await Promise.all([
+    import("../../config/env-vars.js"),
+    import("../../config/io.js"),
+    import("../../config/io.invalid-config.js"),
+    import("../../infra/database-engine/config.js"),
+    import("../../infra/database-engine/context.js"),
+    import("../../infra/dotenv.js"),
+  ]);
+  const configEnv = cloneEnvWithPlatformSemantics(env);
+  await loadDotEnvAsync({ env: configEnv });
+  const snapshot = await createConfigIO({
+    env: configEnv,
+    observe: false,
+    pluginValidation: "core-only",
+  }).readConfigFileSnapshot();
+  if (isConfigReadFailure(snapshot)) {
+    throw createUpdateConfigFailure(snapshot);
+  }
+  // Candidate Doctor owns config recovery; admission only needs the authored engine choice.
+  const selection = await resolveDatabaseEngineSelection(snapshot.sourceConfig, configEnv);
+  return await withDatabaseEngineSelection(selection, run);
+}
+
 async function updateCommandWithRuntime(
   inputOpts: UpdateCommandOptions,
   retainRuntime: RetainUpdateRuntime,
@@ -84,13 +118,17 @@ async function updateCommandWithRuntime(
   );
   // Post-core children report phase results; the outer updater owns the run ledger.
   if (prepared.postCoreUpdateResume) {
-    return await withUpdateInProgressEnv(invocationCwd, async () =>
-      (await import("./update-execution.runtime.js")).resumePostCoreUpdate({
-        root: prepared.discoveredRoot,
-        channel: prepared.postCoreUpdateChannel,
-        opts: inputOpts,
-        timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-      }),
+    return await withUpdateAdmissionReporting(inputOpts, () =>
+      withUpdateDatabaseEngine(recoveryState.triageTarget.env, () =>
+        withUpdateInProgressEnv(invocationCwd, async () =>
+          (await import("./update-execution.runtime.js")).resumePostCoreUpdate({
+            root: prepared.discoveredRoot,
+            channel: prepared.postCoreUpdateChannel,
+            opts: inputOpts,
+            timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+          }),
+        ),
+      ),
     );
   }
   return await withUpdateAdmissionReporting(inputOpts, async () => {
@@ -104,53 +142,55 @@ async function updateCommandWithRuntime(
       expectedForeground:
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     });
-    if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
-      defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
-    }
-    const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-    assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
-    const needsInitialization = await updateStateNeedsInitialization(env);
-    const captureOriginal =
-      !inputOpts.dryRun &&
-      !inputOpts.run &&
-      !inputOpts.recovery &&
-      !executorOptions &&
-      !env[UPDATE_RUN_ID_ENV]?.trim() &&
-      env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
-    const execute = (initialization?: InitializedUpdate) =>
-      runAdmittedUpdate(
-        inputOpts,
-        prepared,
-        recoveryState,
-        invocationCwd,
-        (opts, presentation, executor) =>
-          updateCommandInternal(
-            opts,
-            recoveryState,
-            invocationCwd,
-            prepared,
-            presentation,
-            executor,
-            retainRuntime,
-            initialization,
-          ),
-        initialization,
-        executorOptions,
-      );
-    if (needsInitialization || captureOriginal) {
-      const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
-      return await initializeAndRunUpdate(
-        inputOpts,
-        prepared,
-        recoveryState,
-        invocationCwd,
-        env,
-        execute,
-        { needsInitialization, captureOriginal },
-        executorOptions,
-      );
-    }
-    return await execute();
+    return await withUpdateDatabaseEngine(env, async () => {
+      if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
+        defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
+      }
+      const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
+      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
+      const needsInitialization = await updateStateNeedsInitialization(env);
+      const captureOriginal =
+        !inputOpts.dryRun &&
+        !inputOpts.run &&
+        !inputOpts.recovery &&
+        !executorOptions &&
+        !env[UPDATE_RUN_ID_ENV]?.trim() &&
+        env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
+      const execute = (initialization?: InitializedUpdate) =>
+        runAdmittedUpdate(
+          inputOpts,
+          prepared,
+          recoveryState,
+          invocationCwd,
+          (opts, presentation, executor) =>
+            updateCommandInternal(
+              opts,
+              recoveryState,
+              invocationCwd,
+              prepared,
+              presentation,
+              executor,
+              retainRuntime,
+              initialization,
+            ),
+          initialization,
+          executorOptions,
+        );
+      if (needsInitialization || captureOriginal) {
+        const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
+        return await initializeAndRunUpdate(
+          inputOpts,
+          prepared,
+          recoveryState,
+          invocationCwd,
+          env,
+          execute,
+          { needsInitialization, captureOriginal },
+          executorOptions,
+        );
+      }
+      return await execute();
+    });
   });
 }
 

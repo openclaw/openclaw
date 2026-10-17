@@ -22,7 +22,7 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { cronPage } from "./sidebar-attention-store.test-support.ts";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import "./sidebar-attention.tsx";
@@ -207,7 +207,7 @@ describe("sidebar attention refresh ownership", () => {
       agents: { state: { agentsList: null }, subscribe: () => () => undefined },
     } as unknown as Parameters<typeof createSidebarAttentionStore>[0];
     const store = createSidebarAttentionStore(sources);
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     stores.add(store);
     const provider = createApplicationContextProvider({
       ...sources,

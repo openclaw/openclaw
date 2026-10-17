@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -69,6 +70,28 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("SQLite session handle lifecycle", () => {
   let scope: { sessionId: string; sessionKey: string; storePath: string };
   let databasePath: string;
+  const databaseOptions = () => ({ agentId: "main", path: databasePath });
+  const openDatabase = () => openOpenClawAgentDatabase(databaseOptions());
+  const persist = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
+    persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+  function evictHandle(database: ReturnType<typeof openDatabase>) {
+    closeCachedOpenClawAgentDatabase(database);
+    expect(database.db.isOpen).toBe(false);
+  }
+  async function seedRepair() {
+    await persist([{ eventId: "target", message: { role: "user", content: "target" } }]);
+    const database = openDatabase();
+    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    return database;
+  }
+  function runMessage(
+    eventId: string,
+    role: string,
+    content: string,
+    fields: Record<string, unknown> = {},
+  ) {
+    return { eventId, message: { role, content, ...fields } };
+  }
 
   beforeEach(async () => {
     scope = {
@@ -95,7 +118,7 @@ describe("SQLite session handle lifecycle", () => {
       { type: "message", id: "third", message: { role: "user", content: "third" } },
     ];
     await replaceTranscriptEvents(scope, events);
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const database = openDatabase();
     const row = database.db
       .prepare(
         "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT 1 OFFSET ?",
@@ -132,8 +155,8 @@ describe("SQLite session handle lifecycle", () => {
         parentId: index === 0 ? null : "event-" + (index - 1),
         message: { role: "user", content: "body " + index, idempotencyKey: "mirror-" + index },
       }));
-      await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      await persist(messages);
+      const database = openDatabase();
       const generation = database.db
         .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
         .get(scope.sessionId)?.generation;
@@ -194,32 +217,18 @@ describe("SQLite session handle lifecycle", () => {
 
   it("reads assistant run candidates alongside older idempotency keys", async () => {
     const messages = [
-      {
-        eventId: "old-key",
-        message: { role: "assistant", content: "old answer", idempotencyKey: "old-delivery" },
-      },
-      {
-        eventId: "run-input",
-        message: { role: "user", content: "question", idempotencyKey: "source-run:user" },
-      },
-      ...Array.from({ length: 20 }, (_, index) => ({
-        eventId: `tool-${index}`,
-        message: {
-          role: "toolResult",
-          content: "Unneeded tool output ".repeat(128),
+      runMessage("old-key", "assistant", "old answer", { idempotencyKey: "old-delivery" }),
+      runMessage("run-input", "user", "question", { idempotencyKey: "source-run:user" }),
+      ...Array.from({ length: 20 }, (_, index) =>
+        runMessage(`tool-${index}`, "toolResult", "Unneeded tool output ".repeat(128), {
           __openclaw: { runId: "source-run" },
-        },
-      })),
-      {
-        eventId: "run-answer",
-        message: {
-          role: "assistant",
-          content: "delivered answer",
-          __openclaw: { runId: "source-run" },
-        },
-      },
+        }),
+      ),
+      runMessage("run-answer", "assistant", "delivered answer", {
+        __openclaw: { runId: "source-run" },
+      }),
     ];
-    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    await persist(messages);
     const facts = await withTranscriptWriteLock(scope, (transcript) =>
       transcript.readMessageFacts({
         idempotencyKeys: ["old-delivery"],
@@ -246,7 +255,7 @@ describe("SQLite session handle lifecycle", () => {
     const message = { role: "user", content: "retained", idempotencyKey: "mirror-state" };
     const appended = await appendTranscriptMessage(scope, { message });
     expect(appended?.anchor?.activeMessagePosition).toBe(0);
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const database = openDatabase();
 
     await withTranscriptWriteLock(scope, async (transcript) => {
       database.db.exec(mutation);
@@ -263,12 +272,11 @@ describe("SQLite session handle lifecycle", () => {
     async (kind) => {
       const message = { role: "user", content: "retained", idempotencyKey: "handle-message" };
       await appendTranscriptMessage(scope, { message });
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      const database = openDatabase();
 
       await withTranscriptWriteLock(scope, async (transcript) => {
         const before = await transcript.readEvents();
-        closeCachedOpenClawAgentDatabase(database);
-        expect(database.db.isOpen).toBe(false);
+        evictHandle(database);
         if (kind === "events") {
           await expect(transcript.readEvents()).resolves.toEqual(before);
         } else {
@@ -282,15 +290,14 @@ describe("SQLite session handle lifecycle", () => {
   );
 
   it("commits a turn after its async predicate loses the cached handle", async () => {
-    const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const planningDatabase = openDatabase();
     const result = await persistSessionTranscriptTurn(scope, {
       messages: [
         {
           message: { role: "user", content: "append after close" },
           shouldAppend: async () => {
             // The callback owns writer admission; evict only its cached host handle.
-            closeCachedOpenClawAgentDatabase(planningDatabase);
-            expect(planningDatabase.db.isOpen).toBe(false);
+            evictHandle(planningDatabase);
             return true;
           },
         },
@@ -345,9 +352,7 @@ describe("SQLite session handle lifecycle", () => {
     );
     try {
       await writerStarted.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldToEventLoop();
       expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
 
       expect(closeOpenClawAgentDatabaseByPath(retiredPath)).toBe(true);
@@ -371,7 +376,7 @@ describe("SQLite session handle lifecycle", () => {
   it.each(["cache eviction", "database retirement"] as const)(
     "retains lifecycle builder authority across %s only while its owner remains live",
     async (closure) => {
-      const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      const planningDatabase = openDatabase();
       const operation = applySessionEntryLifecycleMutation({
         storePath: scope.storePath,
         skipMaintenance: true,
@@ -382,8 +387,7 @@ describe("SQLite session handle lifecycle", () => {
               if (closure === "database retirement") {
                 expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
               } else {
-                closeCachedOpenClawAgentDatabase(planningDatabase);
-                expect(planningDatabase.db.isOpen).toBe(false);
+                evictHandle(planningDatabase);
               }
               return { ...currentEntry!, label: "built after close" };
             },
@@ -402,14 +406,13 @@ describe("SQLite session handle lifecycle", () => {
   );
 
   it("revalidates label ownership after the planning handle closes", async () => {
-    const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const planningDatabase = openDatabase();
     await applySessionEntryCanonicalReplacements({
       storePath: scope.storePath,
       sessionKeys: [scope.sessionKey],
       includeLabelOwners: "Renamed",
       update: async ([snapshot]) => {
-        closeCachedOpenClawAgentDatabase(planningDatabase);
-        expect(planningDatabase.db.isOpen).toBe(false);
+        evictHandle(planningDatabase);
         return {
           result: undefined,
           replacements: [
@@ -426,35 +429,24 @@ describe("SQLite session handle lifecycle", () => {
   });
 
   it("waits for projection repair after its polling handle closes", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "target", message: { role: "user", content: "target" } }],
-      touchSessionEntry: false,
-    });
-    const databaseOptions = { agentId: "main", path: databasePath };
-    const database = openOpenClawAgentDatabase(databaseOptions);
-    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-    startSessionTranscriptIndexReconcile(databaseOptions);
+    const target = databaseOptions();
+    const database = await seedRepair();
+    startSessionTranscriptIndexReconcile(target);
     try {
       const ready = waitForSessionTranscriptProjection(scope);
-      closeCachedOpenClawAgentDatabase(database);
-      expect(database.db.isOpen).toBe(false);
+      evictHandle(database);
       await ready;
       expect(
         readSessionTranscriptMessageEventPage(scope, { maxMessages: 0, offset: 0 }).totalMessages,
       ).toBe(1);
     } finally {
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      await waitForSessionTranscriptIndexReconcile(target);
     }
   });
 
   it("cancels a projection wait while its worker is stalled", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "target", message: { role: "user", content: "target" } }],
-      touchSessionEntry: false,
-    });
-    const databaseOptions = { agentId: "main", path: databasePath };
-    const database = openOpenClawAgentDatabase(databaseOptions);
-    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    const target = databaseOptions();
+    await seedRepair();
     let stalledWorker: Worker | undefined;
     const workerStarted = createDeferred();
     observer.beforeCreate = (filename, options) =>
@@ -465,7 +457,7 @@ describe("SQLite session handle lifecycle", () => {
       stalledWorker ??= worker;
       workerStarted.resolve();
     };
-    startSessionTranscriptIndexReconcile(databaseOptions);
+    startSessionTranscriptIndexReconcile(target);
     const controller = new AbortController();
     const abortReason = new Error("cancel stalled projection wait");
 
@@ -491,7 +483,7 @@ describe("SQLite session handle lifecycle", () => {
       }
     } finally {
       await stalledWorker?.terminate();
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      await waitForSessionTranscriptIndexReconcile(target);
     }
   });
 
@@ -504,11 +496,10 @@ describe("SQLite session handle lifecycle", () => {
       { sessionKey, storePath },
       { sessionId: "current-session", updatedAt: 2 },
     );
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const database = openDatabase();
     const closeHandle = vi.fn(() => {
       expect(database.db.isOpen).toBe(true);
-      closeCachedOpenClawAgentDatabase(database);
-      expect(database.db.isOpen).toBe(false);
+      evictHandle(database);
     });
     archiveMaterializationHook.afterMaterialize = closeHandle;
 

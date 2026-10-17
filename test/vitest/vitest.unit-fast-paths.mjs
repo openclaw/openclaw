@@ -143,6 +143,8 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  // Real heartbeat admission needs the infra runner's agent-database host owner.
+  "src/infra/heartbeat-runner.exact-session-busy.test.ts",
   // This family proof belongs to the PostgreSQL conformance owner.
   "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,

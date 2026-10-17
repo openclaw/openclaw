@@ -19,18 +19,11 @@ import {
 } from "../config/runtime-snapshot.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { captureEnv } from "../test-utils/env.js";
+import { buildCodexHarnessAppServerArgs } from "./gateway-codex-harness.live-helpers.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
-type ProviderRequest = {
-  body: string;
-  threadId: string | string[] | undefined;
-};
-
-type ReadyThread = {
-  threadId: string;
-  clientId: string;
-  action: string;
-};
+type ProviderRequest = { body: string; threadId: string | string[] | undefined };
+type ReadyThread = { threadId: string; clientId: string; action: string };
 
 const RECOVERY_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
@@ -39,32 +32,22 @@ const SHUTDOWN_FAILURE_DETAIL =
 
 const cases: Array<{
   name: string;
-  failFirst: boolean;
+  healthy?: boolean;
   activeSibling?: boolean;
   idleSibling?: "incognito" | "persistent";
   shutdown?: "delayed" | "cancelled" | "unconfirmed";
 }> = [
   {
     name: "recovers on the same client while an active sibling continues",
-    failFirst: true,
     activeSibling: true,
   },
-  {
-    name: "reloads a healthy thread",
-    failFirst: false,
-    activeSibling: false,
-  },
-  { name: "preserves an idle Incognito sibling", failFirst: true, idleSibling: "incognito" },
-  { name: "preserves an idle persistent sibling", failFirst: true, idleSibling: "persistent" },
-  { name: "waits for physical exit before recovery", failFirst: true, shutdown: "delayed" },
-  {
-    name: "cancels during physical exit without reacquisition",
-    failFirst: true,
-    shutdown: "cancelled",
-  },
+  { name: "reloads a healthy thread", healthy: true },
+  { name: "preserves an idle Incognito sibling", idleSibling: "incognito" },
+  { name: "preserves an idle persistent sibling", idleSibling: "persistent" },
+  { name: "waits for physical exit before recovery", shutdown: "delayed" },
+  { name: "cancels during physical exit without reacquisition", shutdown: "cancelled" },
   {
     name: "preserves its binding when physical exit is unconfirmed",
-    failFirst: true,
     shutdown: "unconfirmed",
   },
 ];
@@ -72,7 +55,8 @@ const cases: Array<{
 it.each(cases)(
   "chat.send $name",
   { timeout: 180_000 },
-  async ({ failFirst, activeSibling, idleSibling, shutdown }) => {
+  async ({ healthy, activeSibling, idleSibling, shutdown }) => {
+    const failFirst = !healthy;
     const dirs = useAutoCleanupTempDirTracker(onTestFinished);
     const root = await fs.realpath(dirs.make("gateway-native-recovery-"));
     const workspace = path.join(root, "workspace");
@@ -97,17 +81,15 @@ it.each(cases)(
     );
     await fs.writeFile(
       path.join(plugin, "index.js"),
-      [
-        'const fs = require("node:fs");',
-        "module.exports = {",
-        '  id: "recovery-instructions",',
-        "  register(api) {",
-        '    api.on("before_prompt_build", () => ({',
-        `      systemPrompt: fs.readFileSync(${JSON.stringify(instruction)}, "utf8"),`,
-        "    }));",
-        "  },",
-        "};",
-      ].join("\n"),
+      `const fs = require("node:fs");
+module.exports = {
+  id: "recovery-instructions",
+  register(api) {
+    api.on("before_prompt_build", () => ({
+      systemPrompt: fs.readFileSync(${JSON.stringify(instruction)}, "utf8"),
+    }));
+  },
+};`,
     );
 
     const nativeProcesses = new Map<ChildProcess, { output: string }>();
@@ -154,25 +136,17 @@ it.each(cases)(
       });
       req.on("end", () => {
         const request = { body, threadId: req.headers["thread-id"] };
+        const reply = (text: string, id: string) =>
+          writeOpenAiResponsesText(res, { text, messageId: id, responseId: `${id}-response` });
         requests.push(request);
         if (body.includes("IDLE_SIBLING_CONTEXT")) {
           idleSiblingRequests.push(request);
-          writeOpenAiResponsesText(res, {
-            text: "IDLE_SIBLING_REPLY",
-            messageId: `idle-${idleSiblingRequests.length}`,
-            responseId: `idle-response-${idleSiblingRequests.length}`,
-          });
+          reply("IDLE_SIBLING_REPLY", `idle-${idleSiblingRequests.length}`);
           return;
         }
         if (body.includes("SIBLING_HELD")) {
           siblingReceived.resolve(request);
-          void releaseSibling.promise.then(() => {
-            writeOpenAiResponsesText(res, {
-              text: "SIBLING_COMPLETE",
-              messageId: "sibling-message",
-              responseId: "sibling-response",
-            });
-          });
+          void releaseSibling.promise.then(() => reply("SIBLING_COMPLETE", "sibling-message"));
           return;
         }
         primaryRequests.push(request);
@@ -188,11 +162,10 @@ it.each(cases)(
           );
           return;
         }
-        writeOpenAiResponsesText(res, {
-          text: primaryRequests.length === 1 ? "INITIAL_REPLY" : "HISTORY_ALPHA NEW_POLICY_BETA",
-          messageId: `primary-message-${primaryRequests.length}`,
-          responseId: `primary-response-${primaryRequests.length}`,
-        });
+        reply(
+          primaryRequests.length === 1 ? "INITIAL_REPLY" : "HISTORY_ALPHA NEW_POLICY_BETA",
+          `primary-message-${primaryRequests.length}`,
+        );
       });
     });
     onTestFinished(async () => {
@@ -286,19 +259,12 @@ it.each(cases)(
             config: {
               sessionCatalog: { enabled: false },
               appServer: {
-                args: [
-                  "app-server",
-                  "--listen",
-                  "stdio://",
-                  "-c",
+                args: buildCodexHarnessAppServerArgs([
                   `openai_base_url="${baseUrl}"`,
-                  "-c",
                   "analytics.enabled=false",
-                  "-c",
                   "feedback.enabled=false",
-                  "-c",
                   "features.shell_snapshot=false",
-                ],
+                ]),
               },
             },
           },
@@ -318,45 +284,29 @@ it.each(cases)(
       configPath: values.OPENCLAW_CONFIG_PATH,
       token: values.OPENCLAW_GATEWAY_TOKEN,
       onEvent: ({ event, payload }) => {
-        if (
-          event === "chat" &&
-          isRecord(payload) &&
-          payload.state === "aborted" &&
-          typeof payload.runId === "string"
-        ) {
-          abortedRuns.add(payload.runId);
-        }
-        if (
-          event !== "agent" ||
-          !isRecord(payload) ||
-          typeof payload.runId !== "string" ||
-          !isRecord(payload.data)
-        ) {
+        if (!isRecord(payload) || typeof payload.runId !== "string") {
           return;
         }
-        if (
-          payload.stream === "lifecycle" &&
-          payload.data.phase === "error" &&
-          typeof payload.data.error === "string"
-        ) {
-          lifecycleErrors.set(payload.runId, [
-            ...(lifecycleErrors.get(payload.runId) ?? []),
-            payload.data.error,
-          ]);
+        const { runId, stream, data } = payload;
+        if (event === "chat" && payload.state === "aborted") {
+          abortedRuns.add(runId);
         }
-        if (
-          payload.stream !== "codex_app_server.lifecycle" ||
-          payload.data.phase !== "thread_ready"
-        ) {
+        if (event !== "agent" || !isRecord(data)) {
           return;
         }
-        const { threadId, clientId, action } = payload.data;
+        if (stream === "lifecycle" && data.phase === "error" && typeof data.error === "string") {
+          lifecycleErrors.set(runId, [...(lifecycleErrors.get(runId) ?? []), data.error]);
+        }
+        if (stream !== "codex_app_server.lifecycle" || data.phase !== "thread_ready") {
+          return;
+        }
+        const { threadId, clientId, action } = data;
         if (
           typeof threadId === "string" &&
           typeof clientId === "string" &&
           typeof action === "string"
         ) {
-          readyThreads.set(payload.runId, { threadId, clientId, action });
+          readyThreads.set(runId, { threadId, clientId, action });
         }
       },
     });
@@ -410,8 +360,7 @@ it.each(cases)(
         siblingSessionKey = created.key;
       }
       const idle = await start("Remember IDLE_SIBLING_CONTEXT.", "idle-first", siblingSessionKey);
-      const idleResult = await wait(idle.runId);
-      expect(idleResult, idleResult.error).toMatchObject({ status: "ok" });
+      expect(await wait(idle.runId)).toMatchObject({ status: "ok" });
       idleThread = await ready(idle.runId);
     }
     const first = await start("Remember HISTORY_ALPHA.", "first");
@@ -441,16 +390,14 @@ it.each(cases)(
         maxEntries: 50_000,
         overflowPolicy: "reject-new",
       });
-      expect(await bindings.entries()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            value: expect.objectContaining({
-              sessionId: history.sessionId,
-              state: "active",
-              binding: expect.objectContaining({ threadId: previous.threadId }),
-            }),
+      expect(await bindings.entries()).toContainEqual(
+        expect.objectContaining({
+          value: expect.objectContaining({
+            sessionId: history.sessionId,
+            state: "active",
+            binding: expect.objectContaining({ threadId: previous.threadId }),
           }),
-        ]),
+        }),
       );
     };
     const continueIdleSibling = async (expectedClientId: string) => {
@@ -496,8 +443,7 @@ it.each(cases)(
     const continued = await start("Continue with changed instructions.", "second");
     if (exitGate) {
       await withTestTimeout(exitGate.waiting, 10_000, "startup did not wait for physical exit");
-      expect(exitGate.child.exitCode).toBeNull();
-      expect(exitGate.child.signalCode).toBeNull();
+      expect(exitGate.child).toMatchObject({ exitCode: null, signalCode: null });
       expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
       expect(primaryRequests).toHaveLength(1);
       await assertOriginalBinding();
@@ -506,8 +452,7 @@ it.each(cases)(
           gateway.client.request("chat.abort", { sessionKey, runId: continued.runId }),
         ).resolves.toEqual({ ok: true, aborted: true, runIds: [continued.runId] });
         expect(abortedRuns.has(continued.runId)).toBe(true);
-        expect(exitGate.child.exitCode).toBeNull();
-        expect(exitGate.child.signalCode).toBeNull();
+        expect(exitGate.child).toMatchObject({ exitCode: null, signalCode: null });
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
       } else if (shutdown === "unconfirmed") {
         await vi.advanceTimersByTimeAsync(2_000);
@@ -532,13 +477,8 @@ it.each(cases)(
     }
     expect(await wait(continued.runId)).toMatchObject({ status: "ok" });
     const recovered = await ready(continued.runId);
-    expect(recovered.threadId).toBe(previous.threadId);
-    expect(recovered.action).toBe("resumed");
-    if (shutdown) {
-      expect(recovered.clientId).not.toBe(previous.clientId);
-    } else {
-      expect(recovered.clientId).toBe(previous.clientId);
-    }
+    expect(recovered).toMatchObject({ threadId: previous.threadId, action: "resumed" });
+    expect(recovered.clientId === previous.clientId).toBe(!shutdown);
     expect(primaryRequests).toHaveLength(2);
     expect(primaryRequests[1]).toMatchObject({
       threadId: previous.threadId,
@@ -599,24 +539,18 @@ function holdNativeExit(
   // shutdown receipt. Keep actual Node exit state separately for teardown.
   let restoreExitConfirmation = () => {};
   if (withholdExitConfirmation) {
-    let exitCode = child.exitCode;
-    let signalCode = child.signalCode;
-    const exitDescriptor = Object.getOwnPropertyDescriptor(child, "exitCode");
-    const signalDescriptor = Object.getOwnPropertyDescriptor(child, "signalCode");
-    assert(exitDescriptor && signalDescriptor);
-    Object.defineProperty(child, "exitCode", {
-      configurable: true,
-      get: () => null,
-      set: (value: typeof exitCode) => {
-        exitCode = value;
-      },
-    });
-    Object.defineProperty(child, "signalCode", {
-      configurable: true,
-      get: () => null,
-      set: (value: typeof signalCode) => {
-        signalCode = value;
-      },
+    const restoreStatus = (["exitCode", "signalCode"] as const).map((key) => {
+      let value = child[key];
+      const descriptor = Object.getOwnPropertyDescriptor(child, key);
+      assert(descriptor);
+      Object.defineProperty(child, key, {
+        configurable: true,
+        get: () => null,
+        set: (next: typeof value) => {
+          value = next;
+        },
+      });
+      return () => Object.defineProperty(child, key, { ...descriptor, value });
     });
     const once = child.once.bind(child);
     const receipt = vi.spyOn(child, "once").mockImplementation((event, listener) => {
@@ -628,8 +562,7 @@ function holdNativeExit(
     });
     restoreExitConfirmation = () => {
       receipt.mockRestore();
-      Object.defineProperty(child, "exitCode", { ...exitDescriptor, value: exitCode });
-      Object.defineProperty(child, "signalCode", { ...signalDescriptor, value: signalCode });
+      restoreStatus.forEach((restore) => restore());
     };
   }
   // Containment stops the launcher before killing its native child. Keep it

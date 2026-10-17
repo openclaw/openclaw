@@ -120,6 +120,7 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
   }
   const { sanitizeConfiguredModelProviderRequest } =
     await import("openclaw/plugin-sdk/provider-http");
+  const { isTransientNetworkError } = await import("openclaw/plugin-sdk/retry-runtime");
   const params = {
     text: req.text,
     apiKey,
@@ -136,7 +137,7 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
   return retryAsync(() => synthesizeGoogleTtsPcmOnce(params), {
     attempts: 2,
     minDelayMs: 0,
-    shouldRetry: isGoogleTtsRetryableError,
+    shouldRetry: (err) => isGoogleTtsRetryableError(err) || isTransientNetworkError(err),
   });
 }
 
