@@ -84,3 +84,17 @@ it("does not replay a retained draft into a different Gateway", () => {
   expect(secondPage.read().overview.identityDraft.name).toBeNull();
   expect(secondRequest).not.toHaveBeenCalledWith("agents.update", expect.anything());
 });
+
+it("does not restore an unmounted draft after the operator profile changes", () => {
+  const request = vi.fn(async () => ({}));
+  const { context } = identityContext(request as GatewayBrowserClient["request"]);
+  context.gateway.snapshot.selfUser = { id: "first-operator" };
+  const firstPage = createAgentsPage(context);
+  firstPage.read().overview.onIdentityFieldChange("name", "Private first-profile draft");
+  firstPage.dispose();
+
+  context.gateway.snapshot.selfUser = { id: "second-operator" };
+  const secondPage = createAgentsPage(context);
+  expect(secondPage.read().overview.identityDraft.name).toBeNull();
+  expect(request).not.toHaveBeenCalledWith("agents.update", expect.anything());
+});
