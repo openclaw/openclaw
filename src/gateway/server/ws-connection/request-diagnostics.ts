@@ -29,6 +29,28 @@ type ChatHistoryAttribution = NonNullable<Extract<RpcEvent, { phase: "response" 
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
+const sharedResponseFields = new WeakMap<
+  object,
+  { rowsUnchanged: boolean; rowsDelta: true | undefined }
+>();
+
+/** Retain only bounded diagnostic facts for the lifetime of the encoded response. */
+export function retainGatewayRpcResponseDiagnostics(
+  method: string,
+  payload: unknown,
+  serialized: object,
+): void {
+  if (method !== "sessions.list") {
+    return;
+  }
+  const result = asOptionalRecord(payload);
+  if (result) {
+    sharedResponseFields.set(serialized, {
+      rowsUnchanged: result.rowsUnchanged === true,
+      rowsDelta: result.rowsDelta === undefined ? undefined : true,
+    });
+  }
+}
 
 export type GatewayRpcQueueTiming = { receivedAt: number; dequeuedAt: number };
 
@@ -101,10 +123,13 @@ export class GatewayRpcDiagnostics {
     // Acceptance and final frames can share one request and outlive its handler.
     // Keep first-response timing separate from each encoded frame's byte count.
     // Successful replies have passed method validation; never attribute rejected params.
-    const result =
+    let result =
       outcome === "ok" && (this.sessionsList || this.chatHistoryClient)
         ? asOptionalRecord(response?.payload)
         : undefined;
+    if (result) {
+      result = sharedResponseFields.get(result) ?? result;
+    }
     const params = result ? asOptionalRecord(response?.params) : undefined;
     let chatHistory: ChatHistoryAttribution | undefined;
     if (this.chatHistoryClient && result && response) {

@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { serializeGatewayFrame } from "../../serialized-json.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import {
   createDispatchTestHarness,
@@ -18,7 +19,7 @@ async function dispatch(
   method: string,
   params: Record<string, unknown>,
   payload: unknown,
-  delivery: "wire" | "internal" | "error" | "unavailable" | "serialization" = "wire",
+  delivery: "wire" | "shared" | "internal" | "error" | "unavailable" | "serialization" = "wire",
 ) {
   const events: Extract<DiagnosticEventPayload, { type: "gateway.rpc"; phase: "response" }>[] = [];
   onTestFinished(
@@ -31,7 +32,9 @@ async function dispatch(
       { include: ["gateway.rpc"] },
     ),
   );
-  const handler: GatewayRequestHandler = ({ respond }) => respond(delivery !== "error", payload);
+  const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
+    respond(delivery !== "error", payload),
+  );
   const harness = createDispatchTestHarness({ extraHandlers: { [method]: handler } });
   harness.send.mockReturnValue(
     delivery === "unavailable" ? { kind: "unavailable" } : { kind: "sent", bytes: 1234 },
@@ -39,12 +42,32 @@ async function dispatch(
   if (delivery === "serialization") {
     harness.send.mockReturnValueOnce({ kind: "serialization", error: new Error("synthetic") });
   }
+  const client = createOperatorWsClient({
+    clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
+  });
+  if (delivery === "shared") {
+    client.authenticatedUserProfile = {
+      profileId: "private-profile",
+      displayName: "Test operator",
+      hasAvatar: false,
+      avatarRevision: "0",
+      updatedAt: 0,
+    };
+  }
+  const request = { type: "req", id: "private-request", method, params };
   await harness.dispatcher.dispatch(
-    { type: "req", id: "private-request", method, params },
-    createOperatorWsClient({ clientInfo: { id: "openclaw-control-ui", mode: "webchat" } }),
+    request,
+    client,
     undefined,
     delivery === "internal" ? (frame) => harness.send(frame) : undefined,
   );
+  if (delivery === "shared") {
+    await harness.dispatcher.dispatch({ ...request, id: "private-follower" }, client);
+    expect(handler).toHaveBeenCalledOnce();
+    for (const [frame] of harness.send.mock.calls) {
+      expect(JSON.parse(serializeGatewayFrame(frame).toString()).payload).toEqual(payload);
+    }
+  }
   await waitForDiagnosticEventsDrained();
   return events;
 }
@@ -75,9 +98,14 @@ it.each([
 ])(
   "attributes session response bytes as $rowsOutcome",
   async ({ params, payload, rowsOutcome }) => {
-    const events = await dispatch("sessions.list", { ...params, source: "sidebar" }, payload);
-    expect(events).toMatchObject([
-      {
+    for (const delivery of ["wire", "shared"] as const) {
+      const events = await dispatch(
+        "sessions.list",
+        { ...params, source: "sidebar" },
+        payload,
+        delivery,
+      );
+      const expected = {
         responseBytes: 1234,
         sessionsList: {
           clientKind: "openclaw-control-ui",
@@ -87,9 +115,10 @@ it.each([
           filter: "general",
           rowsOutcome,
         },
-      },
-    ]);
-    expect(JSON.stringify(events)).not.toContain("private-");
+      };
+      expect(events).toMatchObject(delivery === "shared" ? [expected, expected] : [expected]);
+      expect(JSON.stringify(events)).not.toContain("private-");
+    }
   },
 );
 
