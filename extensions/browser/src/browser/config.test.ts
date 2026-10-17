@@ -594,6 +594,28 @@ describe("browser config", () => {
       },
     },
     {
+      name: "preserves https cdpUrl credentials, path, and query for the default profile",
+      config: { cdpUrl: "https://u:p@remote-browser.example.com/prefix?token=T" },
+      profileName: "openclaw",
+      expected: {
+        cdpUrl: "https://u:p@remote-browser.example.com/prefix?token=T",
+        cdpHost: "remote-browser.example.com",
+        cdpPort: 443,
+        cdpIsLoopback: false,
+      },
+    },
+    {
+      name: "preserves loopback http cdpUrl credentials and query for the default profile",
+      config: { cdpUrl: "http://u:p@127.0.0.1:9222/?token=T", attachOnly: true },
+      profileName: "openclaw",
+      expected: {
+        cdpUrl: "http://u:p@127.0.0.1:9222/?token=T",
+        cdpPort: 9222,
+        cdpIsLoopback: true,
+        attachOnly: true,
+      },
+    },
+    {
       name: "preserves loopback direct WebSocket cdpUrl for explicit profiles",
       config: withProfile("localws", {
         cdpUrl: "ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key",
