@@ -7,10 +7,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
-import type {
-  WorkerSessionPlacementIdentity,
-  WorkerPlacementExecutionMode,
-} from "./placement-record.js";
+import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -39,29 +36,17 @@ describe("worker session placement activation", () => {
     environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
   });
 
-  async function attachEnvironment(
-    environmentId: string,
-    sessionId: string,
-    from: "ready" | "idle" = "ready",
-  ) {
-    return await environments.transition({
-      environmentId,
-      from,
-      to: "attached",
-      patch: {
-        attachedSessionIds: [sessionId],
-        credential: {
-          credentialHash: hashWorkerCredential(`${environmentId}:${sessionId}:${nowMs}`),
-          sessionId,
-          rpcSetVersion: 1,
-          expiresAtMs: nowMs + 10_000,
-        },
-      },
-    });
+  function credential(value: string, sessionId: string | null) {
+    return {
+      credentialHash: hashWorkerCredential(value),
+      sessionId,
+      rpcSetVersion: 1,
+      expiresAtMs: nowMs + 10_000,
+    };
   }
 
-  async function createAttachedEnvironment(identity: WorkerSessionPlacementIdentity = SESSION) {
-    const environmentId = `environment-${identity.sessionId}`;
+  async function createAttachedEnvironment() {
+    const environmentId = `environment-${SESSION.sessionId}`;
     await environments.createIntent({
       environmentId,
       providerId: "test-provider",
@@ -82,47 +67,46 @@ describe("worker session placement activation", () => {
           openclawVersion: "2026.9.1",
           protocolFeatures: ["worker-execution-context-v2"],
         },
-        credential: {
-          credentialHash: hashWorkerCredential(`ready:${environmentId}`),
-          sessionId: null,
-          rpcSetVersion: 1,
-          expiresAtMs: nowMs + 10_000,
-        },
+        credential: credential(`ready:${environmentId}`, null),
       },
     });
-    return attachEnvironment(environmentId, identity.sessionId);
+    return environments.transition({
+      environmentId,
+      from: "ready",
+      to: "attached",
+      patch: {
+        attachedSessionIds: [SESSION.sessionId],
+        credential: credential(`${environmentId}:${SESSION.sessionId}:${nowMs}`, SESSION.sessionId),
+      },
+    });
   }
 
-  async function advanceToStarting(
-    identity: WorkerSessionPlacementIdentity = SESSION,
-    executionMode: WorkerPlacementExecutionMode = "worker-turn",
-    environmentId = `environment-${identity.sessionId}`,
-  ) {
-    let placement = await store.startDispatch({ ...identity, executionMode });
-    placement = await store.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId },
-    });
-    placement = await store.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    return store.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+  async function advanceToStarting() {
+    let placement = await store.startDispatch({ ...SESSION, executionMode: "worker-turn" });
+    const transitions = [
+      {
+        from: "requested",
+        to: "provisioning",
+        patch: { environmentId: `environment-${SESSION.sessionId}` },
       },
-    });
+      { from: "provisioning", to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        from: "syncing",
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+          remoteWorkspaceDir: `/workspace/${SESSION.sessionId}`,
+        },
+      },
+    ] as const;
+    for (const transition of transitions) {
+      placement = await store.transition({
+        ...transition,
+        sessionId: SESSION.sessionId,
+        expectedGeneration: placement.generation,
+      });
+    }
+    return placement;
   }
 
   async function activate(
