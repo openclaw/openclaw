@@ -3,7 +3,6 @@ import {
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { registerListener } from "../../../src/shared/listeners.js";
-import { listen } from "../lib/reactive/listener.ts";
 import type {
   ApplicationGateway,
   ApplicationTheme,
@@ -43,7 +42,16 @@ function subscribeMediaQuery(query: string, onChange: () => void): (() => void) 
   if (typeof globalThis.matchMedia !== "function") {
     return undefined;
   }
-  return listen(globalThis.matchMedia(query), "change", onChange);
+  const mediaQuery = globalThis.matchMedia(query);
+  if (typeof mediaQuery.addEventListener === "function") {
+    mediaQuery.addEventListener("change", onChange);
+    return () => mediaQuery.removeEventListener("change", onChange);
+  }
+  if (typeof mediaQuery.addListener === "function") {
+    mediaQuery.addListener(onChange);
+    return () => mediaQuery.removeListener(onChange);
+  }
+  return undefined;
 }
 
 function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogTheme): void {
@@ -240,10 +248,7 @@ export function createApplicationTheme(
       refresh();
     }
   };
-  const stopStorage =
-    typeof globalThis.addEventListener === "function"
-      ? listen(globalThis, "storage", onStorage)
-      : undefined;
+  globalThis.addEventListener?.("storage", onStorage);
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
@@ -297,7 +302,7 @@ export function createApplicationTheme(
       disposed = true;
       catalog?.dispose();
       stopPreferences();
-      stopStorage?.();
+      globalThis.removeEventListener?.("storage", onStorage);
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();

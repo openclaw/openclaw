@@ -96,9 +96,8 @@ export function ApplicationProvider(props: {
     );
   }
   return createComponent(ApplicationContext, {
-    get value() {
-      return props.value;
-    },
+    // Solid context snapshots this capability; native transport above owns replacements.
+    value: untrack(() => props.value),
     get children() {
       return props.children;
     },
