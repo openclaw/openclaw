@@ -42,12 +42,15 @@ export type BridgeWorkerData = {
 };
 
 /** Prepare bindings and mutation hints without interpreting quoted text as SQL. */
-export function preparePostgresQuery(sql: string): { sql: string; mayWrite: boolean } {
+export function preparePostgresQuery(sql: string): {
+  sql: string;
+  mutation?: PostgresResult["mutation"];
+} {
   let result = "";
   let parameter = 0;
   let statementStart = true;
   let previousKeyword: string | undefined;
-  let mayWrite = false;
+  let mutation: PostgresResult["mutation"];
   for (let i = 0; i < sql.length;) {
     const rest = sql.slice(i);
     const quoted =
@@ -91,10 +94,17 @@ export function preparePostgresQuery(sql: string): { sql: string; mayWrite: bool
       if (word) {
         const keyword = word.toUpperCase();
         // SELECT tags can hide modifying CTEs or SELECT INTO. Row locks and labels do not write.
-        mayWrite ||=
-          /^(?:INSERT|UPDATE|DELETE|MERGE|INTO)$/.test(keyword) &&
-          previousKeyword !== "AS" &&
-          !(keyword === "UPDATE" && (previousKeyword === "FOR" || previousKeyword === "KEY"));
+        if (previousKeyword !== "AS") {
+          if (keyword === "INTO" && previousKeyword !== "INSERT" && previousKeyword !== "MERGE") {
+            mutation = "unscoped";
+          } else if (
+            mutation === undefined &&
+            /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(keyword) &&
+            !(keyword === "UPDATE" && (previousKeyword === "FOR" || previousKeyword === "KEY"))
+          ) {
+            mutation = "scoped";
+          }
+        }
         previousKeyword = keyword;
         result += word;
         i += word.length;
@@ -122,7 +132,7 @@ export function preparePostgresQuery(sql: string): { sql: string; mayWrite: bool
       }
     }
   }
-  return { sql: result, mayWrite };
+  return { sql: result, mutation };
 }
 
 export function validatePostgresBindings(parameters: readonly unknown[]): void {

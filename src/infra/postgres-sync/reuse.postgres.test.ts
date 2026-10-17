@@ -110,6 +110,40 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     run(() => db.close());
   });
 
+  it("preserves certified CTE write scopes but fences SELECT INTO across scopes", () => {
+    const db = open();
+    run(() => db.exec("CREATE TABLE cte_entries (id integer)"));
+    const first = readSqliteDatabaseScopedWriteToken(db, "first");
+    const second = readSqliteDatabaseScopedWriteToken(db, "second");
+    let pending: string | undefined;
+    run(() =>
+      db.runTransaction(() =>
+        withSqliteDatabaseWriteScope(db, ["second"], () => {
+          expect(
+            db.query(
+              "WITH inserted AS (INSERT INTO cte_entries VALUES (7) RETURNING id) SELECT id FROM inserted",
+            ).rows,
+          ).toEqual([{ id: 7 }]);
+          pending = readSqliteDatabasePendingScopedWriteToken(db, "second");
+        }),
+      ),
+    );
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).toBe(first);
+    expect(readSqliteDatabaseScopedWriteToken(db, "second")).toBe(pending);
+    expect(pending).not.toBe(second);
+
+    run(() =>
+      db.runTransaction(() =>
+        withSqliteDatabaseWriteScope(db, ["second"], () =>
+          db.exec("SELECT id INTO cte_copy FROM cte_entries"),
+        ),
+      ),
+    );
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).not.toBe(first);
+    run(() => db.exec("DROP TABLE cte_copy; DROP TABLE cte_entries"));
+    run(() => db.close());
+  });
+
   it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {
     const first = open();
     const killedPid = pid(first);

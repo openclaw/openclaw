@@ -230,7 +230,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   }
 
   private execute(
-    { sql, mayWrite }: ReturnType<typeof preparePostgresQuery>,
+    { sql, mutation: hintedMutation }: ReturnType<typeof preparePostgresQuery>,
     parameters: readonly SQLInputValue[],
     readBigInts: boolean,
   ) {
@@ -251,17 +251,17 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         throw new Error("PostgreSQL transaction rolled back instead of committing");
       }
     }
-    const opaqueWrite = mayWrite && /^(?:SELECT|EXPLAIN)$/.test(result.command ?? "");
-    const mutated = result.mutation !== undefined || opaqueWrite;
+    const mutation =
+      result.mutation === "unscoped" || hintedMutation === "unscoped"
+        ? "unscoped"
+        : (result.mutation ?? hintedMutation);
+    const mutated = mutation !== undefined;
     if (mutated) {
       // Like SQLite's mutation witness, rollback does not rewind local cache invalidation.
       this.mutationRevision++;
       // Typed DML borrows its owner's scopes; schema and raw writes fence every reader.
       this.pendingWrite = true;
-      beginSqliteDatabaseWrite(
-        sqlPublicationAnchor(this),
-        opaqueWrite || result.mutation === "unscoped",
-      );
+      beginSqliteDatabaseWrite(sqlPublicationAnchor(this), mutation === "unscoped");
     }
     const autocommitWrite = !wasTransaction && mutated;
     if (!this.isTransaction && (mutated || wasTransaction)) {

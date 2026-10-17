@@ -34,17 +34,26 @@ describe("experimental PostgreSQL SQL boundary", () => {
   );
 
   it.each([
-    ["WITH changed AS (UPDATE entries SET value = ? RETURNING *) SELECT * FROM changed", true],
+    ["WITH changed AS (UPDATE entries SET value = ? RETURNING *) SELECT * FROM changed", "scoped"],
     [
       "WITH changed AS (WITH input AS (SELECT 1) DELETE FROM entries RETURNING *) SELECT * FROM changed",
-      true,
+      "scoped",
     ],
-    ["SELECT * INTO copied_entries FROM entries", true],
-    ["SELECT * FROM entries FOR UPDATE", false],
-    ["SELECT * FROM entries FOR NO KEY UPDATE", false],
-    ["SELECT 1 AS update, 'DELETE', $$INSERT$$, E'UPDATE\\\' INTO' /* MERGE */", false],
+    [
+      "WITH changed AS (INSERT INTO entries VALUES (?) RETURNING *) SELECT * FROM changed",
+      "scoped",
+    ],
+    ["MERGE INTO entries USING source ON false WHEN NOT MATCHED THEN INSERT VALUES (?)", "scoped"],
+    ["SELECT * INTO copied_entries FROM entries", "unscoped"],
+    [
+      "SELECT * INTO copied_entries FROM entries; INSERT INTO copied_entries VALUES (?)",
+      "unscoped",
+    ],
+    ["SELECT * FROM entries FOR UPDATE", undefined],
+    ["SELECT * FROM entries FOR NO KEY UPDATE", undefined],
+    ["SELECT 1 AS update, 'DELETE', $$INSERT$$, E'UPDATE\\\' INTO' /* MERGE */", undefined],
   ] as const)("retains mutation evidence while preparing %s", (input, expected) => {
-    expect(preparePostgresQuery(input).mayWrite).toBe(expected);
+    expect(preparePostgresQuery(input).mutation).toBe(expected);
   });
 
   it("accepts SQLite scalar and binary bindings", () => {
