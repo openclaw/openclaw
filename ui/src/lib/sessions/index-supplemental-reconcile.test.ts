@@ -142,11 +142,7 @@ describe("supplemental session reconciliation", () => {
           source: "model" as const,
         },
       };
-      const catalog = {
-        ...initial,
-        ...selected,
-        ...thinkingCatalog("medium"),
-      };
+      const catalog = { ...initial, ...selected, ...thinkingCatalog("medium") };
       const delayed = createDeferred<ReturnType<typeof sessionsResult>>();
       let hold = false;
       let reply = initial;
@@ -179,11 +175,9 @@ describe("supplemental session reconciliation", () => {
         hold = false;
         reply = catalog;
         await sessions.refresh(options);
-        const refreshed = primary();
-        expect(refreshed).toMatchObject(selected);
-        expect(refreshed?.thinkingLevels).toEqual(catalog.thinkingLevels);
-        expect(refreshed?.thinkingOptions).toEqual(catalog.thinkingOptions);
-        expect(refreshed?.thinkingDefault).toBe(catalog.thinkingDefault);
+        expect(primary()).toEqual(
+          expect.objectContaining({ ...selected, ...thinkingCatalog("medium") }),
+        );
       } finally {
         delayed.resolve(sessionsResult([initial], 20));
         await pending;
@@ -230,21 +224,16 @@ describe("supplemental session reconciliation", () => {
   );
 
   it.each([
-    ...(["older response", "replacement", "deletion"] as const).map((scenario) => ({
-      scenario,
-      permission: undefined,
-      primaryPresent: true,
-    })),
-    ...(["full", null] as const).flatMap((permission) =>
-      [true, false].map((primaryPresent) => ({
-        scenario: "older response" as const,
-        permission,
-        primaryPresent,
-      })),
-    ),
-  ])(
-    "preserves managed-row observation order across $scenario (permission: $permission, primary: $primaryPresent)",
-    async ({ scenario, permission, primaryPresent }) => {
+    ["older response", undefined, true],
+    ["replacement", undefined, true],
+    ["deletion", undefined, true],
+    ["older response", "full", true],
+    ["older response", "full", false],
+    ["older response", null, true],
+    ["older response", null, false],
+  ] as const)(
+    "preserves managed-row order across %s (permission: %s, primary: %s)",
+    async (scenario, permission, primaryPresent) => {
       const initial = {
         ...initialChild,
         placement: placement("available"),
@@ -404,39 +393,35 @@ describe("supplemental session reconciliation", () => {
     expect(sessions.state.result?.sessions[0]?.label).toBe(current.label);
   });
 
-  it("publishes an owner change but not unchanged lineage rows and defaults", async () => {
-    const canonical = child;
-    const sessions = capabilityWithList(sessionsResult([canonical], 10));
-    try {
+  it.each([false, true])(
+    "publishes lineage without disturbing unchanged rows (archived: %s)",
+    async (archived) => {
+      const row = archived
+        ? {
+            ...child,
+            key: "agent:main:archived-routed",
+            sessionId: "session-routed",
+            archived: true,
+          }
+        : child;
+      const sessions = capabilityWithList(sessionsResult(archived ? [] : [row], 10));
       await sessions.refresh({ force: true });
       const published = vi.fn();
-      sessions.subscribe(published);
-      const result = sessions.state.result;
-      sessions.reconcile(canonical, result?.defaults, { resultAgentId: "main" });
-      expect(sessions.state.result).toBe(result);
-      expect(sessions.state.agentId).toBe("main");
-      expect(published).toHaveBeenCalledOnce();
-      published.mockClear();
-      const owner = publishLineage(sessions, canonical);
-      expect(owner.activeSessionLineageSelectedRow).toEqual(canonical);
-      expect(sessions.state.result?.sessions).toEqual([canonical]);
-      expect(published).not.toHaveBeenCalled();
-    } finally {
-      sessions.dispose();
-    }
-  });
-
-  it("publishes an archived lineage missing from a newer canonical list", async () => {
-    const sessions = capabilityWithList(sessionsResult([], 10));
-    await sessions.refresh({ force: true });
-    const archived = {
-      ...child,
-      key: "agent:main:archived-routed",
-      sessionId: "session-routed",
-      archived: true,
-    };
-    publishLineage(sessions, archived);
-    expect(sessions.state.result?.sessions).toEqual([archived]);
-    sessions.dispose();
-  });
+      if (!archived) {
+        sessions.subscribe(published);
+        const result = sessions.state.result;
+        sessions.reconcile(row, result?.defaults, { resultAgentId: "main" });
+        expect(sessions.state.result).toBe(result);
+        expect(sessions.state.agentId).toBe("main");
+        expect(published).toHaveBeenCalledOnce();
+        published.mockClear();
+      }
+      const owner = publishLineage(sessions, row);
+      expect(sessions.state.result?.sessions).toEqual([row]);
+      if (!archived) {
+        expect(owner.activeSessionLineageSelectedRow).toEqual(row);
+        expect(published).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

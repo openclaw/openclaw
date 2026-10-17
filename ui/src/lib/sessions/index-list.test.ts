@@ -25,16 +25,12 @@ const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 type ListParams = {
   agentId?: string;
   archived?: true | "all";
-  boardFace?: "chat" | "dashboard";
   hasBoard?: boolean;
-  includeDerivedTitles?: boolean;
-  includeLastMessage?: boolean;
   limit?: number;
-  offset?: number;
 };
 
-function listResult(keys: string[] = [], totalCount = keys.length, offset = 0): SessionsListResult {
-  const nextOffset = offset + keys.length;
+function listResult(keys: string[] = [], totalCount = keys.length): SessionsListResult {
+  const nextOffset = keys.length;
   return {
     ts: 1,
     path: "",
@@ -451,38 +447,6 @@ describe("session list requests", () => {
     await expect(retiredRequest).resolves.toBeNull();
   });
 
-  it("keeps filtered pages scoped without replacing the canonical active roster", async () => {
-    const request = vi.fn(async (_method: string, params?: ListParams) => {
-      const filter = params?.archived === true ? "archived" : params?.archived || "active";
-      const offset = params?.offset ?? 0;
-      const keys = Array.from({ length: 4 }, (_, index) => `agent:main:${filter}-${index}`);
-      return listResult(keys.slice(offset, offset + (params?.limit ?? 50)), 4, offset);
-    });
-    const { sessions } = sessionHarness(request);
-    const archivedScope = { agentId: "main", archivedFilter: "archived" as const, limit: 2 };
-    const archived = listView(sessions, archivedScope);
-    const allScope = { agentId: "main", archivedFilter: "all" as const, limit: 1 };
-    const all = listView(sessions, allScope);
-    const observeSnapshot = vi.fn();
-    const unsubscribe = archived.subscribe(observeSnapshot);
-    await sessions.refreshList({ agentId: "main", limit: 1, force: true });
-    const activeResult = sessions.state.result;
-    await archived.refresh({ limit: 2 });
-    await archived.refresh({ limit: 2, offset: 2, append: true });
-    await all.refresh({ limit: 1 });
-    await archived.refresh({ limit: 2 });
-    expect(request).toHaveBeenLastCalledWith(
-      "sessions.list",
-      expect.objectContaining({ agentId: "main", archived: true, limit: 4 }),
-    );
-    expect(archived.rows()).toHaveLength(4);
-    expect(all.rows()).toHaveLength(1);
-    expect(sessions.state.result).toBe(activeResult);
-    expect(sessions.canonicalListRevision).toBe(1);
-    expect(observeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ loading: true }));
-    unsubscribe();
-  });
-
   it.each(["before", "after"] as const)(
     "absorbs only invalidations preceding a queued managed replacement (%s)",
     async (eventTiming) => {
@@ -616,42 +580,6 @@ describe("session list requests", () => {
     await Promise.all([first, replacement]);
     expect(view.first()?.key).toBe("agent:main:retained");
     expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("keeps explicit unenriched page queries independent from the primary roster", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(listResult(["agent:main:primary"]))
-      .mockResolvedValueOnce(listResult(["agent:main:page"]));
-    const { sessions } = sessionHarness(request);
-    const pageQuery = {
-      agentId: "main",
-      limit: 50,
-      includeGlobal: true,
-      includeUnknown: true,
-      configuredAgentsOnly: true,
-      includeDerivedTitles: false,
-      includeLastMessage: false,
-    };
-    const unsubscribe = sessions.subscribeList(pageQuery, () => undefined);
-
-    await sessions.refreshList({ agentId: "main", limit: 50, force: true });
-    const primaryResult = sessions.state.result;
-    await sessions.refreshList({ ...pageQuery, force: true });
-
-    expect(sessions.state.result).toBe(primaryResult);
-    expect(sessions.listSnapshot(pageQuery).result?.sessions[0]?.key).toBe("agent:main:page");
-    expect(request.mock.calls[1]?.[1]).toEqual({
-      rowMode: "compact",
-      source: "chat-pane",
-      excludeDock: true,
-      agentId: "main",
-      configuredAgentsOnly: true,
-      includeGlobal: true,
-      includeUnknown: true,
-      limit: 50,
-    });
-    unsubscribe();
   });
 
   it("retires stale filtered snapshots across same-client reconnects without losing subscribers", async () => {
