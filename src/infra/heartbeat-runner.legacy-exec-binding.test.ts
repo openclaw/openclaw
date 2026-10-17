@@ -119,12 +119,7 @@ it.each([
     cfg.agents!.defaults!.models = {
       "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
     };
-    cfg.agents!.defaults!.heartbeat = {
-      every: "5m",
-      target: "telegram",
-      to: ownerDm,
-      accountId: "personal",
-    };
+    Object.assign(cfg.agents!.defaults!.heartbeat!, { to: ownerDm, accountId: "personal" });
     cfg.commands = { ownerAllowFrom: ["telegram:" + ownerDm] };
     cfg.channels!.telegram!.allowFrom = [ownerDm];
     cfg.plugins = { enabled: false };
@@ -187,7 +182,6 @@ it.each([
         platform: "linux",
         commands: ["system.run"],
       }),
-      {},
     );
     try {
       const invocation = registry.invoke({
@@ -252,14 +246,13 @@ it.each([
         }
         return { messageId: "status-receipt", chatId: to };
       });
-      const originalConversationRef = buildConversationRef({
+      const conversationRef = buildConversationRef({
         channel: source.channel,
         accountId: source.accountId,
         kind: source.threadId ? "group" : "direct",
         peerId: normalizeConversationPeerId(source.channel, source.to),
         threadId: source.threadId,
       });
-      let persistedTransport: unknown;
       let selectedTarget: string | undefined;
       let toolReceipt: unknown;
       const privateInputs: string[] = [];
@@ -271,9 +264,19 @@ it.each([
           );
           return { payloads: [{ text: "HEARTBEAT_OK" }], meta: { durationMs: 1 } };
         }
-        await params.userTurnTranscriptRecorder?.persistApproved();
-        expect(params.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
-        persistedTransport = params.userTurnTranscriptRecorder?.getPersistedMessage?.();
+        const recorder = params.userTurnTranscriptRecorder;
+        await recorder?.persistApproved();
+        expect(recorder?.hasPersisted()).toBe(true);
+        expect(recorder?.getPersistedMessage?.()).toMatchObject({
+          provenance: { kind: "internal_system", sourceTool: "exec" },
+          __openclaw: {
+            transport: {
+              channel: "telegram",
+              conversationRef,
+              ...(source.threadId ? { threadId: source.threadId } : {}),
+            },
+          },
+        });
         const tool = createMessageTool({
           config: cfg,
           agentId: params.agentId,
@@ -303,14 +306,8 @@ it.each([
         } catch (error) {
           toolReceipt = { error: error instanceof Error ? error.message : String(error) };
         }
-        return {
-          payloads: [
-            {
-              text: `Delivery is unconfirmed: ${JSON.stringify(toolReceipt)}. No resend attempted.`,
-            },
-          ],
-          meta: { durationMs: 1 },
-        };
+        const text = `Delivery is unconfirmed: ${JSON.stringify(toolReceipt)}. No resend attempted.`;
+        return { payloads: [{ text }], meta: { durationMs: 1 } };
       });
       const result = await runHeartbeatOnce({
         cfg,
@@ -334,38 +331,20 @@ it.each([
         messageThreadId: source.threadId,
         chatType: source.threadId ? "group" : "direct",
       });
-      expect(persistedTransport).toMatchObject({
-        provenance: { kind: "internal_system", sourceTool: "exec" },
-        __openclaw: {
-          transport: {
-            channel: "telegram",
-            conversationRef: originalConversationRef,
-            ...(source.threadId ? { threadId: source.threadId } : {}),
-          },
-        },
-      });
       expect(selectedTarget === ownerDm).toBe(explicitDm);
       expect(toolReceipt).toMatchObject({ error: failedSend });
+      expect(send).toHaveBeenCalledTimes(2);
+      const [completion, status] = send.mock.calls;
+      expect(completion?.[1]).toContain(marker);
       expect(
-        send.mock.calls.map(([to, text, opts]) => ({
-          to: normalizeTelegramMessagingTarget(to),
-          text,
-          accountId: opts?.accountId,
-          thread: opts?.messageThreadId,
-        })),
-      ).toMatchObject([
-        {
-          to: explicitDm ? "telegram:" + ownerDm : source.to,
-          text: expect.stringContaining(marker),
-        },
-        {
-          to: source.to,
-          text: expect.stringContaining(failedSend),
-          accountId: "work",
-          thread: source.threadId ? 42 : undefined,
-        },
-      ]);
-      expect(send.mock.calls[1]?.[1]).toContain("No resend attempted");
+        [completion?.[0], status?.[0]].map((to) => normalizeTelegramMessagingTarget(to ?? "")),
+      ).toEqual([explicitDm ? "telegram:" + ownerDm : source.to, source.to]);
+      expect({ accountId: status?.[2]?.accountId, thread: status?.[2]?.messageThreadId }).toEqual({
+        accountId: "work",
+        thread: source.threadId ? 42 : undefined,
+      });
+      expect(status?.[1]).toContain(failedSend);
+      expect(status?.[1]).toContain("No resend attempted");
     } finally {
       registry.unregister("legacy-conn");
     }

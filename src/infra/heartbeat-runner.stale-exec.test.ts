@@ -3,7 +3,7 @@ import { getReplySystemEventContext } from "../auto-reply/reply/system-event-ses
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import {
   runHeartbeatOnce,
@@ -25,7 +25,6 @@ import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "
 
 describe("stale exec heartbeat wakes", () => {
   type WakeRequest = Parameters<typeof requestHeartbeat>[0];
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let currentHandlerDisposer: (() => void) | undefined;
   const ran = { status: "ran", durationMs: 1 } as const;
   const stale = { status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT } as const;
@@ -93,7 +92,6 @@ describe("stale exec heartbeat wakes", () => {
     resetHeartbeatEventsForTest();
     resetSystemEventsForTest();
     setHeartbeatsEnabled(true);
-    envSnapshot.restore();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

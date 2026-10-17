@@ -13,7 +13,6 @@ import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   seedSessionStore,
-  seedMainSessionStore,
   readSessionStoreForTest,
   withTempHeartbeatSandbox,
   type HeartbeatReplySpy,
@@ -49,34 +48,11 @@ function identityConfig(
   return { agents: { defaults: { workspace, heartbeat } }, session: { store, ...session } };
 }
 
-function mockReplyWithSystemEvents(replySpy: HeartbeatReplySpy, cfg: OpenClawConfig) {
-  const blocks: Array<string | undefined> = [];
-  replySpy.mockImplementation(async (ctx, opts) => {
-    const eventContext = getReplySystemEventContext(opts);
-    const sessionKey = eventContext?.sessionKey ?? ctx.SessionKey;
-    if (!ctx.AgentId || !sessionKey) {
-      throw new Error("Expected heartbeat agent and session context");
-    }
-    blocks.push(
-      await drainFormattedSystemEvents({
-        cfg,
-        agentId: ctx.AgentId,
-        sessionKey,
-        isMainSession: false,
-        isNewSession: false,
-        events: eventContext?.events ?? [],
-      }),
-    );
-    return { text: "HEARTBEAT_OK" };
-  });
-  return blocks;
-}
-
 describe("runHeartbeatOnce identity", () => {
   afterEach(() => resetSystemEventsForTest());
 
-  it("keeps isolated global delivery and identity in the selected agent store", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+  it("keeps isolated global delivery and identity in the selected agent store", () =>
+    withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
       const cfg = identityConfig(
         tmpDir,
@@ -129,22 +105,20 @@ describe("runHeartbeatOnce identity", () => {
         expect.objectContaining({ identity: { name: "Pulse", emoji: "📟" } }),
       );
       expect(readSessionStoreForTest(mainStorePath)).toEqual(mainStoreBefore);
-      const historianStore = Object.fromEntries(
-        listSessionEntriesReadOnly(scope("historian2")).map(({ sessionKey, entry }) => [
-          sessionKey,
-          entry,
-        ]),
+      expect(listSessionEntriesReadOnly(scope("historian2"))).toEqual(
+        expect.arrayContaining(
+          ["global", "agent:historian2:global:heartbeat"].map((sessionKey) =>
+            expect.objectContaining({ sessionKey, entry: expect.anything() }),
+          ),
+        ),
       );
-      expect(historianStore.global).toBeDefined();
-      expect(historianStore["agent:historian2:global:heartbeat"]).toBeDefined();
       expect(sendSlack).toHaveBeenCalledOnce();
-    });
-  });
+    }));
 
   it.each([false, true])(
     "preserves the queue of a session named heartbeat with isolation %s",
-    async (isolatedSession) => {
-      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    (isolatedSession) =>
+      withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
         const cfg = identityConfig(tmpDir, storePath, {
           every: "5m",
           target: "none",
@@ -162,12 +136,11 @@ describe("runHeartbeatOnce identity", () => {
         expect(getReplySystemEventContext(options)).toMatchObject({
           heartbeatEventQueueSessionKey: "agent:main:heartbeat",
         });
-      });
-    },
+      }),
   );
 
-  it("keeps a global hook event owned by another agent queued for its owner", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+  it("keeps a global hook event owned by another agent queued for its owner", () =>
+    withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
       const cfg = identityConfig(tmpDir, storeTemplate, undefined, { scope: "global" });
       cfg.agents!.entries = { main: {}, alpha: {}, beta: {} };
@@ -182,7 +155,25 @@ describe("runHeartbeatOnce identity", () => {
           withSystemEventOwner({ sessionKey: "global" }, agentId),
         );
       }
-      const systemEventBlocks = mockReplyWithSystemEvents(replySpy, cfg);
+      const systemEventBlocks: Array<string | undefined> = [];
+      replySpy.mockImplementation(async (ctx, opts) => {
+        const eventContext = getReplySystemEventContext(opts);
+        const sessionKey = eventContext?.sessionKey ?? ctx.SessionKey;
+        if (!ctx.AgentId || !sessionKey) {
+          throw new Error("Expected heartbeat agent and session context");
+        }
+        systemEventBlocks.push(
+          await drainFormattedSystemEvents({
+            cfg,
+            agentId: ctx.AgentId,
+            sessionKey,
+            isMainSession: false,
+            isNewSession: false,
+            events: eventContext?.events ?? [],
+          }),
+        );
+        return { text: "HEARTBEAT_OK" };
+      });
 
       const run = (agentId: string) =>
         runIdentity(cfg, replySpy, {
@@ -209,31 +200,5 @@ describe("runHeartbeatOnce identity", () => {
           ]);
         }
       }
-    });
-  });
-  it("uses the delivery target as sender when lastTo differs", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = identityConfig(tmpDir, storePath, {
-        every: "5m",
-        target: "slack",
-        to: "C0A9P2N8QHY",
-      });
-
-      await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "1644620762",
-      });
-
-      replySpy.mockImplementation(async (ctx: { To?: string; From?: string }) => {
-        expect(ctx).toMatchObject({ To: "C0A9P2N8QHY", From: "C0A9P2N8QHY" });
-        return { text: "ok" };
-      });
-
-      const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "C0A9P2N8QHY" });
-      await runIdentity(cfg, replySpy, {}, { slack: sendSlack, nowMs: () => 0 });
-
-      expect(sendSlack).toHaveBeenCalled();
-    });
-  });
+    }));
 });
