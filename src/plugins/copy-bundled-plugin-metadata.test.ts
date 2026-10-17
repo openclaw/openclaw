@@ -85,6 +85,15 @@ function theme(source: string, beret: string) {
   };
 }
 
+function writeStaleMetadata(dir: string, id: string, skills?: string[]) {
+  writeJsonFile(path.join(dir, "openclaw.plugin.json"), {
+    id,
+    configSchema: { type: "object" },
+    ...(skills ? { skills } : {}),
+  });
+  writeJsonFile(path.join(dir, "package.json"), { name: `@openclaw/${id}` });
+}
+
 afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("copyBundledPluginMetadata", () => {
@@ -318,14 +327,7 @@ describe("copyBundledPluginMetadata", () => {
       "index.js": "export default {}\n",
     });
     fs.mkdirSync(path.join(distDir, "node_modules"), { recursive: true });
-    writeJsonFile(path.join(distDir, "openclaw.plugin.json"), {
-      id: "removed-plugin",
-      configSchema: { type: "object" },
-      skills: ["./bundled-skills/@scope/skill"],
-    });
-    writeJsonFile(path.join(distDir, "package.json"), {
-      name: "@openclaw/removed-plugin",
-    });
+    writeStaleMetadata(distDir, "removed-plugin", ["./bundled-skills/@scope/skill"]);
     fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
 
     copyBundledPluginMetadata({ repoRoot });
@@ -339,13 +341,7 @@ describe("copyBundledPluginMetadata", () => {
     fs.mkdirSync(path.join(sourcePluginDir, "node_modules"), { recursive: true });
     const staleDistDir = bundledPluginDir(repoRoot, "google-gemini-cli-auth");
     writeFiles(staleDistDir, { "index.js": "export default {}\n" });
-    writeJsonFile(path.join(staleDistDir, "openclaw.plugin.json"), {
-      id: "google-gemini-cli-auth",
-      configSchema: { type: "object" },
-    });
-    writeJsonFile(path.join(staleDistDir, "package.json"), {
-      name: "@openclaw/google-gemini-cli-auth",
-    });
+    writeStaleMetadata(staleDistDir, "google-gemini-cli-auth");
 
     copyBundledPluginMetadata({ repoRoot });
 
