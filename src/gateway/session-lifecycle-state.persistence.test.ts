@@ -1,13 +1,11 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
-import {
-  createAgentRunDirectAbortError,
-  resolveAgentRunAbortLifecycleFields,
-} from "../agents/run-termination.js";
+import * as termination from "../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
@@ -30,10 +28,7 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
+import * as agentDb from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
@@ -47,10 +42,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
-import {
-  bindSessionRowProjection,
-  getSessionRowProjection,
-} from "./session-row-projection-access.js";
+import * as projection from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-terminal-");
@@ -97,8 +89,8 @@ function createTarget(sessionKey: string) {
 }
 
 async function closeStore(root: string) {
-  await closeOpenClawAgentDatabasesAsync(root);
-  closeOpenClawAgentDatabasesForTest(root);
+  await agentDb.closeOpenClawAgentDatabasesAsync(root);
+  agentDb.closeOpenClawAgentDatabasesForTest(root);
 }
 
 type Subscriptions = ReturnType<typeof startGatewayEventSubscriptions>;
@@ -344,18 +336,13 @@ it.each(["success", "failed-write"])(
     });
     admission.setAdmittedRunAbort(registration);
     registration.markExecutionStarted();
-    const entry = registration.entry;
-    if (!entry) {
-      throw new Error("expected registered child");
-    }
-    const startPersisted = createDeferred();
-    const terminalWrite = createDeferred();
+    const entry = expectDefined(registration.entry, "registered child");
+    const [startPersisted, terminalWrite] = [createDeferred(), createDeferred()] as const;
     let persistenceSpy:
       | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
       | undefined;
     const restartRecoveryCandidates = new Map();
-    const writerStarted = createDeferred();
-    const releaseWriter = createDeferred();
+    const [writerStarted, releaseWriter] = [createDeferred(), createDeferred()] as const;
     let heldWriter: Promise<unknown> | undefined;
     let subscriptions: Subscriptions | undefined;
     let interruption: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
@@ -393,11 +380,11 @@ it.each(["success", "failed-write"])(
         })) ?? undefined;
       await admission.acquire(target.storePath);
       const rowProjection = await createSessionRowProjection({ cfg, context });
-      bindSessionRowProjection(context, () => rowProjection);
+      projection.bindSessionRowProjection(context, () => rowProjection);
       const sessionEventSubscribers = createSessionEventSubscriberRegistry();
       sessionEventSubscribers.subscribe("session-observer");
       subscriptions = subscribe(chatRunState, {
-        getSessionRowProjection: () => getSessionRowProjection(context),
+        getSessionRowProjection: () => projection.getSessionRowProjection(context),
         broadcast,
         broadcastToConnIds,
         sessionEventSubscribers,
@@ -439,12 +426,12 @@ it.each(["success", "failed-write"])(
       interruption = startSessionWorkAdmissionInterruption({
         scope: target.storePath,
         identities: [target.sessionKey, sessionId],
-        reason: createAgentRunDirectAbortError(),
+        reason: termination.createAgentRunDirectAbortError(),
       });
       expect(registration.controller.signal.aborted).toBe(true);
       emitLifecycle({
         phase: "error",
-        ...resolveAgentRunAbortLifecycleFields(registration.controller.signal),
+        ...termination.resolveAgentRunAbortLifecycleFields(registration.controller.signal),
         endedAt: 2_000,
       });
       registration.cleanup();
@@ -527,7 +514,7 @@ it.each(["success", "failed-write"])(
       releaseWriter.resolve();
       await heldWriter;
       await stopSubscriptions(subscriptions);
-      getSessionRowProjection(context)?.dispose();
+      projection.getSessionRowProjection(context)?.dispose();
       registration.cleanup();
       persistenceSpy?.mockRestore();
       routing.loadSessionEntry.mockReset();
@@ -554,8 +541,7 @@ it.for([
       const runId = "worker-terminal-run";
       const sessionId = "worker-terminal-session";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const writerStarted = createDeferred();
-      const releaseWriter = createDeferred();
+      const [writerStarted, releaseWriter] = [createDeferred(), createDeferred()] as const;
       const clearRequested = createDeferred<string>();
       let claimId: string | undefined;
       let subscriptions: Subscriptions | undefined;
@@ -584,10 +570,7 @@ it.for([
             onClearRequested: clearRequested.resolve,
           },
         );
-        if (!claimId) {
-          throw new Error("expected worker terminal claim");
-        }
-        const terminalClaimId = claimId;
+        const terminalClaimId = expectDefined(claimId, "worker terminal claim");
         const ownerStatus = () =>
           getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration);
         const chatRunState = createChatRunState();
@@ -602,7 +585,7 @@ it.for([
             stream: "lifecycle",
             data: { phase, ...data, startedAt: 1_000, endedAt: 2_000 },
           },
-          claimId,
+          terminalClaimId,
         );
         await vi.waitFor(
           () =>
