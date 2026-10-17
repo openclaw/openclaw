@@ -10,7 +10,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { Context, ImageContent } from "../../../llm/types.js";
+import type { Context } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import {
@@ -54,6 +54,45 @@ const toolProjectionSessionId = "projection-dispatch";
 afterEach(() => {
   clearEmbeddedSessionPromptStates([toolProjectionSessionId, modelPromptSessionId]);
 });
+
+function captureRequests() {
+  const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(buildOpenAIResponsesParams(model, context, undefined));
+    return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }]));
+  });
+  return requests;
+}
+
+function normalizeSession(
+  session: Awaited<ReturnType<typeof createTestSession>>["session"],
+  options: () => Parameters<typeof normalizeMessagesForLlmBoundary>[1] = () => undefined,
+) {
+  const convert = session.agent.convertToLlm;
+  session.agent.convertToLlm = (messages) =>
+    convert(normalizeMessagesForLlmBoundary(messages, options()));
+}
+
+type Submission = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
+type TestSession = Awaited<ReturnType<typeof createTestSession>>["session"];
+
+function submitProjection(session: TestSession, input: Partial<Submission>) {
+  return submitEmbeddedAttemptPrompt({
+    ...createBaseInput(),
+    activeSession: session,
+    promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+    ...input,
+  });
+}
+
+function promptImages(buffer: Buffer) {
+  return finalizeRuntimePromptImages([
+    {
+      image: { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },
+      factIndex: 0,
+    },
+  ]).images;
+}
 
 describe("durable model prompt projection at provider dispatch", () => {
   const sessionId = modelPromptSessionId;
@@ -169,24 +208,13 @@ describe("durable model prompt projection at provider dispatch", () => {
               }
             },
           });
-          await submitEmbeddedAttemptPrompt({
-            ...createBaseInput(),
+          await submitProjection(active.session, {
             attempt: { sessionId, userTurnTranscriptRecorder: recorder },
             ...(withImage && turn === 1
               ? {
-                  images: finalizeRuntimePromptImages([
-                    {
-                      image: {
-                        type: "image" as const,
-                        data: imageBuffer.toString("base64"),
-                        mimeType: "image/png",
-                      },
-                      factIndex: 0,
-                    },
-                  ]).images,
+                  images: promptImages(imageBuffer),
                 }
               : {}),
-            activeSession: active.session,
             transcriptPrompt,
             modelPrompt: projection === "modelPrompt replacement" ? expectedProjection(turn) : "",
             prependContext:
@@ -196,7 +224,6 @@ describe("durable model prompt projection at provider dispatch", () => {
             appendContext: projection === "unchanged prompt" ? undefined : `hook after ${turn}`,
             getUserTranscriptContexts: active.getUserTranscriptContexts,
             withTranscriptWrite: (write) => withSessionManagerWrite(active.sessionManager, write),
-            promptActiveSession: (prompt, options) => active.session.prompt(prompt, options),
           });
           expect(
             active.session.getLastAssistantText(),
@@ -222,25 +249,13 @@ describe("durable model prompt projection at provider dispatch", () => {
         let firstTurnRequests = steering === "midturn" ? 2 : 1;
         expect(requests).toHaveLength(firstTurnRequests);
         if (steering === "retry") {
-          await submitEmbeddedAttemptPrompt({
-            ...createBaseInput(),
+          await submitProjection(first.session, {
             attempt: { sessionId, userTurnTranscriptRecorder: firstRecorder },
-            activeSession: first.session,
             transcriptPrompt: "original turn 1",
             modelPrompt: "Changed prompt from the retry",
-            images: finalizeRuntimePromptImages([
-              {
-                image: {
-                  type: "image",
-                  data: createSolidPngBuffer(1, 1, { r: 200, g: 100, b: 50 }).toString("base64"),
-                  mimeType: "image/png",
-                } satisfies ImageContent,
-                factIndex: 0,
-              },
-            ]).images,
+            images: promptImages(createSolidPngBuffer(1, 1, { r: 200, g: 100, b: 50 })),
             getUserTranscriptContexts: first.getUserTranscriptContexts,
             withTranscriptWrite: (write) => withSessionManagerWrite(first.sessionManager, write),
-            promptActiveSession: (prompt, options) => first.session.prompt(prompt, options),
           });
           firstTurnRequests++;
           expect(requests).toHaveLength(firstTurnRequests);
@@ -394,29 +409,22 @@ describe("durable model prompt projection at provider dispatch", () => {
             sessionManager: manager,
             model: { ...testModel, id: fallback ? "backup" : "primary" },
           });
-          const convert = session.agent.convertToLlm;
-          session.agent.convertToLlm = (messages) =>
-            convert(
-              normalizeMessagesForLlmBoundary(messages, {
-                userTranscriptContexts: contexts.list(),
-                includeTimestamp: false,
-              }),
-            );
-          await submitEmbeddedAttemptPrompt({
-            ...createBaseInput(),
+          normalizeSession(session, () => ({
+            userTranscriptContexts: contexts.list(),
+            includeTimestamp: false,
+          }));
+          await submitProjection(session, {
+            prependContext: undefined,
+            appendContext: undefined,
             attempt: {
               sessionId,
               userTurnTranscriptRecorder: recorder,
               skipPreparedUserTurnMessage: internal,
             },
-            activeSession: session,
             transcriptPrompt: internal ? retry : original,
             modelPrompt: fallback ? retry : firstProjection,
-            prependContext: undefined,
-            appendContext: undefined,
             getUserTranscriptContexts: () => contexts.list(),
             withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
-            promptActiveSession: (prompt, options) => session.prompt(prompt, options),
           });
           const outcome = session.messages.at(-1);
           session.dispose();
@@ -488,18 +496,8 @@ describe("durable model prompt projection at provider dispatch", () => {
           },
         );
         const { session } = await createTestSession({ sessionManager: manager });
-        const convert = session.agent.convertToLlm;
-        session.agent.convertToLlm = (messages) =>
-          convert(
-            normalizeMessagesForLlmBoundary(messages, { userTranscriptContexts: contexts.list() }),
-          );
-        const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-        streamMocks.streamSimple.mockImplementation((model, context) => {
-          requests.push(buildOpenAIResponsesParams(model, context, undefined));
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "done" }]),
-          );
-        });
+        normalizeSession(session, () => ({ userTranscriptContexts: contexts.list() }));
+        const requests = captureRequests();
         const releaseMedia = async () => {
           media.resolve({
             ...original,
@@ -508,14 +506,12 @@ describe("durable model prompt projection at provider dispatch", () => {
           await resolution;
         };
         try {
-          await submitEmbeddedAttemptPrompt({
-            ...createBaseInput(),
-            attempt: { sessionId, userTurnTranscriptRecorder: recorder },
-            activeSession: session,
-            transcriptPrompt: original.text,
-            modelPrompt: "enriched image request",
+          await submitProjection(session, {
             prependContext: undefined,
             appendContext: undefined,
+            attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+            transcriptPrompt: original.text,
+            modelPrompt: "enriched image request",
             getUserTranscriptContexts: () => contexts.list(),
             withTranscriptWrite: async (write) => {
               if (phase === "capture") {
@@ -528,7 +524,6 @@ describe("durable model prompt projection at provider dispatch", () => {
                 await releaseMedia();
               }
             },
-            promptActiveSession: (prompt, options) => session.prompt(prompt, options),
           });
         } finally {
           media.resolve(original);
@@ -594,24 +589,15 @@ describe("durable model prompt projection at provider dispatch", () => {
         100,
       );
       const { session } = await createTestSession({ sessionManager: manager });
-      const convert = session.agent.convertToLlm;
-      session.agent.convertToLlm = (messages) => convert(normalizeMessagesForLlmBoundary(messages));
-      const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-      streamMocks.streamSimple.mockImplementation((model, context) => {
-        requests.push(buildOpenAIResponsesParams(model, context, undefined));
-        return createAssistantResultStream(
-          createAssistant(model, [{ type: "text", text: "done" }]),
-        );
-      });
+      normalizeSession(session);
+      const requests = captureRequests();
 
-      await submitEmbeddedAttemptPrompt({
-        ...createBaseInput(),
-        activeSession: session,
+      await submitProjection(session, {
+        appendContext: undefined,
         attempt: { sessionId, userTurnTranscriptRecorder: recorder },
         transcriptPrompt: "original compacted turn",
         modelPrompt: "enriched compacted turn",
         prependContext: "unrelated hook",
-        appendContext: undefined,
         getUserTranscriptContexts: () => [],
         withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
         promptActiveSession: async (_prompt, options) => {
@@ -675,26 +661,16 @@ describe("durable model prompt projection at provider dispatch", () => {
         await recorder.persistApproved();
         const manager = await SessionManager.openAsync(target, state.workspaceDir);
         const { session } = await createTestSession({ sessionManager: manager });
-        const convert = session.agent.convertToLlm;
-        session.agent.convertToLlm = (messages) =>
-          convert(normalizeMessagesForLlmBoundary(messages));
-        const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-        streamMocks.streamSimple.mockImplementation((model, context) => {
-          requests.push(buildOpenAIResponsesParams(model, context, undefined));
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "done" }]),
-          );
-        });
+        normalizeSession(session);
+        const requests = captureRequests();
 
         // The first request keeps the same stored provenance envelope as replay.
-        await submitEmbeddedAttemptPrompt({
-          ...createBaseInput(),
-          activeSession: session,
+        await submitProjection(session, {
+          prependContext: undefined,
+          appendContext: undefined,
           attempt: { sessionId, userTurnTranscriptRecorder: recorder },
           transcriptPrompt: annotated,
           modelPrompt: hook ? `hook before hidden\n\n${body}` : body,
-          prependContext: undefined,
-          appendContext: undefined,
           getUserTranscriptContexts: () => [],
           withTranscriptWrite: (write) => write(),
           promptActiveSession: async (_prompt, options) => {

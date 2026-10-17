@@ -508,63 +508,52 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it.each([true])(
-    "refreshes permission guidance with in-history updates %s",
-    async (inHistorySystemUpdates) => {
-      const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
-        createSystemUpdateInput();
-      const prepared = await prepareEmbeddedAttemptAgentSession({
-        ...fixture.input,
-        prepareSystemPromptUpdate: inHistorySystemUpdates ? prepareSystemPromptUpdate : undefined,
-      });
-      let currentPrompt = pinnedPrompt;
-      prepared.setPermissionPromptPreparation(async () => () => currentPrompt);
-      const signal = new AbortController().signal;
-      await prepareNextRequest(signal);
-      expect(steer).not.toHaveBeenCalled();
-      if (inHistorySystemUpdates) {
-        expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(pinnedPrompt, false);
-      }
+  it("refreshes permission guidance with in-history updates", async () => {
+    const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
+      createSystemUpdateInput();
+    const prepared = await prepareEmbeddedAttemptAgentSession({
+      ...fixture.input,
+      prepareSystemPromptUpdate,
+    });
+    let currentPrompt = pinnedPrompt;
+    prepared.setPermissionPromptPreparation(async () => () => currentPrompt);
+    const signal = new AbortController().signal;
+    await prepareNextRequest(signal);
+    expect(steer).not.toHaveBeenCalled();
+    expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(pinnedPrompt, false);
 
-      currentPrompt =
-        "## Tools\nread\n\n<!-- openclaw:attempt:PERMISSION -->\n## Permission change\nThe operator changed workspace permissions to read-only.\n<!-- /openclaw:attempt:PERMISSION -->";
-      prepared.setPermissionPromptPreparation(async () =>
-        Object.assign(() => currentPrompt, { freshlyRendered: true }),
-      );
-      await prepareNextRequest(signal);
-      expect(fixture.activeSession.agent.state.systemPrompt).toBe(
-        inHistorySystemUpdates ? pinnedPrompt : currentPrompt,
-      );
-      if (inHistorySystemUpdates) {
-        expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(currentPrompt, true);
-        expect(steer).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            role: "custom",
-            customType: "openclaw.system-update",
-            content: expect.stringContaining("## Tools\nread"),
-            details: { kind: "prompt-update", turnScoped: false },
-          }),
-        );
-        expect(steer.mock.calls[0]?.[0].content).toContain(
-          "## Permission change\nThe operator changed workspace permissions to read-only.",
-        );
-        await prepareNextRequest(signal);
-        expect(steer).toHaveBeenCalledTimes(1);
+    currentPrompt =
+      "## Tools\nread\n\n<!-- openclaw:attempt:PERMISSION -->\n## Permission change\nThe operator changed workspace permissions to read-only.\n<!-- /openclaw:attempt:PERMISSION -->";
+    prepared.setPermissionPromptPreparation(async () =>
+      Object.assign(() => currentPrompt, { freshlyRendered: true }),
+    );
+    await prepareNextRequest(signal);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
+    expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(currentPrompt, true);
+    expect(steer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        role: "custom",
+        customType: "openclaw.system-update",
+        content: expect.stringContaining("## Tools\nread"),
+        details: { kind: "prompt-update", turnScoped: false },
+      }),
+    );
+    expect(steer.mock.calls[0]?.[0].content).toContain(
+      "## Permission change\nThe operator changed workspace permissions to read-only.",
+    );
+    await prepareNextRequest(signal);
+    expect(steer).toHaveBeenCalledTimes(1);
 
-        fixture.activeSession.agent.state.messages.push(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Done." }],
-          }),
-        );
-        currentPrompt = "## Tools\nnone";
-        await fixture.activeSession.agent.prepareNextTurn?.(signal);
-        expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
-        expect(steer).toHaveBeenCalledTimes(1);
-      } else {
-        expect(steer).not.toHaveBeenCalled();
-      }
-    },
-  );
+    fixture.activeSession.agent.state.messages.push(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Done." }],
+      }),
+    );
+    currentPrompt = "## Tools\nnone";
+    await fixture.activeSession.agent.prepareNextTurn?.(signal);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
+    expect(steer).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps an initial update pending until replay admission succeeds", async () => {
     const { fixture, pinnedPrompt, steer, state, prepareSystemPromptUpdate } =
@@ -705,15 +694,15 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledOnce();
     const sessionCall = hoisted.createAgentSession.mock.calls[0];
-    expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
     expect(sessionCall?.[0]).toMatchObject({
+      resourceLoader: fixture.resourceLoader,
+      tools: fixture.sessionToolAllowlist,
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "caller",
       cleanupProviderSessionResourcesOnDispose: false,
     });
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
-    expect(sessionCall?.[0]).toMatchObject({ tools: fixture.sessionToolAllowlist });
     expect(result).toEqual(
       expect.objectContaining({
         activeSession: fixture.activeSession,

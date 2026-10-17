@@ -44,11 +44,54 @@ function createSession(activeToolNames: string[]) {
   };
 }
 
-function createBaseline(activeToolNames: string[], catalogRef?: ToolSearchCatalogRef) {
+function catalog(entries: ToolSearchCatalogEntry[]): ToolSearchCatalogRef {
   return {
-    activeToolNames,
-    catalogEntries: [...(catalogRef?.current?.entries ?? [])],
+    current: {
+      entries,
+      counterScope: "permissions",
+      searchCount: 0,
+      describeCount: 0,
+      callCount: 0,
+    },
   };
+}
+
+function applyAllow(
+  fixture: ReturnType<typeof createSession>,
+  tools: { name: string }[],
+  overrides: Partial<Parameters<typeof applyPromptBuildToolsAllow>[0]> = {},
+) {
+  return applyPromptBuildToolsAllow({
+    session: fixture.session,
+    toolsAllow: [],
+    baseline: {
+      activeToolNames: fixture.readNames(),
+      catalogEntries: [...(overrides.catalogRef?.current?.entries ?? [])],
+    },
+    effectiveTools: tools,
+    uncompactedEffectiveTools: tools,
+    tools,
+    codeModeControlsEnabled: false,
+    ...overrides,
+  });
+}
+
+function expectSurface(result: ReturnType<typeof applyAllow>, names: string[]) {
+  const { activeToolNames, effectiveTools, uncompactedEffectiveTools, tools } = result;
+  expect({ activeToolNames, effectiveTools, uncompactedEffectiveTools, tools }).toEqual({
+    activeToolNames: names,
+    effectiveTools: names.map((name) => ({ name })),
+    uncompactedEffectiveTools: names.map((name) => ({ name })),
+    tools: names.map((name) => ({ name })),
+  });
+}
+
+function finalize(activeToolNames: string[]) {
+  return applyResolvedToolPromptFinalizer({
+    prompt: "cron",
+    activeToolNames,
+    finalize: ({ prompt, messageToolAvailable }) => `${prompt}:${messageToolAvailable}`,
+  });
 }
 
 describe("applyPromptBuildToolsAllow", () => {
@@ -58,15 +101,7 @@ describe("applyPromptBuildToolsAllow", () => {
       const fixture = createSession(["tool_search"]);
       const oldRead = { name: "read", generation: "old" };
       const tools = [oldRead];
-      const catalogRef: ToolSearchCatalogRef = {
-        current: {
-          entries: [catalogEntry("read", oldRead)],
-          counterScope: "permissions",
-          searchCount: 0,
-          describeCount: 0,
-          callCount: 0,
-        },
-      };
+      const catalogRef = catalog([catalogEntry("read", oldRead)]);
       const policy = createPromptBuildToolPolicy({
         session: fixture.session,
         effectiveTools: [{ name: "tool_search" }],
@@ -103,86 +138,38 @@ describe("applyPromptBuildToolsAllow", () => {
 
   it("removes every submitted tool and catalog entry for an empty hook allowlist", () => {
     const fixture = createSession(["tool_search", "message"]);
-    const catalogRef: ToolSearchCatalogRef = {
-      current: {
-        entries: [catalogEntry("read"), catalogEntry("write")],
-        counterScope: "scope-1",
-        searchCount: 0,
-        describeCount: 0,
-        callCount: 0,
-      },
-    };
+    const catalogRef = catalog([catalogEntry("read"), catalogEntry("write")]);
 
-    const result = applyPromptBuildToolsAllow({
-      session: fixture.session,
-      toolsAllow: [],
-      baseline: createBaseline(fixture.readNames(), catalogRef),
+    const result = applyAllow(fixture, [{ name: "read" }, { name: "write" }, { name: "message" }], {
       effectiveTools: [{ name: "tool_search" }, { name: "message" }],
-      uncompactedEffectiveTools: [{ name: "read" }, { name: "write" }, { name: "message" }],
-      tools: [{ name: "read" }, { name: "write" }, { name: "message" }],
       catalogRef,
-      codeModeControlsEnabled: false,
     });
 
-    expect(result.activeToolNames).toEqual([]);
-    expect(result.effectiveTools).toEqual([]);
-    expect(result.uncompactedEffectiveTools).toEqual([]);
-    expect(result.tools).toEqual([]);
+    expectSurface(result, []);
     expect(catalogRef.current?.entries).toEqual([]);
     expect(fixture.readNames()).toEqual([]);
-    expect(
-      applyResolvedToolPromptFinalizer({
-        prompt: "cron",
-        activeToolNames: result.activeToolNames,
-        finalize: ({ prompt, messageToolAvailable }) => `${prompt}:${messageToolAvailable}`,
-      }),
-    ).toBe("cron:false");
+    expect(finalize(result.activeToolNames)).toBe("cron:false");
   });
 
   it("keeps host-required tools when a hook denies optional tools", () => {
     const fixture = createSession(["message", "read"]);
 
-    const result = applyPromptBuildToolsAllow({
-      session: fixture.session,
-      toolsAllow: [],
+    const result = applyAllow(fixture, [{ name: "message" }, { name: "read" }], {
       forceToolNames: ["message"],
-      baseline: createBaseline(fixture.readNames()),
-      effectiveTools: [{ name: "message" }, { name: "read" }],
-      uncompactedEffectiveTools: [{ name: "message" }, { name: "read" }],
-      tools: [{ name: "message" }, { name: "read" }],
-      codeModeControlsEnabled: false,
     });
 
-    expect(result.activeToolNames).toEqual(["message"]);
-    expect(result.effectiveTools).toEqual([{ name: "message" }]);
-    expect(result.uncompactedEffectiveTools).toEqual([{ name: "message" }]);
-    expect(result.tools).toEqual([{ name: "message" }]);
-    expect(
-      applyResolvedToolPromptFinalizer({
-        prompt: "cron",
-        activeToolNames: result.activeToolNames,
-        finalize: ({ prompt, messageToolAvailable }) => `${prompt}:${messageToolAvailable}`,
-      }),
-    ).toBe("cron:true");
+    expectSurface(result, ["message"]);
+    expect(finalize(result.activeToolNames)).toBe("cron:true");
   });
 
   it("cannot add a tool that the host-resolved surface already removed", () => {
     const fixture = createSession(["read"]);
 
-    const result = applyPromptBuildToolsAllow({
-      session: fixture.session,
+    const result = applyAllow(fixture, [{ name: "read" }], {
       toolsAllow: ["exec"],
-      baseline: createBaseline(fixture.readNames()),
-      effectiveTools: [{ name: "read" }],
-      uncompactedEffectiveTools: [{ name: "read" }],
-      tools: [{ name: "read" }],
-      codeModeControlsEnabled: false,
     });
 
-    expect(result.activeToolNames).toEqual([]);
-    expect(result.effectiveTools).toEqual([]);
-    expect(result.uncompactedEffectiveTools).toEqual([]);
-    expect(result.tools).toEqual([]);
+    expectSurface(result, []);
   });
 
   it("keeps cataloged plugin tools allowed through the plugin group", () => {
@@ -192,25 +179,12 @@ describe("applyPromptBuildToolsAllow", () => {
     } as unknown as AnyAgentTool;
     setPluginToolMeta(pluginTool, { pluginId: "example", optional: false });
     const fixture = createSession(["tool_search"]);
-    const catalogRef: ToolSearchCatalogRef = {
-      current: {
-        entries: [catalogEntry(pluginTool.name, pluginTool)],
-        counterScope: "scope-1",
-        searchCount: 0,
-        describeCount: 0,
-        callCount: 0,
-      },
-    };
+    const catalogRef = catalog([catalogEntry(pluginTool.name, pluginTool)]);
 
-    const result = applyPromptBuildToolsAllow({
-      session: fixture.session,
+    const result = applyAllow(fixture, [pluginTool], {
       toolsAllow: ["group:plugins"],
-      baseline: createBaseline(fixture.readNames(), catalogRef),
       effectiveTools: [{ name: "tool_search" }],
-      uncompactedEffectiveTools: [pluginTool],
-      tools: [pluginTool],
       catalogRef,
-      codeModeControlsEnabled: false,
     });
 
     expect(result.activeToolNames).toEqual(["tool_search"]);

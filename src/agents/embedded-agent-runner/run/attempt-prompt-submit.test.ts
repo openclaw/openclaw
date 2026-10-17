@@ -56,10 +56,7 @@ import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js"
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
-import {
-  buildRuntimeContextCustomMessage,
-  type RuntimeContextCustomMessage,
-} from "./runtime-context-prompt.js";
+import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -69,6 +66,24 @@ type PromptOptions = Parameters<PromptActiveSession>[1];
 afterEach(() => {
   clearEmbeddedSessionPromptStates([sessionId]);
 });
+
+function toolResult(
+  toolCallId: string,
+  toolName: string,
+  text: string,
+  timestamp: number,
+  details?: unknown,
+): Extract<AgentMessage, { role: "toolResult" }> {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp,
+    ...(details ? { details } : {}),
+  };
+}
 
 describe("submitEmbeddedAttemptPrompt", () => {
   it("refreshes review source authority before continuing a model request and refuses revocation", async () => {
@@ -697,15 +712,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
     const input = createBaseInput();
     const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
-    const runtimeContextMessage: RuntimeContextCustomMessage = {
-      role: "custom",
-      customType: "openclaw.runtime-context",
-      content: "runtime context",
-      display: false,
-      details: {
-        source: "openclaw-runtime-context",
-        runtimeContextCarrier: true,
-      },
+    const runtimeContextMessage = {
+      ...buildRuntimeContextCustomMessage("runtime context")!,
       timestamp: 2,
     };
     const promptActiveSession = vi.fn(
@@ -744,24 +752,14 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const small = "small MCP result";
     activeSession.agent.state.messages = [
       { role: "user", content: "call MCP tools", timestamp: 1 },
-      {
-        role: "toolResult",
-        toolCallId: "mcp-huge-call",
-        toolName: "huge__return_text",
-        content: [{ type: "text", text: oversized }],
-        isError: false,
-        details: { mcpServer: "huge", mcpTool: "return_text" },
-        timestamp: 2,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "mcp-small-call",
-        toolName: "huge__small_text",
-        content: [{ type: "text", text: small }],
-        isError: false,
-        details: { mcpServer: "huge", mcpTool: "small_text" },
-        timestamp: 3,
-      },
+      toolResult("mcp-huge-call", "huge__return_text", oversized, 2, {
+        mcpServer: "huge",
+        mcpTool: "return_text",
+      }),
+      toolResult("mcp-small-call", "huge__small_text", small, 3, {
+        mcpServer: "huge",
+        mcpTool: "small_text",
+      }),
     ] as AgentMessage[];
     let providerMessages: AgentMessage[] = [];
     activeSession.agent.streamFn = ((_model, context) => {
@@ -821,22 +819,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
     } as const;
     activeSession.agent.state.messages = [
       { role: "user", content: "call tools", timestamp: 1 },
-      {
-        role: "toolResult",
-        toolCallId: "aggregate-a",
-        toolName: "read",
-        content: [{ type: "text", text: "a".repeat(6_000) }],
-        isError: false,
-        timestamp: 2,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "aggregate-b",
-        toolName: "read",
-        content: [{ type: "text", text: "b".repeat(6_000) }],
-        isError: false,
-        timestamp: 3,
-      },
+      toolResult("aggregate-a", "read", "a".repeat(6_000), 2),
+      toolResult("aggregate-b", "read", "b".repeat(6_000), 3),
       // Consumed results remain eligible when history is projected for the first time.
       { role: "assistant", content: [{ type: "text", text: "results processed" }], timestamp: 4 },
       { role: "user", content: "continue", timestamp: 5 },
