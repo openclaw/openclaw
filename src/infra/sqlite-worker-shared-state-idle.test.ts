@@ -258,9 +258,9 @@ poolIt(
     expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);
     await expect(executeOpenClawStateWorker(peerContext, read)).resolves.toBeUndefined();
 
-    await expect(
-      readConfigMachineStateAsync(key, { env: context.environment }),
-    ).resolves.toEqual(record);
+    await expect(readConfigMachineStateAsync(key, { env: context.environment })).resolves.toEqual(
+      record,
+    );
     const reopened = await openClient(context);
     expect(reopened.store).not.toBe(first.store);
     expect(reopened.actor).toBe(first.actor);
