@@ -31,6 +31,13 @@ function expectJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+async function expectResponse(response: Promise<unknown>, fields: JsonObject) {
+  const value = expectJsonObject(await response);
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(value[key]).toEqual(expected);
+  }
+}
+
 function sendJson(socket: WebSocket, payload: JsonObject): void {
   socket.send(JSON.stringify(payload));
 }
@@ -119,25 +126,6 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
         return;
       }
 
-      if (frame.method === "agents.list") {
-        reply({ agents: [{ id: "main" }] });
-        return;
-      }
-
-      if (frame.method === "agent.identity.get") {
-        reply({ agentId: "main", ...(frame.params as JsonObject | undefined) });
-        return;
-      }
-
-      if (
-        frame.method === "agents.create" ||
-        frame.method === "agents.update" ||
-        frame.method === "agents.delete"
-      ) {
-        reply({ ok: true, method: frame.method, params: frame.params as JsonObject | undefined });
-        return;
-      }
-
       if (frame.method === "agent") {
         const params = frame.params as { sessionKey?: string } | undefined;
         reply({
@@ -146,120 +134,64 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
           sessionKey: params?.sessionKey,
         });
         setTimeout(() => {
-          sendJson(socket, {
-            type: "event",
-            event: "agent",
-            seq: seq++,
-            payload: {
-              runId: "run-sdk-e2e",
-              sessionKey: params?.sessionKey,
-              stream: "lifecycle",
-              ts: Date.now(),
-              data: { phase: "start" },
-            },
-          });
-          sendJson(socket, {
-            type: "event",
-            event: "agent",
-            seq: seq++,
-            payload: {
-              runId: "run-sdk-e2e",
-              sessionKey: params?.sessionKey,
-              stream: "assistant",
-              ts: Date.now(),
-              data: { delta: "hello from fake gateway" },
-            },
-          });
-          sendJson(socket, {
-            type: "event",
-            event: "agent",
-            seq: seq++,
-            payload: {
-              runId: "run-sdk-e2e",
-              sessionKey: params?.sessionKey,
-              stream: "lifecycle",
-              ts: Date.now(),
-              data: { phase: "end" },
-            },
-          });
+          for (const [stream, data] of [
+            ["lifecycle", { phase: "start" }],
+            ["assistant", { delta: "hello from fake gateway" }],
+            ["lifecycle", { phase: "end" }],
+          ] as const) {
+            sendJson(socket, {
+              type: "event",
+              event: "agent",
+              seq: seq++,
+              payload: {
+                runId: "run-sdk-e2e",
+                sessionKey: params?.sessionKey,
+                stream,
+                ts: Date.now(),
+                data,
+              },
+            });
+          }
         }, 50);
         return;
       }
 
-      if (frame.method === "agent.wait") {
-        reply({
+      const params = frame.params as JsonObject | undefined;
+      const echo = { ok: true, method: frame.method, params };
+      const responses: Record<string, JsonObject> = {
+        "agents.list": { agents: [{ id: "main" }] },
+        "agent.identity.get": { agentId: "main", ...params },
+        "agents.create": echo,
+        "agents.update": echo,
+        "agents.delete": echo,
+        "agent.wait": {
           status: "ok",
           runId: "run-sdk-e2e",
           sessionKey: "main",
           startedAt: 123,
           endedAt: 456,
-        });
-        return;
-      }
-
-      if (frame.method === "sessions.list") {
-        reply({ sessions: [{ key: "sdk-session" }] });
-        return;
-      }
-
-      if (frame.method === "sessions.create") {
-        const params = frame.params as { key?: string } | undefined;
-        reply({ key: params?.key ?? "sdk-session" });
-        return;
-      }
-
-      if (frame.method === "sessions.resolve") {
-        reply({ key: "sdk-session", params: frame.params as JsonObject | undefined });
-        return;
-      }
-
-      if (frame.method === "sessions.send") {
-        const params = frame.params as { key?: string } | undefined;
-        reply({ status: "ok", runId: "run-session-e2e", sessionKey: params?.key });
-        return;
-      }
-
-      if (frame.method === "sessions.abort") {
-        reply({
+        },
+        "sessions.list": { sessions: [{ key: "sdk-session" }] },
+        "sessions.create": { key: params?.key ?? "sdk-session" },
+        "sessions.resolve": { key: "sdk-session", params },
+        "sessions.send": { status: "ok", runId: "run-session-e2e", sessionKey: params?.key },
+        "sessions.abort": {
           ok: true,
-          abortedRunId: (frame.params as { runId?: string } | undefined)?.runId ?? "run-sdk-e2e",
+          abortedRunId: params?.runId ?? "run-sdk-e2e",
           status: "aborted",
-        });
-        return;
-      }
-
-      if (frame.method === "sessions.patch" || frame.method === "sessions.compact") {
-        reply({ ok: true, method: frame.method, params: frame.params as JsonObject | undefined });
-        return;
-      }
-
-      if (frame.method === "models.list") {
-        reply({ models: [{ id: "gpt-5.4" }] });
-        return;
-      }
-
-      if (frame.method === "models.authStatus") {
-        reply({ providers: [] });
-        return;
-      }
-
-      if (frame.method === "tools.catalog") {
-        reply({ tools: [{ name: "shell" }] });
-        return;
-      }
-
-      if (frame.method === "tools.effective") {
-        reply({ tools: [{ name: "shell", enabled: true }] });
-        return;
-      }
-
-      if (frame.method === "tools.invoke") {
-        reply({ ok: true, toolName: "shell", output: { ok: true } });
-        return;
-      }
-
-      if (frame.method === "exec.approval.list") {
-        reply({ approvals: [] });
+        },
+        "sessions.patch": echo,
+        "sessions.compact": echo,
+        "models.list": { models: [{ id: "gpt-5.4" }] },
+        "models.authStatus": { providers: [] },
+        "tools.catalog": { tools: [{ name: "shell" }] },
+        "tools.effective": { tools: [{ name: "shell", enabled: true }] },
+        "tools.invoke": { ok: true, toolName: "shell", output: { ok: true } },
+        "exec.approval.list": { approvals: [] },
+      };
+      const response = Object.hasOwn(responses, frame.method) && responses[frame.method];
+      if (response) {
+        reply(response);
         return;
       }
 
@@ -347,14 +279,15 @@ describe("OpenClaw SDK websocket e2e", () => {
 
       expect(run.id).toBe("run-sdk-e2e");
       expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
-      expect(result.runId).toBe("run-sdk-e2e");
-      expect(result.sessionKey).toBe("main");
-      expect(result.status).toBe("completed");
-      expect(result.startedAt).toBe(123);
-      expect(result.endedAt).toBe(456);
+      expect(result).toMatchObject({
+        runId: "run-sdk-e2e",
+        sessionKey: "main",
+        status: "completed",
+        startedAt: 123,
+        endedAt: 456,
+      });
       const cancelResult = expectJsonObject(await run.cancel());
-      expect(cancelResult.abortedRunId).toBe("run-sdk-e2e");
-      expect(cancelResult.status).toBe("aborted");
+      expect(cancelResult).toMatchObject({ abortedRunId: "run-sdk-e2e", status: "aborted" });
     } finally {
       await oc.close();
       await gateway.close();
@@ -371,68 +304,52 @@ describe("OpenClaw SDK websocket e2e", () => {
     const oc = new OpenClaw({ transport });
 
     try {
-      const agents = expectJsonObject(await oc.agents.list());
-      expect(agents.agents).toEqual([{ id: "main" }]);
+      await expectResponse(oc.agents.list(), { agents: [{ id: "main" }] });
       const agent = await oc.agents.get("main");
-      const identity = expectJsonObject(await agent.identity({ sessionKey: "sdk-session" }));
-      expect(identity.agentId).toBe("main");
-      expect(identity.sessionKey).toBe("sdk-session");
-      const createAgent = expectJsonObject(
-        await oc.agents.create({ name: "SDK Agent", workspace: "/tmp/sdk-agent" }),
-      );
-      expect(createAgent.method).toBe("agents.create");
-      expect(createAgent.params).toEqual({ name: "SDK Agent", workspace: "/tmp/sdk-agent" });
-      const updateAgent = expectJsonObject(
-        await oc.agents.update({ agentId: "sdk-agent", name: "Renamed SDK Agent" }),
-      );
-      expect(updateAgent.method).toBe("agents.update");
-      expect(updateAgent.params).toEqual({ agentId: "sdk-agent", name: "Renamed SDK Agent" });
-      const clearAgentModel = expectJsonObject(
-        await oc.agents.update({ agentId: "sdk-agent", model: null }),
-      );
-      expect(clearAgentModel.params).toEqual({ agentId: "sdk-agent", model: null });
-      const deleteAgent = expectJsonObject(await oc.agents.delete({ agentId: "sdk-agent" }));
-      expect(deleteAgent.method).toBe("agents.delete");
-      expect(deleteAgent.params).toEqual({ agentId: "sdk-agent" });
-
-      const sessions = expectJsonObject(await oc.sessions.list());
-      expect(sessions.sessions).toEqual([{ key: "sdk-session" }]);
-      const session = await oc.sessions.create({ key: "sdk-session", agentId: "main" });
-      expect(session.key).toBe("sdk-session");
-      const resolvedSession = expectJsonObject(await oc.sessions.resolve({ key: "sdk-session" }));
-      expect(resolvedSession.key).toBe("sdk-session");
-      const sessionRun = await session.send("continue");
-      expect(sessionRun.id).toBe("run-session-e2e");
-      const abortSession = expectJsonObject(await session.abort(sessionRun.id));
-      expect(abortSession.abortedRunId).toBe("run-session-e2e");
-      const patchSession = expectJsonObject(await session.patch({ label: "Renamed" }));
-      expect(patchSession.method).toBe("sessions.patch");
-      const compactSession = expectJsonObject(await session.compact({ maxLines: 200 }));
-      expect(compactSession.method).toBe("sessions.compact");
-
-      const models = expectJsonObject(await oc.models.list());
-      expect(models.models).toEqual([{ id: "gpt-5.4" }]);
-      const modelStatus = expectJsonObject(await oc.models.status({ probe: false }));
-      expect(modelStatus.providers).toEqual([]);
-      const tools = expectJsonObject(await oc.tools.list());
-      expect(tools.tools).toEqual([{ name: "shell" }]);
-      const effectiveTools = expectJsonObject(
-        await oc.tools.effective({ sessionKey: "sdk-session" }),
-      );
-      expect(effectiveTools.tools).toEqual([{ name: "shell", enabled: true }]);
-      const toolResult = await oc.tools.invoke("shell", {
-        args: { command: "pwd" },
+      await expectResponse(agent.identity({ sessionKey: "sdk-session" }), {
+        agentId: "main",
         sessionKey: "sdk-session",
       });
-      expect(toolResult.ok).toBe(true);
-      expect(toolResult.toolName).toBe("shell");
-      expect(toolResult.output).toEqual({ ok: true });
-      const approvals = expectJsonObject(await oc.approvals.list());
-      expect(approvals.approvals).toEqual([]);
-      const approvalResult = expectJsonObject(
-        await oc.approvals.respond("approval-1", { decision: "allow-once" }),
+      await expectResponse(oc.agents.create({ name: "SDK Agent", workspace: "/tmp/sdk-agent" }), {
+        method: "agents.create",
+        params: { name: "SDK Agent", workspace: "/tmp/sdk-agent" },
+      });
+      await expectResponse(oc.agents.update({ agentId: "sdk-agent", name: "Renamed SDK Agent" }), {
+        method: "agents.update",
+        params: { agentId: "sdk-agent", name: "Renamed SDK Agent" },
+      });
+      await expectResponse(oc.agents.update({ agentId: "sdk-agent", model: null }), {
+        params: { agentId: "sdk-agent", model: null },
+      });
+      await expectResponse(oc.agents.delete({ agentId: "sdk-agent" }), {
+        method: "agents.delete",
+        params: { agentId: "sdk-agent" },
+      });
+
+      await expectResponse(oc.sessions.list(), { sessions: [{ key: "sdk-session" }] });
+      const session = await oc.sessions.create({ key: "sdk-session", agentId: "main" });
+      expect(session.key).toBe("sdk-session");
+      await expectResponse(oc.sessions.resolve({ key: "sdk-session" }), { key: "sdk-session" });
+      const sessionRun = await session.send("continue");
+      expect(sessionRun.id).toBe("run-session-e2e");
+      await expectResponse(session.abort(sessionRun.id), { abortedRunId: "run-session-e2e" });
+      await expectResponse(session.patch({ label: "Renamed" }), { method: "sessions.patch" });
+      await expectResponse(session.compact({ maxLines: 200 }), { method: "sessions.compact" });
+
+      await expectResponse(oc.models.list(), { models: [{ id: "gpt-5.4" }] });
+      await expectResponse(oc.models.status({ probe: false }), { providers: [] });
+      await expectResponse(oc.tools.list(), { tools: [{ name: "shell" }] });
+      await expectResponse(oc.tools.effective({ sessionKey: "sdk-session" }), {
+        tools: [{ name: "shell", enabled: true }],
+      });
+      await expectResponse(
+        oc.tools.invoke("shell", { args: { command: "pwd" }, sessionKey: "sdk-session" }),
+        { ok: true, toolName: "shell", output: { ok: true } },
       );
-      expect(approvalResult.ok).toBe(true);
+      await expectResponse(oc.approvals.list(), { approvals: [] });
+      await expectResponse(oc.approvals.respond("approval-1", { decision: "allow-once" }), {
+        ok: true,
+      });
 
       expect(gateway.requests.map((request) => request.method)).toEqual([
         "connect",

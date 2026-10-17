@@ -77,11 +77,17 @@ async function collectSdkRunFixture(
   }
 }
 
-const start: GatewayEvent = {
+const agent = (seq: number, stream: string, data: Record<string, unknown>): GatewayEvent => ({
   event: "agent",
-  seq: 1,
-  payload: { runId, ts: 1, stream: "lifecycle", data: { phase: "start" } },
-};
+  seq,
+  payload: { runId, ts: seq, stream, data },
+});
+const chat = (seq: number, payload: Record<string, unknown>): GatewayEvent => ({
+  event: "chat",
+  seq,
+  payload: { runId, ts: seq, ...payload },
+});
+const start = agent(1, "lifecycle", { phase: "start" });
 const marker: GatewayEvent = { event: "custom.debug", seq: 6, payload: { runId, ts: 6 } };
 
 const terminalCases = [
@@ -129,37 +135,10 @@ describe("SDK terminal observations", () => {
     async ({ mode, terminal, terminalType, terminalData }) => {
       const frames = [
         start,
-        {
-          event: "agent",
-          seq: 2,
-          payload: {
-            runId,
-            ts: 2,
-            stream: "error",
-            data: { reason: "seq gap", expected: 2, received: 3 },
-          },
-        },
-        {
-          event: "agent",
-          seq: 3,
-          payload: {
-            runId,
-            ts: 3,
-            stream: "lifecycle",
-            data: { phase: "error", endedAt: 3, error: "retryable provider failure" },
-          },
-        },
-        {
-          event: "chat",
-          seq: 4,
-          payload: {
-            runId,
-            ts: 4,
-            state: "delta",
-            message: { role: "assistant", content: "partial fallback" },
-          },
-        },
-        { event: "chat", seq: 5, payload: { runId, ts: 5, ...terminal } },
+        agent(2, "error", { reason: "seq gap", expected: 2, received: 3 }),
+        agent(3, "lifecycle", { phase: "error", endedAt: 3, error: "retryable provider failure" }),
+        chat(4, { state: "delta", message: { role: "assistant", content: "partial fallback" } }),
+        chat(5, terminal),
         marker,
       ] as const;
       const expectedRaw = structuredClone(frames);
@@ -188,17 +167,8 @@ describe("SDK chat-first abort", () => {
     async ({ mode, stopReason, terminalType }) => {
       const frames = [
         start,
-        { event: "chat", seq: 2, payload: { runId, ts: 2, state: "aborted", stopReason } },
-        {
-          event: "agent",
-          seq: 3,
-          payload: {
-            runId,
-            ts: 3,
-            stream: "lifecycle",
-            data: { phase: "end", status: "cancelled", aborted: true, stopReason },
-          },
-        },
+        chat(2, { state: "aborted", stopReason }),
+        agent(3, "lifecycle", { phase: "end", status: "cancelled", aborted: true, stopReason }),
         marker,
       ] as const;
       const expectedRaw = structuredClone(frames);

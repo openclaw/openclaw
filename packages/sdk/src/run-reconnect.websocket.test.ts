@@ -26,6 +26,19 @@ describe("SDK run reconciliation over reconnect", () => {
     await gateway.close();
   });
 
+  function chat(state: string, text?: string, extra: Record<string, unknown> = {}) {
+    return {
+      ...scope,
+      state,
+      ...(text === undefined ? {} : { message: { role: "assistant", content: text } }),
+      ...extra,
+    };
+  }
+
+  async function expectNext(events: AsyncIterator<OpenClawEvent>, value: unknown) {
+    await expect(events.next()).resolves.toMatchObject({ value });
+  }
+
   async function connect() {
     const disconnected = createDeferred();
     const reconnected = createDeferred();
@@ -63,12 +76,7 @@ describe("SDK run reconciliation over reconnect", () => {
   async function baseline(): Promise<AsyncIterator<OpenClawEvent>> {
     const events = oc.runEvents(scope.runId)[Symbol.asyncIterator]();
     const first = events.next();
-    gateway.sendEvent(gateway.socket(), "chat", {
-      ...scope,
-      state: "delta",
-      deltaText: "hello",
-      message: { role: "assistant", content: "hello" },
-    });
+    gateway.sendEvent(gateway.socket(), "chat", chat("delta", "hello", { deltaText: "hello" }));
     await expect(first).resolves.toMatchObject({ value: { data: { text: "hello" } } });
     return events;
   }
@@ -128,12 +136,8 @@ describe("SDK run reconciliation over reconnect", () => {
               mode === "agent-lifecycle"
                 ? { ...scope, stream: "lifecycle", data: { phase: "end" } }
                 : mode === "chat-final"
-                  ? {
-                      ...scope,
-                      state: "final",
-                      message: { role: "assistant", content: outputText },
-                    }
-                  : { ...scope, state: "delta", deltaText: " lost suffix" },
+                  ? chat("final", outputText)
+                  : chat("delta", undefined, { deltaText: " lost suffix" }),
           }),
         );
         if (mode !== "chat-final") {
@@ -142,11 +146,7 @@ describe("SDK run reconciliation over reconnect", () => {
               type: "event",
               event: "chat",
               seq: 4,
-              payload: {
-                ...scope,
-                state: "final",
-                message: { role: "assistant", content: outputText },
-              },
+              payload: chat("final", outputText),
             }),
           );
         }
@@ -212,15 +212,12 @@ describe("SDK run reconciliation over reconnect", () => {
       const resolveHistory = await history.promise;
       const socket = gateway.socket();
       if (mode === "newer-live-snapshot") {
-        gateway.sendEvent(socket, "chat", {
-          ...scope,
-          state: "delta",
-          message: { role: "assistant", content: "hello newer" },
-          deltaText: "hello newer",
-        });
-        await expect(events.next()).resolves.toMatchObject({
-          value: { data: { text: "hello newer" } },
-        });
+        gateway.sendEvent(
+          socket,
+          "chat",
+          chat("delta", "hello newer", { deltaText: "hello newer" }),
+        );
+        await expectNext(events, { data: { text: "hello newer" } });
       }
       resolveHistory();
       await waiting.promise;
@@ -236,39 +233,26 @@ describe("SDK run reconciliation over reconnect", () => {
         });
         expect(recovered.value?.raw).toBeUndefined();
       } else if (mode === "failed-history") {
-        await expect(events.next()).resolves.toMatchObject({
-          value: { type: "raw", data: { recovery: { reason: "history-request-failed" } } },
+        await expectNext(events, {
+          type: "raw",
+          data: { recovery: { reason: "history-request-failed" } },
         });
       }
       if (mode !== "newer-live-snapshot") {
-        gateway.sendEvent(socket, "chat", {
-          ...scope,
-          state: "delta",
-          message: { role: "assistant", content: "hello recovered" },
-          deltaText: "hello recovered",
-        });
-        await expect(events.next()).resolves.toMatchObject({
-          value: {
-            data: {
-              text: "hello recovered",
-              delta: mode === "history" ? "" : " recovered",
-            },
-          },
+        gateway.sendEvent(
+          socket,
+          "chat",
+          chat("delta", "hello recovered", { deltaText: "hello recovered" }),
+        );
+        await expectNext(events, {
+          data: { text: "hello recovered", delta: mode === "history" ? "" : " recovered" },
         });
       }
       const text = mode === "newer-live-snapshot" ? "hello newer suffix" : "hello recovered suffix";
-      gateway.sendEvent(socket, "chat", { ...scope, state: "delta", deltaText: " suffix" });
-      await expect(events.next()).resolves.toMatchObject({
-        value: { data: { text, delta: " suffix" } },
-      });
-      gateway.sendEvent(socket, "chat", {
-        ...scope,
-        state: "final",
-        message: { role: "assistant", content: text },
-      });
-      await expect(events.next()).resolves.toMatchObject({
-        value: { type: "run.completed", data: { outputText: text } },
-      });
+      gateway.sendEvent(socket, "chat", chat("delta", undefined, { deltaText: " suffix" }));
+      await expectNext(events, { data: { text, delta: " suffix" } });
+      gateway.sendEvent(socket, "chat", chat("final", text));
+      await expectNext(events, { type: "run.completed", data: { outputText: text } });
       await connection.aborted;
       await events.return?.();
     },
@@ -349,17 +333,13 @@ describe("SDK run reconciliation over reconnect", () => {
         await vi.advanceTimersByTimeAsync(1_000);
         await rearmed.promise;
       } else {
-        await expect(events.next()).resolves.toMatchObject({
-          value: { raw: { event: "probe.history" } },
-        });
+        await expectNext(events, { raw: { event: "probe.history" } });
         for (const [count, delay] of [
           [2, 1_000],
           [3, 2_000],
         ] as const) {
           await vi.advanceTimersByTimeAsync(delay);
-          await expect(events.next()).resolves.toMatchObject({
-            value: { raw: { event: "probe.wait" }, data: { waits: count } },
-          });
+          await expectNext(events, { raw: { event: "probe.wait" }, data: { waits: count } });
         }
       }
       await events.return?.();
@@ -461,11 +441,7 @@ describe("SDK run reconciliation over reconnect", () => {
         stream: "assistant",
         data: { delta: " continues" },
       });
-      await expect(events.next()).resolves.toMatchObject({
-        value: {
-          data: { text: "research continues", delta: " continues" },
-        },
-      });
+      await expectNext(events, { data: { text: "research continues", delta: " continues" } });
       await events.return?.();
     },
   );

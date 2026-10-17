@@ -37,6 +37,24 @@ const chat = (seq: number, text: string | undefined, deltaText?: string, replace
 const assistant = (seq: number, data: Record<string, unknown>) =>
   createAgentEvent("run", seq, seq, "assistant", data);
 
+async function readEvent(pending: Promise<IteratorResult<OpenClawEvent>>) {
+  const next = await pending;
+  expect(next.done).toBe(false);
+  if (next.done) {
+    throw new Error("Expected projected output");
+  }
+  return next.value;
+}
+
+function streamFrame(stream: string, run: number, seq: number, text?: string, delta = text) {
+  return stream === "chat"
+    ? createChatEvent(`run-${run}`, `session-${run}`, seq, "delta", text, seq, { deltaText: delta })
+    : createAgentEvent(`run-${run}`, seq, seq, "assistant", {
+        ...(text === undefined ? {} : { text }),
+        delta,
+      });
+}
+
 describe("SDK streaming projections", () => {
   it("does not surface raw chat projections alongside canonical assistant events", async () => {
     const { oc } = fixture(
@@ -150,14 +168,10 @@ describe("SDK streaming projections", () => {
       if (live) {
         transport.emit(frame);
       }
-      const result = await next;
-      expect(result.done).toBe(false);
-      if (result.done) {
-        throw new Error("Expected projected output");
-      }
-      expect(result.value.type).toBe(value.type);
-      expect(result.value.data).toEqual(value.data);
-      expect(result.value.raw).toBe(frame);
+      const result = await readEvent(next);
+      expect(result.type).toBe(value.type);
+      expect(result.data).toEqual(value.data);
+      expect(result.raw).toBe(frame);
     }
     expect(frames).toEqual(original);
   });
@@ -189,35 +203,27 @@ describe("SDK streaming projections", () => {
       const iterator = events(run.id);
       if (stream === "assistant") {
         for (let index = 251; index <= 500; index++) {
-          const next = await iterator.next();
-          expect(next.done).toBe(false);
-          if (next.done) {
-            throw new Error("Expected retained assistant replay");
-          }
-          expect(next.value.type).toBe("assistant.delta");
-          expect(next.value.data).toEqual({
+          const next = await readEvent(iterator.next());
+          expect(next.type).toBe("assistant.delta");
+          expect(next.data).toEqual({
             itemId: "reply",
             text: "token ".repeat(index + 1),
             delta: "token ",
           });
-          expect(next.value.raw).toBe(frames[index]);
-          expect(next.value.raw?.payload).not.toHaveProperty("data.text");
+          expect(next.raw).toBe(frames[index]);
+          expect(next.raw?.payload).not.toHaveProperty("data.text");
         }
         expect((await rawEvents(1001).next()).value).toBe(frames[500]);
       } else {
-        const first = await iterator.next();
-        expect(first.done).toBe(false);
-        if (first.done) {
-          throw new Error("Expected retained chat replay");
-        }
-        expect(first.value.type).toBe("assistant.delta");
-        expect(first.value.data).toEqual({ text: "hello 1", delta: "hello 1" });
+        const first = await readEvent(iterator.next());
+        expect(first.type).toBe("assistant.delta");
+        expect(first.data).toEqual({ text: "hello 1", delta: "hello 1" });
         const observedLive = observeGatewaySequence(oc, 502);
         text += " 501";
         transport.emit(chat(502, undefined, " 501"));
         await observedLive;
         await oc.close();
-        const seen = [first.value];
+        const seen = [first];
         for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
           seen.push(next.value);
         }
@@ -244,29 +250,14 @@ describe("SDK streaming projections", () => {
       await oc.connect();
       const observedActive = observeGatewaySequence(oc, 101);
       for (let seq = 1; seq <= 101; seq++) {
-        transport.emit(
-          stream === "chat"
-            ? createChatEvent(`run-${seq}`, `session-${seq}`, seq, "delta", "prefix", seq, {
-                deltaText: "prefix",
-              })
-            : createAgentEvent(`run-${seq}`, seq, seq, "assistant", {
-                text: "prefix",
-                delta: "prefix",
-              }),
-        );
+        transport.emit(streamFrame(stream, seq, seq, "prefix"));
       }
       await observedActive;
       const iterator = events("run-1");
       await expect(iterator.next()).resolves.toMatchObject({
         value: { data: { text: "prefix", delta: "prefix" } },
       });
-      transport.emit(
-        stream === "chat"
-          ? createChatEvent("run-1", "session-1", 102, "delta", undefined, 102, {
-              deltaText: " suffix",
-            })
-          : createAgentEvent("run-1", 102, 102, "assistant", { delta: " suffix" }),
-      );
+      transport.emit(streamFrame(stream, 1, 102, undefined, " suffix"));
       await expect(iterator.next()).resolves.toMatchObject({
         value: { data: { text: "prefix suffix", delta: " suffix" } },
       });
@@ -305,16 +296,7 @@ describe("SDK streaming projections", () => {
           message: "hello",
           idempotencyKey: `run-${seq}`,
         });
-        transport.emit(
-          stream === "chat"
-            ? createChatEvent(`run-${seq}`, `session-${seq}`, seq, "delta", "unfinished", seq, {
-                deltaText: "unfinished",
-              })
-            : createAgentEvent(`run-${seq}`, seq, seq, "assistant", {
-                text: "unfinished",
-                delta: "unfinished",
-              }),
-        );
+        transport.emit(streamFrame(stream, seq, seq, "unfinished"));
       }
       await observedLast;
       const exhausted = oc.events()[Symbol.asyncIterator]().next();
