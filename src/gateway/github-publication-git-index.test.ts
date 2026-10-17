@@ -26,6 +26,8 @@ const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 const rejectRefUpdate = async () => {
   throw new Error("update-ref must not run");
 };
+const rejects = (operation: Promise<unknown>, message: string) =>
+  expect(operation).rejects.toThrow(message);
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -69,16 +71,18 @@ async function createFixture() {
   const cwd = await makeDirectory("git");
   const commit = (tree: string, parent: string, message: string) =>
     git(cwd, ["commit-tree", tree, "-p", parent], message);
+  const run = (...args: string[]) => git(cwd, args);
+  const write = (name: string, value: string) => fs.writeFile(path.join(cwd, name), value);
   await git(cwd, ["init", "--initial-branch=main"]);
   await git(cwd, ["config", "user.name", "OpenClaw Test"]);
   await git(cwd, ["config", "user.email", "openclaw@example.test"]);
-  await fs.writeFile(path.join(cwd, "artifact.txt"), "base\n");
-  await git(cwd, ["add", "artifact.txt"]);
-  await git(cwd, ["commit", "-m", "base"]);
-  const previousHead = await git(cwd, ["rev-parse", "HEAD"]);
-  await fs.writeFile(path.join(cwd, "artifact.txt"), "accepted\n");
-  await git(cwd, ["add", "artifact.txt"]);
-  const sourceIndexTree = await git(cwd, ["write-tree"]);
+  await write("artifact.txt", "base\n");
+  await run("add", "artifact.txt");
+  await run("commit", "-m", "base");
+  const previousHead = await run("rev-parse", "HEAD");
+  await write("artifact.txt", "accepted\n");
+  await run("add", "artifact.txt");
+  const sourceIndexTree = await run("write-tree");
   const headCommit = await commit(
     sourceIndexTree,
     previousHead,
@@ -103,7 +107,8 @@ async function createFixture() {
   return {
     ...params,
     commit,
-    git: (...args: string[]) => git(cwd, args),
+    git: run,
+    write,
     file: (...parts: string[]) => path.join(cwd, ...parts),
     update: (
       overrides: Partial<Parameters<typeof updateGitHubPublicationBranchAndIndex>[0]> = {},
@@ -117,25 +122,26 @@ async function createFixture() {
         ...overrides,
       }),
     state: async () => ({
-      head: await git(cwd, ["rev-parse", "HEAD"]),
-      tree: await git(cwd, ["write-tree"]),
-      status: await git(cwd, ["status", "--porcelain"]),
+      head: await run("rev-parse", "HEAD"),
+      tree: await run("write-tree"),
+      status: await run("status", "--porcelain"),
       artifact: await fs.readFile(path.join(cwd, "artifact.txt"), "utf8"),
     }),
   };
 }
 
-const moveHead = () => git(f.cwd, ["update-ref", "refs/heads/main", f.headCommit, f.previousHead]);
+const moveHead = () => f.git("update-ref", "refs/heads/main", f.headCommit, f.previousHead);
 
 async function interruptAcceptedUpdate() {
-  await expect(
+  await rejects(
     f.update({
       updateRef: async () => {
         await moveHead();
         throw new Error("response lost");
       },
     }),
-  ).rejects.toThrow("workspace recovery is pending");
+    "workspace recovery is pending",
+  );
 }
 
 describe("GitHub publication index update", () => {
@@ -145,14 +151,14 @@ describe("GitHub publication index update", () => {
       const remote = await makeDirectory("remote");
       await git(remote, ["init", "--bare", "--initial-branch=main"]);
       await fs.mkdir(f.file(".github/workflows"), { recursive: true });
-      await fs.writeFile(
-        f.file(".github/workflows/example.yml"),
+      await f.write(
+        ".github/workflows/example.yml",
         "name: synthetic\non: workflow_dispatch\njobs: {}\n",
       );
       await f.git("add", "-A");
       const workflowTree = await f.git("write-tree");
       const observedHead = await f.commit(workflowTree, f.previousHead, "maintainer workflow\n");
-      await fs.writeFile(f.file("artifact.txt"), "guest code\n");
+      await f.write("artifact.txt", "guest code\n");
       await f.git("add", "artifact.txt");
       const candidateTree = await f.git("write-tree");
       const candidate = await f.commit(candidateTree, observedHead, "guest code\n");
@@ -209,7 +215,7 @@ describe("GitHub publication index update", () => {
       ),
     ).resolves.toBeUndefined();
 
-    await expect(
+    await rejects(
       f.update({
         env: hookEnv,
         updateRef: async () => {
@@ -217,7 +223,8 @@ describe("GitHub publication index update", () => {
           throw new Error("response lost");
         },
       }),
-    ).rejects.toThrow("workspace recovery is pending");
+      "workspace recovery is pending",
+    );
     await fs.rm(f.file(".git", "index.lock"));
     const hardenedGit = ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false"];
     await run([...hardenedGit, "update-index", "--force-remove", "artifact.txt"]);
@@ -234,14 +241,11 @@ describe("GitHub publication index update", () => {
   });
 
   it("rejects a filter from Git's default global attributes file", async () => {
-    const { cwd } = f;
     const globalAttributes = path.join(testState.home, ".config", "git", "attributes");
     await fs.mkdir(path.dirname(globalAttributes), { recursive: true });
     await fs.writeFile(globalAttributes, "*.secret filter=redact\n");
 
-    await expect(captureGitHubPublicationWorkspaceSnapshot({ cwd })).rejects.toThrow(
-      "unsupported Git clean filter",
-    );
+    await rejects(captureGitHubPublicationWorkspaceSnapshot(f), "unsupported Git clean filter");
   });
 
   it("settles the accepted branch and index after publication authority ends", async () => {
@@ -272,58 +276,51 @@ describe("GitHub publication index update", () => {
   });
 
   it("rejects concurrent staged changes without moving HEAD or rewriting the index", async () => {
-    await fs.writeFile(f.file("concurrent.txt"), "keep staged\n");
+    await f.write("concurrent.txt", "keep staged\n");
     await f.git("add", "concurrent.txt");
 
-    await expect(f.update({ updateRef: rejectRefUpdate })).rejects.toThrow(
-      "workspace index changed",
-    );
+    await rejects(f.update({ updateRef: rejectRefUpdate }), "workspace index changed");
 
     expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
     expect(await f.git("diff", "--cached", "--name-only")).toContain("concurrent.txt");
   });
 
-  it("retries a complete recovery lock when an ambiguous ref CAS did not move", async () => {
-    const indexPath = f.file(".git", "index");
-    const indexBefore = await fs.readFile(indexPath);
-
-    await expect(
-      f.update({
-        updateRef: async () => {
-          throw new Error("ref changed");
-        },
-      }),
-    ).rejects.toThrow("workspace recovery is pending");
-
-    expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
-    expect(await fs.readFile(indexPath)).toEqual(indexBefore);
-    const recoveryLock = await fs.stat(f.file(".git", "index.lock"));
-    expect(recoveryLock.size).toBeGreaterThan(0);
-
-    await f.update({
-      updateRef: async () => {
-        await moveHead();
-      },
-    });
-    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
-    expect(await f.git("status", "--porcelain")).toBe("");
-  });
-
-  it("installs a retained recovery index when an ambiguous ref CAS moved", async () => {
-    await interruptAcceptedUpdate();
-
-    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
-    await f.recover();
-    expect(await git(f.cwd, ["write-tree"])).toBe(f.workspaceTree);
-    expect(await f.git("status", "--porcelain")).toBe("");
-    await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
-  });
+  it.each([false, true])(
+    "recovers the retained index when ambiguous CAS moved=%s",
+    async (moved) => {
+      const indexPath = f.file(".git", "index");
+      const indexBefore = await fs.readFile(indexPath);
+      await rejects(
+        f.update({
+          updateRef: async () => {
+            if (moved) {
+              await moveHead();
+            }
+            throw new Error("response lost");
+          },
+        }),
+        "workspace recovery is pending",
+      );
+      expect(await f.git("rev-parse", "HEAD")).toBe(moved ? f.headCommit : f.previousHead);
+      if (!moved) {
+        expect(await fs.readFile(indexPath)).toEqual(indexBefore);
+        expect((await fs.stat(f.file(".git", "index.lock"))).size).toBeGreaterThan(0);
+        await f.update({ updateRef: moveHead });
+      } else {
+        await f.recover();
+        expect(await f.git("write-tree")).toBe(f.workspaceTree);
+        await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
+      }
+      expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+      expect(await f.git("status", "--porcelain")).toBe("");
+    },
+  );
 
   it("does not install a recovered index after custody changes during Git probes", async () => {
     await interruptAcceptedUpdate();
 
     let current = true;
-    await expect(
+    await rejects(
       f.recover({
         assertCustody: () => {
           if (!current) {
@@ -338,7 +335,8 @@ describe("GitHub publication index update", () => {
           return result;
         },
       }),
-    ).rejects.toThrow("publication authority changed");
+      "publication authority changed",
+    );
     await expect(fs.stat(f.file(".git", "index.lock"))).resolves.toBeDefined();
   });
 
@@ -350,16 +348,14 @@ describe("GitHub publication index update", () => {
     });
     await fs.rename(foreignIndex, f.file(".git", "index.lock"));
 
-    await expect(f.update({ updateRef: rejectRefUpdate })).rejects.toThrow(
-      "locked by another operation",
-    );
+    await rejects(f.update({ updateRef: rejectRefUpdate }), "locked by another operation");
 
     expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
     expect((await fs.stat(f.file(".git", "index.lock"))).size).toBeGreaterThan(0);
   });
 
   it("removes its owned lock after a definite ref CAS rejection", async () => {
-    await expect(
+    await rejects(
       f.update({
         updateRef: async () => {
           const result = await runCommandBuffered(
@@ -369,7 +365,8 @@ describe("GitHub publication index update", () => {
           assertGitHubPublicationRefCasCompleted(result);
         },
       }),
-    ).rejects.toThrow("workspace branch changed before commit");
+      "workspace branch changed before commit",
+    );
 
     await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
     expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);

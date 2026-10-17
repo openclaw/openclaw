@@ -50,11 +50,10 @@ const mocks = vi.hoisted(() => ({
   config: vi.fn(),
   identity: vi.fn(),
 }));
-// mock-isolation: Keep session-owner SQL outside the worktree-read measurement.
+// mock-isolation: Exclude session SQL, credentials, and config from worktree-read measurement.
 vi.mock("./session-utils.js", () => ({
   loadIncognitoGatewaySessionEntryReadOnly: (...args: unknown[]) => mocks.session(...args),
 }));
-// mock-isolation: Keep session-worker state outside the worktree-read measurement.
 vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async (
     params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],
@@ -62,19 +61,14 @@ vi.mock("./session-utils-store-worker.js", () => ({
     const loaded = await mocks.sessionRead(params);
     params.onSelected?.({
       ...loaded,
-      storePath: "/synthetic/admitted.sqlite",
+      storePath: admittedSource.path,
       storeKeys: [loaded.canonicalKey],
       store: { [loaded.canonicalKey]: loaded.entry },
-      capturedReadSource: {
-        agentId: loaded.agentId,
-        path: "/synthetic/admitted.sqlite",
-        databaseIdentity: "publication-worker-fixture",
-      },
+      capturedReadSource: { ...admittedSource, agentId: loaded.agentId },
     });
     return loaded;
   },
 }));
-// mock-isolation: Supply fresh row facts from the admitted physical session reader.
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   withSessionEntryReadOnlyInWorker: async <T>(
     scope: Parameters<typeof withSessionEntryReadOnlyInWorker>[0],
@@ -93,9 +87,9 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
         kind: "file",
         assertCurrent,
         source: {
-          agentId: scope.agentId ?? "main",
-          path: scope.storePath ?? "/synthetic/admitted.sqlite",
-          databaseIdentity: "publication-worker-fixture",
+          ...admittedSource,
+          agentId: scope.agentId ?? admittedSource.agentId,
+          path: scope.storePath ?? admittedSource.path,
         },
       },
     );
@@ -128,7 +122,7 @@ vi.mock("../config/sessions/session-entry-read-facts.js", async (original) => {
     }) satisfies typeof actual.readRetainedSessionEntryFacts,
   };
 });
-// mock-isolation: Use the synthetic registry without starting managed-worktree services.
+// mock-isolation: Keep registry reads real without starting managed-worktree services.
 vi.mock("../agents/worktrees/service.js", () => ({
   managedWorktrees: {
     resolveRepositoryIdentity: async () => ({
@@ -141,7 +135,6 @@ vi.mock("../agents/worktrees/service.js", () => ({
       findLiveRegistryWorktreeByOwner(process.env, kind, id),
   },
 }));
-// mock-isolation: Control identity preparation without credential discovery.
 vi.mock("../agents/github-tool-identity.js", () => ({
   prepareGitHubPublicationIdentity: mocks.identity,
   prepareGitHubPublicationOptionsIdentity: mocks.identity,
@@ -149,13 +142,10 @@ vi.mock("../agents/github-tool-identity.js", () => ({
   resolveConfiguredGitHubToolIdentity: () => undefined,
   onManagedGitHubProfileChanged: () => () => {},
 }));
-// mock-isolation: Exclude OAuth credentials and network activity from this reader fixture.
 vi.mock("./github-oauth-lifecycle.js", () => ({
   requestCurrentGitHubOAuthRefresh: async () => {},
 }));
-// mock-isolation: Use synthetic configuration without loading operator configuration.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
-// mock-isolation: Exclude process-wide secret materialization from this reader fixture.
 vi.mock("../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: () => undefined,
 }));
@@ -163,6 +153,11 @@ vi.mock("../secrets/runtime-state.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionStorePath = "/publication-availability/sessions.sqlite";
 const session = { sessionKey: "agent:main:publication", sessionId: "session", agentId: "main" };
+const admittedSource = {
+  agentId: session.agentId,
+  path: "/synthetic/admitted.sqlite",
+  databaseIdentity: "publication-worker-fixture",
+};
 const sessionReadSource = {
   agentId: session.agentId,
   path: sessionStorePath,
@@ -189,8 +184,11 @@ const worktreeEntry = (record = worktree) => ({
 const admittedTarget = (sessionKey = session.sessionKey) => ({
   ...session,
   sessionKey,
-  storePath: "/synthetic/admitted.sqlite",
+  storePath: admittedSource.path,
 });
+const baseEntry = { sessionId: session.sessionId, lifecycleRevision: "lifecycle" };
+const setWorktree = (entry: ReturnType<typeof worktreeEntry> | undefined) =>
+  mocks.session.mockReturnValue({ ...mocks.session(), entry: { ...baseEntry, worktree: entry } });
 const retargetStore = () =>
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-other-store-"));
 const rejectHostRead = () => {
@@ -240,11 +238,7 @@ beforeEach(async () => {
     agentId: session.agentId,
     storePath: sessionStorePath,
     readSource: sessionReadSource,
-    entry: {
-      sessionId: session.sessionId,
-      lifecycleRevision: "lifecycle",
-      worktree: worktreeEntry(),
-    },
+    entry: { ...baseEntry, worktree: worktreeEntry() },
   });
   mocks.sessionRead.mockReset().mockImplementation(async () => mocks.session());
   mocks.admittedSessionRead.mockReset().mockImplementation(async () => ({
@@ -276,10 +270,7 @@ it.each([true, false])(
 it("rejects an unbound session without dispatching a worktree read", async () => {
   const worker = await import("../state/openclaw-state-worker-store.js");
   const execute = vi.spyOn(worker, "executeOpenClawStateWorker");
-  mocks.session.mockReturnValue({
-    ...mocks.session(),
-    entry: { sessionId: session.sessionId, lifecycleRevision: "lifecycle" },
-  });
+  setWorktree(undefined);
   expect(await prepareGitHubPublicationAvailability(session)).toBe(false);
   expect(execute).not.toHaveBeenCalled();
 });
@@ -310,7 +301,7 @@ it.each([
       expect.objectContaining({
         agentId: session.agentId,
         sessionKey: session.sessionKey,
-        storePath: "/synthetic/admitted.sqlite",
+        storePath: admittedSource.path,
         projection: [],
       }),
       expect.any(Function),
@@ -336,23 +327,16 @@ it("keeps an admitted stored main alias under its canonical publication owner", 
     ownerId: "global",
   };
   await insertRegistryWorktree(process.env, aliasWorktree);
-  mocks.session.mockReturnValue({
-    ...mocks.session(),
-    canonicalKey: "global",
-    entry: {
-      ...mocks.session().entry,
-      worktree: worktreeEntry(aliasWorktree),
-    },
-  });
+  setWorktree(worktreeEntry(aliasWorktree));
+  mocks.session.mockReturnValue({ ...mocks.session(), canonicalKey: "global" });
   const storedKey = "agent:main:main";
   mocks.admittedSessionRead.mockResolvedValue({
     entries: [{ sessionKey: storedKey, entry: mocks.session().entry }],
   });
-  const prepared = await prepareGitHubPublicationWorkspaceOwner(
+  using prepared = await prepareGitHubPublicationWorkspaceOwner(
     { ...session, sessionKey: "global" },
     { sessionTarget: admittedTarget(storedKey) },
   );
-  using _ = { [Symbol.dispose]: () => prepared.release() };
   expect(prepared.initial.loaded.canonicalKey).toBe("global");
   expect(mocks.sessionRead).not.toHaveBeenCalled();
 });
@@ -441,12 +425,11 @@ it("retains the memory session outside its async scope and rejects a replacement
     "writer",
   );
   const { selected, location, binding } = fixture;
-  const prepared = await runWithSessionActorStorage(binding, () =>
+  using prepared = await runWithSessionActorStorage(binding, () =>
     prepareGitHubPublicationWorkspaceOwner(selected, {
       sessionTarget: { ...selected, storePath: location.path, expectedWriterRunId: "writer" },
     }),
   );
-  using _ = { [Symbol.dispose]: () => prepared.release() };
   mocks.session.mockImplementation(rejectHostRead);
   expect((await prepared.read()).loaded.entry.activeWriterRunId).toBe("writer");
   await runWithSessionActorStorage(binding, () =>

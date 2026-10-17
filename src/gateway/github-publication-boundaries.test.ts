@@ -99,7 +99,8 @@ function localClaim(
   });
 }
 
-async function cloudFixture(environmentId: string) {
+async function cloudFixture() {
+  const environmentId = "publication-environment";
   await persistClaimPublicationWorkspace();
   const database = localDatabase();
   const placements = createWorkerSessionPlacementStore({ database });
@@ -296,11 +297,8 @@ describe("Gateway GitHub publication boundaries", () => {
         }
         return result;
       });
-      const idempotencyKey = `shared-authority-after-${boundary}`;
       const result = await coordinator.requestForSessionV2({
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        idempotencyKey,
+        ...sessionRequest(`shared-authority-after-${boundary}`),
         assertCurrent: () => {
           if (!current) {
             throw new GitHubPublicationRequesterUnavailableError();
@@ -555,11 +553,7 @@ describe("Gateway GitHub publication boundaries", () => {
     { label: "a mismatched run identity", claimRunId: "run-active", expectedRunId: "run-other" },
     { label: "its own active turn", claimRunId: "run-active", expectedRunId: "run-active" },
   ])("queues a cloud session publication with $label", async ({ claimRunId, expectedRunId }) => {
-    const {
-      database,
-      placements,
-      claim: claimTurn,
-    } = await cloudFixture("environment-deferred-request");
+    const { database, placements, claim: claimTurn } = await cloudFixture();
     const claim = claimRunId ? await claimTurn(claimRunId, "claim-active") : undefined;
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
@@ -584,7 +578,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("publishes deferred session requests alongside an accepted turn claim", async () => {
-    const { placements, claim: claimTurn } = await cloudFixture("environment-accepted-deferred");
+    const { placements, claim: claimTurn } = await cloudFixture();
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
     const deferred = await coordinator.requestForSessionV2(
       cloudRequest("accepted-deferred-session"),
@@ -605,7 +599,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("defers an orphaned turn request and publishes it when the workspace is quiescent", async () => {
-    const { database, placements, claim: claimTurn } = await cloudFixture("environment-1");
+    const { database, placements, claim: claimTurn } = await cloudFixture();
     const claim = await claimTurn("run-orphan", "claim-orphan");
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
     const accepted = await coordinator.requestForClaimV2({
@@ -630,11 +624,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("defers snapshot preparation failures without blocking workspace acceptance", async () => {
-    const {
-      database,
-      placements,
-      claim: claimTurn,
-    } = await cloudFixture("environment-snapshot-failure");
+    const { database, placements, claim: claimTurn } = await cloudFixture();
     const claim = await claimTurn("run-snapshot-failure", "claim-snapshot-failure");
     const runtime = createGitHubPublicationRuntime({
       placements,

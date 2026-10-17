@@ -698,66 +698,60 @@ describe("shared GitHub publication requester authority", () => {
       const database = openOpenClawStateDatabase();
       const requestId = "legacy-interrupted-publication";
       const advancedHead = "f".repeat(40);
-      const advanced = [
-        "advanced-closed",
-        "unrelated",
-        "ancestry-unavailable",
-        "unmarked",
-      ].includes(outcome);
-      let compared = false;
-      let readCommit = false;
-      let readPullRequests = false;
-      seedLocalPublication(database, { requestId, status: "publishing", requester: null });
-      interceptTransport(async (argv, options, transport) => {
-        if (
-          argv.includes(
-            "repos/openclaw/openclaw/compare/" + NEW_HEAD + "..." + advancedHead + "?per_page=1",
-          )
-        ) {
-          compared = true;
-          return outcome === "ancestry-unavailable"
+      const is = (...values: (typeof outcome)[]) => values.includes(outcome);
+      const advanced = is("advanced-closed", "unrelated", "ancestry-unavailable", "unmarked");
+      const commitPath = `repos/openclaw/openclaw/git/commits/${NEW_HEAD}`;
+      const comparePath = `repos/openclaw/openclaw/compare/${NEW_HEAD}...${advancedHead}?per_page=1`;
+      const reads = new Set<string>();
+      const replies = [
+        [
+          comparePath,
+          is("ancestry-unavailable")
             ? commandResult("", 1)
-            : jsonResult({ sha: outcome === "unrelated" ? OLD_HEAD : NEW_HEAD });
-        }
-        if (argv.includes(`repos/openclaw/openclaw/git/commits/${NEW_HEAD}`)) {
-          readCommit = true;
-          return outcome === "unavailable"
+            : jsonResult({ sha: is("unrelated") ? OLD_HEAD : NEW_HEAD }),
+        ],
+        [
+          commitPath,
+          is("unavailable")
             ? commandResult("", 1)
             : jsonResult({
                 sha: NEW_HEAD,
-                tree: { sha: outcome === "old-tree" ? "e".repeat(40) : WORKSPACE_TREE },
+                tree: { sha: is("old-tree") ? "e".repeat(40) : WORKSPACE_TREE },
                 parents: [{ sha: OLD_HEAD }],
-                message: `OpenClaw-Publication: ${outcome === "wrong-marker" ? "another-request" : requestId}`,
-              });
-        }
-        if (argv.includes("state=all")) {
-          readPullRequests = true;
-          return jsonResult(
-            outcome === "missing"
+                message: `OpenClaw-Publication: ${is("wrong-marker") ? "another-request" : requestId}`,
+              }),
+        ],
+        [
+          "state=all",
+          jsonResult(
+            is("missing")
               ? []
               : [
                   pullRequest({
-                    state: outcome === "advanced-closed" ? "closed" : "open",
-                    body:
-                      outcome === "unmarked"
-                        ? "Another publication"
-                        : `<!-- openclaw-publication:${requestId} -->`,
+                    state: is("advanced-closed") ? "closed" : "open",
+                    body: is("unmarked")
+                      ? "Another publication"
+                      : `<!-- openclaw-publication:${requestId} -->`,
                     headSha: advanced ? advancedHead : NEW_HEAD,
                   }),
                 ],
-          );
+          ),
+        ],
+      ] as const;
+      seedLocalPublication(database, { requestId, status: "publishing", requester: null });
+      interceptTransport(async (argv, options, transport) => {
+        const reply = replies.find(([endpoint]) => argv.includes(endpoint));
+        if (!reply) {
+          return await transport(argv, options);
         }
-        return await transport(argv, options);
+        reads.add(reply[0]);
+        return reply[1];
       });
       const coordinator = createTestGitHubPublicationCoordinator({
         placements: createWorkerSessionPlacementStore({ database }),
       });
       const recovery = coordinator.resumeSessionRequests();
-      if (
-        ["missing", "unavailable", "unrelated", "ancestry-unavailable", "unmarked"].includes(
-          outcome,
-        )
-      ) {
+      if (is("missing", "unavailable", "unrelated", "ancestry-unavailable", "unmarked")) {
         await expect(recovery).rejects.toBeInstanceOf(AggregateError);
         expect(["requested", "publishing"]).toContain(
           (await coordinator.readAsync(requestId))?.status,
@@ -765,7 +759,7 @@ describe("shared GitHub publication requester authority", () => {
       } else {
         await recovery;
       }
-      if (outcome === "accepted" || outcome === "advanced-closed") {
+      if (is("accepted", "advanced-closed")) {
         await expectResult(coordinator, requestId, {
           status: "published",
           url: publicationUrl("local"),
@@ -778,12 +772,12 @@ describe("shared GitHub publication requester authority", () => {
           workspace_tree: WORKSPACE_TREE,
         });
       }
-      if (advanced && outcome !== "unmarked") {
-        expect(compared).toBe(true);
+      if (advanced && !is("unmarked")) {
+        expect(reads.has(comparePath)).toBe(true);
       }
-      expect(readCommit).toBe(true);
-      if (!["unavailable", "old-tree", "wrong-marker"].includes(outcome)) {
-        expect(readPullRequests).toBe(true);
+      expect(reads.has(commitPath)).toBe(true);
+      if (!is("unavailable", "old-tree", "wrong-marker")) {
+        expect(reads.has("state=all")).toBe(true);
       }
       expect(
         mocks.runCommand.mock.calls.some(

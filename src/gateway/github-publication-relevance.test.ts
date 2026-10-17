@@ -57,12 +57,11 @@ function responses(publishedTree = "4".repeat(40), compared: unknown = compariso
     json(requestUrl(input).includes("/compare/") ? compared : published(head, publishedTree)),
   );
 }
-const current = () => {};
 const check = (
   fetchImpl: typeof fetch,
   accepted: Scenario["snapshot"] = {},
   pullRequests = [pr],
-  assertCurrent = current,
+  assertCurrent = () => {},
 ) =>
   isGitHubPublicationSuperseded({ ...snapshot, ...accepted }, pullRequests, {
     fetchImpl,
@@ -104,7 +103,7 @@ type Scenario = {
   tree?: string;
   compared?: unknown;
 };
-const snapshotCases: [name: string, input: Scenario, superseded: boolean, calls?: number][] = [
+it.each<[name: string, input: Scenario, superseded: boolean, calls?: number]>([
   ["committed open history", { pr: { state: "open" } }, true, 2],
   ["committed draft history", { pr: { state: "draft" } }, true, 2],
   ["committed merged history", { pr: { state: "merged" } }, true, 2],
@@ -117,22 +116,18 @@ const snapshotCases: [name: string, input: Scenario, superseded: boolean, calls?
   ["diverged history", { compared: { ...comparison, status: "diverged" } }, false],
   ["wrong merge base", { compared: { ...comparison, merge_base_commit: { sha: head } } }, false],
   ["unreadable comparison", { compared: null }, false],
-];
-it.each(snapshotCases)(
-  "checks publication coverage for %s",
-  async (_name, input, superseded, calls) => {
-    const fetchImpl = responses(input.tree, input.compared);
-    expect(await check(fetchImpl, input.snapshot, [{ ...pr, ...input.pr }])).toBe(superseded);
-    if (calls !== undefined) {
-      expect(fetchImpl).toHaveBeenCalledTimes(calls);
-    }
-    if (superseded && calls === 2) {
-      expect(fetchImpl.mock.calls[1]?.[0]).toEqual(
-        expect.stringContaining(`compare/${source}...${head}?per_page=1&page=2`),
-      );
-    }
-  },
-);
+])("checks publication coverage for %s", async (_name, input, superseded, calls) => {
+  const fetchImpl = responses(input.tree, input.compared);
+  expect(await check(fetchImpl, input.snapshot, [{ ...pr, ...input.pr }])).toBe(superseded);
+  if (calls !== undefined) {
+    expect(fetchImpl).toHaveBeenCalledTimes(calls);
+  }
+  if (superseded && calls === 2) {
+    expect(fetchImpl.mock.calls[1]?.[0]).toEqual(
+      expect.stringContaining(`compare/${source}...${head}?per_page=1&page=2`),
+    );
+  }
+});
 
 it.each(["missing", "malformed"])("checks later matching PRs after a %s head", async (failure) => {
   const missingHead = "6".repeat(40);
