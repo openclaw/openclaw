@@ -19,7 +19,9 @@ import {
 type Start = NonNullable<TranscriptSourceProvider["start"]>;
 type Stop = NonNullable<TranscriptSourceProvider["stop"]>;
 const testState = useTranscriptTestState();
-const plugins = { allow: ["transcript-test-fixture"] };
+const config = { plugins: { allow: ["transcript-test-fixture"] }, transcripts: { enabled: true } };
+const localCaller = { kind: "operator", source: "local" } as const;
+const captureSource = { accountId: "account-a", guildId: "guild-a", channelId: "voice-a" };
 const startCapture: Start = async ({ session }) => ({ ok: true, session });
 const stopCapture: Stop = async ({ sessionId }) => ({ ok: true, sessionId });
 const authorize: NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"] = async ({
@@ -36,9 +38,8 @@ const expectDetails = (
 ) => expect(result).resolves.toMatchObject({ details });
 const emptyStatus = { active: [] };
 
-function harness(overrides: Partial<TranscriptSourceProvider> = {}) {
-  const { stateDir, store } = testState();
-  const logger = { warn: vi.fn() };
+function register(overrides: Partial<TranscriptSourceProvider>) {
+  const state = testState();
   const provider: TranscriptSourceProvider = {
     id: "proof-live",
     name: "Proof Live",
@@ -48,12 +49,12 @@ function harness(overrides: Partial<TranscriptSourceProvider> = {}) {
     ...overrides,
   };
   registerTranscriptTestProvider(provider, "transcript-test-fixture");
-  const ctx = {
-    config: { plugins, transcripts: { enabled: true } },
-    stateDir,
-    logger,
-    caller: { kind: "operator", source: "local" },
-  } as const;
+  return { ...state, provider };
+}
+
+function harness(overrides: Partial<TranscriptSourceProvider> = {}) {
+  const { stateDir, store, provider } = register(overrides);
+  const ctx = { config, stateDir, logger: { warn: vi.fn() }, caller: localCaller };
   const tool = createTranscriptsTool(ctx);
   const execute = (action: string, sessionId?: string) =>
     tool.execute(action, { action, sessionId });
@@ -66,14 +67,7 @@ function harness(overrides: Partial<TranscriptSourceProvider> = {}) {
     }
     return value;
   };
-  return {
-    ...ctx,
-    provider,
-    execute,
-    start,
-    store,
-    session,
-  };
+  return { ...ctx, provider, execute, start, store, session };
 }
 
 describe("transcripts tool", () => {
@@ -214,13 +208,13 @@ describe("transcripts tool", () => {
         id: "room-audio",
         name: "Room Audio",
         sourceKinds: ["live-audio"],
-        start: async (request) => ({ ok: true, session: request.session }),
-        stop: async (request) => ({ ok: true, sessionId: request.sessionId }),
+        start: startCapture,
+        stop: stopCapture,
       };
       registerTranscriptTestProvider(provider);
       const tool = createTranscriptsTool({
         stateDir: testState().stateDir,
-        caller: { kind: "operator", source: "local" },
+        caller: localCaller,
       });
       const sessionIds = [
         ...Array.from({ length: count }, (_, index) => `notes-${index}-${"?".repeat(idChars)}`),
@@ -275,13 +269,12 @@ const owner = { channel: "discord", accountId: "account-a" };
 const remote = { channel: "webchat", accountId: "operator" };
 
 function fixture(overrides: Partial<TranscriptSourceProvider> = {}) {
-  const { stateDir, store } = testState();
   const resolveAccountId = vi.fn<
     NonNullable<TranscriptSourceProvider["accessControl"]>["resolveAccountId"]
   >(({ source }) => ({ ok: true, value: source.accountId }));
   const start = vi.fn(startCapture);
   const stop = vi.fn(stopCapture);
-  const provider: TranscriptSourceProvider = {
+  const { stateDir, store, provider } = register({
     id: "discord-voice",
     name: "Discord Voice",
     sourceKinds: ["live-audio"],
@@ -293,16 +286,15 @@ function fixture(overrides: Partial<TranscriptSourceProvider> = {}) {
       authorize,
     },
     ...overrides,
-  };
-  registerTranscriptTestProvider(provider, "transcript-test-fixture");
+  });
   const tool = (agentId = "main", origin?: Origin) =>
     createTranscriptsTool({
-      config: { plugins: { allow: ["transcript-test-fixture"] }, transcripts: { enabled: true } },
+      config,
       stateDir,
       agentId,
       caller: origin
         ? { kind: "channel", ...origin, senderId: "test-sender", roleIds: [] }
-        : { kind: "operator", source: "local" },
+        : localCaller,
     });
   const execute = (params: Record<string, unknown>, origin?: Origin, agentId = "main") =>
     tool(agentId, origin).execute("account", params);
@@ -328,9 +320,7 @@ function fixture(overrides: Partial<TranscriptSourceProvider> = {}) {
       {
         action: "start",
         providerId: provider.id,
-        accountId: "account-a",
-        guildId: "guild-a",
-        channelId: "voice-a",
+        ...captureSource,
         sessionId,
         ...source,
       },

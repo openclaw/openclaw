@@ -93,81 +93,67 @@ async function terminal(name: string, permissionMode: "full" | "workspace" = "wo
   const manager = new TerminalSessionManager({ emit() {}, spawn: async () => backend });
   managers.add(manager);
   const opened = expectTerminalOpen(await manager.open(baseOpenRequest({ owner })));
-  return {
-    entry,
-    binding,
-    owner,
-    backend,
-    manager,
-    terminalId: opened.sessionId,
-    target: { agentId: "main", sessionKey, storePath: actor.path },
-  };
-}
-
-async function invoke<T>(
-  fixture: Awaited<ReturnType<typeof terminal>>,
-  route: "owner" | "bearer-mcp",
-  consume: (tool: ReturnType<typeof createTerminalTool>) => Promise<T>,
-) {
-  const admission = prepareSystemAgentRunAdmission({}, fixture.entry.sessionId, "main", "terminal");
-  try {
-    const admittedRunContext = await admission.admit("embedded");
-    const gateway = { terminalSessions: fixture.manager };
-    bindGatewayContextResolver(admittedRunContext, () => gateway as GatewayRequestContext);
-    const tool = createTerminalTool({
-      agentId: "main",
-      agentSessionKey: fixture.owner.agentSessionKey,
-      sessionId: fixture.entry.sessionId,
-      ...(route === "owner" ? { getGatewayContext: () => gateway } : {}),
+  const invoke = <T>(
+    route: "owner" | "bearer-mcp",
+    consume: (
+      input: (data?: string) => ReturnType<ReturnType<typeof createTerminalTool>["execute"]>,
+    ) => Promise<T>,
+  ) =>
+    runWithSessionActorStorage(binding, async () => {
+      const admission = prepareSystemAgentRunAdmission({}, entry.sessionId, "main", "terminal");
+      try {
+        const admittedRunContext = await admission.admit("embedded");
+        const gateway = { terminalSessions: manager };
+        bindGatewayContextResolver(admittedRunContext, () => gateway as GatewayRequestContext);
+        const tool = createTerminalTool({
+          agentId: "main",
+          agentSessionKey: sessionKey,
+          sessionId: entry.sessionId,
+          ...(route === "owner" ? { getGatewayContext: () => gateway } : {}),
+        });
+        return await withGatewayToolCallerIdentity(
+          createAdmittedGatewayToolCallerIdentity({
+            admittedRunContext,
+            agentId: "main",
+            sessionKey,
+            ...(route === "bearer-mcp" ? { receiptAuthority: () => true } : {}),
+          }),
+          () =>
+            consume((data = "pwd\r") =>
+              tool.execute("input", { action: "input", sessionId: opened.sessionId, data }),
+            ),
+        );
+      } finally {
+        admission.close();
+      }
     });
-    return await withGatewayToolCallerIdentity(
-      createAdmittedGatewayToolCallerIdentity({
-        admittedRunContext,
-        agentId: "main",
-        sessionKey: fixture.owner.agentSessionKey,
-        ...(route === "bearer-mcp" ? { receiptAuthority: () => true } : {}),
-      }),
-      () => consume(tool),
-    );
-  } finally {
-    admission.close();
-  }
+  return { entry, backend, invoke, target: { agentId: "main", sessionKey, storePath: actor.path } };
 }
 
 it.each(["owner", "bearer-mcp"] as const)(
   "loads actor policy for %s input without prepared execSession",
   async (route) => {
     const fixture = await terminal(`input-${route}`, "full");
-    await runWithSessionActorStorage(fixture.binding, () =>
-      invoke(fixture, route, async (tool) => {
-        await expect(
-          tool.execute("input", { action: "input", sessionId: fixture.terminalId, data: "pwd\r" }),
-        ).resolves.toMatchObject({ details: { ok: true } });
-      }),
+    await fixture.invoke(route, (input) =>
+      expect(input()).resolves.toMatchObject({ details: { ok: true } }),
     );
     expect(fixture.backend.writes).toEqual(["pwd\r"]);
     expect(approvals.register).not.toHaveBeenCalled();
   },
 );
 
-it.each([
-  { change: "permission revocation", error: "execution policy changed" },
-  { change: "session rebound", error: "execution policy changed" },
-] as const)("refuses input after $change while approval is pending", async ({ change, error }) => {
-  const fixture = await terminal(change.replaceAll(" ", "-"));
-  const requested = createDeferredCore();
-  const decision = createDeferredCore<string>();
-  approvals.decide.mockImplementationOnce(() => {
-    requested.resolve();
-    return decision.promise;
-  });
-  await runWithSessionActorStorage(fixture.binding, () =>
-    invoke(fixture, "bearer-mcp", async (tool) => {
-      const result = tool.execute("input", {
-        action: "input",
-        sessionId: fixture.terminalId,
-        data: "echo stale\r",
-      });
+it.each(["permission revocation", "session rebound"])(
+  "refuses input after %s while approval is pending",
+  async (change) => {
+    const fixture = await terminal(change.replaceAll(" ", "-"));
+    const requested = createDeferredCore();
+    const decision = createDeferredCore<string>();
+    approvals.decide.mockImplementationOnce(() => {
+      requested.resolve();
+      return decision.promise;
+    });
+    await fixture.invoke("bearer-mcp", async (input) => {
+      const result = input("echo stale\r");
       try {
         await awaitGateBeforeSettlement(requested.promise, result, "Input settled before approval");
         expect(fixture.backend.writes).toEqual([]);
@@ -182,23 +168,19 @@ it.each([
         }
       } finally {
         decision.resolve("allow-once");
-        await expect(result).rejects.toThrow(error);
+        await expect(result).rejects.toThrow("execution policy changed");
       }
-    }),
-  );
-  expect(fixture.backend.writes).toEqual([]);
-  expect(approvals.register).toHaveBeenCalledOnce();
-});
+    });
+    expect(fixture.backend.writes).toEqual([]);
+    expect(approvals.register).toHaveBeenCalledOnce();
+  },
+);
 
 it("refuses selected actor absence without discovery or approval", async () => {
   const fixture = await terminal("absent");
   actor.closeSession(fixture.target.sessionKey);
-  await runWithSessionActorStorage(fixture.binding, () =>
-    invoke(fixture, "owner", async (tool) => {
-      await expect(
-        tool.execute("input", { action: "input", sessionId: fixture.terminalId, data: "pwd\r" }),
-      ).rejects.toThrow("Terminal session unavailable");
-    }),
+  await fixture.invoke("owner", (input) =>
+    expect(input()).rejects.toThrow("Terminal session unavailable"),
   );
   expect(fixture.backend.writes).toEqual([]);
   expect(approvals.register).not.toHaveBeenCalled();

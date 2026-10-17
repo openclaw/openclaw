@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
@@ -50,6 +51,10 @@ function emptyManager() {
   return new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
 }
 
+function withPermission(permissionMode: "guarded" | "full") {
+  return openAgentTerminal({ execSession: { permissionMode } });
+}
+
 function makeContext(manager: TerminalSessionManager) {
   return { terminalSessions: manager };
 }
@@ -80,12 +85,7 @@ async function openAgentTerminal(options: TerminalToolOptions = {}) {
   const tool = makeTool(manager, options);
   const input = (data = "echo unsafe\r", id = "input") =>
     tool.execute(id, { action: "input", sessionId, data });
-  const rejectInput = async (error: string | RegExp) => {
-    const check = () => expect(input()).rejects.toThrow(error);
-    await withActiveRun(manager, check);
-    expect(backend.writes).toEqual([]);
-  };
-  return { backend, manager, sessionId, spawn, tool, input, rejectInput };
+  return { backend, manager, sessionId, spawn, tool, input };
 }
 
 async function withActiveRun<T>(
@@ -133,13 +133,9 @@ describe("terminal tool", () => {
       },
     });
     const schema = tool.parameters as { properties?: Record<string, unknown> };
-    expect(Object.keys(schema.properties ?? {})).toEqual([
-      "action",
-      "sessionId",
-      "data",
-      "cols",
-      "rows",
-    ]);
+    expect(Object.keys(schema.properties ?? {})).toEqual(
+      "action sessionId data cols rows".split(" "),
+    );
     expect(schema.properties).not.toHaveProperty("command");
     expect(schema.properties).not.toHaveProperty("cwd");
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("terminal");
@@ -159,111 +155,84 @@ describe("terminal tool", () => {
     expect(manager.size).toBe(1);
   });
 
-  it("uses the admitted caller Gateway before ambient context", async () => {
+  it.each(["admitted", "retired", "ambient"])("routes %s Gateway context", async (route) => {
     const callerManager = emptyManager();
     const ambientManager = emptyManager();
     const callerList = vi.spyOn(callerManager, "listAgent");
     const ambientList = vi.spyOn(ambientManager, "listAgent");
-    const gatewayContextResolver = vi.fn();
-    gatewayContextResolver.mockReturnValue(makeContext(callerManager));
     getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
     const tool = createTerminalTool(agentToolOptions);
-
-    const result = await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: agentOwner.agentSessionKey,
-        gatewayContextResolver,
-      },
-      async () => await tool.execute("list", { action: "list" }),
-    );
-
-    expect(result.details).toEqual({ sessions: [] });
-    expect(callerList).toHaveBeenCalledOnce();
-    expect(ambientList).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when the admitted caller Gateway has retired", async () => {
-    const ambientManager = emptyManager();
-    const ambientList = vi.spyOn(ambientManager, "listAgent");
-    getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
-    const tool = createTerminalTool(agentToolOptions);
-
-    await expect(
-      withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: agentOwner.agentSessionKey,
-          gatewayContextResolver: () => undefined,
-        },
-        async () => await tool.execute("list", { action: "list" }),
-      ),
-    ).rejects.toThrow("terminal unavailable");
-    expect(ambientList).not.toHaveBeenCalled();
-  });
-
-  it("uses ambient Gateway context without an admitted caller", async () => {
-    const manager = emptyManager();
-    const list = vi.spyOn(manager, "listAgent");
-    getInProcessGatewayToolContext.mockReturnValue(makeContext(manager));
-    const tool = createTerminalTool(agentToolOptions);
-
-    await expect(tool.execute("list", { action: "list" })).resolves.toMatchObject({
-      details: { sessions: [] },
-    });
-    expect(list).toHaveBeenCalledOnce();
+    const execute = () => tool.execute("list", { action: "list" });
+    const result =
+      route === "ambient"
+        ? execute()
+        : withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: agentOwner.agentSessionKey,
+              gatewayContextResolver: () =>
+                route === "retired" ? undefined : makeContext(callerManager),
+            },
+            execute,
+          );
+    if (route === "retired") {
+      await expect(result).rejects.toThrow("terminal unavailable");
+    } else {
+      expect((await result).details).toEqual({ sessions: [] });
+      expect(route === "ambient" ? ambientList : callerList).toHaveBeenCalledOnce();
+    }
+    if (route !== "ambient") {
+      expect(ambientList).not.toHaveBeenCalled();
+    }
   });
 
   it("lists, reads, resizes, and closes only its existing operator-opened terminal", async () => {
     const backend = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const opened = expectTerminalOpen(
+    const { sessionId } = expectTerminalOpen(
       await manager.open(baseOpenRequest({ owner: agentOwner, viewerConnId: "operator" })),
     );
     const tool = makeTool(manager);
+    const execute = async (action: string, args: Record<string, unknown> = {}) => {
+      const { details } = await tool.execute(action, {
+        action,
+        ...(action === "list" ? {} : { sessionId }),
+        ...args,
+      });
+      expect(Value.Check(tool.outputSchema!, details)).toBe(true);
+      return details;
+    };
 
     expect(tool.outputSchema).toBeDefined();
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
       "{ sessions: Array<{ agentId: string; attached: boolean; createdAtMs: number; cwd: string; owner: string; sessionId: string; shell: string }> } | { sessionId: string; text: string } | { ok: true }",
     );
 
-    const listed = await tool.execute("list", { action: "list" });
-    expect(listed.details).toEqual({
+    expect(await execute("list")).toEqual({
       sessions: [
         expect.objectContaining({
-          sessionId: opened.sessionId,
+          sessionId,
           attached: true,
           owner: `agent:${agentOwner.agentSessionKey}`,
         }),
       ],
     });
-    expect(Value.Check(tool.outputSchema!, listed.details)).toBe(true);
 
     backend.emitData("\u001b[31mready\u001b[0m\r\n");
-    const read = await tool.execute("read", { action: "read", sessionId: opened.sessionId });
-    expect(read.details).toEqual({
-      sessionId: opened.sessionId,
+    const read = await execute("read");
+    expect(read).toEqual({
+      sessionId,
       text: expect.stringContaining("ready\n"),
     });
-    expect((read.details as { text: string }).text).not.toContain("\u001b");
-    expect(Value.Check(tool.outputSchema!, read.details)).toBe(true);
+    expect((read as { text: string }).text).not.toContain("\u001b");
 
-    expect(manager.write("operator", opened.sessionId, "operator command\r")).toBe(true);
+    expect(manager.write("operator", sessionId, "operator command\r")).toBe(true);
     expect(backend.writes).toEqual(["operator command\r"]);
 
-    const resized = await tool.execute("resize", {
-      action: "resize",
-      sessionId: opened.sessionId,
-      cols: 120,
-      rows: 40,
-    });
-    expect(resized.details).toEqual({ ok: true });
-    expect(Value.Check(tool.outputSchema!, resized.details)).toBe(true);
+    expect(await execute("resize", { cols: 120, rows: 40 })).toEqual({ ok: true });
     expect(backend.resizes).toEqual([[120, 40]]);
 
-    const closed = await tool.execute("close", { action: "close", sessionId: opened.sessionId });
-    expect(closed.details).toEqual({ ok: true });
-    expect(Value.Check(tool.outputSchema!, closed.details)).toBe(true);
+    expect(await execute("close")).toEqual({ ok: true });
     expect(backend.killed).toBe(true);
   });
 
@@ -358,7 +327,7 @@ describe("terminal tool", () => {
   });
 
   it("rejects full terminal input without an active admitted run", async () => {
-    const { backend, input } = await openAgentTerminal({ execSession: { permissionMode: "full" } });
+    const { backend, input } = await withPermission("full");
     await expect(input()).rejects.toThrow("agent run is no longer active");
 
     expect(backend.writes).toEqual([]);
@@ -366,9 +335,7 @@ describe("terminal tool", () => {
   });
 
   it("rejects full terminal input after its exact run authority is replaced", async () => {
-    const { backend, manager, input } = await openAgentTerminal({
-      execSession: { permissionMode: "full" },
-    });
+    const { backend, manager, input } = await withPermission("full");
 
     await withActiveRun(manager, async (authority) => {
       const replacement = claimAgentRunDelegatedAuthority({
@@ -424,75 +391,54 @@ describe("terminal tool", () => {
   });
 
   it("waits for an explicit one-shot decision before writing guarded input", async () => {
-    const { backend, manager, input } = await openAgentTerminal({
-      execSession: { permissionMode: "guarded" },
-    });
-    let resolveDecision!: (decision: string) => void;
-    approvalMocks.decide.mockImplementationOnce(
-      () =>
-        new Promise<string>((resolve) => {
-          resolveDecision = resolve;
-        }),
-    );
+    const { backend, manager, input } = await withPermission("guarded");
+    const decision = createDeferred<string>();
+    approvalMocks.decide.mockImplementationOnce(() => decision.promise);
 
     await withActiveRun(manager, async () => {
       const pending = input("echo pending\r", "pending-input");
       await vi.waitFor(() => expect(approvalMocks.decide).toHaveBeenCalledOnce());
       expect(backend.writes).toEqual([]);
 
-      resolveDecision("allow-once");
+      decision.resolve("allow-once");
       await expect(pending).resolves.toMatchObject({ details: { ok: true } });
     });
 
     expect(backend.writes).toEqual(["echo pending\r"]);
   });
 
-  it("rejects guarded input when the operator decision is allow-always", async () => {
-    const { rejectInput } = await openAgentTerminal({
-      execSession: { permissionMode: "guarded" },
-    });
-    approvalMocks.decide.mockResolvedValueOnce("allow-always");
-
-    await rejectInput("operator approval required");
-  });
-
-  it("rejects guarded input when no operator approval route is available", async () => {
-    const { rejectInput } = await openAgentTerminal({
-      execSession: { permissionMode: "guarded" },
-    });
-    approvalMocks.register.mockRejectedValueOnce(new Error("no approval delivery route"));
-
-    await rejectInput(/approval|route/i);
-    expect(approvalMocks.decide).not.toHaveBeenCalled();
-  });
-
-  it("rejects guarded input that loses its exact run authority during operator approval", async () => {
-    const { backend, manager, input } = await openAgentTerminal({
-      execSession: { permissionMode: "guarded" },
-    });
-
+  it.each([
+    { cause: "the operator decision is allow-always", error: "operator approval required" },
+    { cause: "no operator approval route is available", error: /approval|route/i },
+    {
+      cause: "its exact run authority is lost during approval",
+      error: "agent run is no longer active",
+    },
+    {
+      cause: "its terminal session is lost during approval",
+      error: "Terminal session unavailable",
+    },
+  ])("rejects guarded input when $cause", async ({ cause, error }) => {
+    const { backend, manager, sessionId, input } = await withPermission("guarded");
     await withActiveRun(manager, async (authority) => {
-      approvalMocks.decide.mockImplementationOnce(async () => {
-        releaseAgentRunDelegatedAuthority(authority);
-        return "allow-once";
-      });
-
-      await expect(input()).rejects.toThrow("agent run is no longer active");
+      if (cause === "no operator approval route is available") {
+        approvalMocks.register.mockRejectedValueOnce(new Error("no approval delivery route"));
+      } else {
+        approvalMocks.decide.mockImplementationOnce(async () => {
+          if (cause === "its exact run authority is lost during approval") {
+            releaseAgentRunDelegatedAuthority(authority);
+          } else if (cause === "its terminal session is lost during approval") {
+            manager.closeAgent(agentOwner, sessionId);
+          }
+          return cause === "the operator decision is allow-always" ? "allow-always" : "allow-once";
+        });
+      }
+      await expect(input()).rejects.toThrow(error);
     });
-
     expect(backend.writes).toEqual([]);
-  });
-
-  it("rejects guarded input that loses its terminal session during operator approval", async () => {
-    const { manager, sessionId, rejectInput } = await openAgentTerminal({
-      execSession: { permissionMode: "guarded" },
-    });
-    approvalMocks.decide.mockImplementationOnce(async () => {
-      manager.closeAgent(agentOwner, sessionId);
-      return "allow-once";
-    });
-
-    await rejectInput("Terminal session unavailable");
+    if (cause === "no operator approval route is available") {
+      expect(approvalMocks.decide).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects guarded input when its admitted Gateway changes during operator approval", async () => {

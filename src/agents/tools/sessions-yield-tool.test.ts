@@ -20,7 +20,6 @@ describe("sessions_yield tool", () => {
           content: [],
           api: "test-api",
           provider: "test-provider",
-          model: "test-model",
           stopReason: "toolUse",
         }),
         toolCall: { type: "toolCall", id: "call-1", name: "sessions_yield", arguments: {} },
@@ -35,12 +34,21 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("returns error when no sessionId is provided", async () => {
-    const { onYield, execute } = setup({ sessionId: undefined });
-    expect((await execute()).details).toMatchObject({
-      status: "error",
-      error: "No session context",
-    });
+  it.each([
+    { name: "no session context", options: { sessionId: undefined }, error: "No session context" },
+    {
+      name: "no callback",
+      options: { onYield: undefined },
+      error: "Yield not supported in this context",
+    },
+    {
+      name: "a rejected claim",
+      options: { claimYield: () => ({ error: "Yield unsupported for this session kind" }) },
+      error: "Yield unsupported for this session kind",
+    },
+  ])("returns the specific error for $name without yielding", async ({ options, error }) => {
+    const { onYield, execute } = setup(options);
+    expect((await execute()).details).toMatchObject({ status: "error", error });
     expect(onYield).not.toHaveBeenCalled();
   });
 
@@ -170,27 +178,5 @@ describe("sessions_yield tool", () => {
     expect(invalid.details).toMatchObject({ status: "error" });
     expect(claimYield).toHaveBeenCalledTimes(2);
     expect(onYield).toHaveBeenCalledTimes(2);
-  });
-
-  it("surfaces a claim rejection reason instead of the generic error", async () => {
-    const { onYield, execute } = setup({
-      claimYield: () => ({ error: "Yield unsupported for this session kind" }),
-    });
-
-    const result = await execute();
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Yield unsupported for this session kind",
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
-
-  it("returns error without onYield callback", async () => {
-    const { execute } = setup({ onYield: undefined });
-    expect((await execute()).details).toMatchObject({
-      status: "error",
-      error: "Yield not supported in this context",
-    });
   });
 });
