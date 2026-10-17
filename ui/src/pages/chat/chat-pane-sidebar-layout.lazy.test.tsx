@@ -14,6 +14,7 @@ const lazyMocks = vi.hoisted(() => ({
   retryDocument: vi.fn(async () => true),
 }));
 
+// mock-isolation: count lazy registration without mounting the real dashboard renderer.
 vi.mock("../../components/board/board-view.ts", () => {
   lazyMocks.boardImportAttempts += 1;
   lazyMocks.boardRegistered = true;
