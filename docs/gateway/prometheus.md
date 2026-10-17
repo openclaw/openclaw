@@ -280,8 +280,12 @@ later-rejected requests and export no filter values, limits, offsets, or revisio
 tokens. Each observed combination uses one sample in the existing shared cap.
 
 `openclaw_sessions_list_response_bytes_total` reuses these labels and adds
-`rows_outcome`: `unchanged` for `rowsUnchanged`, `delta` for `rowsDelta`, or `full`
-for other sidebar responses; non-sidebar row modes use `not-sidebar`.
+`rows_outcome`: `unchanged` for `rowsUnchanged`, `delta` for `rowsDelta`, or the
+sidebar sharing owner's `rowsFullReason`: `full-no-base` when `ifRowsRevision`
+is omitted, `full-stale-base` when a supplied revision cannot serve the response,
+or `full-delta-not-smaller` when the retained base was found but every row changed.
+Plain revision tokens only request an unchanged check; a nonmatching plain token
+uses `full-stale-base`. Non-sidebar row modes use `not-sidebar`.
 
 `openclaw_chat_history_requests_total` counts successful `chat.history` replies;
 `openclaw_chat_history_response_bytes_total` sums their encoded response bytes.

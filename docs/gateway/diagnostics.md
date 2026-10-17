@@ -824,8 +824,10 @@ The optimized WebSocket journal also records fast `sessions.list` responses of
 at least 200 KiB. `openclaw_sessions_list_requests_total` counts requests by
 `client_kind`, `source`, `caller_source`, `row_mode`, and `filter`;
 `openclaw_sessions_list_response_bytes_total` attributes successful response
-bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`, `full`,
-or `not-sidebar`).
+bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
+`full-no-base`, `full-stale-base`, `full-delta-not-smaller`, or `not-sidebar`).
+The sidebar sharing owner carries the full-response cause as `rowsFullReason`;
+diagnostics never recompute base retention or row changes.
 
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`

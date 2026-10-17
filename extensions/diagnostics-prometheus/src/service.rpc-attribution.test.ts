@@ -4,7 +4,14 @@ import { createMetricsHarness, untrusted } from "./service.test-helpers.js";
 it("accounts for session response bytes by sidebar row outcome", () => {
   const metrics = createMetricsHarness();
   try {
-    for (const rowsOutcome of ["delta", "unchanged", "full", "not-sidebar"] as const) {
+    for (const rowsOutcome of [
+      "delta",
+      "unchanged",
+      "full-no-base",
+      "full-stale-base",
+      "full-delta-not-smaller",
+      "not-sidebar",
+    ] as const) {
       const event = {
         type: "gateway.rpc",
         method: "sessions.list",
@@ -29,7 +36,7 @@ it("accounts for session response bytes by sidebar row outcome", () => {
       );
     }
     expect(metrics.render()).toContain(
-      'openclaw_gateway_rpc_response_bytes_sum{method="sessions.list"} 5104\n',
+      'openclaw_gateway_rpc_response_bytes_sum{method="sessions.list"} 7656\n',
     );
   } finally {
     metrics.stop();

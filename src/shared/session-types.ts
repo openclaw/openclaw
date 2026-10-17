@@ -89,6 +89,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   rowsUnchanged?: true;
   /** Complete window indexes into the base rows followed by this response's changed rows. */
   rowsDelta?: { baseRevision: string; order: number[] };
+  /** Why a sidebar response sent full rows instead of a delta. */
+  rowsFullReason?: "full-no-base" | "full-stale-base" | "full-delta-not-smaller";
   sessions: TRow[];
 };
 

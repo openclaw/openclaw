@@ -56,7 +56,17 @@ it.each([
     payload: { rowsDelta: { baseRevision: "private-revision" } },
     rowsOutcome: "delta",
   },
-  { rowMode: "sidebar", payload: { sessions: [] }, rowsOutcome: "full" },
+  { rowMode: "sidebar", payload: { rowsFullReason: "full-no-base" }, rowsOutcome: "full-no-base" },
+  {
+    rowMode: "sidebar",
+    payload: { rowsFullReason: "full-stale-base" },
+    rowsOutcome: "full-stale-base",
+  },
+  {
+    rowMode: "sidebar",
+    payload: { rowsFullReason: "full-delta-not-smaller" },
+    rowsOutcome: "full-delta-not-smaller",
+  },
   { rowMode: "compact", payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
 ])(
   "attributes session response bytes as $rowsOutcome",

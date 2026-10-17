@@ -170,7 +170,7 @@ export function shareSidebarSessionRows(
   previousRows?: GatewaySessionRow[],
 ): Pick<
   SessionsListResult,
-  "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged" | "rowsDelta"
+  "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged" | "rowsDelta" | "rowsFullReason"
 > {
   let shared = sharedLists.get(rows);
   if (!shared) {
@@ -204,8 +204,12 @@ export function shareSidebarSessionRows(
         rowsDelta: { baseRevision, order },
       };
     }
+    return { ...shared, rowsFullReason: "full-delta-not-smaller" };
   }
-  return shared;
+  return {
+    ...shared,
+    rowsFullReason: ifRowsRevision === undefined ? "full-no-base" : "full-stale-base",
+  };
 }
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */

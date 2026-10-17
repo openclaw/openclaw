@@ -125,6 +125,18 @@ export class GatewayRpcDiagnostics {
         outcome: result.kind === "delta" ? "delta" : result.kind === "reset" ? "reset" : "page",
       };
     }
+    const rowsOutcome =
+      this.sessionsList?.rowMode !== "sidebar"
+        ? "not-sidebar"
+        : result?.rowsUnchanged === true
+          ? "unchanged"
+          : result?.rowsDelta !== undefined
+            ? "delta"
+            : result?.rowsFullReason === "full-no-base" ||
+                result?.rowsFullReason === "full-stale-base" ||
+                result?.rowsFullReason === "full-delta-not-smaller"
+              ? result.rowsFullReason
+              : undefined;
     this.emit({
       type: "gateway.rpc",
       method: this.method,
@@ -132,18 +144,11 @@ export class GatewayRpcDiagnostics {
       outcome,
       firstResponse: sent ? firstResponse : undefined,
       responseBytes,
-      ...(this.sessionsList && result
+      ...(this.sessionsList && result && rowsOutcome
         ? {
             sessionsList: {
               ...this.sessionsList,
-              rowsOutcome:
-                this.sessionsList.rowMode !== "sidebar"
-                  ? "not-sidebar"
-                  : result.rowsUnchanged === true
-                    ? "unchanged"
-                    : result.rowsDelta !== undefined
-                      ? "delta"
-                      : "full",
+              rowsOutcome,
             },
           }
         : {}),

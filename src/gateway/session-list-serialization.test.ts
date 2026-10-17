@@ -79,6 +79,7 @@ it("packs equal fields by their recipient rows without changing the input or wir
     rowsUnchanged: true,
   });
   expect(packed).toEqual({
+    rowsFullReason: "full-no-base",
     sessions: [
       {
         key: "one",

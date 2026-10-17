@@ -1,5 +1,6 @@
 import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
+import type { SessionsListResultBase } from "../shared/session-types.js";
 
 type SessionsListAttribution = {
   clientKind: GatewayClientId;
@@ -42,7 +43,11 @@ export type DiagnosticGatewayRpcFields = {
       firstResponse?: boolean;
       responseBytes?: number;
       sessionsList?: SessionsListAttribution & {
-        rowsOutcome: "unchanged" | "delta" | "full" | "not-sidebar";
+        rowsOutcome:
+          | "unchanged"
+          | "delta"
+          | "not-sidebar"
+          | NonNullable<SessionsListResultBase<unknown, unknown>["rowsFullReason"]>;
       };
       chatHistory?: {
         clientKind: GatewayClientId;
