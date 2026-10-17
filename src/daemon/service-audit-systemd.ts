@@ -357,7 +357,7 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     if (!hasErrnoCode(error, "ENOENT")) {
       return `Systemd service backup could not be inspected; check ${backupPath} and retry the service audit.`;
     }
-    return;
+    return undefined;
   }
   const mode = stat.mode & 0o777;
   const embeddedKeys = new Set<string>();
@@ -386,7 +386,7 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     }
   }
   if (stat.isFile() && !unreadable && embeddedKeys.size === 0 && (mode & 0o077) === 0) {
-    return;
+    return undefined;
   }
   const detail = [
     backupPath,
