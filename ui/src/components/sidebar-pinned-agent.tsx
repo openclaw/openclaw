@@ -4,7 +4,6 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { SessionGlyph, sessionRunVisibility } from "./solid/session-presentation.tsx";
-import { Tooltip } from "./solid/tooltip.tsx";
 import "../styles/sidebar-pinned-agents.css";
 
 export function SidebarPinnedAgent(props: {
@@ -20,7 +19,7 @@ export function SidebarPinnedAgent(props: {
 }) {
   return (
     <div class="sidebar-pinned-agent session-row-host" data-pinned-agent={props.agent.id}>
-      <Tooltip class="sidebar-pinned-agent__tooltip" placement="right-start">
+      <openclaw-tooltip class="sidebar-pinned-agent__tooltip" prop:placement="right-start">
         <a
           class="sidebar-pinned-agent__link"
           data-agent-id={props.agent.id}
@@ -56,7 +55,7 @@ export function SidebarPinnedAgent(props: {
               t(props.loading ? "common.loading" : "agentsHome.noAssistantMessage")}
           </span>
         </span>
-      </Tooltip>
+      </openclaw-tooltip>
       {props.menu}
     </div>
   );
