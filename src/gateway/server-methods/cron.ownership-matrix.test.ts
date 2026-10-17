@@ -42,7 +42,8 @@ vi.mock("../../cron/inference-binding.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cron/inference-binding.runtime.js")>()),
   captureCronInferenceBinding: async () => undefined,
 }));
-vi.mock("../../cron/delivery-preview.js", () => ({
+vi.mock("../../cron/delivery-preview.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cron/delivery-preview.js")>()),
   resolveCronDeliveryFailurePreview: async () => undefined,
   resolveCronDeliveryPreview: async () => ({ label: "x", detail: "x" }),
   resolveCronDeliveryPreviews: async ({ jobs }: { jobs: Array<{ id: string }> }) =>
@@ -107,8 +108,32 @@ const OPS: Record<string, Record<string, unknown>> = {
   cap: { payload: { kind: "agentTurn", message: "p3", toolsAllow: ["read"] } },
 };
 
-type Caller = "scoped" | "creator" | "manager";
-const CALLERS: Caller[] = ["scoped", "creator", "manager"];
+// "revoked" is a channel-owner manager whose ownership is removed after admission, before the write.
+type Caller = "scoped" | "creator" | "manager" | "revoked";
+const CALLERS: Caller[] = ["scoped", "creator", "manager", "revoked"];
+
+const OWNER_CONFIG = {
+  agents: { entries: { ops: {} } },
+  commands: { ownerAllowFrom: ["telegram:owner-1"] },
+} as OpenClawConfig;
+
+// Runtime state is rewritten when the service loads; the edit can only touch the definition.
+const definition = (job: CronJob | undefined) =>
+  job && {
+    enabled: job.enabled,
+    owner: job.owner,
+    payload: job.payload,
+    scheduledToolPolicy: job.scheduledToolPolicy,
+  };
+
+function expectAllowed(caller: Caller, shape: Partial<CronJob>, opName: string): boolean {
+  const ownSession = shape.owner?.sessionKey === S_A;
+  if (caller === "scoped" || caller === "creator") {
+    return ownSession && shape.owner?.accountId === "default";
+  }
+  // Management keeps creator attribution: a manager's own-session cap still needs a fresh capture.
+  return caller === "manager" && !(opName === "cap" && ownSession);
+}
 
 async function updateAs(
   caller: Caller,
@@ -129,12 +154,14 @@ async function updateAs(
   const scope = createCronCreatorAuthorityRunScope(
     identity.operationalRunInstance.runId,
     { kind: "external", channel: "telegram" },
-    caller === "manager" ? { source: "channel-owner", isCurrent: isOwner } : undefined,
+    caller === "manager" || caller === "revoked"
+      ? { source: "channel-owner", isCurrent: isOwner }
+      : undefined,
   );
   try {
     return await runWithCronCreatorAuthorityCapability(scope, () =>
       withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-        if (caller === "manager") {
+        if (caller === "manager" || caller === "revoked") {
           identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.update");
         } else {
           identity.cronToolsAllowCapture = "final-executable-surface";
@@ -151,16 +178,13 @@ async function updateAs(
 
 describe("cron ownership access matrix", () => {
   beforeEach(() => {
-    getRuntimeConfig.mockReset().mockReturnValue({
-      agents: { entries: { ops: {} } },
-      commands: { ownerAllowFrom: ["telegram:owner-1"] },
-    } as OpenClawConfig);
+    getRuntimeConfig.mockReset().mockReturnValue(OWNER_CONFIG);
     setCronValidationTestRegistry();
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
   // Every ownership shape x caller x tool-runtime edit, through the Gateway handlers and the SQLite service.
-  it("keeps owner attribution and tool authority bound to the recorded owner", async () => {
+  it("allows only the recorded owner or live management to change prompt or tools", async () => {
     const violations: string[] = [];
     for (const [shapeName, shape] of Object.entries(SHAPES)) {
       for (const caller of CALLERS) {
@@ -188,9 +212,13 @@ describe("cron ownership access matrix", () => {
           context.cron.readJob.mockImplementation((id) => cron.readJob(id));
           context.cron.getJob.mockImplementation((id) => cron.getJob(id));
           context.cron.getDefaultAgentId.mockImplementation(() => "ops");
-          context.cron.updateWithPrecondition.mockImplementation((...args) =>
-            cron.updateWithPrecondition(...args),
-          );
+          getRuntimeConfig.mockReturnValue(OWNER_CONFIG);
+          context.cron.updateWithPrecondition.mockImplementation((...args) => {
+            if (caller === "revoked") {
+              getRuntimeConfig.mockReturnValue({ ...OWNER_CONFIG, commands: {} });
+            }
+            return cron.updateWithPrecondition(...args);
+          });
           let ok = false;
           let message = "";
           try {
@@ -205,12 +233,17 @@ describe("cron ownership access matrix", () => {
           }
           const after = (await loadCronStore(storePath)).jobs.find((job) => job.id === seeded.id);
           const chat = caller === "scoped" || caller === "creator";
-          const ownedByCaller = shapeName === "selfCapless" || shapeName === "selfPolicy";
           if (after && !isDeepStrictEqual(after.owner, before?.owner)) {
             violations.push(`${cell}: owner changed`);
           }
-          if (chat && ok && !ownedByCaller) {
-            violations.push(`${cell}: chat changed a job it does not own`);
+          if (ok !== expectAllowed(caller, shape, opName)) {
+            violations.push(`${cell}: ${ok ? "allowed" : `refused (${message})`}`);
+          }
+          if (!ok && !isDeepStrictEqual(definition(after), definition(before))) {
+            violations.push(`${cell}: refused edit changed the stored job`);
+          }
+          if (ok && after?.payload.kind === "agentTurn" && after.payload.message === "m") {
+            violations.push(`${cell}: allowed edit was not stored`);
           }
           if (chat && after?.scheduledToolPolicy?.mode === "trusted" && shapeName !== "trusted") {
             violations.push(`${cell}: chat produced trusted authority`);
