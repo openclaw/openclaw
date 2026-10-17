@@ -609,6 +609,7 @@ function ComposerTextarea(view: {
       dir={detectTextDirection(value())}
       disabled={!context().canCompose}
       readonly={context().dictation?.locksComposer === true || context().goalComposer.pending}
+      autocomplete="off"
       aria-autocomplete="list"
       aria-controls={context().menus.menuVisible ? context().menus.menuListboxId : undefined}
       aria-haspopup={context().menus.menuVisible ? "listbox" : undefined}

@@ -78,6 +78,15 @@ describe("new-session placeholder animation", () => {
   });
 });
 
+describe("new-session composer input", () => {
+  it("opts the composer out of browser form AutoFill", () => {
+    const view = renderComposer();
+
+    expect(getComposerTextarea(view.composer).getAttribute("autocomplete")).toBe("off");
+    view.unmount();
+  });
+});
+
 describe("new-session submission preview", () => {
   it("removes new-session file inputs and blocks dropped files under the Gateway upload policy", () => {
     const context = composerContext({ client: null });

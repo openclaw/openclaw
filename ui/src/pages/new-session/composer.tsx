@@ -549,6 +549,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               placeholder={placeholder()}
               aria-label={frame().messagePlaceholder}
               aria-keyshortcuts={frame().keyShortcuts}
+              autocomplete="off"
               aria-autocomplete="list"
               aria-controls={frame().menuVisible ? frame().menuListboxId : undefined}
               aria-haspopup={frame().menuVisible ? "listbox" : undefined}
