@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -101,6 +101,13 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
   const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ sessionId });
   let failDrain = false;
   let onQueued: (() => void) | undefined;
+  let finishHeld: (() => Promise<void>) | undefined;
+  const payload = {
+    text: "Source reply",
+    mediaUrls: imagePaths,
+    attachments: imagePaths.map((file) => ({ name: path.basename(file) })),
+    trustedLocalMedia: true,
+  };
   const persist = (options: { sessionKey?: string; runId?: string; textOnly?: boolean } = {}) =>
     withOwnedSessionTranscriptWrites(
       {
@@ -136,16 +143,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
           idempotencyKey: "partial-promotion-reply",
           sourceReplyFinal: true,
           runId: options.runId ?? "original-run",
-          payload: {
-            text: "Source reply",
-            ...(options.textOnly
-              ? {}
-              : {
-                  mediaUrls: imagePaths,
-                  attachments: [{ name: "first.png" }, { name: "second.png" }],
-                  trustedLocalMedia: true,
-                }),
-          },
+          payload: options.textOnly ? { text: payload.text } : payload,
         }),
     );
   return {
@@ -159,7 +157,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     failNextDrain: () => {
       failDrain = true;
     },
-    holdWrites: async () => {
+    holdReplay: async () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const done = lifecycle.withTranscriptWrite(async () => {
@@ -169,9 +167,22 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       await entered.promise;
       const queued = createDeferredCore();
       onQueued = queued.resolve;
-      return { queued: queued.promise, release: release.resolve, done };
+      const replay = Promise.resolve().then(() => persist({ runId: "retry-run" }));
+      finishHeld = async () => {
+        release.resolve();
+        await done;
+        await replay.catch(() => {});
+      };
+      await Promise.race([
+        queued.promise,
+        replay.then(() => {
+          throw new Error("replay completed before the owned queue");
+        }),
+      ]);
+      return { replay, done, release: release.resolve };
     },
     dispose: async () => {
+      await finishHeld?.();
       unsubscribe();
       try {
         await readDownloads();
@@ -185,6 +196,17 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
 type Fixture = Awaited<ReturnType<typeof createSourceReplyFixture>>;
 type Records = Awaited<ReturnType<Fixture["records"]>>;
 
+function withFixture(run: (fixture: Fixture, state: OpenClawTestState) => Promise<void>) {
+  return withOpenClawTestState({ layout: "state-only", prefix: "source-reply-" }, async (state) => {
+    const fixture = await createSourceReplyFixture(state);
+    try {
+      await run(fixture, state);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}
+
 async function expectOriginalBytes(records: Records) {
   for (const {
     record: { original },
@@ -196,6 +218,7 @@ async function expectOriginalBytes(records: Records) {
 }
 
 async function createPartialPromotion(fixture: Fixture) {
+  const { persist, events: readEvents, records: readRecords, updates } = fixture;
   let promotions = 0;
   // Refuse the second native commit, retaining the real update and rollback.
   const fault = probe.admission(operationAdmission, (request, grant, admit) => {
@@ -210,15 +233,11 @@ async function createPartialPromotion(fixture: Fixture) {
     admit(request, grant);
   });
   try {
-    await expect(fixture.persist()).rejects.toThrow("second media promotion failed");
-    const events = await fixture.events();
-    const assistants = events.filter(
-      (event) => readTranscriptEventMessage(event)?.role === "assistant",
-    );
-    expect(assistants).toHaveLength(1);
-    const messageId = readTranscriptEventId(assistants[0]);
+    await expect(persist()).rejects.toThrow("second media promotion failed");
+    const events = await readEvents();
+    const messageId = readTranscriptEventId(onlyAssistant(events));
     expect(messageId).toBeTruthy();
-    const records = await fixture.records();
+    const records = await readRecords();
     expect(records).toHaveLength(2);
     const first = records.find(({ record }) => record.original.filename === "first.png")?.record;
     const second = records.find(({ record }) => record.original.filename === "second.png")?.record;
@@ -226,7 +245,7 @@ async function createPartialPromotion(fixture: Fixture) {
       first: { messageId, retentionClass: "history" },
       second: { messageId: null, retentionClass: "transient" },
     });
-    expect(fixture.updates).toEqual([]);
+    expect(updates).toEqual([]);
     await expectOriginalBytes(records);
     return { events, messageId };
   } finally {
@@ -234,178 +253,142 @@ async function createPartialPromotion(fixture: Fixture) {
   }
 }
 
-describe("internal source reply persistence", () => {
-  it.each(["partial-promotion", "owned-drain", "canonical-key", "text-only"] as const)(
-    "completes exact replay and refreshes history after %s",
-    async (mode) => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "source-reply-replay-" },
-        async (state) => {
-          const fixture = await createSourceReplyFixture(state);
-          try {
-            if (mode === "partial-promotion") {
-              await createPartialPromotion(fixture);
-            } else if (mode === "owned-drain") {
-              fixture.failNextDrain();
-              await expect(fixture.persist()).rejects.toThrow("nested drain failed");
-              expect(fixture.updates).toEqual([]);
-              expect(
-                (await fixture.records()).every(
-                  ({ record }) => record.retentionClass === "history",
-                ),
-              ).toBe(true);
-            } else {
-              await fixture.persist({ textOnly: mode === "text-only" });
-              expect(fixture.updates).toHaveLength(1);
-            }
-            const events = await fixture.events();
-            const assistants = events.filter(
-              (event) => readTranscriptEventMessage(event)?.role === "assistant",
-            );
-            expect(assistants).toHaveLength(1);
-            expect(readTranscriptEventMessage(assistants[0])).toMatchObject({
-              __openclaw: { runId: "original-run" },
-            });
-            const messageId = readTranscriptEventId(assistants[0]);
-            const originalIds = (await fixture.records())
-              .map(({ record }) => record.attachmentId)
-              .toSorted();
-            const beforeUpdates = fixture.updates.length;
-            await expect(
-              fixture.persist({
-                runId: "retry-run",
-                textOnly: mode === "text-only",
-                ...(mode === "canonical-key"
-                  ? { sessionKey: "AGENT:MAIN:webchat:dm:partial-promotion" }
-                  : {}),
-              }),
-            ).resolves.toBeUndefined();
-            expect(await fixture.events()).toEqual(events);
-            const records = await fixture.records();
-            expect(records.map(({ record }) => record.attachmentId).toSorted()).toEqual(
-              originalIds,
-            );
-            expect(fixture.updates).toHaveLength(beforeUpdates + 1);
-            expect(fixture.updates.at(-1)?.message).toBeUndefined();
-            expect(fixture.updates.filter((update) => update.message !== undefined)).toHaveLength(
-              beforeUpdates,
-            );
-            expect(records).toHaveLength(mode === "text-only" ? 0 : 2);
-            for (const { record, cleanupPending } of records) {
-              expect(cleanupPending).toBe(false);
-              expect(record).toMatchObject({ messageId, retentionClass: "history" });
-            }
-            await expectOriginalBytes(records);
-            const downloads = await fixture.downloads();
-            expect(downloads).toHaveLength(fixture.updates.length * (mode === "text-only" ? 0 : 2));
-            for (const download of downloads) {
-              expect(download).toMatchObject({ type: "image" });
-            }
-          } finally {
-            await fixture.dispose();
-          }
-        },
-      );
-    },
+function onlyAssistant(events: Awaited<ReturnType<Fixture["events"]>>) {
+  const assistants = events.filter(
+    (event) => readTranscriptEventMessage(event)?.role === "assistant",
   );
+  expect(assistants).toHaveLength(1);
+  return assistants[0];
+}
 
-  it.each([
-    "session",
-    "lifecycle",
-    "writer",
-    "abandoned",
-    "removed",
-    "missing-media",
-    "cleanup-pending",
-  ] as const)(
-    "rejects replay after %s changes while its real owned write is queued",
-    async (changed) => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "source-reply-stale-" },
-        async (state) => {
-          const fixture = await createSourceReplyFixture(state);
-          let held: Awaited<ReturnType<Fixture["holdWrites"]>> | undefined;
-          let replay: Promise<void> | undefined;
-          try {
-            const original = await createPartialPromotion(fixture);
-            held = await fixture.holdWrites();
-            replay = fixture.persist({ runId: "retry-run" });
-            await Promise.race([
-              held.queued,
-              replay.then(() => {
-                throw new Error("replay completed before the owned queue");
-              }),
-            ]);
-            if (changed === "session" || changed === "lifecycle" || changed === "writer") {
-              await replaceSessionEntry(fixture.scope, {
-                ...fixture.entry,
-                ...(changed === "session" ? { sessionId: "replacement-session" } : {}),
-                ...(changed === "lifecycle" ? { lifecycleRevision: "replacement-lifecycle" } : {}),
-                ...(changed === "writer" ? { activeWriterRunId: "replacement-writer" } : {}),
-              });
-            } else if (changed === "abandoned") {
-              await appendTranscriptMessage(fixture.scope, {
-                eventId: "replacement-root",
-                parentId: null,
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "Replacement branch" }],
-                },
-              });
-            } else if (changed === "removed") {
-              await replaceTranscriptEvents(
-                fixture.scope,
-                original.events.filter(
-                  (event) => readTranscriptEventId(event) !== original.messageId,
-                ),
-              );
-            } else {
-              const pending = (await fixture.records()).find(
-                ({ record }) => record.messageId === null,
-              )?.record;
-              if (!pending) {
-                throw new Error("expected second prepared media record");
-              }
-              if (changed === "cleanup-pending") {
-                expect(await claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(
-                  true,
-                );
-              } else {
-                await removeManagedOutgoingMediaBlocks({
-                  stateDir: state.stateDir,
-                  messageId: null,
-                  blocks: [
-                    {
-                      type: "image",
-                      url: `/api/chat/media/outgoing/${encodeURIComponent(fixture.scope.sessionKey)}/${pending.attachmentId}/full`,
-                    },
-                  ],
-                });
-                expect(await fixture.records()).toHaveLength(1);
-              }
-            }
-            const beforeEvents = await fixture.events();
-            const beforeRecords = await fixture.records();
-            held.release();
-            await expect(replay).rejects.toThrow(
-              changed === "missing-media" || changed === "cleanup-pending"
-                ? "media ownership could not be persisted"
-                : "no longer owns the active transcript",
-            );
-            await held.done;
-            expect(await fixture.events()).toEqual(beforeEvents);
-            const records = await fixture.records();
-            expect(records).toEqual(beforeRecords);
-            expect(fixture.updates).toEqual([]);
-            await expectOriginalBytes(records);
-          } finally {
-            held?.release();
-            await held?.done;
-            await replay?.catch(() => {});
-            await fixture.dispose();
-          }
-        },
+it.each(["partial-promotion", "owned-drain", "canonical-key", "text-only"] as const)(
+  "completes exact replay and refreshes history after %s",
+  async (mode) =>
+    withFixture(async (fixture) => {
+      const { persist, records: readRecords, events: readEvents, updates, downloads } = fixture;
+      if (mode === "partial-promotion") {
+        await createPartialPromotion(fixture);
+      } else if (mode === "owned-drain") {
+        fixture.failNextDrain();
+        await expect(persist()).rejects.toThrow("nested drain failed");
+        expect(updates).toEqual([]);
+        expect((await readRecords()).map(({ record }) => record.retentionClass)).toEqual([
+          "history",
+          "history",
+        ]);
+      } else {
+        await persist({ textOnly: mode === "text-only" });
+        expect(updates).toHaveLength(1);
+      }
+      const events = await readEvents();
+      const assistant = onlyAssistant(events);
+      expect(readTranscriptEventMessage(assistant)).toMatchObject({
+        __openclaw: { runId: "original-run" },
+      });
+      const messageId = readTranscriptEventId(assistant);
+      const originalIds = (await readRecords()).map(({ record }) => record.attachmentId).toSorted();
+      const beforeUpdates = updates.length;
+      await expect(
+        persist({
+          runId: "retry-run",
+          textOnly: mode === "text-only",
+          sessionKey:
+            mode === "canonical-key" ? "AGENT:MAIN:webchat:dm:partial-promotion" : undefined,
+        }),
+      ).resolves.toBeUndefined();
+      expect(await readEvents()).toEqual(events);
+      const records = await readRecords();
+      expect(records.map(({ record }) => record.attachmentId).toSorted()).toEqual(originalIds);
+      expect(updates.map((update) => update.message !== undefined)).toEqual([
+        ...Array<boolean>(beforeUpdates).fill(true),
+        false,
+      ]);
+      expect(records).toHaveLength(mode === "text-only" ? 0 : 2);
+      for (const { record, cleanupPending } of records) {
+        expect({ cleanupPending, record }).toMatchObject({
+          cleanupPending: false,
+          record: { messageId, retentionClass: "history" },
+        });
+      }
+      await expectOriginalBytes(records);
+      expect((await downloads()).map((download) => download?.type)).toEqual(
+        Array<string>(updates.length * (mode === "text-only" ? 0 : 2)).fill("image"),
       );
-    },
-  );
-});
+    }),
+);
+
+it.each([
+  "session",
+  "lifecycle",
+  "writer",
+  "abandoned",
+  "removed",
+  "missing-media",
+  "cleanup-pending",
+] as const)(
+  "rejects replay after %s changes while its real owned write is queued",
+  async (changed) =>
+    withFixture(async (fixture, state) => {
+      const { scope, entry, records: readRecords, events: readEvents, updates } = fixture;
+      const original = await createPartialPromotion(fixture);
+      const held = await fixture.holdReplay();
+      if (changed === "session" || changed === "lifecycle" || changed === "writer") {
+        const replacements = {
+          session: { sessionId: "replacement-session" },
+          lifecycle: { lifecycleRevision: "replacement-lifecycle" },
+          writer: { activeWriterRunId: "replacement-writer" },
+        };
+        await replaceSessionEntry(scope, { ...entry, ...replacements[changed] });
+      } else if (changed === "abandoned") {
+        await appendTranscriptMessage(scope, {
+          eventId: "replacement-root",
+          parentId: null,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Replacement branch" }],
+          },
+        });
+      } else if (changed === "removed") {
+        await replaceTranscriptEvents(
+          scope,
+          original.events.filter((event) => readTranscriptEventId(event) !== original.messageId),
+        );
+      } else {
+        const pending = (await readRecords()).find(
+          ({ record }) => record.messageId === null,
+        )?.record;
+        if (!pending) {
+          throw new Error("expected second prepared media record");
+        }
+        if (changed === "cleanup-pending") {
+          expect(await claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(true);
+        } else {
+          await removeManagedOutgoingMediaBlocks({
+            stateDir: state.stateDir,
+            messageId: null,
+            blocks: [
+              {
+                type: "image",
+                url: `/api/chat/media/outgoing/${encodeURIComponent(scope.sessionKey)}/${pending.attachmentId}/full`,
+              },
+            ],
+          });
+          expect(await readRecords()).toHaveLength(1);
+        }
+      }
+      const beforeEvents = await readEvents();
+      const beforeRecords = await readRecords();
+      held.release();
+      await expect(held.replay).rejects.toThrow(
+        changed === "missing-media" || changed === "cleanup-pending"
+          ? "media ownership could not be persisted"
+          : "no longer owns the active transcript",
+      );
+      await held.done;
+      expect(await readEvents()).toEqual(beforeEvents);
+      const records = await readRecords();
+      expect(records).toEqual(beforeRecords);
+      expect(updates).toEqual([]);
+      await expectOriginalBytes(records);
+    }),
+);

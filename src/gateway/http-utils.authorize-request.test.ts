@@ -53,6 +53,21 @@ const readProfileSource = () => ({
   path: "/synthetic/openclaw.sqlite",
   env: { OPENCLAW_STATE_DIR: "/synthetic" },
 });
+function profileAuthorityFixture(profile: typeof ownerProfile, aliases = [profile.profileId]) {
+  return {
+    profileId: profile.profileId,
+    role: null,
+    aliases,
+    isCurrent: () => true,
+    readSource: readProfileSource,
+    display: {
+      id: profile.profileId,
+      displayName: profile.displayName,
+      avatarRevision: profile.avatarRevision,
+      hasAvatar: profile.hasAvatar,
+    },
+  };
+}
 
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
@@ -70,6 +85,8 @@ const authorityMethods = {
   revalidate: expect.any(Function),
 };
 const guestAuth = { ok: true, method: "trusted-proxy", user: "guest@example.test" } as const;
+const mockAuth = (result: Awaited<ReturnType<typeof authorizeHttpGatewayConnect>> = guestAuth) =>
+  vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(result);
 const expectedGuestAuth = {
   ...authorityMethods,
   authMethod: "trusted-proxy",
@@ -129,19 +146,12 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       updatedAt: ownerProfile.updatedAt,
     });
     vi.spyOn(profileAuthority, "prepareUserProfileRoleAuthority").mockImplementation(
-      async (profileId) => ({
-        profileId,
-        role: null,
-        aliases: [profileId],
-        isCurrent: () => true,
-        readSource: readProfileSource,
-        display: {
-          id: profileId,
+      async (profileId) =>
+        profileAuthorityFixture({
+          ...ownerProfile,
+          profileId,
           displayName: profileId === ownerProfile.profileId ? ownerProfile.displayName : "Guest",
-          avatarRevision: "2",
-          hasAvatar: false,
-        },
-      }),
+        }),
     );
     vi.spyOn(githubIdentity, "createAuthenticatedGitHubIdentitySync").mockReturnValue(undefined);
   });
@@ -181,11 +191,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   it.each([{ trustedProxies: undefined }, { trustedProxies: ["192.0.2.1"] }])(
     "keeps trusted-proxy overrides current with runtime proxies $trustedProxies",
     async ({ trustedProxies }) => {
-      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-        ok: true,
-        method: "trusted-proxy",
-        user: "operator",
-      });
+      mockAuth({ ok: true, method: "trusted-proxy", user: "operator" });
       const originalConfig = getRuntimeConfig();
       let currentConfig = {
         ...originalConfig,
@@ -213,7 +219,6 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         expect(admitted?.hasCurrentClientAuthority()).toBe(false);
         await expect(admitted?.revalidate()).rejects.toThrow("Unauthorized");
       } finally {
-        vi.mocked(getRuntimeConfig).mockReturnValue(originalConfig);
         res.destroy();
       }
     },
@@ -334,7 +339,6 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       } finally {
         release.resolve();
         await pending;
-        vi.mocked(getRuntimeConfig).mockReturnValue(originalConfig);
       }
     },
   );
@@ -352,7 +356,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       vi.spyOn(operatorRoles, "resolveOperatorRolePolicyForAssignment").mockReturnValue(
         rolesConfigured ? role : undefined,
       );
-      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(guestAuth);
+      mockAuth();
 
       await expect(
         authorize({ req: createReq({ authorization: "Bearer upstream-idp-token" }) }),
@@ -385,7 +389,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
           throw error;
         });
       }
-      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(guestAuth);
+      mockAuth();
       const response = {} as ServerResponse;
 
       const result = await authorize({ res: response });
@@ -405,20 +409,13 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   it("uses the verified GitHub profile before dispatching a request without roles", async () => {
     const sync = vi.fn().mockResolvedValue({ profileId: "profile-github", updatedAt: 3 });
     vi.mocked(githubIdentity.createAuthenticatedGitHubIdentitySync).mockReturnValue(sync);
-    vi.mocked(profileAuthority.prepareUserProfileRoleAuthority).mockResolvedValue({
-      profileId: "profile-github-canonical",
-      role: null,
-      aliases: ["profile-github", "profile-github-canonical"],
-      isCurrent: () => true,
-      readSource: readProfileSource,
-      display: {
-        id: "profile-github-canonical",
-        displayName: "GitHub User",
-        avatarRevision: "3",
-        hasAvatar: true,
-      },
-    });
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(guestAuth);
+    vi.mocked(profileAuthority.prepareUserProfileRoleAuthority).mockResolvedValue(
+      profileAuthorityFixture(expectedGitHubProfile, [
+        "profile-github",
+        "profile-github-canonical",
+      ]),
+    );
+    mockAuth();
 
     await expect(authorize()).resolves.toEqual(
       expectedProfileAuth(expectedGitHubProfile, ["profile-github", "profile-github-canonical"]),
@@ -435,7 +432,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     "rejects identity-less %s authentication when operator roles require durable identity",
     async (method, others) => {
       vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole(others));
-      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method });
+      mockAuth({ ok: true, method });
       const response = {} as ServerResponse;
 
       await expect(authorize({ res: response, auth: tokenAuth })).resolves.toBeNull();
@@ -448,7 +445,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
 
   it("preserves shared-secret owner authentication when operator roles are configured", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole("none"));
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
+    mockAuth({ ok: true, method: "token" });
 
     await expect(
       authorize({
@@ -465,11 +462,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   });
 
   it("forwards browser-origin policy into HTTP auth", async () => {
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-      ok: true,
-      method: "trusted-proxy",
-      user: "operator",
-    });
+    mockAuth({ ok: true, method: "trusted-proxy", user: "operator" });
 
     await authorize({
       req: createReq({

@@ -43,13 +43,7 @@ function warningFixture() {
   vi.setSystemTime(0);
   const warn = vi.fn();
   const report = createGatewayUnattributableProxyReporter({ warn });
-  const attribution = prepareGatewayIngressAttribution({
-    req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
-  });
-  if (attribution.kind !== "unattributable-proxy") {
-    throw new Error("expected unattributable proxy");
-  }
-  return { warn, report, attribution };
+  return { warn, report, attribution: unattributableSource(10) };
 }
 
 const source = (kind: string, clientIp: string) => ({
@@ -142,7 +136,7 @@ describe("gateway ingress attribution", () => {
     expect(prepareGatewayIngressAttribution({ req })).toMatchObject(expected);
   });
 
-  it("does not let continued traffic keep a source suppressed forever", async () => {
+  it("does not let continued traffic keep a source suppressed forever", () => {
     const { warn, report, attribution } = warningFixture();
 
     // A peer that never stops sending must not refresh its own suppression record.
@@ -154,7 +148,7 @@ describe("gateway ingress attribution", () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
-  it("retains a full late-window source set across the next budget", async () => {
+  it("retains a full late-window source set across the next budget", () => {
     const { warn, report } = warningFixture();
 
     vi.setSystemTime(5 * 60_000 - 1_000);
@@ -170,7 +164,7 @@ describe("gateway ingress attribution", () => {
     expect(warn).toHaveBeenCalledTimes(17);
   });
 
-  it("resets source suppression when the wall clock moves backward", async () => {
+  it("resets source suppression when the wall clock moves backward", () => {
     const { warn, report, attribution } = warningFixture();
 
     vi.setSystemTime(4 * 60_000);
@@ -185,9 +179,8 @@ describe("gateway ingress attribution", () => {
     expect(warn).toHaveBeenCalledTimes(3);
   });
 
-  it("bounds warnings from a flood of unique proxy sources", async () => {
-    const warn = vi.fn();
-    const report = createGatewayUnattributableProxyReporter({ warn });
+  it("bounds warnings from a flood of unique proxy sources", () => {
+    const { warn, report } = warningFixture();
 
     for (let index = 0; index < 1_000; index += 1) {
       report(unattributableSource(index));

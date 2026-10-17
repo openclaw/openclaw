@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { createServer, ServerResponse, type IncomingMessage } from "node:http";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
@@ -30,10 +31,6 @@ beforeEach(() => {
   resetDiagnosticEventsForTest();
 });
 
-function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): void {
-  expect(setHeader.mock.calls.map(([header]) => header)).not.toContain(name);
-}
-
 function expectJsonResponse(res: ServerResponse, statusCode: number, body: unknown) {
   expect(res.statusCode).toBe(statusCode);
   expect(res.end).toHaveBeenCalledWith(JSON.stringify(body));
@@ -50,29 +47,20 @@ function mockDisconnect(
   return { res, controller, onDisconnect, cleanup };
 }
 
+const HSTS = "max-age=63072000; includeSubDomains; preload";
 it.each([
   [undefined, undefined],
-  [" \t ", undefined],
-  [
-    "  max-age=63072000; includeSubDomains; preload  ",
-    "max-age=63072000; includeSubDomains; preload",
-  ],
-])("setDefaultSecurityHeaders sets baseline headers and normalizes HSTS %j", (input, expected) => {
+  [{ strictTransportSecurity: " \t " }, undefined],
+  [{ strictTransportSecurity: `  ${HSTS}  ` }, HSTS],
+] as const)("sets security headers with HSTS %j", (options, expected) => {
   const { res, setHeader } = makeMockHttpResponse();
-  setDefaultSecurityHeaders(
-    res,
-    input === undefined ? undefined : { strictTransportSecurity: input },
-  );
-  expect(Object.fromEntries(setHeader.mock.calls)).toMatchObject({
+  setDefaultSecurityHeaders(res, options);
+  expect(Object.fromEntries(setHeader.mock.calls)).toEqual({
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
+    ...(expected === undefined ? {} : { "Strict-Transport-Security": expected }),
   });
-  if (expected === undefined) {
-    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
-  } else {
-    expect(setHeader).toHaveBeenCalledWith("Strict-Transport-Security", expected);
-  }
 });
 
 it("sendMissingScopeForbidden preserves the legacy response without a concrete scope", () => {
@@ -95,7 +83,7 @@ it("sendMethodNotAllowed defaults the Allow header to POST and responds 405", ()
 it("sendRateLimited responds with 429 and no Retry-After when retryAfterMs is omitted", () => {
   const { res, setHeader } = makeMockHttpResponse();
   sendRateLimited(res);
-  expectHeaderNotSet(setHeader, "Retry-After");
+  expect(setHeader.mock.calls.map(([name]) => name)).not.toContain("Retry-After");
   expectJsonResponse(res, 429, {
     error: {
       message: "Too many failed authentication attempts. Please try again later.",
@@ -106,56 +94,53 @@ it("sendRateLimited responds with 429 and no Retry-After when retryAfterMs is om
 
 describe("readJsonBodyOrError", () => {
   it.each([
-    { error: "payload too large", status: 413, message: "Payload too large" },
-    { error: "request body timeout", status: 408, message: "Request body timeout" },
-  ])(
-    "delivers the complete $status response and preserves diagnostics",
-    async ({ error, status, message }) => {
-      readJsonBodyMock.mockResolvedValueOnce({ ok: false, error });
-      const events: DiagnosticEventPayload[] = [];
-      const stop = onDiagnosticEvent((event) => events.push(event));
-      const tasks: Promise<unknown>[] = [];
-      const server = createServer((req, res) => {
-        setDefaultSecurityHeaders(res);
-        tasks.push(readJsonBodyOrError(req, res, 1024));
+    ["payload too large", 413, "Payload too large"],
+    ["request body timeout", 408, "Request body timeout"],
+  ] as const)("rejects %s with complete response", async (error, status, message) => {
+    readJsonBodyMock.mockResolvedValueOnce({ ok: false, error });
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const tasks: Promise<unknown>[] = [];
+    const server = createServer((req, res) => {
+      setDefaultSecurityHeaders(res);
+      tasks.push(readJsonBodyOrError(req, res, 1024));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing listener");
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/`, {
+        method: "POST",
+        body: "x".repeat(2048),
       });
+      expect(response.status).toBe(status);
+      expect(response.headers.get("connection")).toBe("close");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(await response.json()).toEqual({
+        error: { message, type: "invalid_request_error" },
+      });
+      if (status === 413) {
+        expect(events.find((entry) => entry.type === "payload.large")).toMatchObject({
+          surface: "gateway.http.json",
+          action: "rejected",
+          bytes: 2048,
+          limitBytes: 1024,
+          reason: "json_body_limit",
+        });
+      }
+    } finally {
+      stop();
+      server.closeAllConnections();
       await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
+        server.close(() => resolve());
       });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("missing listener");
-      }
-      try {
-        const response = await fetch(`http://127.0.0.1:${address.port}/`, {
-          method: "POST",
-          body: "x".repeat(2048),
-        });
-        expect(response.status).toBe(status);
-        expect(response.headers.get("connection")).toBe("close");
-        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-        expect(await response.json()).toEqual({
-          error: { message, type: "invalid_request_error" },
-        });
-        if (status === 413) {
-          expect(events.find((entry) => entry.type === "payload.large")).toMatchObject({
-            surface: "gateway.http.json",
-            action: "rejected",
-            bytes: 2048,
-            limitBytes: 1024,
-            reason: "json_body_limit",
-          });
-        }
-      } finally {
-        stop();
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-        await Promise.all(tasks);
-      }
-    },
-  );
+      await Promise.all(tasks);
+    }
+  });
 
   it("responds with 400 for other parse failures", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "bad json" });
@@ -233,52 +218,42 @@ describe("watchClientDisconnect", () => {
     expect(res.listenerCount("error")).toBe(0);
   });
 
-  it.each(["late write", "already destroyed"])(
-    "handles real response errors: %s",
-    async (cause) => {
-      const socket = new EventEmitter();
-      const req = { socket } as IncomingMessage;
-      const res = new ServerResponse({ method: "POST" } as IncomingMessage);
-      const controller = new AbortController();
-      const onDisconnect = vi.fn();
-      const destroyed = cause === "already destroyed";
-      const deferredError = destroyed
-        ? new Promise<void>((resolve) => {
-            process.nextTick(() => {
-              res.emit("error", new Error("destroyed response failed during cleanup"));
-              resolve();
-            });
-          })
-        : undefined;
-      if (destroyed) {
-        res.destroy();
-      }
-      const cleanup = watchClientDisconnect(
-        req,
-        res,
-        controller,
-        destroyed ? undefined : onDisconnect,
-      );
-      if (destroyed) {
-        expect(controller.signal.aborted).toBe(true);
-        expect(res.listenerCount("error")).toBe(1);
-        await deferredError;
-      } else {
-        expect(res.listenerCount("error")).toBeGreaterThan(0);
-        cleanup();
-        res.end();
-        res.write("late SSE frame");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(onDisconnect).toHaveBeenCalledTimes(1);
-      }
+  it.each(["late write", "already destroyed"])("handles response errors: %s", async (cause) => {
+    const socket = new EventEmitter();
+    const req = { socket } as IncomingMessage;
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    const controller = new AbortController();
+    const destroyed = cause === "already destroyed";
+    const onDisconnect = destroyed ? undefined : vi.fn();
+    const deferredError = destroyed
+      ? new Promise<void>((resolve) => {
+          process.nextTick(() => {
+            res.emit("error", new Error("destroyed response failed during cleanup"));
+            resolve();
+          });
+        })
+      : undefined;
+    if (destroyed) {
+      res.destroy();
+    }
+    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+    if (destroyed) {
       expect(controller.signal.aborted).toBe(true);
+      expect(res.listenerCount("error")).toBe(1);
+      await deferredError;
+    } else {
+      expect(res.listenerCount("error")).toBeGreaterThan(0);
       cleanup();
-      res.emit("close");
-      expect(res.listenerCount("error")).toBe(0);
-    },
-  );
+      res.end();
+      res.write("late SSE frame");
+      await nextImmediate();
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+    }
+    expect(controller.signal.aborted).toBe(true);
+    cleanup();
+    res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
 
   it("does not double-abort when the controller is already aborted", () => {
     const socket = new EventEmitter();
@@ -305,21 +280,18 @@ describe("watchClientDisconnect", () => {
     expect(onDisconnect).toHaveBeenCalledOnce();
   });
 
-  it.each(["cleanup", "response completion"])(
-    "keeps completed work un-aborted after %s",
-    (phase) => {
-      const socket = new EventEmitter();
-      const { res, controller, cleanup } = mockDisconnect(socket, null);
-      expect(socket.listenerCount("close")).toBe(1);
-      if (phase === "cleanup") {
-        cleanup();
-      } else {
-        res.emit("finish");
-      }
-      expect(socket.listenerCount("close")).toBe(0);
-      socket.emit("close");
-      expect(controller.signal.aborted).toBe(false);
-      res.emit("close");
-    },
-  );
+  it.each(["cleanup", "response completion"])("does not abort after %s", (phase) => {
+    const socket = new EventEmitter();
+    const { res, controller, cleanup } = mockDisconnect(socket, null);
+    expect(socket.listenerCount("close")).toBe(1);
+    if (phase === "cleanup") {
+      cleanup();
+    } else {
+      res.emit("finish");
+    }
+    expect(socket.listenerCount("close")).toBe(0);
+    socket.emit("close");
+    expect(controller.signal.aborted).toBe(false);
+    res.emit("close");
+  });
 });
