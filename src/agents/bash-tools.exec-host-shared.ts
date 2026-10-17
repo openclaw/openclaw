@@ -1,5 +1,4 @@
 /**
- * Shared approval helpers for gateway and node exec hosts.
  * Owns pending-state construction, policy merging, unavailable-route handling,
  * follow-up dispatch, and approval-pending tool result rendering.
  */
@@ -38,7 +37,6 @@ import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-ty
 import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-/** Cap for deduplicating repeated follow-up dispatch failure log keys. */
 const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
 const loggedExecApprovalFollowupFailures = new LruCache<boolean>(
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS,
@@ -66,7 +64,6 @@ type ExecApprovalUnavailableReason =
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported";
 
-/** Context returned after a default approval request is registered. */
 type RegisteredExecApprovalRequestContext = {
   approvalId: string;
   approvalSlug: string;
@@ -78,7 +75,6 @@ type RegisteredExecApprovalRequestContext = {
   unavailableReason: ExecApprovalUnavailableReason | null;
 };
 
-/** Destination and context for async exec approval follow-up delivery. */
 type ExecApprovalFollowupTarget = {
   approvalId: string;
   agentId?: string;
@@ -121,7 +117,6 @@ function resolveBaseExecApprovalDecision(params: {
   return { approvedByAsk: false, deniedReason: null, timedOut: false };
 }
 
-/** Resolves effective exec policy for a gateway/node host. */
 export async function resolveExecHostApprovalContext(params: {
   agentId?: string;
   security: ExecSecurity;
@@ -191,7 +186,6 @@ type DefaultExecApprovalRequestParams = {
   register: (approvalId: string) => Promise<ExecApprovalRegistration>;
 };
 
-/** Creates, registers, and normalizes a default approval request context. */
 async function createAndRegisterDefaultExecApprovalRequest(
   params: DefaultExecApprovalRequestParams,
 ): Promise<RegisteredExecApprovalRequestContext> {

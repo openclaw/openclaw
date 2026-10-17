@@ -1,7 +1,3 @@
-/**
- * Diagnostics, skill telemetry, terminal presentation, and loop outcomes for
- * before_tool_call execution.
- */
 import os from "node:os";
 import path from "node:path";
 import {

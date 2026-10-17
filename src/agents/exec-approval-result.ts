@@ -1,6 +1,3 @@
-/**
- * Parses exec approval tool output and formats denial messages for users.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ExecApprovalResult =

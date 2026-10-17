@@ -1,5 +1,4 @@
 /**
- * Approval transport for before_tool_call policy decisions.
  * Owns request/wait routing, embedded approval bridging, deferred approvals,
  * timeout classification, and owner-provided approval outcomes.
  */

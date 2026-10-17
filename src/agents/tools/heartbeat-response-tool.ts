@@ -1,6 +1,4 @@
 /**
- * Heartbeat response tool.
- *
  * Auto-reply heartbeat turns use this tool to accept the agent's outcome,
  * notification decision, and next-check metadata exactly once per turn.
  */

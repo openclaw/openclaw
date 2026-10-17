@@ -1,5 +1,4 @@
 /**
- * Exec approval request client.
  * Registers two-phase approval requests with the gateway, waits for decisions,
  * and builds host/node payloads with optional command highlighting.
  */
