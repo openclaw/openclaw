@@ -445,7 +445,7 @@ describe("Plugin session dashboard", () => {
     snapshot = { ...snapshot, revision: 2 };
     listener?.({ type: "event", event: "board.changed", payload: { sessionKey, revision: 2 } });
     await vi.waitFor(() =>
-      expect(element.querySelector("openclaw-board-view")?.snapshot.revision).toBe(2),
+      expect(element.querySelector("openclaw-board-view")?.snapshot?.revision).toBe(2),
     );
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     expect(
