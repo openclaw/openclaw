@@ -1,13 +1,18 @@
 import {
-  resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeGithubCopilotDomain, PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
+import {
+  fetchWithSsrFGuard,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeGithubCopilotDomain,
+  PUBLIC_GITHUB_COPILOT_DOMAIN,
+} from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
@@ -18,8 +23,10 @@ const GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS = 5_000;
 // instead of github.com. The host is threaded in from the selected auth flow so
 // the SSRF allowlist and every request target stay consistent for one login.
 const deviceCodeUrl = (domain: string) => `https://${domain}/login/device/code`;
-const accessTokenUrl = (domain: string) => `https://${domain}/login/oauth/access_token`;
-const deviceVerificationUrl = (domain: string) => `https://${domain}/login/device`;
+const accessTokenUrl = (domain: string) =>
+  `https://${domain}/login/oauth/access_token`;
+const deviceVerificationUrl = (domain: string) =>
+  `https://${domain}/login/device`;
 const githubAuthSsrfPolicy = (domain: string): SsrFPolicy => ({
   hostnameAllowlist: [domain],
 });
@@ -29,7 +36,9 @@ type DeviceCodeResponse = {
   userCode: string;
   verificationUri: string;
   expiresInMs: number;
-  expiresAt: number;
+  // Monotonic performance.now() deadline; wall-clock jumps must not stretch or
+  // shrink the device-code window. Sleeps also consume setTimeout (monotonic).
+  deadlineMs: number;
   intervalMs: number;
 };
 
@@ -55,17 +64,15 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
 
 function parseDeviceCodeResponse(
   value: Record<string, unknown>,
-  issuedAt: number,
+  issuedAtMs: number,
 ): DeviceCodeResponse {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
   const intervalMs =
     value.interval === undefined
       ? GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS
       : nonNegativeSecondsToSafeMilliseconds(value.interval);
-  const expiresAt =
-    expiresInMs === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(expiresInMs, { nowMs: issuedAt });
+  const deadlineMs =
+    expiresInMs === undefined ? undefined : issuedAtMs + expiresInMs;
 
   if (
     typeof value.device_code !== "string" ||
@@ -75,7 +82,7 @@ function parseDeviceCodeResponse(
     typeof value.verification_uri !== "string" ||
     !value.verification_uri ||
     expiresInMs === undefined ||
-    expiresAt === undefined ||
+    deadlineMs === undefined ||
     intervalMs === undefined
   ) {
     throw new Error("GitHub device code response missing fields");
@@ -86,7 +93,7 @@ function parseDeviceCodeResponse(
     userCode: value.user_code,
     verificationUri: value.verification_uri,
     expiresInMs,
-    expiresAt,
+    deadlineMs,
     intervalMs,
   };
 }
@@ -150,14 +157,16 @@ async function requestDeviceCode(params: {
     ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
   });
   params.assertCurrent?.();
-  // Anchor expiry to when GitHub issued the code, before UI prompts or browser launch.
-  return parseDeviceCodeResponse(json, Date.now());
+  // Anchor expiry to when GitHub issued the code, before UI prompts or browser
+  // launch, and keep the budget on the monotonic clock so wall-clock steps
+  // (NTP correction, sleep/resume, manual changes) cannot stretch or shrink it.
+  return parseDeviceCodeResponse(json, performance.now());
 }
 
 async function pollForAccessToken(params: {
   deviceCode: string;
   intervalMs: number;
-  expiresAt: number;
+  deadlineMs: number;
   domain: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -169,10 +178,14 @@ async function pollForAccessToken(params: {
   });
 
   let intervalMs = params.intervalMs;
-  while (Date.now() < params.expiresAt) {
-    await sleepGitHubDevicePollDelay(intervalMs, params.expiresAt, params.signal);
+  while (performance.now() < params.deadlineMs) {
+    await sleepGitHubDevicePollDelay(
+      intervalMs,
+      params.deadlineMs,
+      params.signal,
+    );
     params.assertCurrent?.();
-    if (Date.now() >= params.expiresAt) {
+    if (performance.now() >= params.deadlineMs) {
       break;
     }
 
@@ -199,7 +212,10 @@ async function pollForAccessToken(params: {
     if (err === "slow_down") {
       // slow_down is cumulative; a returned interval may raise but never lower the required floor.
       intervalMs = Math.max(
-        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS),
+        Math.min(
+          Number.MAX_SAFE_INTEGER,
+          intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS,
+        ),
         positiveSecondsToSafeMilliseconds(json.interval) ?? 0,
       );
       continue;
@@ -218,22 +234,27 @@ async function pollForAccessToken(params: {
 
 async function sleepGitHubDevicePollDelay(
   delayMs: number,
-  expiresAt: number,
+  deadlineMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
   const requestedDelayMs = Math.max(1, Math.floor(delayMs));
-  const targetAt = Math.min(Date.now() + requestedDelayMs, expiresAt);
-  while (Date.now() < targetAt) {
-    const remainingMs = Math.max(1, targetAt - Date.now());
+  const targetAt = Math.min(performance.now() + requestedDelayMs, deadlineMs);
+  while (performance.now() < targetAt) {
+    const remainingMs = Math.max(1, targetAt - performance.now());
     const safeDelayMs = resolveTimerTimeoutMs(remainingMs, 1);
     const waitMs = Math.min(safeDelayMs, remainingMs);
     await sleepWithAbort(waitMs, signal).catch(() => {
-      throw signal?.reason instanceof Error ? signal.reason : new Error("GitHub login cancelled");
+      throw signal?.reason instanceof Error
+        ? signal.reason
+        : new Error("GitHub login cancelled");
     });
   }
 }
 
-function normalizeGitHubDeviceVerificationUrl(raw: string, domain: string): string {
+function normalizeGitHubDeviceVerificationUrl(
+  raw: string,
+  domain: string,
+): string {
   const parsed = URL.parse(raw);
   if (!parsed) {
     throw new Error("GitHub device flow returned an invalid verification URL");
@@ -246,7 +267,9 @@ function normalizeGitHubDeviceVerificationUrl(raw: string, domain: string): stri
     parsed.username ||
     parsed.password
   ) {
-    throw new Error("GitHub device flow returned an unexpected verification URL");
+    throw new Error(
+      "GitHub device flow returned an unexpected verification URL",
+    );
   }
 
   return deviceVerificationUrl(domain);
@@ -266,7 +289,11 @@ type GitHubCopilotDeviceFlowResult =
   | { status: "expired" };
 
 type GitHubCopilotDeviceFlowIO = {
-  showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
+  showCode(args: {
+    verificationUrl: string;
+    userCode: string;
+    expiresInMs: number;
+  }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -288,7 +315,10 @@ export async function runGitHubCopilotDeviceFlow(
     ...(io.signal ? { signal: io.signal } : {}),
     assertCurrent,
   });
-  const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verificationUri, host);
+  const verificationUrl = normalizeGitHubDeviceVerificationUrl(
+    device.verificationUri,
+    host,
+  );
   const userCode = normalizeGitHubDeviceUserCode(device.userCode);
   assertCurrent();
   await io.showCode({
@@ -308,7 +338,7 @@ export async function runGitHubCopilotDeviceFlow(
   return await pollForAccessToken({
     deviceCode: device.deviceCode,
     intervalMs: Math.max(1000, device.intervalMs),
-    expiresAt: device.expiresAt,
+    deadlineMs: device.deadlineMs,
     domain: host,
     ...(io.signal ? { signal: io.signal } : {}),
     assertCurrent,
