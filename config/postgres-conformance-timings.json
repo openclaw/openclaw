@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "source": "Green PostgreSQL conformance runs 39068774273 and 39071119824 (post-TSX-reuse fix); maximum per-target three-worker makespan across runs, using observed passing per-file case spans (longest first), rounded to milliseconds with a 1 s floor. All current targets sampled; no timeout values. Weights are advisory, never inventory.",
+  "source": "Green PostgreSQL conformance runs 39068774273 and 39071119824 (post-TSX-reuse fix), plus newly added resident-session target from green run 39075024684; maximum per-target three-worker makespan across runs, using observed passing per-file case spans (longest first), rounded to milliseconds with a 1 s floor. All current targets sampled; no timeout values. Weights are advisory, never inventory.",
   "targetSeconds": {
     "extensions/logbook/src/postgres-store.test.ts": 1,
     "extensions/matrix/src/matrix/account-state.postgres.test.ts": 8.454,
@@ -14,6 +14,7 @@
     "extensions/team-reports/src/postgres-store.test.ts": 1,
     "extensions/workboard": 90.784,
     "src/commands/doctor-database-diagnostics.postgres.test.ts": 124.746,
+    "src/config/sessions/session-turn-resident.postgres.test.ts": 3.801,
     "src/gateway/server-database-engine.postgres.test.ts": 34.954,
     "src/infra/database-engine/adapters.test.ts": 1,
     "src/infra/database-engine/admission-scope.test.ts": 3.759,
