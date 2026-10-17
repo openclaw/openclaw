@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
+import type { IsolatedCompletionPurpose } from "../agents/isolated-completion-purpose.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -34,7 +35,10 @@ import type {
   DiagnosticRuntimeMeasurementFields,
   DiagnosticWorkerRequestFields,
 } from "./diagnostic-process-types.js";
-import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
+import type {
+  DiagnosticGatewayRpcFields,
+  DiagnosticGatewayWsFields,
+} from "./diagnostic-rpc-types.js";
 import type {
   DiagnosticAgentCommentaryFields,
   DiagnosticRunScopeFields,
@@ -86,6 +90,8 @@ type DiagnosticUsageEvent = DiagnosticSessionEvent & {
   agentId?: string;
   provider?: string;
   model?: string;
+  purpose?: IsolatedCompletionPurpose;
+  runtimeKind?: "cli" | "harness";
   usage: {
     input?: number;
     output?: number;
@@ -775,6 +781,7 @@ type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticEventPayload =
   | DiagnosticGatewayRpcEvent
+  | (DiagnosticBaseEvent & DiagnosticGatewayWsFields)
   | (DiagnosticBaseEvent & DiagnosticRuntimeMeasurementFields)
   | (DiagnosticBaseEvent & DiagnosticWorkerRequestFields)
   | DiagnosticUsageEvent
@@ -969,6 +976,8 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "gateway.main_thread.stall",
   "gateway.http.cancelled",
   "gateway.rpc",
+  "gateway.ws.event",
+  "gateway.ws.connections",
   "tool.execution.started",
   "tool.execution.completed",
   "tool.execution.error",
@@ -1622,6 +1631,8 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
     exclude: [
       "log.record",
       "gateway.rpc",
+      "gateway.ws.event",
+      "gateway.ws.connections",
       "gateway.event_loop.sample",
       "gateway.main_thread.stall",
       "gateway.http.cancelled",

@@ -9,7 +9,7 @@ import { createApplicationRouter } from "../app-routes.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   admitStoredChatComposerQueueItem,
   persistChatComposerState,

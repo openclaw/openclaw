@@ -13,6 +13,8 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
 } from "../state/openclaw-state-maintenance-context.js";
+import { resolveClientCredentialStorePath } from "./client-credential-store.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveStatePortRoots } from "./database-engine/state-port.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -56,6 +58,7 @@ import { withStateInspectionCleanup } from "./update-candidate-state.process.js"
 import {
   collectRegisteredPaths,
   readSharedDatabaseVersion,
+  readUpdateStoreSchemaVersion,
   type StateInput,
 } from "./update-candidate-state.shared.js";
 import {
@@ -63,18 +66,15 @@ import {
   readUpdateStateDatabaseSizesInProcess,
   updateStateDatabaseExists,
 } from "./update-candidate-state.sizes.js";
+import {
+  publishStateDatabaseVersions,
+  UpdateStateSchemaVersionsSchema,
+  type UpdateStateSchemaVersion,
+} from "./update-candidate-state.versions.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
-const UpdateStateSchemaVersionsSchema = z.array(
-  z.object({
-    path: z.string(),
-    userVersion: z.number().nullable(),
-    contentVersion: z.number().optional(),
-    retainedAgentPaths: z.array(z.string()).optional(),
-  }),
-);
-export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
+export type { UpdateStateSchemaVersion } from "./update-candidate-state.versions.js";
 export const UpdateCandidateStateSnapshotSchema = z.object({
   versions: UpdateStateSchemaVersionsSchema,
   pluginPaths: z.record(z.string(), z.string()),
@@ -85,13 +85,15 @@ type CandidateStateDatabase = Pick<
   "agent_databases" | "agent_database_leases" | "state_leases"
 >;
 
-const UpdateCandidateStateInventorySchema = z
-  .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
-  .transform((entries) => new Map(entries));
 export const UpdateCandidateSnapshotInventorySchema = z.object({
-  databases: UpdateCandidateStateInventorySchema,
+  databases: z
+    .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
+    .transform((entries) => new Map(entries)),
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
+  // The installed driver budgets the candidate worker's copy lifecycle.
+  // Omission retains the larger allowance used by released older workers.
+  snapshotSpace: z.literal("single-generation").optional(),
   // Published candidate workers before named snapshot warnings omit this field.
   warnings: z.array(z.string()).default([]),
 });
@@ -148,6 +150,7 @@ export async function collectStateDatabasePaths(
     }
   }
   // Published owners describe shared/agent schemas; local stores retain exact opaque contents.
+  queue(resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
   queue(resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateRoot }));
   const directories =
     options.includeUnconfiguredAgents !== false
@@ -184,38 +187,18 @@ export async function collectStateDatabasePaths(
 
 async function collectUpdateCandidateDatabasePaths(input: StateInput) {
   const files = await collectStateDatabasePaths(input);
-  if (input.config.database?.engine === "postgres") {
-    const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
-    // Capture already froze plugin roots before taking maintenance custody.
-    for (const file of input.additionalPaths ?? (await discoverBackupDatabasePaths(input))) {
+  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
+  // The private snapshot below owns registry reads, including legacy schemas.
+  // Include declared retained plugin databases on either physical engine here.
+  for (const file of input.additionalPaths ??
+    (await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }))) {
+    // Supplemental realpaths must not add aliases to the legacy versions inventory.
+    // Registry discovery below still preserves every explicitly recorded spelling.
+    if (!files.has(resolveUpdateCandidateStateIdentity(input.stateDir, file))) {
       queueStateDatabaseSpelling(files, input.stateDir, file);
     }
   }
   return files;
-}
-
-/** Publish exact aliases; released shared/agent callers opt out of local schema versions. */
-function publishStateDatabaseVersions(
-  files: Map<string, StateDatabaseDiscovery>,
-  inspected: Map<string, Omit<UpdateStateSchemaVersion, "path">>,
-  input: StateInput,
-): UpdateStateSchemaVersion[] {
-  const versions: UpdateStateSchemaVersion[] = [];
-  for (const [identity, discovery] of files) {
-    const result = inspected.get(identity);
-    if (!result) {
-      continue;
-    }
-    for (const spelling of discovery.spellings) {
-      versions.push({ path: spelling, ...result });
-    }
-  }
-  return input.includeLocalStoreVersions === false
-    ? versions.filter(
-        ({ path: file }) =>
-          file !== resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir }),
-      )
-    : versions;
 }
 
 /** Read registrations and plugin ownership from one private shared copy before budgeting. */
@@ -268,7 +251,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
     };
   };
   if (await updateStateDatabaseExists(shared)) {
-    if (input.config.database?.engine === "postgres") {
+    if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
       const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
       const result = await readUpdatePostgresState(input, files);
       for (const [identity, discovery] of result.files) {
@@ -308,7 +291,7 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
   if (!(await updateStateDatabaseExists(shared))) {
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
   }
-  if (input.config.database?.engine === "postgres") {
+  if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
     const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
     const result = await readUpdatePostgresState(input, files);
     return { files: result.files, sharedVersion: { path: shared, ...result.version } };
@@ -353,9 +336,11 @@ export async function readUpdateStateSchemaVersionsInProcess(
       phase:
         file === shared
           ? "shared database inspection"
-          : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
-            ? "daemon schema inspection"
-            : "agent schema inspection",
+          : file === resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
+            ? "client credential schema inspection"
+            : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir })
+              ? "daemon schema inspection"
+              : "agent schema inspection",
       path: file,
     });
     // Missing stores stay explicit so creation is checked and loss blocks rollback.
@@ -363,7 +348,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
       inspected.set(identity, { userVersion: null });
       continue;
     }
-    if (file === shared && input.config.database?.engine === "postgres") {
+    if (file === shared && resolveDatabaseFamilyEngines(input.config).state === "postgres") {
       const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
       const result = await readUpdatePostgresState(input, files);
       for (const [key, entry] of result.files) {
@@ -373,14 +358,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
       continue;
     }
     if (file !== shared) {
-      // This child owns source access and any artifact-preserving copy.
-      const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
-        file,
-        input.stagingRoot,
-        undefined,
-        input.preserveSourceArtifacts,
-      );
-      inspected.set(identity, { userVersion });
+      inspected.set(identity, await readUpdateStoreSchemaVersion(file, input));
       continue;
     }
     inspected.set(
@@ -621,7 +599,10 @@ export async function snapshotUpdateCandidateState(
   // keep every raw alias so released rollback baselines still match.
   const files = await collectUpdateCandidateDatabasePaths(input);
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
-  if (input.config.database?.engine === "postgres" && (await updateStateDatabaseExists(shared))) {
+  if (
+    resolveDatabaseFamilyEngines(input.config).state === "postgres" &&
+    (await updateStateDatabaseExists(shared))
+  ) {
     const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
     const discovered = await readUpdatePostgresState(input, files);
     for (const [identity, discovery] of discovered.files) {
@@ -644,21 +625,21 @@ export async function snapshotUpdateCandidateState(
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const progress = createUpdateStateSnapshotReporter(file, "database snapshot", input.onProgress);
     let snapshotSource = file;
-    if (input.config.database?.engine === "postgres") {
-      const { capturePostgresBackup, readBackupEngine } =
-        await import("../snapshot/database-backup.js");
-      if (readBackupEngine(file).engine === "postgres") {
-        const directory = `${target}.postgres`;
-        await capturePostgresBackup({
-          sourcePath: file,
-          directory,
-          config: input.config,
-          profile: "exact",
-          assertCurrent() {},
-        });
-        // Rehearsal owns this portable image; the source engine never changes.
-        snapshotSource = path.join(directory, "database.sqlite");
-      }
+    const { capturePostgresBackup, readBackupEngine } =
+      await import("../snapshot/database-backup.js");
+    const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file, input.targetStateDir);
+    // PostgreSQL anchors have header version zero; versioned SQLite uses online backup directly.
+    if (userVersion === 0 && readBackupEngine(file).engine === "postgres") {
+      const directory = `${target}.postgres`;
+      await capturePostgresBackup({
+        sourcePath: file,
+        directory,
+        config: input.config,
+        profile: "exact",
+        assertCurrent() {},
+      });
+      // Rehearsal owns this portable image; the source engine never changes.
+      snapshotSource = path.join(directory, "database.sqlite");
     }
     const snapshot = await createVerifiedSqliteSnapshot({
       sourcePath: snapshotSource,

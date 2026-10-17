@@ -104,8 +104,7 @@ export function registerAgentConfigMutationTests({
         }
       };
       const configFactory = await import("../config/io.factory.js");
-      const { readAgentDeletionJournal } = await import("../state/agent-deletion-journal.js");
-      const { removeAgentDeletionJournal } =
+      const { readAgentDeletionJournal, removeAgentDeletionJournal } =
         await import("../test-utils/agent-deletion-journal.js");
       const original = await getCurrentConfigObject();
       const seed = await patchConfig("seed logging", {

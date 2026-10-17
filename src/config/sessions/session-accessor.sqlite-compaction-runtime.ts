@@ -1,4 +1,4 @@
-import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
+import type { CommittedCompactionBoundary } from "../../agents/sessions/session-compaction-persistence.js";
 import {
   captureSessionManagerIncognitoBinding,
   withSessionManagerMemoryActor,
@@ -37,7 +37,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
   scope: Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[0],
   params: Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[1],
   assertActive?: () => void,
-): Promise<CommittedCompactionAppend> {
+): Promise<CommittedCompactionBoundary> {
   assertActive?.();
   const captured = withOwnedSessionTranscriptWriterFence({
     ...captureSessionTranscriptTargetBinding(scope),
@@ -69,7 +69,9 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
   };
   const memory = captureSessionManagerIncognitoBinding(captured);
   const options = memory?.database ?? toDatabaseOptions(resolveSqliteTranscriptScope(captured));
-  const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
+  const transcriptByteCompactionLatch = params.transcriptByteCompactionLatch
+    ? { ...params.transcriptByteCompactionLatch }
+    : params.transcriptByteCompactionLatch;
   const persist = async (
     database: OpenClawAgentDatabaseExecution | SessionManagerIncognitoDatabase,
   ) => {
@@ -96,6 +98,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
                   scope: memory ? { ...preparedTarget, storePath: database.path } : preparedTarget,
                 },
                 transcriptByteCompactionLatch,
+                tokensAfter: params.tokensAfter,
                 ...(initialWriter && !initialWriter.committedFence
                   ? { initialWriterRunId: initialWriter.writerRunId }
                   : {}),

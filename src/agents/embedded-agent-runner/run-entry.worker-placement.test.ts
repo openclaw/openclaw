@@ -14,7 +14,7 @@ beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("runEmbeddedAgentEntry worker placement", () => {
-  it.each(["provider replacement", "cancellation", "lifecycle rotation"] as const)(
+  it.each(["cancellation", "lifecycle rotation"] as const)(
     "rejects %s while preparing the placement runtime",
     async (change) => {
       const started = createDeferred();
@@ -52,9 +52,7 @@ describe("runEmbeddedAgentEntry worker placement", () => {
           entry,
           "entry bypassed placement selection",
         );
-        if (change === "provider replacement") {
-          onTestFinished(installSessionPlacementAdmissionProvider({ ...provider }));
-        } else if (change === "cancellation") {
+        if (change === "cancellation") {
           abort.abort(new Error("runtime preparation cancelled"));
         } else {
           rotateAgentEventLifecycleGeneration();

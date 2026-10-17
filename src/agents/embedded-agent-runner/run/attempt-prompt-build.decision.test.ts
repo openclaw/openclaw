@@ -105,15 +105,18 @@ async function fixture(
   mode: "structured" | "search" | "code" = "structured",
   agentId = "main",
   hookRunner: Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["hookRunner"] = null,
+  toolSurface: { names?: string[]; forceToolNames?: string[]; clientOnly?: boolean } = {},
 ) {
   const runId = "prefilter-" + ++sequence;
-  const tools = ["inspect_file", "message", "decision_evaluate"].map((name) => ({
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({}),
-    execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} }),
-  }));
+  const tools = (toolSurface.names ?? ["inspect_file", "message", "decision_evaluate"]).map(
+    (name) => ({
+      name,
+      label: name,
+      description: name,
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} }),
+    }),
+  );
   const controls = mode === "search" ? ["tool_search"] : mode === "code" ? ["exec"] : [];
   const controlTools = controls.map((name) => ({ ...tools[0]!, name }));
   const { session, sessionManager, modelRegistry } = await createTestSession({
@@ -144,12 +147,16 @@ async function fixture(
         };
   const policy = createPromptBuildToolPolicy({
     session,
-    effectiveTools: mode === "structured" ? tools : [...controlTools, tools[1]!],
-    uncompactedEffectiveTools: tools,
-    tools,
+    effectiveTools: toolSurface.clientOnly
+      ? []
+      : mode === "structured"
+        ? tools
+        : [...controlTools, tools[1]!],
+    uncompactedEffectiveTools: toolSurface.clientOnly ? [] : tools,
+    tools: toolSurface.clientOnly ? [] : tools,
     catalogRef,
     codeModeControlsEnabled: mode === "code",
-    forceToolNames: ["message", "denied"],
+    forceToolNames: toolSurface.forceToolNames ?? ["message", "denied"],
   });
   const admission = prepareSystemAgentRunAdmission(cfg, runId, agentId, "prefilter-test");
   const promptStateLease = retainEmbeddedSessionPromptState(runId);
@@ -193,8 +200,9 @@ async function fixture(
       sessionAgentId: agentId,
       runtimeModel: testModel.id,
       systemPromptText: "System",
-      applyPromptBuildToolsAllow: (allow, decisionIsCurrent) =>
-        policy.apply(allow, decisionIsCurrent).callableToolNames,
+      hasBaselineTools: policy.hasBaselineTools,
+      applyPromptBuildToolsAllow: (allow, pruneForDecision) =>
+        policy.apply(allow, pruneForDecision).callableToolNames,
       setActiveSessionSystemPrompt: () => {},
       setLeasedSteering: () => {},
     });
@@ -221,18 +229,75 @@ async function fixture(
       onSteeringAcknowledged: () => {},
       assertHostActive: assembly.assertHostActive,
       persistToolResultProjections,
-      preparePrimaryModelRequest: () =>
-        policy.prepareForDispatch(async () => () => ({
-          tools: session.agent.state.tools.slice(),
-          systemPrompt: session.agent.state.systemPrompt,
-        })),
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
   };
-  return { assemble, submit, session, policy, catalogRef, controller, admission, attempt };
+  return { assemble, submit, session, policy, catalogRef, controller, admission, attempt, tools };
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
+  it("skips Decision inference when the prepared tool surface is empty", async () => {
+    const call = register();
+    const f = await fixture(config(), "structured", "main", null, { names: [] });
+
+    const assembly = await f.assemble();
+
+    expect(f.attempt.disableTools).toBeUndefined();
+    expect(assembly.decisionPrefilter).toMatchObject({ status: "skipped", reason: "no-tools" });
+    expect(call).not.toHaveBeenCalled();
+    expect(f.session.getActiveToolNames()).toEqual([]);
+  });
+
+  it("evaluates the next turn after a Decision removes every model-facing tool", async () => {
+    const call = register();
+    const f = await fixture(config(), "structured", "main", null, {
+      names: ["inspect_file"],
+      forceToolNames: [],
+    });
+    await f.assemble();
+    expect(f.policy.current.effectiveTools).toEqual([]);
+    expect(f.session.getActiveToolNames()).toEqual([]);
+
+    call.mockResolvedValue(result(0.9));
+    await f.assemble({ prompt: "Read package.json now." });
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(f.session.getActiveToolNames()).toEqual(["inspect_file"]);
+  });
+
+  it("reads the permission baseline after preparation awaits and admits a later nonempty generation", async () => {
+    const call = register();
+    const f = await fixture();
+    const tools = f.tools.slice();
+    vi.mocked(leasePendingAgentSteeringItems).mockImplementationOnce(async () => {
+      f.tools.splice(0);
+      f.session.setActiveToolsByName([]);
+      f.policy.refresh();
+      return undefined;
+    });
+    const assembly = await f.assemble({ sessionKey: "agent:main:tools-revoked" });
+    expect(assembly.decisionPrefilter).toMatchObject({ status: "skipped", reason: "no-tools" });
+    expect(call).not.toHaveBeenCalled();
+
+    f.tools.push(...tools);
+    f.session.setActiveToolsByName(tools.map((tool) => tool.name));
+    f.policy.refresh();
+    await f.assemble();
+    expect(call).toHaveBeenCalledOnce();
+  });
+
+  it("keeps client-only model tools eligible for Decision inference", async () => {
+    const call = register(async () => result(0.9));
+    const f = await fixture(config(), "structured", "main", null, {
+      names: ["client_lookup"],
+      clientOnly: true,
+    });
+    expect(f.policy.current.effectiveTools).toEqual([]);
+    await f.assemble();
+    expect(call).toHaveBeenCalledOnce();
+    expect(f.session.getActiveToolNames()).toEqual(["client_lookup"]);
+  });
+
   it.each<[string, OpenClawConfig, string, boolean | undefined, boolean]>([
     ["missing referent", config(), "main", true, false],
     ["disabled", config(false), "main", true, false],
@@ -263,14 +328,13 @@ describe("prompt assembly with registered Decision runtime", () => {
     },
   );
   it.each(["structured", "search", "code"] as const)(
-    "keeps admitted opt-out results but withdraws model changes at final %s dispatch",
+    "keeps the admitted Decision result for final %s dispatch",
     async (mode) => {
       for (const change of ["opt-out", "model-change"] as const) {
         register();
         const cfg = config();
         setRuntimeConfigSnapshot(cfg);
         const f = await fixture(cfg, mode);
-        const baseline = f.session.agent.state.tools.map((t) => t.name);
         const assembly = await f.assemble();
         expect(f.session.getActiveToolNames()).toEqual(["message"]);
         const entered = createDeferredCore();
@@ -295,18 +359,14 @@ describe("prompt assembly with registered Decision runtime", () => {
         setRuntimeConfigSnapshot(next);
         barrier.resolve();
         await pending;
-        const expected = change === "opt-out" ? ["message"] : baseline;
+        const expected = ["message"];
         expect(captured).toEqual([expected]);
         expect(f.session.getActiveToolNames()).toEqual(expected);
-        expect(f.policy.current.callableToolNames.includes("inspect_file")).toBe(
-          change === "model-change",
-        );
+        expect(f.policy.current.callableToolNames).not.toContain("inspect_file");
         expect(f.policy.current.callableToolNames).not.toContain("denied");
         expect(f.policy.current.tools.map((t) => t.name)).toContain("message");
         if (f.catalogRef) {
-          expect(f.catalogRef.current?.entries.map((e) => e.name)).toEqual(
-            change === "opt-out" ? [] : ["decision_evaluate", "inspect_file"],
-          );
+          expect(f.catalogRef.current?.entries).toEqual([]);
         }
       }
     },

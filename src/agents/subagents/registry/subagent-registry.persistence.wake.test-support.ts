@@ -9,6 +9,7 @@ import {
 import {
   createDeliveredWake,
   observeSubagentRequesterWake,
+  prepareSubagentRecoveryFixture,
 } from "./subagent-registry.persistence.test-support.js";
 
 type WakeParams = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
@@ -23,7 +24,7 @@ export function registerStaleRequesterWakeBatchTests({
     requesterSettleModule: typeof import("../announce/subagent-announce.requester-settle-wake.js");
     bindGatewayContextResolver: typeof import("../../../plugins/runtime/gateway-request-scope.js").bindGatewayContextResolver;
   };
-  withRegistryState: (run: () => Promise<void>) => Promise<void>;
+  withRegistryState: (run: (stateDir: string) => Promise<void>) => Promise<void>;
   settleOwnedWork: () => Promise<void> | undefined;
 }) {
   const readPersistedRun = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
@@ -44,7 +45,7 @@ export function registerStaleRequesterWakeBatchTests({
       };
       vi.useFakeTimers();
       try {
-        await withRegistryState(async () => {
+        await withRegistryState(async (stateDir) => {
           try {
             const batch = ["run-batch-anchor", "run-batch-sibling"].map((runId, index) =>
               createDeliveredWake(runId, {
@@ -55,6 +56,9 @@ export function registerStaleRequesterWakeBatchTests({
                 ...(index === 1 ? { nextAttemptAt: Date.now() + 30_000 } : {}),
               }),
             );
+            for (const run of batch) {
+              await prepareSubagentRecoveryFixture(run, { stateDir });
+            }
             const { run: wakeRequester, waitForCalls } = observeSubagentRequesterWake((params) => {
               oldParams ??= params;
               return oldDone.promise;

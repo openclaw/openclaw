@@ -40,6 +40,7 @@ export type GatewayClient = Pick<
   | "clientIp"
   | "pairedClientId"
   | "authenticatedUserId"
+  | "authenticatedFactoryGitHubAccountId"
   | "authenticatedUserIsTailscaleProvider"
   | "authenticatedGitHubIdentitySync"
   | "preparedSessionProfile"
@@ -81,10 +82,7 @@ export type GatewayClient = Pick<
     agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
-    /** Host-owned exact media set for a scoped automatic recovery delivery. */
-    internalDeliveryMediaUrls?: string[];
     runtimeContextFragments?: RuntimeContextFragment[];
-    internalDeliverySuppressText?: boolean;
     /** Host-owned: deliver only authored output, never runtime error payloads. */
     internalDeliverySuppressErrors?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */

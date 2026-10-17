@@ -384,32 +384,6 @@ describe("createBeamMirrorRunner", () => {
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
   });
 
-  it("preserves the uploaded title and visible messages", async () => {
-    const token = `sk-${"synthetic".repeat(5)}`;
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", name: `Review credential ${token}`, recencyAt: beamTestNow }],
-      items: [
-        { type: "agentMessage", text: `Credential ${token} was found in configuration.` },
-        { type: "userMessage", text: `Use ${token} to inspect the gateway.` },
-      ],
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(JSON.stringify(sent[0]?.payload)).toContain(token);
-    expect(sent[0]?.payload).toMatchObject({
-      title: `Review credential ${token}`,
-      items: [
-        { type: "userMessage", text: `Use ${token} to inspect the gateway.` },
-        { type: "agentMessage", text: `Credential ${token} was found in configuration.` },
-      ],
-    });
-  });
-
   it("keeps successful uploads successful when response cancellation rejects", async () => {
     const sent: SentRequest[] = [];
     const warnings: string[] = [];

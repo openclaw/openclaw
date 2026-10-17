@@ -13,6 +13,7 @@
 
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { isScalar, parseDocument } from "yaml";
 import type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult } from "./ast.js";
 import { slugify } from "./slug.js";
 
@@ -106,6 +107,15 @@ function unquote(value: string): string {
     const f = value.charCodeAt(0);
     const l = value.charCodeAt(value.length - 1);
     if (f === l && (f === 34 || f === 39)) {
+      const doc = parseDocument(value, { prettyErrors: false });
+      if (
+        doc.errors.length === 0 &&
+        isScalar(doc.contents) &&
+        typeof doc.contents.value === "string"
+      ) {
+        return doc.contents.value;
+      }
+      // Preserve the tolerant handling of malformed, hand-authored quoted values.
       return value.slice(1, -1);
     }
   }

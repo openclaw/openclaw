@@ -2776,7 +2776,7 @@ function pluginDetail(
 }
 
 async function buildReadyGoogleCalendarThreadConfig(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig,
 ): Promise<Awaited<ReturnType<typeof buildCodexPluginThreadConfig>>> {
   const appCache = await cacheApps([appInfo("google-calendar-app", true)]);
 
@@ -2812,13 +2812,13 @@ describe("missing configured plugins", () => {
     {
       marketplaceName: "missing-marketplace",
       code: "marketplace_missing",
-      actions: "ask",
+      actions: "ask" as const,
       enabled: true,
     },
   ])(
     "keeps healthy runtime apps for $code with actions=$actions enabled=$enabled",
     async ({ marketplaceName, code, actions, enabled }) => {
-      const pluginConfig = {
+      const pluginConfig: CodexPluginConfig = {
         codexPlugins: {
           enabled: true,
           allow_all_plugins: true,

@@ -42,6 +42,7 @@ import {
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
+  runAfterPluginLifecycleCommit,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
 } from "../plugins/plugin-lifecycle-lease.js";
@@ -293,7 +294,8 @@ export function startGatewayConfigReloader(
   });
   const readPluginInstallRecords = opts.readPluginInstallRecords ?? readCurrentInstallRecords;
   const appliedRevision = createConfigAppliedRevisionTracker({
-    onConfigApplied: opts.onConfigApplied,
+    onConfigApplied: (plan, nextConfig) =>
+      runAfterPluginLifecycleCommit(() => opts.onConfigApplied?.(plan, nextConfig)),
     onRevisionApplied: opts.onConfigRevisionApplied,
   });
 
@@ -460,7 +462,7 @@ export function startGatewayConfigReloader(
         // The next queued config is compared against the runtime actually published here.
         commitPublishedRuntimeEnv();
         onRuntimeCommitted?.();
-        opts.onRuntimeConfigCommitted?.(plan, runtimeConfig);
+        runAfterPluginLifecycleCommit(() => opts.onRuntimeConfigCommitted?.(plan, runtimeConfig));
         committedRuntimeConfig = runtimeConfig;
         acceptedSourceSnapshot = undefined;
         currentConfig = runtimeConfig;
@@ -550,27 +552,30 @@ export function startGatewayConfigReloader(
       await checkpoint();
       // Persisted content changed even when the runtime skipped applying it
       // (writer intent, reload mode off): change listeners still refresh.
-      const notifyCommitted = async () => {
-        opts.log.info(
-          `config source revision ${initialEpoch} accepted (${candidate?.origin ?? "file"})`,
-        );
-        opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
-        if (changedPaths.length > 0) {
-          opts.onConfigCandidateCommitted?.({
-            path: opts.watchPath,
-            persistedHash: persistedHash ?? null,
-            changedPaths,
-          });
-        }
-        if (options.runtimeApplied !== false && (changedPaths.length > 0 || pluginLifecycle)) {
-          try {
-            const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
-            await refreshSkillsDiscovery({ config: currentConfig, reason: "config-change" });
-          } catch (error) {
-            opts.log.warn(`config applied, but skills discovery refresh failed: ${String(error)}`);
+      const notifyCommitted = () =>
+        runAfterPluginLifecycleCommit(async () => {
+          opts.log.info(
+            `config source revision ${initialEpoch} accepted (${candidate?.origin ?? "file"})`,
+          );
+          opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
+          if (changedPaths.length > 0) {
+            opts.onConfigCandidateCommitted?.({
+              path: opts.watchPath,
+              persistedHash: persistedHash ?? null,
+              changedPaths,
+            });
           }
-        }
-      };
+          if (options.runtimeApplied !== false && (changedPaths.length > 0 || pluginLifecycle)) {
+            try {
+              const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
+              await refreshSkillsDiscovery({ config: currentConfig, reason: "config-change" });
+            } catch (error) {
+              opts.log.warn(
+                `config applied, but skills discovery refresh failed: ${String(error)}`,
+              );
+            }
+          }
+        });
       const acceptConfig = async () => {
         await opts.onConfigAccepted?.(
           committedRuntimeConfig ?? nextConfig,

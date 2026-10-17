@@ -14,8 +14,9 @@ import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-l
 import { projectGatewayEventLog } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { canReadSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/debug-data.css";
 import { DebugOverlaySectionLoading } from "./debug-overlay-loading-view.tsx";
 import {
@@ -67,8 +68,7 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
     });
   };
 
-  // Timer callbacks sample the current mode without owning its reactive subscription.
-  function refresh(minimized = untrack(() => props.minimized)) {
+  function refresh(minimized = props.minimized) {
     const scope = lifecycle.capture();
     if (!scope || document.visibilityState === "hidden") {
       return;
@@ -147,6 +147,7 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
       }
     }
   }
+  // Synchronize the Gateway diagnostics polling timer with panel/document visibility.
   createEffect(
     () => ({ minimized: props.minimized, visible: visible() }),
     // Start after the previous keyed content has released shared requests.
@@ -156,15 +157,15 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
   const eventRevision = () =>
     !props.minimized && visible() ? eventLog.read().revision : undefined;
   onSettled(() => {
-    // Gateway notifications sample the current mode; the effect owns mode changes.
-    const stopGateway = source.subscribe(() => syncPolling(untrack(() => props.minimized)));
-    document.addEventListener("visibilitychange", visibilityChanged);
+    // Gateway receipts abort retired diagnostics and synchronously revoke unauthorized status polling.
+    const stopGateway = source.subscribe(() => syncPolling(props.minimized));
+    const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
     return () => {
       stopPolling();
       abortRequests();
       stopGateway();
       lifecycle.dispose();
-      document.removeEventListener("visibilitychange", visibilityChanged);
+      stopVisibility();
     };
   });
   const state = (id: string) => sections[id] ?? { status: "loading" as const };
@@ -238,6 +239,7 @@ type Props = { context: ApplicationContext | undefined; minimized: boolean };
 export const DebugOverlayContent = defineSolidBridge<Props>(
   "openclaw-debug-overlay-content",
   (props) => {
+    // A bridge's provider ancestry is fixed for this renderer lifetime.
     const inherited = untrack(() => props.context) ? undefined : useApplication();
     return (
       <Show when={(props.context ?? inherited)?.gateway} keyed>

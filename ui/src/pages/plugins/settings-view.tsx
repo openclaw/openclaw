@@ -54,6 +54,7 @@ type SharedProps = Omit<
   PluginSettingsEditorModel,
   "pluginId" | "configSchema" | "backHref" | "onBack"
 > & {
+  registerIcon?: (readId: () => string) => () => void;
   loading: boolean;
   error: string | null;
   busy: Readonly<Record<string, PluginMutationAction>>;
@@ -189,6 +190,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                   }}
                 >
                   <PluginArtTile
+                    registerIcon={props.registerIcon}
                     slug={plugin().id}
                     name={plugin().name}
                     iconUrl={props.iconUrls[plugin().id]}
@@ -511,6 +513,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
         onBack={props.onBack}
         icon={
           <PluginArtTile
+            registerIcon={props.registerIcon}
             slug={plugin().id}
             name={plugin().name}
             iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}

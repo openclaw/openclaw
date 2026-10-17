@@ -55,15 +55,16 @@ vi.mock(import("../../process/command-queue.js"), async (importOriginal) => ({
 }));
 
 const acpManagerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn<
-    () =>
+  resolveSessionAsync: vi.fn<
+    () => Promise<
       | { kind: "none" }
       | {
           kind: "ready";
           sessionKey: string;
           meta: unknown;
         }
-  >(() => ({ kind: "none" })),
+    >
+  >(async () => ({ kind: "none" })),
   cancelSession: vi.fn(async () => {}),
 }));
 
@@ -83,13 +84,17 @@ vi.mock(
   import("../../agents/embedded-agent-runner/runs.abort-target.js"),
   async (importOriginal) => ({
     ...(await importOriginal()),
-    prepareEmbeddedAgentRunAbort: (sessionId: string) => () => ({
-      active:
-        runtimeAbortMocks.isEmbeddedAgentRunActive() ||
-        runtimeAbortMocks.resolveActiveEmbeddedRunSessionId() === sessionId,
-      aborted: runtimeAbortMocks.abortEmbeddedAgentRun(sessionId),
-      sessionId,
-    }),
+    prepareEmbeddedAgentRunAbort: (sessionId: string) =>
+      Object.assign(
+        () => ({
+          active:
+            runtimeAbortMocks.isEmbeddedAgentRunActive() ||
+            runtimeAbortMocks.resolveActiveEmbeddedRunSessionId() === sessionId,
+          aborted: runtimeAbortMocks.abortEmbeddedAgentRun(sessionId),
+          sessionId,
+        }),
+        { isWaitingForLocalModel: () => false },
+      ),
   }),
 );
 vi.mock("../../agents/embedded-agent-runner/active-run-projections.js", () => ({
@@ -104,9 +109,10 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../acp/control-plane/manager.js", () => ({
+vi.mock("../../acp/control-plane/manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/control-plane/manager.js")>()),
   getAcpSessionManager: () => ({
-    resolveSession: acpManagerMocks.resolveSession,
+    resolveSessionAsync: acpManagerMocks.resolveSessionAsync,
     cancelSession: acpManagerMocks.cancelSession,
   }),
 }));
@@ -315,7 +321,7 @@ describe("abort handling", () => {
     vi.mocked(resolveSessionAbortTarget).mockReset();
     replyRunRegistryTesting.resetReplyRunRegistry();
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
-    acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
+    acpManagerMocks.resolveSessionAsync.mockReset().mockResolvedValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
     runtimeAbortMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(true);
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
@@ -531,109 +537,131 @@ describe("abort handling", () => {
     });
   });
 
-  it("ACP cancel failures do not skip queue and lane cleanup", async () => {
-    const sessionKey = "agent:codex:acp:test-2";
-    const sessionId = "session-456";
-    const { root, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [sessionKey]: sessionId },
-    });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
-    acpManagerMocks.resolveSession.mockReturnValue({
-      kind: "ready",
-      sessionKey,
-      meta: {} as never,
-    });
-    acpManagerMocks.cancelSession.mockRejectedValueOnce(new Error("cancel failed"));
-
-    const result = await runStopCommand({
-      cfg,
-      sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
-      targetSessionKey: sessionKey,
-    });
-
-    expect(result.handled).toBe(true);
-    expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-    expectSessionLaneCleared(sessionKey);
-  });
-
-  it("signals the native parent before deferred ACP cancellation and never retargets its replacement", async () => {
-    const sessionKey = "agent:main:discord:channel:deferred-acp";
-    const acpKey = "agent:main:acp:deferred-acp";
-    const { root, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [sessionKey]: "native-session", [acpKey]: "acp-session" },
-    });
-    const native = createReplyOperation({
-      sessionKey,
-      sessionId: "native-session",
-      resetTriggered: false,
-    });
-    native.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId: "native-session", sessionKey });
-    bindAcpSessionForTest(acpKey);
-    acpManagerMocks.resolveSession.mockReturnValue({ kind: "ready", sessionKey: acpKey, meta: {} });
-    const entered = createDeferred();
-    const proceed = createDeferred();
-    acpManagerMocks.cancelSession.mockImplementationOnce(async () => {
-      entered.resolve();
-      await proceed.promise;
-    });
-    const pending = runStopCommand({
-      cfg,
-      sessionKey,
-      from: "discord:deferred-acp",
-      to: "discord:deferred-acp",
-    });
-    let replacement: ReturnType<typeof createReplyOperation> | undefined;
-    try {
-      await entered.promise;
-      const signaledBeforeAcpWait = native.abortSignal.aborted;
-      if (!signaledBeforeAcpWait) {
-        // This is still-live parent work, not a post-closure registration claim.
-        await registerSubagentRun({
-          runId: "during-acp-wait",
-          childSessionKey: "agent:main:subagent:during-acp-wait",
-          childAgentId: "main",
-          sessionEntry: { sessionId: "during-acp-wait-session" },
-          requesterSessionKey: sessionKey,
-          requesterAgentId: "main",
-          requesterDisplayKey: sessionKey,
-          task: "registered before native parent was signaled",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
-      }
-      const queueClearedBeforeAcpWait = getFollowupQueueDepth(sessionKey) === 0;
-      native.complete();
-      replacement = createReplyOperation({
+  it.each(["lookup", "cancel"])(
+    "ACP %s failures do not skip queue and lane cleanup",
+    async (failure) => {
+      const sessionKey = "agent:codex:acp:test-2";
+      const sessionId = "session-456";
+      const { root, cfg } = await createAbortConfig({
+        sessionIdsByKey: { [sessionKey]: sessionId },
+      });
+      enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+      acpManagerMocks.resolveSessionAsync.mockResolvedValue({
+        kind: "ready",
         sessionKey,
-        sessionId: "replacement-session",
+        meta: {} as never,
+      });
+      if (failure === "lookup") {
+        acpManagerMocks.resolveSessionAsync.mockRejectedValueOnce(new Error("lookup failed"));
+      } else {
+        acpManagerMocks.cancelSession.mockRejectedValueOnce(new Error("cancel failed"));
+      }
+
+      const result = await runStopCommand({
+        cfg,
+        sessionKey,
+        from: "telegram:123",
+        to: "telegram:123",
+        targetSessionKey: sessionKey,
+      });
+
+      expect(result.handled).toBe(true);
+      expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+      expectSessionLaneCleared(sessionKey);
+    },
+  );
+
+  it.each(["lookup", "cancel"])(
+    "signals the native parent before deferred ACP %s and never retargets its replacement",
+    async (phase) => {
+      const sessionKey = "agent:main:discord:channel:deferred-acp";
+      const acpKey = "agent:main:acp:deferred-acp";
+      const { root, cfg } = await createAbortConfig({
+        sessionIdsByKey: { [sessionKey]: "native-session", [acpKey]: "acp-session" },
+      });
+      const native = createReplyOperation({
+        sessionKey,
+        sessionId: "native-session",
         resetTriggered: false,
       });
-      replacement.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-      proceed.resolve();
-      await pending;
-      expect(
-        signaledBeforeAcpWait,
-        "native parent must be signaled before the independent ACP await",
-      ).toBe(true);
-      expect(queueClearedBeforeAcpWait).toBe(true);
-      expect(
-        replacement.abortSignal.aborted,
-        "do not rediscover a replacement parent after ACP settles",
-      ).toBe(false);
-      expect(
-        await getSubagentRunByChildSessionKey("agent:main:subagent:during-acp-wait"),
-      ).toBeNull();
-    } finally {
-      proceed.resolve();
-      await pending;
-      native.complete();
-      replacement?.complete();
-    }
-  });
+      native.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+      enqueueQueuedFollowupRun({ root, cfg, sessionId: "native-session", sessionKey });
+      bindAcpSessionForTest(acpKey);
+      acpManagerMocks.resolveSessionAsync.mockResolvedValue({
+        kind: "ready",
+        sessionKey: acpKey,
+        meta: {},
+      });
+      const entered = createDeferred();
+      const proceed = createDeferred();
+      if (phase === "lookup") {
+        acpManagerMocks.resolveSessionAsync.mockImplementationOnce(async () => {
+          entered.resolve();
+          await proceed.promise;
+          return { kind: "ready", sessionKey: acpKey, meta: {} };
+        });
+      } else {
+        acpManagerMocks.cancelSession.mockImplementationOnce(async () => {
+          entered.resolve();
+          await proceed.promise;
+        });
+      }
+      const pending = runStopCommand({
+        cfg,
+        sessionKey,
+        from: "discord:deferred-acp",
+        to: "discord:deferred-acp",
+      });
+      let replacement: ReturnType<typeof createReplyOperation> | undefined;
+      try {
+        await entered.promise;
+        const signaledBeforeAcpWait = native.abortSignal.aborted;
+        if (!signaledBeforeAcpWait) {
+          // This is still-live parent work, not a post-closure registration claim.
+          await registerSubagentRun({
+            runId: "during-acp-wait",
+            childSessionKey: "agent:main:subagent:during-acp-wait",
+            childAgentId: "main",
+            sessionEntry: { sessionId: "during-acp-wait-session" },
+            requesterSessionKey: sessionKey,
+            requesterAgentId: "main",
+            requesterDisplayKey: sessionKey,
+            task: "registered before native parent was signaled",
+            cleanup: "keep",
+            collect: true,
+            queued: true,
+          });
+        }
+        const queueClearedBeforeAcpWait = getFollowupQueueDepth(sessionKey) === 0;
+        native.complete();
+        replacement = createReplyOperation({
+          sessionKey,
+          sessionId: "replacement-session",
+          resetTriggered: false,
+        });
+        replacement.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+        proceed.resolve();
+        await pending;
+        expect(
+          signaledBeforeAcpWait,
+          "native parent must be signaled before the independent ACP await",
+        ).toBe(true);
+        expect(queueClearedBeforeAcpWait).toBe(true);
+        expect(
+          replacement.abortSignal.aborted,
+          "do not rediscover a replacement parent after ACP settles",
+        ).toBe(false);
+        expect(
+          await getSubagentRunByChildSessionKey("agent:main:subagent:during-acp-wait"),
+        ).toBeNull();
+      } finally {
+        proceed.resolve();
+        await pending;
+        native.complete();
+        replacement?.complete();
+      }
+    },
+  );
 
   it("propagates a callback failure without a requester", async () => {
     const requesterSessionKey = undefined;
@@ -711,7 +739,7 @@ describe("abort handling", () => {
       sessionId: "source-active-session",
       resetTriggered: false,
     });
-    acpManagerMocks.resolveSession.mockReturnValue({
+    acpManagerMocks.resolveSessionAsync.mockResolvedValue({
       kind: "ready",
       sessionKey: acpSessionKey,
       meta: {} as never,
@@ -752,7 +780,7 @@ describe("abort handling", () => {
       resetTriggered: false,
     });
     bindAcpSessionForTest(acpSessionKey);
-    acpManagerMocks.resolveSession.mockReturnValue({
+    acpManagerMocks.resolveSessionAsync.mockResolvedValue({
       kind: "ready",
       sessionKey: acpSessionKey,
       meta: {} as never,

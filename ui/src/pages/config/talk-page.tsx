@@ -11,7 +11,8 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   isTalkGptLiveModel,
@@ -88,7 +89,7 @@ class VoiceWakeSettingsOwner {
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly gateway: ApplicationContext["gateway"]) {
-    // This subscription shares the Gateway's lifetime, including route absences.
+    // Retire queued voice-wake writes synchronously, including while this route is absent.
     gateway.subscribe(() => this.sync());
   }
 
@@ -540,19 +541,19 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
     }
   }
-  const stopGateway = context.gateway.subscribe(() =>
-    syncCatalog(catalogConnection(context.gateway)),
-  );
-  const stopConfig = context.runtimeConfig.subscribe(() =>
-    refreshCatalogOnConfigChange(context.runtimeConfig.state),
-  );
+  const stops = [
+    // Retire catalog reads on every connection transition, even within one render.
+    context.gateway.subscribe(() => syncCatalog(catalogConnection(context.gateway))),
+    // Config receipts acknowledge model resets and admit a fresh catalog read.
+    context.runtimeConfig.subscribe(() =>
+      refreshCatalogOnConfigChange(context.runtimeConfig.state),
+    ),
+    listen(window, "focus", refreshOnFocus),
+  ];
   syncCatalog(catalogConnection(context.gateway));
   refreshCatalogOnConfigChange(context.runtimeConfig.state);
-  window.addEventListener("focus", refreshOnFocus);
   onCleanup(() => {
-    window.removeEventListener("focus", refreshOnFocus);
-    stopGateway();
-    stopConfig();
+    stops.forEach((stop) => stop());
     connectionValue = null;
   });
   return { catalog, modelDefaultResetIntent, changeModel, changeVoice, changeProvider };
@@ -563,11 +564,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const settings = createTalkSettings(context, props);
   const runtime = projectRuntimeConfig(context.runtimeConfig);
   const voiceWake = voiceWakeOwner(context.gateway);
-  const voiceWakeState = projectSource(voiceWake, {
-    read: (owner) => owner.state,
-    subscribe: (owner, notify) => owner.subscribe(notify),
-    equality: "revision",
-  });
+  const voiceWakeState = projectOwner(voiceWake, (owner) => owner.state);
   const device = context.nativeDeviceSettings
     ? projectNativeDeviceSettings(context.nativeDeviceSettings)
     : undefined;

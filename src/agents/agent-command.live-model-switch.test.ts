@@ -6,14 +6,16 @@ import { expectDefined, toStringifiedError } from "@openclaw/normalization-core"
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryRuntime from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -1130,9 +1132,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolvedSessionKeyMock = undefined;
     state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
       const params = args[0] as {
-        sessionStore?: Record<string, unknown>;
+        sessionStore?: Record<string, SessionEntry>;
         sessionKey?: string;
-        entry?: unknown;
+        entry?: SessionEntry;
         shouldPersist?: (entry: unknown) => boolean;
       };
       const current =
@@ -1147,6 +1149,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }
       if (params.sessionStore && params.sessionKey && params.entry) {
         params.sessionStore[params.sessionKey] = params.entry;
+        (state.sessionStoreMock ??= params.sessionStore)[params.sessionKey] = params.entry;
         return params.entry;
       }
       return current;
@@ -1175,6 +1178,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     state.resolveMessageChannelSelectionMock.mockRejectedValue(new Error("channel required"));
     await resetTestSessionReaders(state);
+    // Keep command metadata writes on the fixture's persistence owner, including native recovery cases.
+    vi.spyOn(sessionEntryRuntime, "applySessionEntryOperation").mockImplementation(
+      async (scope, operation, options) => {
+        if (operation.kind !== "fields") {
+          throw new Error(`Unexpected command session patch: ${operation.kind}`);
+        }
+        const entry = state.loadSessionEntryMock(scope) as SessionEntry | undefined;
+        if (!entry) {
+          return null;
+        }
+        const patch = reduceSessionEntryPatch(operation, entry, entry);
+        if (!patch) {
+          return entry;
+        }
+        const persisted = (await state.persistSessionEntryMock({
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          sessionStore: state.sessionStoreMock ?? { [scope.sessionKey]: entry },
+          initialEntry: entry,
+          entry: { ...entry, ...patch },
+        })) as SessionEntry | undefined;
+        if (persisted) {
+          options?.onCommitted?.(persisted);
+        }
+        return persisted ?? null;
+      },
+    );
     state.resolveAgentDeliveryPlanMock.mockImplementation(
       (params: {
         accountId?: string;
@@ -2564,100 +2595,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   registerAgentCommandRecoveryCases(getAgentCommandRecoveryFixture);
 
-  it("records generated-media delivery runs as durable terminal sources", async () => {
-    setupSuccessfulAttempt();
-    setupBareStoredSession();
-    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
-      const onDeliveryResult = (
-        params as { onDeliveryResult?: (result: unknown, payloads: ReplyPayload[]) => void }
-      ).onDeliveryResult;
-      const deliveryResult = {
-        payloads: [{ isReasoning: true }, { text: "ready", mediaUrls: ["/tmp/payload.png"] }],
-        meta: {},
-        deliverySucceeded: true,
-        deliveryStatus: {
-          status: "partial_failed",
-          payloadOutcomes: [
-            { index: 0, status: "suppressed" },
-            { index: 1, status: "failed", sentBeforeError: false },
-          ],
-        },
-        messagingToolSentTargets: [
-          {
-            provider: "discord",
-            to: "discord:dm:123",
-            threadId: 42,
-            mediaUrls: ["/tmp/proof.png"],
-          },
-        ],
-      };
-      onDeliveryResult?.(deliveryResult, deliveryResult.payloads);
-      return deliveryResult;
-    });
-
-    await agentCommand({
-      message: "generated image ready",
-      channel: "discord",
-      to: "discord:dm:123",
-      deliver: false,
-      runId: "image:task-1:agent-loop",
-      sourceReplyDeliveryMode: "automatic",
-      disableMessageTool: true,
-      forceRestartSafeTools: true,
-      internalDeliveryMediaUrls: ["/tmp/payload.png"],
-      inputProvenance: {
-        kind: "inter_session",
-        sourceChannel: "internal",
-        sourceTool: "image_generate",
-      },
-    });
-
-    const persistedSourceRunIds = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliverySourceRunId;
-    });
-    expect(persistedSourceRunIds).toContain("image:task-1:agent-loop");
-    expect(
-      state.persistSessionEntryMock.mock.calls.some((call) => {
-        const params = call[0] as { entry?: SessionEntry };
-        return params.entry?.restartRecoverySourceReplyDeliveryMode === "automatic";
-      }),
-    ).toBe(true);
-    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
-      | { sessionStore?: Record<string, SessionEntry> }
-      | undefined;
-    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
-    expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(stored?.restartRecoverySourceReplyDeliveryMode).toBeUndefined();
-    expect(stored?.restartRecoveryTerminalRunIds).toEqual(["image:task-1:agent-loop"]);
-    expect(stored?.restartRecoveryTerminalDeliveryEvidence).toEqual([
-      {
-        runId: "image:task-1:agent-loop",
-        transcriptRunId: "image:task-1:agent-loop",
-        captured: true,
-        payloads: [{ visible: false }, { mediaUrls: ["/tmp/payload.png"], visible: true }],
-        deliveryStatus: {
-          status: "partial_failed",
-          payloadOutcomes: [
-            { index: 0, status: "suppressed" },
-            { index: 1, status: "failed", sentBeforeError: false },
-          ],
-        },
-        messagingToolSentTargets: [
-          {
-            provider: "discord",
-            to: "discord:dm:123",
-            threadId: "42",
-            mediaUrls: ["/tmp/proof.png"],
-            visible: true,
-          },
-        ],
-        restartUnsafeSideEffectsDetected: true,
-      },
-    ]);
-  });
-
-  it("does not make an unconstrained message-tool completion replayable", async () => {
+  it("keeps a generated-media completion turn an ordinary run", async () => {
     setupSuccessfulAttempt();
     setupBareStoredSession();
 
@@ -2680,125 +2618,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         return params.entry?.restartRecoveryDeliverySourceRunId !== undefined;
       }),
     ).toBe(false);
-  });
-
-  it("constrains recovery delivery to host-owned media before persistence and send", async () => {
-    await withStoredAgentCommandRecoverySession(getAgentCommandRecoveryFixture(), async () => {
-      setupSingleAttemptFallback();
-      state.runAgentAttemptMock.mockResolvedValue({
-        ...makeSuccessResult("openai", "gpt-5.4"),
-        payloads: [{ text: "ready", mediaUrls: ["/tmp/already-delivered.png"] }],
-      });
-
-      await agentCommand({
-        message: "deliver only missing generated media",
-        channel: "discord",
-        to: "channel:123",
-        deliver: true,
-        sourceReplyDeliveryMode: "automatic",
-        disableMessageTool: true,
-        forceRestartSafeTools: true,
-        internalDeliveryMediaUrls: ["/tmp/missing.png"],
-        runId: "image:task-policy:agent-loop",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "internal",
-          sourceTool: "image_generate",
-        },
-      });
-
-      const deliveryParams = requireRecord(
-        mockCallArg(state.deliverAgentCommandResultMock),
-        "delivery params",
-      );
-      const expectedRecoveryPayloads = [
-        {
-          text: "ready",
-          mediaUrl: "/tmp/missing.png",
-          mediaUrls: ["/tmp/missing.png"],
-          audioAsVoice: undefined,
-          trustedLocalMedia: true,
-        },
-      ];
-      expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual(
-        expectedRecoveryPayloads,
-      );
-      expect(deliveryParams.payloads).toEqual(expectedRecoveryPayloads);
-      expect(
-        state.persistSessionEntryMock.mock.calls.some((call) => {
-          const params = call[0] as { entry?: SessionEntry };
-          return (
-            params.entry?.restartRecoveryDeliveryMediaUrls?.[0] === "/tmp/missing.png" &&
-            params.entry.restartRecoveryDisableMessageTool === true &&
-            params.entry.restartRecoveryForceSafeTools === true
-          );
-        }),
-      ).toBe(true);
-    });
-  });
-
-  it("restores the exact generated-media policy for a preclaimed recovery run", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue({
-      ...makeSuccessResult("openai", "gpt-5.4"),
-      payloads: [{ text: "ready", mediaUrls: ["/tmp/model-selected.png"] }],
-    });
-    setupBareStoredSession({
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "image:task-policy:agent-loop",
-      restartRecoveryDeliveryContext: { channel: "discord", to: "channel:123" },
-      restartRecoveryDeliveryMediaUrls: ["/tmp/missing.png"],
-      restartRecoveryDisableMessageTool: true,
-      restartRecoverySuppressTextDelivery: true,
-      restartRecoverySourceReplyDeliveryMode: "automatic",
-      restartRecoveryForceSafeTools: true,
-    });
-
-    await agentCommand({
-      message: "continue generated media delivery",
-      sessionKey: "agent:main:main",
-      channel: "discord",
-      to: "channel:123",
-      deliver: true,
-      runId: "recovery-run",
-    });
-
-    const deliveryParams = requireRecord(
-      mockCallArg(state.deliverAgentCommandResultMock),
-      "delivery params",
-    );
-    expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual([
-      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
-    ]);
-    const persistedPolicies = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return {
-        mediaUrls: params.entry?.restartRecoveryDeliveryMediaUrls,
-        disableMessageTool: params.entry?.restartRecoveryDisableMessageTool,
-        forceSafeTools: params.entry?.restartRecoveryForceSafeTools,
-        suppressText: params.entry?.restartRecoverySuppressTextDelivery,
-      };
-    });
-    expect(persistedPolicies).toContainEqual({
-      mediaUrls: undefined,
-      disableMessageTool: undefined,
-      forceSafeTools: undefined,
-      suppressText: undefined,
-    });
-  });
-
-  it("rejects host-owned media constraints without the scoped recovery policy", async () => {
-    await expect(
-      agentCommand({
-        message: "unsafe delivery constraint",
-        sessionKey: "agent:main:main",
-        internalDeliveryMediaUrls: ["/tmp/proof.png"],
-      }),
-    ).rejects.toThrow(
-      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
-    );
-
-    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
   });
 
   it("clears the recovery cycle when a preclaimed transcript-only recovery run completes", async () => {

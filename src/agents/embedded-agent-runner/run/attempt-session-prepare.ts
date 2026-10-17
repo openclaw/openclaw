@@ -123,7 +123,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     silentOverflowProneProvider: isSilentOverflowProneModel({
       provider: attempt.provider,
       modelId: attempt.modelId,
-      baseUrl: attempt.model.baseUrl ?? undefined,
+      baseUrl: attempt.model.baseUrl,
     }),
     // The finalizer's result gate rejects any compaction, so never start one.
     compactionForbidden: attempt.operation === "settled-tool-finalization",

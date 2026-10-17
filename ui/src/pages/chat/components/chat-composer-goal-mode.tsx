@@ -7,41 +7,21 @@ import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
-import { resetSkillMenuState } from "./chat-composer-skill-menu.tsx";
-import { resetSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
-export function createGoalComposerController(
-  props: ChatComposerProps,
-  state: ChatComposerState,
-  requestUpdate: () => void,
-) {
-  const key = composerDraftKey(props);
-  const current = () =>
-    state.composerDraftScope?.key === key && state.goalComposer?.key === key
-      ? state.goalComposer
-      : null;
-  if (props.goalDraftMode !== undefined) {
-    const restored = props.goalDraftMode;
-    const mode = current();
-    const unchanged =
-      mode &&
-      restored &&
-      mode.action === restored.action &&
-      mode.sessionId === restored.sessionId &&
-      (mode.action !== "edit" ||
-        (restored.action === "edit" &&
-          mode.goalId === restored.goalId &&
-          mode.previousDraft === restored.previousDraft));
-    if (!unchanged) {
-      state.goalComposer = restored ? { ...restored, key, pending: false } : null;
-    }
-  }
+export function createGoalComposer(readProps: () => ChatComposerProps, state: ChatComposerState) {
+  const mode = () => readProps().goalDraftMode ?? null;
+  const liveMode = (props: ChatComposerProps) =>
+    (props.draftSource ? props.draftSource.read().goalDraftMode : props.goalDraftMode) ?? null;
+  const [pending, setPending] = state.goalPending;
+  // Updaters read staged writes too, so a second action cannot beat the render flush.
+  const pendingNow = (current: ChatGoalDraftMode | null) =>
+    current !== null && setPending((value) => value) === current;
   const replaceDraft = (draft: string) => {
-    commitComposerDraft(props, draft);
+    commitComposerDraft(readProps(), draft);
     const textarea = state.composerTextarea;
     if (textarea) {
       textarea.value = draft;
@@ -49,146 +29,150 @@ export function createGoalComposerController(
     }
   };
   const focus = () => queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
-  const clearMode = (mode: ChatGoalDraftMode) => {
-    state.goalComposer = null;
-    props.onGoalDraftModeChange?.(null);
+  const clearMode = (current: ChatGoalDraftMode) => {
+    readProps().onGoalDraftModeChange?.(null);
     // Editing borrows the composer; leaving it restores the conversation draft.
-    if (mode.action === "edit") {
-      replaceDraft(mode.previousDraft);
+    if (current.action === "edit") {
+      replaceDraft(current.previousDraft);
     }
   };
   const cancel = () => {
-    const mode = current();
-    if (!mode || mode.pending) {
+    const current = liveMode(readProps());
+    if (!current || pendingNow(current)) {
       return;
     }
-    clearMode(mode);
-    requestUpdate();
+    clearMode(current);
     focus();
   };
   const begin = (goal?: SessionGoal) => {
-    if (!props.onGoalSubmit || current()?.pending) {
-      return;
+    const props = readProps();
+    if (!props.onGoalSubmit || !props.onGoalDraftModeChange || pendingNow(liveMode(props))) {
+      return false;
     }
     const previousDraft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
-    const mode: ChatGoalDraftMode = {
+    props.onGoalDraftModeChange({
       ...(props.currentSessionId ? { sessionId: props.currentSessionId } : {}),
       ...(goal ? { action: "edit", goalId: goal.id, previousDraft } : { action: "start" }),
-    };
-    state.goalComposer = { ...mode, key, pending: false };
-    props.onGoalDraftModeChange?.(mode);
-    resetSlashMenuState(state);
-    resetSkillMenuState(state);
+    });
+    state.slashMenu.reset();
+    state.skillMenu.reset();
     replaceDraft(goal?.objective ?? "");
-    requestUpdate();
     focus();
+    return true;
   };
-  // Only incomplete creation commands become forms. Populated commands and
-  // lifecycle actions retain their text-command interpretation.
   const activateDraft = (draft: string, submitting = false) => {
-    if (current() || !props.connected || !props.canSend || !props.onGoalSubmit) {
+    const props = readProps();
+    if (liveMode(props) || !props.connected || !props.canSend || !props.onGoalSubmit) {
       return false;
     }
     const match = /^\s*\/goal(?:\s+(start|set|create))?\s*$/iu.exec(draft);
-    // A separator commits the action word; do not consume prefixes such as
-    // /goal starting while the user is still typing an ordinary objective.
+    // A separator commits the action word; prefixes remain ordinary objectives.
     if (!match || (!submitting && (!match[1] || !/\s$/u.test(draft)))) {
       return false;
     }
-    begin();
-    return true;
+    return begin();
   };
   return {
     get active() {
-      return current() !== null;
+      return mode() !== null;
     },
     get pending() {
-      return current()?.pending === true;
+      return Boolean(mode() && pending() === mode());
     },
     get submissionLabel() {
-      const mode = current();
-      return mode ? t(mode.action === "edit" ? "chat.goals.save" : "chat.goals.start") : undefined;
+      const current = mode();
+      return current
+        ? t(current.action === "edit" ? "chat.goals.save" : "chat.goals.start")
+        : undefined;
+    },
+    get mode() {
+      return mode();
     },
     begin,
     activateDraft,
-    activateCommand: (command: SlashCommandDef) => {
-      if (
-        command.key !== "goal" ||
-        command.source !== "native" ||
-        state.slashMenuCompletion?.inline ||
-        !props.onGoalSubmit
-      ) {
+    activateCommand: (command: SlashCommandDef, inline: boolean) => {
+      if (command.key !== "goal" || command.source !== "native" || inline) {
         return false;
       }
-      begin();
-      return true;
+      return begin();
     },
     cancel,
     async submit(submissionAction?: Event) {
-      const mode = current();
+      const props = readProps();
+      const current = liveMode(props);
+      const key = composerDraftKey(props);
       const objective = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
-      if (!mode || mode.pending || !props.onGoalSubmit || !objective.trim()) {
+      if (!current || !props.onGoalSubmit || !objective.trim()) {
+        return;
+      }
+      let admitted = false;
+      setPending((previous) => {
+        if (previous === current) {
+          return previous;
+        }
+        admitted = true;
+        return current;
+      });
+      if (!admitted) {
         return;
       }
       replaceDraft(objective);
-      mode.pending = true;
-      requestUpdate();
       try {
         const submitted = await props.onGoalSubmit(
           {
-            ...(mode.sessionId ? { sessionId: mode.sessionId } : {}),
-            ...(mode.action === "start"
+            ...(current.sessionId ? { sessionId: current.sessionId } : {}),
+            ...(current.action === "start"
               ? { action: "start", objective }
-              : { action: "edit", goalId: mode.goalId, objective }),
+              : { action: "edit", goalId: current.goalId, objective }),
           },
           submissionAction,
         );
-        if (submitted && current() === mode) {
-          clearMode(mode);
+        const live = readProps();
+        if (
+          submitted &&
+          state.composerDraftScope?.key === key &&
+          composerDraftKey(live) === key &&
+          liveMode(live) === current
+        ) {
+          clearMode(current);
         }
       } finally {
-        mode.pending = false;
-        requestUpdate();
+        setPending((previous) => (previous === current ? null : previous));
       }
-    },
-    get mode() {
-      return current();
     },
   };
 }
 
-export type GoalComposerController = ReturnType<typeof createGoalComposerController>;
+export type GoalComposer = ReturnType<typeof createGoalComposer>;
 
-export function GoalComposerMode(props: { controller: GoalComposerController }) {
+export function GoalComposerMode(props: { composer: GoalComposer }) {
   return (
-    <Show when={props.controller.mode}>
+    <Show when={props.composer.mode}>
       {(mode) => (
-        <>
-          <div
-            class="agent-chat__goal-mode composer-context-strip"
-            role="group"
-            aria-label={t("chat.goals.composerMode")}
+        <div
+          class="agent-chat__goal-mode composer-context-strip"
+          role="group"
+          aria-label={t("chat.goals.composerMode")}
+        >
+          <span class="agent-chat__goal-mode-label composer-context-strip__label">
+            <span class="composer-context-strip__icon">{<Icon name="flag" />}</span>
+            <span class="composer-context-strip__label-text">
+              {t(mode().action === "edit" ? "chat.goals.edit" : "chat.goals.composerMode")}
+            </span>
+          </span>
+          <span class="agent-chat__goal-mode-hint composer-context-strip__text">
+            {t(mode().action === "edit" ? "chat.goals.editHint" : "chat.goals.startHint")}
+          </span>
+          <button
+            type="button"
+            class="composer-context-strip__dismiss"
+            aria-label={t("chat.goals.cancel")}
+            disabled={props.composer.pending}
+            onClick={() => props.composer.cancel()}
           >
-            <span class="agent-chat__goal-mode-label composer-context-strip__label">
-              <span class="composer-context-strip__icon">{<Icon name="flag" />}</span>
-              <span class="composer-context-strip__label-text">
-                {t(mode().action === "edit" ? "chat.goals.edit" : "chat.goals.composerMode")}
-              </span>
-            </span>
-            <span class="agent-chat__goal-mode-hint composer-context-strip__text">
-              {t(mode().action === "edit" ? "chat.goals.editHint" : "chat.goals.startHint")}
-            </span>
-            <button
-              type="button"
-              class="composer-context-strip__dismiss"
-              aria-label={t("chat.goals.cancel")}
-              disabled={mode().pending}
-              onClick={() => props.controller.cancel()}
-            >
-              {<Icon name="x" />}
-            </button>
-          </div>
-        </>
+            {<Icon name="x" />}
+          </button>
+        </div>
       )}
     </Show>
   );

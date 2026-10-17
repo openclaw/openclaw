@@ -14,7 +14,7 @@ import {
   type NativeWindowsContext,
   type WindowsInstallation,
 } from "./extension-windows-contract.js";
-import type { WindowsNativePlatform } from "./extension-windows-platform.js";
+import { windowsNativePlatform as ops } from "./extension-windows-platform.js";
 const hash = (bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest("hex");
 export function matchesWindowsContext(a: NativeWindowsContext, b: NativeWindowsContext): boolean {
   return (
@@ -27,7 +27,6 @@ export function matchesWindowsContext(a: NativeWindowsContext, b: NativeWindowsC
 /** Descriptor/receipt are evidence, never permission to skip current OS admission. */
 export async function readWindowsNativeGeneration(
   manifestPath: string,
-  ops: WindowsNativePlatform,
 ): Promise<{ installation: WindowsInstallation; binding: ReturnType<typeof bindingSchema.parse> }> {
   const identity = await ops.identity();
   const root = path.win32.join(
@@ -86,9 +85,8 @@ export async function readWindowsNativeGeneration(
 export async function admitWindowsNativeRuntime(
   params: { manifestPath: string; launcherPath: string; expectedOrigins: string[] },
   context: NativeWindowsContext,
-  ops: WindowsNativePlatform,
 ): Promise<string> {
-  const owned = await readWindowsNativeGeneration(params.manifestPath, ops);
+  const owned = await readWindowsNativeGeneration(params.manifestPath);
   if (
     owned.binding.mode !== "native-windows-cli" ||
     !owned.binding.nativeWindows ||

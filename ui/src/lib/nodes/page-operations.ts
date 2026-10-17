@@ -75,7 +75,7 @@ type QueuedRefresh = "none" | "quiet" | "visible";
 type InventoryState = NodesRequestState & {
   nodesLoading: boolean;
   nodesQueuedRefresh: QueuedRefresh;
-  nodes: Array<Record<string, unknown>>;
+  nodes: NodeListNode[];
   lastError: string | null;
   devicesLoading: boolean;
   devicesQueuedRefresh: QueuedRefresh;

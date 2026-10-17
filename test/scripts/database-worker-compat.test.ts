@@ -929,14 +929,14 @@ it("uses reviewed worker ownership for its complete handler table", () => {
   const file = "src/state/user-github-connections.worker.ts";
   const handler = `import { writeCurrentStateSchemaMetadata } from './openclaw-state-db-maintenance.js';
     export const userGitHubConnectionOperations = {
-      "userGitHubConnections.list": () => writeCurrentStateSchemaMetadata(),
+      "userGitHubConnections.mutate": () => writeCurrentStateSchemaMetadata(),
     } satisfies Handlers;`;
   const result = inspectMaintenance({ "src/commands/doctor.ts": "export {};", [file]: handler });
   expect(
     result.nonRuntimeOperations.get(maintenanceFile)?.get("writeCurrentStateSchemaMetadata"),
   ).toBe("W");
   for (const [caller, source] of [
-    [file, handler.replace("userGitHubConnections.list", "unregistered")],
+    [file, handler.replace("userGitHubConnections.mutate", "unregistered")],
     [file, handler.replace("userGitHubConnectionOperations", "unregistered")],
     ["src/state/unregistered.worker.ts", handler],
   ] as const) {

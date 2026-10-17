@@ -1,5 +1,3 @@
-// Hermes environment credential catalog.
-
 export type SecretCredentialMode = "api_key" | "token";
 
 export type SecretMapping = {

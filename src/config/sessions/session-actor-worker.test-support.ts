@@ -38,11 +38,40 @@ import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { commitSessionLifecycleProjection } from "./session-lifecycle-projection.worker.js";
+import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionParticipantRecordInput } from "./session-sharing-store.types.js";
 import { bindSqliteWorkerBackend as bindSharingBackend } from "./session-sharing-store.worker.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
+
+export function participantRecord(
+  id: string,
+  contributionCount: number,
+  firstPromptedAt: number,
+  lastPromptedAt = firstPromptedAt,
+): SessionParticipantRecord {
+  return { identity: { type: "agent", id }, contributionCount, firstPromptedAt, lastPromptedAt };
+}
+
+export function sessionActorFileTarget(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  sessionKey: string,
+): SessionActorTarget & { database: Extract<SessionActorTarget["database"], { kind: "file" }> } {
+  const identity = readOpenClawAgentDatabaseIdentity(database);
+  if (typeof identity.identity !== "string") {
+    throw new Error("Actor worker fixture requires a durable database");
+  }
+  return {
+    sessionKey,
+    database: {
+      kind: "file",
+      physicalIdentity: identity.identity,
+      birthtime: identity.birthtime,
+      nativeLocation: database.path,
+    },
+  };
+}
 
 export function seedSessionActorOutcomeTransferEntry(
   fixture: Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">,
@@ -60,19 +89,7 @@ export function seedSessionActorOutcomeTransferEntry(
 function createFixture() {
   const seed = createSessionCompoundWorkerFixture();
   let database = seed.database;
-  const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Actor worker fixture requires a durable database");
-  }
-  const target: SessionActorTarget = {
-    sessionKey: seed.scope.sessionKey,
-    database: {
-      kind: "file",
-      physicalIdentity: identity.identity,
-      birthtime: identity.birthtime,
-      nativeLocation: database.path,
-    },
-  };
+  const target = sessionActorFileTarget(database, seed.scope.sessionKey);
   const hooks: {
     admit?: AgentWorkerOperationContext["admit"];
     withCommit?: (commit: () => void) => void;
@@ -145,7 +162,7 @@ function createFixture() {
     get database() {
       return database;
     },
-    read(selected = target): SessionActorHotState {
+    read(selected: SessionActorTarget = target): SessionActorHotState {
       const value = execute({ type: "session.actor.read", input: { target: selected } });
       if ("kind" in value) {
         throw new Error("Actor read returned a mutation outcome");
@@ -207,6 +224,11 @@ function createFixture() {
       return receipts.shift();
     },
     prepare: (command: Command) => actor.prepare(command),
+    writeEntry(entry: Parameters<typeof writeSessionEntry>[2], sessionKey = target.sessionKey) {
+      return runSqliteImmediateTransactionSync(database.db, () =>
+        writeSessionEntry(database, sessionKey, entry),
+      );
+    },
     nativeEntry: () => readExactSessionEntryRow(database, target.sessionKey)?.entry,
     restartActor() {
       actor.close();

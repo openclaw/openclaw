@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
-import type { SearchSchema } from "../infra/database-engine/contract.js";
+import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
@@ -12,13 +12,26 @@ import {
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { VERSION } from "../version.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
+  AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   publishAgentSchemaMetadata,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-metadata.js";
 import { assertCurrentAgentSchemaMetadata } from "./openclaw-agent-db-schema-read.js";
+import {
+  AGENT_INDEX_RETIREMENT_SQL,
+  withLegacyAgentPostgresIndexes,
+} from "./openclaw-agent-index-retirement-migration.js";
 import { agentTranscriptSearchSchema } from "./openclaw-agent-search-schema.js";
+import {
+  AGENT_WRITE_LAYOUT_POSTGRES_MIGRATION_SQL,
+  withLegacyAgentPostgresWriteLayout,
+} from "./openclaw-agent-write-layout-migration.js";
 import { agentPostgresRuntime } from "./postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "./postgres-schema.generated/agent-search-runtime.js";
 
@@ -51,14 +64,41 @@ export function admitAgentEngineSearchExtensions(
   );
 }
 
-const agentEngineSchema = {
+const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
+const agentPostgresV28Sql = withLegacyAgentPostgresIndexes(agentPostgresSql);
+
+export const agentEngineSchema: StoreSchema = {
   id: "agent",
   version: OPENCLAW_AGENT_SCHEMA_VERSION,
   sqlite: "",
-  postgres: `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`,
+  postgres: agentPostgresSql,
   search: agentTranscriptSearchSchema,
-  // PostgreSQL agent storage is unshipped; only the current bootstrap is admitted.
-  postgresMigrations: [],
+  postgresMigrations: [
+    {
+      version: AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
+      fromSchema: { postgres: withLegacyAgentPostgresWriteLayout(agentPostgresV28Sql) },
+      schema: { postgres: agentPostgresV28Sql },
+      sql: `${AGENT_WRITE_LAYOUT_POSTGRES_MIGRATION_SQL}
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_WRITE_LAYOUT_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
+      fromSchema: { postgres: agentPostgresV28Sql },
+      schema: { postgres: agentPostgresSql },
+      sql: `${AGENT_INDEX_RETIREMENT_SQL}
+        ALTER FUNCTION openclaw_transcript_navigation_check(text)
+          STRICT SET search_path = pg_catalog;
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_INDEX_RETIREMENT_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+  ],
 };
 
 function admitAgentPostgres(
@@ -93,8 +133,13 @@ function admitAgentPostgres(
     });
   }
   const metadata = readExistingAgentSchemaMeta(db);
-  assertCurrentAgentSchemaMetadata(metadata, agentId ?? metadata?.agentId ?? "", pathname);
-  if (getPostgresPhysicalFacts(db)?.version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+  assertCurrentAgentSchemaMetadata(
+    metadata,
+    agentId ?? metadata?.agentId ?? "",
+    pathname,
+    agentEngineSchema.version,
+  );
+  if (getPostgresPhysicalFacts(db)?.version !== agentEngineSchema.version) {
     throw new Error("Agent database has no current PostgreSQL schema admission");
   }
   // Nested worker writes must see the identity anchor's completed native admission.
@@ -118,6 +163,7 @@ export function openAgentEngineStore(
     input: agentEngineInput(),
     existingOnly,
     closeOnFailure,
+    assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
     prepareAnchor: () => {},
     openSqlite: () => {},
     inspectSqlite: () => {

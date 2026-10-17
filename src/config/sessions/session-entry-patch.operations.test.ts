@@ -5,6 +5,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { readConversation, registerConversationAddresses } from "./conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "./conversation-route-fingerprint.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   applySessionEntryOperation,
   recordInboundSessionMeta,
@@ -105,6 +106,100 @@ it("reduces a fixed patch against the current row in one worker request without 
       expect(f.read()).toEqual(current);
     }
     expect(published).toEqual([result]);
+  });
+});
+
+it("commits cron state in one request while preserving concurrent metadata and cleared policy", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const initial: SessionEntry = {
+      ...f.read()!,
+      lifecycleRevision: "admitted",
+      elevatedLevel: "full",
+      inheritedToolAllow: ["exec"],
+      sendPolicy: "allow",
+    };
+    replaceSessionEntrySync(f.scope, initial);
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      const current: SessionEntry = {
+        ...initial,
+        label: "Renamed during the run",
+        pinnedAt: 20,
+        updatedAt: 20,
+        sendPolicy: "deny",
+      };
+      delete current.elevatedLevel;
+      delete current.inheritedToolAllow;
+      replaceSessionEntrySync(f.scope, current);
+    };
+    const result = await applySessionEntryOperation(
+      f.scope,
+      {
+        kind: "cron-session",
+        sessionKey: f.scope.sessionKey,
+        initial,
+        next: { ...initial, status: "done", totalTokens: 42, updatedAt: 10 },
+        creation: { createdVia: "cron", createdAt: 10 },
+      },
+      { replaceEntry: true, skipMaintenance: true },
+    );
+    expect(result).toMatchObject({
+      label: "Renamed during the run",
+      pinnedAt: 20,
+      updatedAt: 20,
+      sendPolicy: "deny",
+      status: "done",
+      totalTokens: 42,
+    });
+    expect(result?.elevatedLevel).toBeUndefined();
+    expect(result?.inheritedToolAllow).toBeUndefined();
+    expect(f.read()).toEqual(result);
+    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+  });
+});
+
+it("creates the full initial cron session in one owner command", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const scope = {
+      ...f.scope,
+      sessionKey: "agent:main:cron:created",
+      sessionId: "cron-created",
+    };
+    const next: SessionEntry = {
+      sessionId: "cron-created",
+      updatedAt: 20,
+      label: "Cron: initial state",
+      lifecycleRevision: "admitted",
+      thinkingLevel: "high",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+    };
+    const result = await applySessionEntryOperation(
+      scope,
+      {
+        kind: "cron-session",
+        sessionKey: scope.sessionKey,
+        next,
+        creation: { createdVia: "cron", createdActor: { type: "system" }, createdAt: 10 },
+      },
+      { fallbackEntry: next, replaceEntry: true, skipMaintenance: true },
+    );
+    expect(result).toMatchObject({
+      sessionId: "cron-created",
+      updatedAt: 20,
+      label: "Cron: initial state",
+      lifecycleRevision: "admitted",
+      thinkingLevel: "high",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      createdVia: "cron",
+      createdActor: { type: "system" },
+      createdAt: 10,
+    });
+    expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toEqual(result);
+    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
   });
 });
 

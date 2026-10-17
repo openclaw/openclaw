@@ -2,6 +2,7 @@
 
 import { createComponent, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { CommandPaletteElement } from "../components/command-palette-contract.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -37,6 +38,7 @@ function mountLoader() {
   const { state, dispose: disposeOwner } = createRoot((dispose) => {
     const loading = new ShellCommandPaletteOwner(
       {
+        elements: {},
         commandPaletteElement: COMMAND_PALETTE_ELEMENT,
         lazyCustomElements: createLazyCustomElementRequests(),
         chatNavigationOptions: () => undefined,
@@ -69,6 +71,68 @@ function type(input: HTMLTextAreaElement, value: string) {
 }
 
 describe("cold command palette input custody", () => {
+  it.each(["open", "toggle"] as const)(
+    "preserves the %s intent when the retained palette is detached",
+    (action) => {
+      const palette = () =>
+        Object.assign(document.createElement("openclaw-command-palette"), {
+          custodianAvailable: false,
+          desktopAvailable: false,
+          isOpen: false,
+          openPalette: vi.fn<CommandPaletteElement["openPalette"]>(),
+          togglePalette: vi.fn<CommandPaletteElement["togglePalette"]>(),
+        });
+      const detached = palette();
+      container.append(detached);
+      detached.remove();
+      const host = {
+        elements: { commandPalette: detached },
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: createLazyCustomElementRequests(),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      };
+      const request = vi.fn<ConstructorParameters<typeof ShellCommandPaletteOwner>[1]["request"]>();
+      const { owner, dispose } = createRoot((disposeRoot) => ({
+        owner: new ShellCommandPaletteOwner(host, {
+          request,
+          clear: () => {},
+          cancel: () => {},
+          pending: () => false,
+        }),
+        dispose: disposeRoot,
+      }));
+      onTestFinished(dispose);
+      mountSolid(
+        () => createComponent(CommandPaletteLoading, { state: owner.loading, onClose: () => {} }),
+        { container },
+      );
+
+      owner[action]();
+      flush();
+      expect(detached.openPalette).not.toHaveBeenCalled();
+      expect(detached.togglePalette).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledOnce();
+      const input = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input");
+      if (!input) {
+        throw new Error("Expected the replacement palette's loading input");
+      }
+      type(input, "Keep the replacement intent");
+
+      const replacement = palette();
+      container.append(replacement);
+      host.elements.commandPalette = replacement;
+      request.mock.calls[0]?.[2]?.();
+      expect(replacement.openPalette).toHaveBeenCalledOnce();
+      const take = replacement.openPalette.mock.calls[0]?.[0];
+      expect(typeof take).toBe("function");
+      expect(typeof take === "function" ? take() : undefined).toMatchObject({
+        value: "Keep the replacement intent",
+      });
+      expect(owner.loading.active()).toBe(false);
+    },
+  );
+
   it("retains its live field and selection while the shell refreshes and locks a queued submit", () => {
     const { state, input } = mountLoader();
     type(input, "Keep this selection");

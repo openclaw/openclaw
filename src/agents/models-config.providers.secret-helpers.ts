@@ -45,22 +45,7 @@ export type ProviderApiKeyResolver = (provider: string) => {
   profileId?: string;
 };
 
-/** Resolves full provider auth state for callers that need mode and profile provenance. */
-export type ProviderAuthResolver = (
-  provider: string,
-  options?: {
-    oauthMarker?: string;
-    excludeProfileIds?: readonly string[];
-  },
-) => {
-  apiKey: string | undefined;
-  discoveryApiKey?: string;
-  mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
-  source: "env" | "profile" | "none";
-  profileId?: string;
-  preparationFailed?: boolean;
-  authFlow?: string;
-};
+export type { ProviderAuthResolver } from "./provider-auth-resolver.types.js";
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -277,7 +262,7 @@ export function resolveMissingProviderApiKey(params: {
   secretRefManagedProviders?: Set<string>;
   providerApiKeyResolver?: (env: NodeJS.ProcessEnv) => string | undefined;
 }): ProviderConfig {
-  const hasModels = Array.isArray(params.provider.models) && params.provider.models.length > 0;
+  const hasModels = Boolean(params.provider.models?.length);
   if (!hasModels || params.provider.apiKey) {
     return params.provider;
   }

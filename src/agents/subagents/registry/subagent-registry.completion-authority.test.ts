@@ -627,7 +627,6 @@ describe("registered completion source custody", () => {
     "admission",
     "lifecycle",
     "replacement",
-    "retired child replacement",
     "failed child replacement",
     "unrelated child",
     "store",
@@ -691,11 +690,7 @@ describe("registered completion source custody", () => {
             );
             replacement = subagentRuns.get(runId);
             expect(replacement).toBeDefined();
-          } else if (
-            changed === "retired child replacement" ||
-            changed === "failed child replacement" ||
-            changed === "unrelated child"
-          ) {
+          } else if (changed === "failed child replacement" || changed === "unrelated child") {
             const registerNewChild = () =>
               registerSubagentRun(
                 registration("newer-child", {
@@ -714,9 +709,6 @@ describe("registered completion source custody", () => {
             } else {
               await registerNewChild();
               expect(subagentRuns.get("newer-child")).toBeDefined();
-              if (changed === "retired child replacement") {
-                await releaseSubagentRun("newer-child");
-              }
             }
           } else if (changed === "store") {
             cfg = { session: { store: state.path("replacement.sqlite") } };

@@ -50,6 +50,7 @@ export function connectCreatedComposerQueue(
         }
       });
   };
+  // Recovery publications resume the owned queue; a render may coalesce that admission edge.
   const unsubscribe = context.gateway.subscribe(sync);
   sync();
   return () => {

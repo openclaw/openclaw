@@ -294,7 +294,7 @@ function* createOpenClawToolsSteps(
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
+    requesterOrigin: widgetPresentation.deliveryContext,
     workspaceDir,
     sandbox,
   };
@@ -542,6 +542,7 @@ function* createOpenClawToolsSteps(
       ? createGitHubPublishTool({
           publicationAvailable: options.githubPublicationAvailable,
           actionsAvailable: githubActionsAvailable,
+          sandbox: options.sandbox,
         })
       : null,
     transcriptsTool,
@@ -670,10 +671,6 @@ function* createOpenClawToolsSteps(
       // callers (e.g. Telegram DM with a policy key distinct from the durable run key) still
       // see their spawned runs in the active/recent list. Mirrors createSessionsSpawnTool above.
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-      // Retained task rows created before the durable-key alignment still carry the policy
-      // key in owner_key; let the listing/cancel tool match both so those rows stay reachable
-      // for split-key callers instead of disappearing with "Task outside session tree".
-      callerPolicySessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,
       config: sessionConfig,
     }),

@@ -91,148 +91,125 @@ describe("model command provider preparation", () => {
     return JSON.parse(fs.readFileSync(configPath, "utf8"));
   }
 
-  it.each(["alias"] as const)(
-    "rejects unknown providers for %s without changing config bytes",
-    async (command) => {
-      await isolated(async () => {
-        const before = fs.readFileSync(configPath, "utf8");
-        const operation =
-          command === "alias"
-            ? modelsAliasesAddCommand("local", "ollmaa/qwen3:4b", runtime)
-            : changeFallbacksCommand(
-                { label: "Fallbacks", key: command, action: "add" },
-                "ollmaa/qwen3:4b",
-                runtime,
-              );
-        await expect(operation).rejects.toThrow('Unknown model provider "ollmaa"');
-        expect(fs.readFileSync(configPath, "utf8")).toBe(before);
-      });
-    },
-  );
-
-  it.each([{ provider: "fixture", api: "openai-completions" }] as const)(
-    "keeps the $provider/$api owner's model literal",
-    async ({ provider, api }) => {
-      config.models = {
-        providers: {
-          [provider]: {
-            api,
-            baseUrl: "https://custom.example.invalid/v1",
-            models: [
-              {
-                id: "legacy",
-                name: "Literal model",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 1024,
-              },
-            ],
-          },
-        },
-      };
-      config.agents!.defaults!.models = {
-        [`${provider}/legacy`]: { alias: "friendly", params: { temperature: 0.2 } },
-      };
-      await isolated(async () => {
-        await modelsSetCommand(`${provider}/legacy`, runtime);
-        await modelsAliasesAddCommand("Friendly", `${provider}/legacy`, runtime);
-        await modelsAliasesAddCommand("Friendly", `${provider}/legacy`, runtime);
-        await expect(
-          modelsAliasesAddCommand("friendly", `${provider}/current`, runtime),
-        ).rejects.toThrow(`Alias friendly already points to ${provider}/legacy.`);
-      });
-      expect(readConfig().agents?.defaults?.model).toEqual({ primary: `${provider}/legacy` });
-      expect(readConfig().agents?.defaults?.models).toEqual({
-        [`${provider}/legacy`]: { alias: "Friendly", params: { temperature: 0.2 } },
-      });
-    },
-  );
-
-  it.each([{ hasCanonicalEntry: true, included: true, priorAlias: "same" }])(
-    "preserves alias source settings across canonical moves (existing: $hasCanonicalEntry, include: $included, alias: $priorAlias)",
-    async ({ hasCanonicalEntry, included, priorAlias }) => {
-      config.agents!.defaults!.models = {
-        "fixture/legacy": {
-          ...(priorAlias === "missing"
-            ? {}
-            : { alias: priorAlias === "same" ? "${MODEL_ALIAS}" : "old" }),
-          params: {
-            temperature: 0.2,
-            maxTokens: 128,
-            cacheRetention: "${ALIAS_CACHE_RETENTION}",
-            credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
-          },
-          streaming: false,
-        },
-        ...(hasCanonicalEntry
-          ? { "fixture/current": { params: { temperature: 0.7 }, codeMode: false } }
-          : {}),
-        "unrelated/legacy": {
-          alias: "other",
-          params: { temperature: 0.9, cacheRetention: "long" },
-        },
-      };
-      await withEnvAsync({ MODEL_ALIAS: "friendly", ALIAS_CACHE_RETENTION: "long" }, () =>
-        isolated(async () => {
-          const agentsPath = path.join(root, "agents.json");
-          if (included) {
-            fs.writeFileSync(agentsPath, JSON.stringify(config.agents));
-            fs.writeFileSync(
-              configPath,
-              JSON.stringify({ ...config, agents: { $include: "agents.json" } }),
-            );
-          }
-          const readAgents = (): OpenClawConfig["agents"] =>
-            included ? JSON.parse(fs.readFileSync(agentsPath, "utf8")) : readConfig().agents;
-          await modelsAliasesAddCommand("friendly", "fixture/legacy", runtime);
-          const expectedModels = {
-            "fixture/current": {
-              alias: "friendly",
-              params: {
-                temperature: hasCanonicalEntry ? 0.7 : 0.2,
-                maxTokens: 128,
-                cacheRetention: "${ALIAS_CACHE_RETENTION}",
-                credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
-              },
-              streaming: false,
-              ...(hasCanonicalEntry ? { codeMode: false } : {}),
-            },
-            "unrelated/legacy": {
-              alias: "other",
-              params: { temperature: 0.9, cacheRetention: "long" },
-            },
-          };
-          expect(readAgents()?.defaults?.models).toEqual(expectedModels);
-          await modelsAliasesAddCommand("friendly", "fixture/legacy", runtime);
-          expect(readAgents()?.defaults?.models).toEqual(expectedModels);
-          await expect(
-            modelsAliasesAddCommand("FRIENDLY", "fixture/different", runtime),
-          ).rejects.toThrow("Alias FRIENDLY already points to fixture/current.");
-          expect(readAgents()?.defaults?.models).toEqual(expectedModels);
-          await changeFallbacksCommand(
-            { label: "Fallbacks", key: "model", action: "add" },
-            "friendly",
-            runtime,
-          );
-          expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
-            fallbacks: ["fixture/current"],
-          });
-          await changeFallbacksCommand(
-            { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
-            "fixture/legacy",
-            runtime,
-          );
-          expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
-            fallbacks: [],
-          });
-          if (included) {
-            expect(readConfig().agents).toMatchObject({ $include: "agents.json" });
-          }
-        }),
+  it("rejects unknown providers for alias without changing config bytes", async () => {
+    await isolated(async () => {
+      const before = fs.readFileSync(configPath, "utf8");
+      await expect(modelsAliasesAddCommand("local", "ollmaa/qwen3:4b", runtime)).rejects.toThrow(
+        'Unknown model provider "ollmaa"',
       );
-    },
-  );
+      expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+    });
+  });
+
+  it("keeps the fixture/openai-completions owner's model literal", async () => {
+    config.models = {
+      providers: {
+        fixture: {
+          api: "openai-completions",
+          baseUrl: "https://custom.example.invalid/v1",
+          models: [
+            {
+              id: "legacy",
+              name: "Literal model",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 1024,
+            },
+          ],
+        },
+      },
+    };
+    config.agents!.defaults!.models = {
+      "fixture/legacy": { alias: "friendly", params: { temperature: 0.2 } },
+    };
+    await isolated(async () => {
+      await modelsSetCommand("fixture/legacy", runtime);
+      await modelsAliasesAddCommand("Friendly", "fixture/legacy", runtime);
+      await modelsAliasesAddCommand("Friendly", "fixture/legacy", runtime);
+      await expect(modelsAliasesAddCommand("friendly", "fixture/current", runtime)).rejects.toThrow(
+        "Alias friendly already points to fixture/legacy.",
+      );
+    });
+    expect(readConfig().agents?.defaults?.model).toEqual({ primary: "fixture/legacy" });
+    expect(readConfig().agents?.defaults?.models).toEqual({
+      "fixture/legacy": { alias: "Friendly", params: { temperature: 0.2 } },
+    });
+  });
+
+  it("preserves alias source settings across canonical moves (existing: true, include: true, alias: same)", async () => {
+    config.agents!.defaults!.models = {
+      "fixture/legacy": {
+        alias: "${MODEL_ALIAS}",
+        params: {
+          temperature: 0.2,
+          maxTokens: 128,
+          cacheRetention: "${ALIAS_CACHE_RETENTION}",
+          credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
+        },
+        streaming: false,
+      },
+      "fixture/current": { params: { temperature: 0.7 }, codeMode: false },
+      "unrelated/legacy": {
+        alias: "other",
+        params: { temperature: 0.9, cacheRetention: "long" },
+      },
+    };
+    await withEnvAsync({ MODEL_ALIAS: "friendly", ALIAS_CACHE_RETENTION: "long" }, () =>
+      isolated(async () => {
+        const agentsPath = path.join(root, "agents.json");
+        fs.writeFileSync(agentsPath, JSON.stringify(config.agents));
+        fs.writeFileSync(
+          configPath,
+          JSON.stringify({ ...config, agents: { $include: "agents.json" } }),
+        );
+        const readAgents = (): OpenClawConfig["agents"] =>
+          JSON.parse(fs.readFileSync(agentsPath, "utf8"));
+        await modelsAliasesAddCommand("friendly", "fixture/legacy", runtime);
+        const expectedModels = {
+          "fixture/current": {
+            alias: "friendly",
+            params: {
+              temperature: 0.7,
+              maxTokens: 128,
+              cacheRetention: "${ALIAS_CACHE_RETENTION}",
+              credential: { source: "env", provider: "default", id: "MODEL_SECRET" },
+            },
+            streaming: false,
+            codeMode: false,
+          },
+          "unrelated/legacy": {
+            alias: "other",
+            params: { temperature: 0.9, cacheRetention: "long" },
+          },
+        };
+        expect(readAgents()?.defaults?.models).toEqual(expectedModels);
+        await modelsAliasesAddCommand("friendly", "fixture/legacy", runtime);
+        expect(readAgents()?.defaults?.models).toEqual(expectedModels);
+        await expect(
+          modelsAliasesAddCommand("FRIENDLY", "fixture/different", runtime),
+        ).rejects.toThrow("Alias FRIENDLY already points to fixture/current.");
+        expect(readAgents()?.defaults?.models).toEqual(expectedModels);
+        await changeFallbacksCommand(
+          { label: "Fallbacks", key: "model", action: "add" },
+          "friendly",
+          runtime,
+        );
+        expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
+          fallbacks: ["fixture/current"],
+        });
+        await changeFallbacksCommand(
+          { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
+          "fixture/legacy",
+          runtime,
+        );
+        expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({
+          fallbacks: [],
+        });
+        expect(readConfig().agents).toMatchObject({ $include: "agents.json" });
+      }),
+    );
+  });
 
   it.each([false, true])(
     "preserves nested include ownership with sibling overrides=%s",
@@ -466,31 +443,28 @@ describe("model command provider preparation", () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it.each(["model"] as const)(
-    "repairs %s entry settings while preserving an existing fallback placeholder",
-    async (key) => {
-      config.agents!.defaults![key] = { fallbacks: ["${FALLBACK_REF}"] };
-      const entry = { params: { temperature: 0.2 }, streaming: false };
-      config.agents!.defaults!.models = { "fixture/legacy": entry };
-      await withEnvAsync({ FALLBACK_REF: "fixture/legacy" }, () =>
-        isolated(async () => {
-          await changeFallbacksCommand(
-            { label: "Fallbacks", key, action: "add" },
-            "fixture/current",
-            runtime,
-          );
-          expect(readConfig().agents?.defaults?.[key]).toEqual({ fallbacks: ["${FALLBACK_REF}"] });
-          expect(readConfig().agents?.defaults?.models).toEqual({ "fixture/current": entry });
-          await changeFallbacksCommand(
-            { label: "Fallbacks", key, notFoundLabel: "Fallback", action: "remove" },
-            "fixture/current",
-            runtime,
-          );
-          expect(readConfig().agents?.defaults?.[key]).toEqual({ fallbacks: [] });
-        }),
-      );
-    },
-  );
+  it("repairs model entry settings while preserving an existing fallback placeholder", async () => {
+    config.agents!.defaults!.model = { fallbacks: ["${FALLBACK_REF}"] };
+    const entry = { params: { temperature: 0.2 }, streaming: false };
+    config.agents!.defaults!.models = { "fixture/legacy": entry };
+    await withEnvAsync({ FALLBACK_REF: "fixture/legacy" }, () =>
+      isolated(async () => {
+        await changeFallbacksCommand(
+          { label: "Fallbacks", key: "model", action: "add" },
+          "fixture/current",
+          runtime,
+        );
+        expect(readConfig().agents?.defaults?.model).toEqual({ fallbacks: ["${FALLBACK_REF}"] });
+        expect(readConfig().agents?.defaults?.models).toEqual({ "fixture/current": entry });
+        await changeFallbacksCommand(
+          { label: "Fallbacks", key: "model", notFoundLabel: "Fallback", action: "remove" },
+          "fixture/current",
+          runtime,
+        );
+        expect(readConfig().agents?.defaults?.model).toEqual({ fallbacks: [] });
+      }),
+    );
+  });
 
   it("rejects config replacement during provider preparation", async () => {
     const pluginFile = path.join(root, "provider", "index.cjs");

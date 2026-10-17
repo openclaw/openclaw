@@ -3,7 +3,6 @@ import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk
 import {
   dispatchChannelInboundTurn,
   getGroupThreadDeliverySession,
-  hasFinalInboundReplyDispatch,
   readAgentRunTerminalOutcome,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -19,12 +18,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleepWithAbort,
-} from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
@@ -578,14 +572,5 @@ export async function processDiscordMessage(
       (finalReceipt?.failedBeforeSend ?? 0) + (finalReceipt?.failedAfterSend ?? 0) > 0;
     await draftPreview.cleanup({ failed: finalDeliveryFailed || dispatchError });
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
-  }
-  if (!dispatchResult || !hasFinalInboundReplyDispatch(dispatchResult)) {
-    return;
-  }
-  if (shouldLogVerbose()) {
-    const finalCount = dispatchResult.settledReceipt?.counts.final.delivered ?? 0;
-    logVerbose(
-      `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyPlan.replyTarget}`,
-    );
   }
 }

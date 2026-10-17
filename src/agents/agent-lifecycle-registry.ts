@@ -9,7 +9,10 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { publishAgentDeletionWorkAdmission } from "../sessions/session-agent-work-admission.js";
+import {
+  publishAgentDeletionWorkAdmission,
+  replayAgentDeletionTerminalWrites,
+} from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { captureAgentDatabasePreparationDeletionForIdentity } from "../state/agent-database-admission.js";
@@ -18,13 +21,15 @@ import {
   observeAgentDeletionJournal,
   withAgentDeletionJournalPublication,
 } from "../state/agent-deletion-journal-publication.js";
-import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
+import {
+  getAgentDeletionJournalStatus,
+  getOrLoadAgentDeletionJournalStatus,
+} from "../state/agent-deletion-journal-status.js";
 import type {
   AgentDeletionInput,
   AgentDeletionJournalTransport,
 } from "../state/agent-deletion-journal-transport.js";
 import {
-  readAgentDeletionJournal,
   readAgentDeletionJournalInDatabase,
   type AgentDeletionJournalCleanupPath,
   type AgentDeletionJournalEntry,
@@ -496,6 +501,11 @@ function runAgentDeletionWithLease<T>(
                 }
               },
               rollback: async () => {
+                await replayAgentDeletionTerminalWrites({ agentId: id, statePath }, (write) =>
+                  operation.runDatabaseCleanup(write.target, () =>
+                    write.persist(assertCurrentFinal),
+                  ),
+                );
                 if (remoteOwner) {
                   await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
                   completeOperation();
@@ -524,7 +534,7 @@ function runAgentDeletionWithLease<T>(
   );
 }
 
-/** Return whether this process must refuse new authority for an agent id. */
+/** Host effects consume worker-prepared facts; unknown authority never admits new work. */
 export function isAgentDeletionBlocked(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
@@ -534,20 +544,14 @@ export function isAgentDeletionBlocked(
     return Boolean(readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime"));
   }
   return withCurrentOpenClawStateReadScope(options, (statePath) => {
-    // An active native transaction can see its own uncommitted deletion or rollback.
-    // The process-wide fact deliberately represents only committed journal state.
     const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(statePath, {
       readOnly: true,
     });
+    // Native writers publish transaction-local facts before their committed receipt exists.
     if (opened?.db.isTransaction) {
-      return Boolean(readAgentDeletionJournal(agentId, options, "runtime"));
+      return getAgentDeletionJournalStatus(opened.db, agentId) !== "absent";
     }
-    return (
-      getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => {
-        const journal = readAgentDeletionJournal(agentId, options, "runtime");
-        return journal ? (journal.cleanupCompleted ? "complete" : "pending") : "absent";
-      }) !== "absent"
-    );
+    return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined) !== "absent";
   });
 }
 

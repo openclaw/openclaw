@@ -56,6 +56,7 @@ import {
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
+import { GATEWAY_PER_MESSAGE_DEFLATE } from "./server/ws-compression.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
@@ -309,10 +310,10 @@ export async function createGatewayHttpTransport(params: {
     // Yield between buffered frames so one RPC burst cannot monopolize the
     // event loop before other connections and HTTP probes can run.
     allowSynchronousEvents: false,
-    // Browsers compress even tiny requests when this extension is negotiated.
-    // Serial inflate callbacks delay each frame behind busy event-loop turns,
-    // before the bounded request-start scheduler can admit the burst.
-    perMessageDeflate: false,
+    // Browsers compress even tiny requests once this is negotiated. Each
+    // connection installs the inline codec (ws-compression.ts) so bursts are not
+    // serialized behind ws's per-frame threadpool round trips.
+    perMessageDeflate: GATEWAY_PER_MESSAGE_DEFLATE,
   });
   const preauthConnectionBudget = createPreauthConnectionBudget();
 

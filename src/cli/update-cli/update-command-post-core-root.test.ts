@@ -9,6 +9,7 @@ import * as postCoreCapability from "../../infra/update-post-core-capability.js"
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import * as cliOptions from "./update-command-cli-options.js";
 
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, readControlPlaneUpdateSentinelMeta } =
   controlPlaneSentinel;
@@ -48,7 +49,69 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const linkType = process.platform === "win32" ? "junction" : "dir";
+const pnpmPackage = (project: string, version: string) =>
+  path.join(project, ".pnpm", `openclaw@${version}`, "node_modules", "openclaw");
+function continueFixture(
+  root: string,
+  overrides: Partial<Parameters<typeof continuePostCoreUpdateInFreshProcess>[0]> = {},
+) {
+  return continuePostCoreUpdateInFreshProcess({
+    root,
+    channel: "stable",
+    requestedChannel: null,
+    opts: { json: true },
+    pluginInstallRecords: {},
+    updateStartedAtMs: 123,
+    timeoutMs: 15_000,
+    ...overrides,
+  });
+}
+
 describe("post-core child output", () => {
+  it.each([false, true])(
+    "forwards full integrity only to supporting candidates (%s)",
+    async (supported) => {
+      const state = await createOpenClawTestState({ label: "post-core-integrity" });
+      try {
+        const root = state.path("package");
+        await writePackageRoot(root, "9999.0.0");
+        vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(false);
+        const inspect = vi
+          .spyOn(cliOptions, "readUpdateTargetCliOptions")
+          .mockResolvedValue(
+            new Set(["--accept-capabilities", ...(supported ? ["--full-integrity-check"] : [])]),
+          );
+        mocks.spawn.mockImplementation(() => {
+          const child = new EventEmitter();
+          queueMicrotask(() => {
+            child.emit("exit", 0, null);
+            child.emit("close", 0, null);
+          });
+          return child;
+        });
+        expect(
+          await continuePostCoreUpdateInFreshProcess({
+            root,
+            channel: "stable",
+            requestedChannel: null,
+            opts: { fullIntegrityCheck: true, acceptCapabilities: true },
+            pluginInstallRecords: {},
+            updateStartedAtMs: 123,
+            timeoutMs: 5000,
+            nodeRunner: process.execPath,
+          }),
+        ).toEqual({ resumed: true });
+        expect(inspect).toHaveBeenCalledOnce();
+        const argv = mocks.spawn.mock.calls[0]?.[1] as string[];
+        expect(argv).toContain("--accept-capabilities");
+        expect(argv.includes("--full-integrity-check")).toBe(supported);
+      } finally {
+        await state.cleanup();
+      }
+    },
+  );
+
   it.each([
     ["win32", false, "pipe"],
     ["win32", true, "pipe"],
@@ -74,13 +137,8 @@ describe("post-core child output", () => {
       });
       await withMockedPlatform(platform, async () => {
         expect(
-          await continuePostCoreUpdateInFreshProcess({
-            root,
-            channel: "stable",
-            requestedChannel: null,
+          await continueFixture(root, {
             opts: { json },
-            pluginInstallRecords: {},
-            updateStartedAtMs: 123,
             timeoutMs: 5000,
             nodeRunner: process.execPath,
           }),
@@ -112,17 +170,11 @@ describe("managed post-core root handoff", () => {
       try {
         await state.writeConfig({});
         const project = state.path("pnpm", "global", "5");
-        const previous = path.join(project, ".pnpm", "openclaw@1.0.0", "node_modules", "openclaw");
-        const current = path.join(project, ".pnpm", "openclaw@2.0.0", "node_modules", "openclaw");
-        const inactive = path.join(project, ".pnpm", "openclaw@1.5.0", "node_modules", "openclaw");
+        const previous = pnpmPackage(project, "1.0.0");
+        const current = pnpmPackage(project, "2.0.0");
+        const inactive = pnpmPackage(project, "1.5.0");
         const foreignProject = state.path("other-pnpm", "global", "5");
-        const foreign = path.join(
-          foreignProject,
-          ".pnpm",
-          "openclaw@2.0.0",
-          "node_modules",
-          "openclaw",
-        );
+        const foreign = pnpmPackage(foreignProject, "2.0.0");
         for (const [root, version] of [
           [previous, "1.0.0"],
           [current, "2.0.0"],
@@ -146,7 +198,7 @@ describe("managed post-core root handoff", () => {
             path.join(owner, "package.json"),
             JSON.stringify({ dependencies: { openclaw: "2.0.0" } }),
           );
-          await fs.symlink(target, activeLink, process.platform === "win32" ? "junction" : "dir");
+          await fs.symlink(target, activeLink, linkType);
         }
         const meta = { root: previous, handoffId: "original-driver" };
         const metaPath = await state.writeJson("sentinel-meta.json", { version: 1, meta });
@@ -163,7 +215,7 @@ describe("managed post-core root handoff", () => {
             "readControlPlaneUpdateSentinelMeta",
           ).mockImplementationOnce(async (env) => {
             await fs.unlink(link);
-            await fs.symlink(inactive, link, process.platform === "win32" ? "junction" : "dir");
+            await fs.symlink(inactive, link, linkType);
             return await readControlPlaneUpdateSentinelMeta(env);
           });
         }
@@ -204,18 +256,12 @@ describe("managed post-core root handoff", () => {
       try {
         await state.writeConfig({});
         const globalRoot = state.path("pnpm", "global", "5", "node_modules");
-        const previous = path.join(
-          globalRoot,
-          ".pnpm",
-          "openclaw@1.0.0",
-          "node_modules",
-          "openclaw",
-        );
-        const next = path.join(globalRoot, ".pnpm", "openclaw@2.0.0", "node_modules", "openclaw");
+        const previous = pnpmPackage(globalRoot, "1.0.0");
+        const next = pnpmPackage(globalRoot, "2.0.0");
         const root = path.join(globalRoot, "openclaw");
         await writePackageRoot(previous, "1.0.0");
         await writePackageRoot(next, "2.0.0");
-        await fs.symlink(previous, root, process.platform === "win32" ? "junction" : "dir");
+        await fs.symlink(previous, root, linkType);
         const meta = {
           root: await fs.realpath(root),
           handoffId: "fixture-handoff",
@@ -231,7 +277,7 @@ describe("managed post-core root handoff", () => {
           await prepareUpdateCommand({ json: true });
           // pnpm keeps the global link name while replacing its versioned target.
           await fs.unlink(root);
-          await fs.symlink(next, root, process.platform === "win32" ? "junction" : "dir");
+          await fs.symlink(next, root, linkType);
           const foreign = state.path("different-install");
           await writePackageRoot(foreign, "2.0.0");
           executingRoot.mockReturnValue(foreignChild ? foreign : next);
@@ -258,15 +304,7 @@ describe("managed post-core root handoff", () => {
               return child;
             },
           );
-          const result = await continuePostCoreUpdateInFreshProcess({
-            root,
-            channel: "stable",
-            requestedChannel: null,
-            opts: { json: true },
-            pluginInstallRecords: {},
-            updateStartedAtMs: 123,
-            timeoutMs: 15_000,
-          });
+          const result = await continueFixture(root);
           if (foreignChild) {
             expect(String(childError)).toContain("Managed update handoff root mismatch");
             expect(result).toEqual({ resumed: false, exitCode: 1 });

@@ -206,7 +206,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     }
 
     this.recoveringSession = true;
-    this.requestUpdate();
+    this.invalidate();
     setChatError(state, null);
     try {
       const recovery = await sessions.recover(params);
@@ -252,7 +252,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return true;
     } finally {
       this.recoveringSession = false;
-      this.requestUpdate();
+      this.invalidate();
     }
   };
 
@@ -329,7 +329,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     }
     this.creatingIncognitoSession = expiredIncognito;
     if (expiredIncognito) {
-      this.requestUpdate();
+      this.invalidate();
     }
     try {
       const nextSessionKey = await sessions.create(createParams);
@@ -369,7 +369,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     } finally {
       this.creatingIncognitoSession = false;
       if (expiredIncognito && isCurrent()) {
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   };

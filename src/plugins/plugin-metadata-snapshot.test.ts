@@ -439,12 +439,19 @@ describe("plugin metadata snapshot", () => {
   });
 
   it("reuses an adopted snapshot across config objects until a lifecycle owner replaces it", () => {
-    const config = { plugins: { entries: { demo: { enabled: true } } } };
+    // Activation-only config can share default discovery; a custom path cannot.
+    const load = { paths: ["/custom/plugins"] };
+    const config = { plugins: { load, entries: { demo: { enabled: true } } } };
+    const compatibleConfig = { plugins: { load, entries: { demo: { enabled: false } } } };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     mockRegistrySnapshot(index);
     const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
-    adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, { config, env: {} });
+    adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, {
+      config,
+      compatibleConfigs: [compatibleConfig],
+      env: {},
+    });
     const ignored = { ...snapshot, registrySource: "persisted" as const };
     adoptCurrentPluginMetadataSnapshotIfAbsent(ignored, {
       config: structuredClone(config),
@@ -456,8 +463,19 @@ describe("plugin metadata snapshot", () => {
     expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
       snapshot,
     );
+    const compatibleParams = {
+      config: compatibleConfig,
+      env: {},
+      index: snapshot.index,
+    };
+    expect(loadPluginMetadataSnapshot(compatibleParams)).toBe(snapshot);
+    expect(resolvePluginMetadataSnapshot(compatibleParams)).toBe(snapshot);
     expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+
+    expect(loadPluginMetadataSnapshot({ env: {}, index })).not.toBe(snapshot);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
 
     setGatewayPluginMetadataSnapshot(ignored, { config, env: {} });
     expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(

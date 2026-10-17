@@ -20,6 +20,7 @@ import {
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -29,7 +30,7 @@ import {
   handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
@@ -46,17 +47,12 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
-export function ChatThread(input: {
-  props: ChatThreadProps;
-  transcript: ChatTranscriptController;
-}) {
+export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTranscript }) {
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
-  onCleanup(() => {
-    root?.removeEventListener("wheel", historyIntent);
-    root?.removeEventListener("touchstart", historyIntent);
-    root?.removeEventListener("touchmove", historyIntent);
-  });
+  let stopHistory: (() => void)[] = [];
+  // Retained transcript roots can settle before refs; bind native input at the ref.
+  onCleanup(() => stopHistory.forEach((stop) => stop()));
   const current = createMemo(() =>
     input.transcript.renderSession(input.props.sessionKey, (session) => {
       const projection = projectChatTranscript(input.props, session);
@@ -84,6 +80,7 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
+  // Hydrate favicon images inserted by the markdown DOM owner.
   createEffect(
     () => [current(), input.props.fetchLinkFavicon] as const,
     ([, fetchLinkFavicon]) => {
@@ -138,9 +135,9 @@ export function ChatThread(input: {
           root = element;
           markdownRef(element);
           prefetchRef(element);
-          element.addEventListener("wheel", historyIntent, { passive: true });
-          element.addEventListener("touchstart", historyIntent, { passive: true });
-          element.addEventListener("touchmove", historyIntent, { passive: true });
+          stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
+            listen(element, type, historyIntent, { passive: true }),
+          );
         }}
         class={[
           "chat-thread",

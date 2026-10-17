@@ -53,13 +53,12 @@ type ClientToolCallRecorder =
 
 function describeToolExecutionError(err: unknown): {
   message: string;
-  stack?: string;
   operatorHint?: string;
 } {
   const operatorHint = readToolOperatorHint(err);
   if (err instanceof Error) {
     const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack, ...(operatorHint ? { operatorHint } : {}) };
+    return { message, ...(operatorHint ? { operatorHint } : {}) };
   }
   return { message: String(err) };
 }
@@ -111,13 +110,10 @@ async function executeAdaptedToolOperation(params: {
       throw err;
     }
     const described = describeToolExecutionError(err);
-    if (described.stack && described.stack !== described.message) {
-      logDebug(`tools: ${params.normalizedToolName} failed stack:\n${described.stack}`);
-    }
     const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
     // Operator-only: the hint names containment configuration and stays out of the
     // model-visible result below.
-    logError(`[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint}`);
+    logError(`[tools] ${params.normalizedToolName} failed:${operatorHint}`);
     const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
@@ -145,7 +141,7 @@ function attachAdapterExecutionPreparer<T extends ToolDefinition>(definition: T)
   );
 }
 
-const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 export function findClientToolNameConflicts(params: {
   tools: ClientToolDefinition[];
@@ -179,10 +175,6 @@ export function findClientToolNameConflicts(params: {
     seenClientNames.set(normalizedName, rawName);
   }
   return Array.from(conflicts);
-}
-
-export function createClientToolNameConflictError(conflicts: string[]): Error {
-  return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
 }
 
 /** Detect client tool conflict errors without depending on object identity. */

@@ -204,12 +204,17 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       ...(mediaUrls.length ? { mediaUrls } : {}),
       replyInstruction: [
-        params.status === "ok"
-          ? `The ${params.completionLabel} is ready for the original chat.`
-          : `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
-        params.status === "ok"
-          ? "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event."
-          : "Follow the current visible-reply contract with a concise user-facing failure message.",
+        ...(params.status === "ok"
+          ? [
+              `The ${params.completionLabel} is ready. The host sends its files to the original chat before this turn, so do not send them again.`,
+              "Check the result against what the user asked for. If it falls short, continue the work, for example generate again with adjusted parameters.",
+              "Otherwise follow the current visible-reply contract with a short user-facing reply.",
+            ]
+          : [
+              `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation failed.`,
+              "If the failure looks recoverable, continue the work, for example retry with adjusted parameters.",
+              "Otherwise follow the current visible-reply contract to tell the user briefly what failed.",
+            ]),
         "Keep internal task/session details private and do not copy the internal event text verbatim.",
       ].join(" "),
     },

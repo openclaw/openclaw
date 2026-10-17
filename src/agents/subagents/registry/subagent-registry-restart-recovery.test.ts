@@ -166,7 +166,7 @@ describe("subagent registry restart recovery", () => {
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
 
-  it.each(["run", "admission"] as const)(
+  it.each(["run", "admission", "run after admission"] as const)(
     "recovers as soon as a retained %s releases ownership",
     async (owner) => {
       vi.useFakeTimers();
@@ -177,14 +177,14 @@ describe("subagent registry restart recovery", () => {
         entry,
       );
       const lease =
-        owner === "admission"
+        owner !== "run"
           ? await beginSessionWorkAdmission({
               scope: mocks.storePath,
               identities: [childSessionKey, "session-id"],
               assertAllowed: () => {},
             })
           : undefined;
-      if (owner === "run") {
+      if (owner !== "admission") {
         registerAgentRunContext("retained-owner", {
           sessionKey: childSessionKey,
           sessionId: "session-id",
@@ -197,6 +197,10 @@ describe("subagent registry restart recovery", () => {
         expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
         expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
         lease?.release();
+        if (owner === "run after admission") {
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+        }
         clearAgentRunContext("retained-owner");
         await vi.advanceTimersByTimeAsync(1_000);
         expect(mocks.loadSessionEntry).toHaveBeenCalled();

@@ -228,7 +228,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull();
 
     (context.agents.state as { agentsList: AgentsListResult | null }).agentsList = TWO_AGENTS;
-    sidebar.requestUpdate();
+    sidebar.invalidate();
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "research" });
@@ -470,7 +470,7 @@ describe("AppSidebar agent chip", () => {
     { count: 12, pins: [], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
     { count: 12, pins: ["deleted-agent"], order: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
   ])(
-    "keeps all $count agents in pin order and searches only larger lists (pins=$pins)",
+    "keeps all $count agents in pin order without a search field (pins=$pins)",
     async ({ count, pins, order }) => {
       const { sidebar, context } = await mountSidebar(
         createGateway({} as GatewayBrowserClient),
@@ -484,7 +484,7 @@ describe("AppSidebar agent chip", () => {
       await sidebar.updateComplete;
       sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
       await sidebar.updateComplete;
-      expect(Boolean(sidebar.querySelector(".sidebar-agent-menu__filter"))).toBe(count > 6);
+      expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
       expect(sidebar.querySelector(".sidebar-agent-menu__agent-list")).not.toBeNull();
       expect(
         [

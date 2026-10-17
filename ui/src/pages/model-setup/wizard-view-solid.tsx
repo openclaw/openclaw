@@ -29,6 +29,7 @@ export type WizardViewProps = {
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   let content: HTMLDivElement | undefined;
+  // Focus the committed wizard step after its identity or completion actions change.
   createEffect(
     () =>
       props.state.phase === "step"

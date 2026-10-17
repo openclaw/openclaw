@@ -1,7 +1,8 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { notifyListeners, registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SessionGroupSettings } from "../lib/sessions/custom-groups.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
@@ -124,8 +125,7 @@ function isBootRecord(value: unknown): value is BootRecord {
       (group: unknown) =>
         isRecord(group) && typeof group.name === "string" && typeof group.position === "number",
     ) &&
-    Array.isArray(value.sectionOrder) &&
-    value.sectionOrder.every((section: unknown) => typeof section === "string")
+    isStringArray(value.sectionOrder)
   );
 }
 
@@ -171,7 +171,9 @@ export function readBootRecord(
   }
   try {
     storage?.removeItem(key);
-  } catch {}
+  } catch {
+    // Invalid boot data is already rejected; storage eviction is best effort.
+  }
   return null;
 }
 
@@ -195,7 +197,9 @@ function removeOwnedBootRecord(scope: string | undefined, owner: BootRecordOwner
     ) {
       storage?.removeItem(key);
     }
-  } catch {}
+  } catch {
+    // Optional boot-cache cleanup must not interrupt connection recovery.
+  }
 }
 
 export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void {
@@ -222,7 +226,9 @@ export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void 
         storage.removeItem(key);
       }
     }
-  } catch {}
+  } catch {
+    // In-memory admission is retired even when persisted cleanup is unavailable.
+  }
 }
 
 /** One projection of the admitted boot record for local reads/writes only. */
@@ -307,7 +313,8 @@ if (
   typeof document !== "undefined" &&
   typeof document.addEventListener === "function"
 ) {
-  window.addEventListener("storage", (event) => {
+  // The document owns these listeners, including across BFCache pagehide/pageshow.
+  listen(window, "storage", (event) => {
     if (event.key !== null && !event.key.startsWith(BOOT_RECORD_PREFIX)) {
       return;
     }
@@ -328,8 +335,8 @@ if (
     }
     notifyBootRecordChange({ scope, external: true, replacement, retiredOwner });
   });
-  window.addEventListener("pagehide", flushBootRecord);
-  document.addEventListener("visibilitychange", () => {
+  listen(window, "pagehide", flushBootRecord);
+  listen(document, "visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushBootRecord();
     }

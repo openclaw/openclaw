@@ -1,17 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
-import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import {
+  startNodeWorkspaceTransferTestServer,
+  transferOwner,
+} from "./node-workspace-transfer.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
@@ -34,6 +38,16 @@ it.each([
     const workspaceDir = path.join(root, "worker");
     const home = path.join(root, "home");
     const temporaryRoot = path.join(root, "transfers");
+    const commandResult = (result: Partial<SpawnResult> = {}) => ({
+      workspaceDir,
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+      ...result,
+    });
     await fs.mkdir(workspaceDir);
     const exec = async (argv: string[], input?: string | Uint8Array) => {
       const result = await runCommandWithTimeout(argv, {
@@ -45,6 +59,10 @@ it.each([
           HOME: home,
           GIT_CONFIG_GLOBAL: "/dev/null",
           GIT_CONFIG_NOSYSTEM: "1",
+          GIT_AUTHOR_NAME: "Publication Test",
+          GIT_AUTHOR_EMAIL: "publication@example.invalid",
+          GIT_COMMITTER_NAME: "Publication Test",
+          GIT_COMMITTER_EMAIL: "publication@example.invalid",
         },
       });
       expect(result.code, result.stderr).toBe(0);
@@ -53,24 +71,12 @@ it.each([
     await exec(["git", "init", "--quiet"]);
     await fs.writeFile(path.join(workspaceDir, "result.txt"), "base\n");
     await exec(["git", "add", "result.txt"]);
-    await exec([
-      "git",
-      "-c",
-      "user.name=Publication Test",
-      "-c",
-      "user.email=publication@example.invalid",
-      "commit",
-      "--quiet",
-      "-m",
-      "base",
-    ]);
+    await exec(["git", "commit", "--quiet", "-m", "base"]);
     const base = await prepareNodeWorkspaceTransferSnapshot({
       localPath: workspaceDir,
       temporaryRoot: root,
     });
-    if (!base.manifest.baseCommit) {
-      throw new Error("Repository fixture has no base commit");
-    }
+    assert(base.manifest.baseCommit, "Repository fixture has no base commit");
     const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
     const store = createSessionRepositoryWorkspaceStore({ path: database.path });
     const created = await store.create({
@@ -99,18 +105,9 @@ it.each([
     await fs.mkdir(manifests, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(manifests, `${base.manifestRef.slice(7)}.json`), base.rawManifest);
     await fs.writeFile(path.join(workspaceDir, "result.txt"), "checkpoint edit\n");
-    const owner = new AbortController();
     const service = createNodeWorkspaceTransferService({
       temporaryRoot,
-      getOwner: () => ({
-        credential: { ownerEpoch: 1, sessionId: "session" },
-        environment: {
-          ownerEpoch: 1,
-          attachedSessionIds: ["session"],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
+      getOwner: () => transferOwner("session"),
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
     const receiving = createDeferred();
@@ -158,8 +155,8 @@ it.each([
       environmentId: "environment",
       ownerEpoch: 1,
       sessionId: "session",
-      ownerSignal: owner.signal,
-      isOwnerCurrent: () => !owner.signal.aborted,
+      ownerSignal: new AbortController().signal,
+      isOwnerCurrent: () => true,
       restoredWorkspace: {
         source: {
           kind: "repository",
@@ -196,25 +193,12 @@ it.each([
             expect(await uploadOutcome).toBe("completed");
           }
           // The data channel can outlive a lost control-channel command result.
-          return {
-            workspaceDir,
-            stdout: "",
+          return commandResult({
             stderr: "control channel lost its result",
             code: 1,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+          });
         }
-        return {
-          workspaceDir,
-          stdout: await upload,
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return commandResult({ stdout: await upload });
       },
     });
     const checkpoint: Extract<
@@ -271,18 +255,12 @@ it.each([
       first = reconcile();
       if (receivingUpload) {
         let settled = false;
-        void first.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
+        const onSettled = () => {
+          settled = true;
+        };
+        void first.then(onSettled, onSettled);
         await withTestTimeout(discardStarted.promise, 5_000, "publication disposal did not start");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await setImmediate();
         expect.soft(settled, "reconciliation must join abandoned staging work").toBe(false);
         release.resolve();
       }

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -86,16 +85,19 @@ export function createKeyedStateDomainPublication<T>(codec: {
 }) {
   type Receipt = SqliteCommitReceipt<T>;
   type Facts = Map<string, SqliteCommittedFact<T>>;
-  const state = resolveGlobalSingleton(
-    Symbol.for(`openclaw.stateDomainPublication.${codec.domain}`),
-    () => ({
-      sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
-      capture: new AsyncLocalStorage<{ db: EngineConnection; facts: Facts }>(),
-      facts: new Set<(change: StateDomainChange<T>) => void>(),
-      observers: new Set<(change: StateDomainChange<T>) => void>(),
-      installingFacts: 0,
-    }),
-  );
+  type Capture = { db: EngineConnection; facts: Facts };
+  const state = resolveGlobalSingleton<{
+    sources: WeakMap<EngineConnection, SqliteCommitSource>;
+    capture?: Capture;
+    facts: Set<(change: StateDomainChange<T>) => void>;
+    observers: Set<(change: StateDomainChange<T>) => void>;
+    installingFacts: number;
+  }>(Symbol.for(`openclaw.stateDomainPublication.${codec.domain}`), () => ({
+    sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
+    facts: new Set<(change: StateDomainChange<T>) => void>(),
+    observers: new Set<(change: StateDomainChange<T>) => void>(),
+    installingFacts: 0,
+  }));
   const sourceFor = (db: EngineConnection) => {
     const anchor = sqlPublicationAnchor(db);
     let source = state.sources.get(anchor);
@@ -154,7 +156,7 @@ export function createKeyedStateDomainPublication<T>(codec: {
     if (!facts.size) {
       return;
     }
-    const capture = state.capture.getStore();
+    const capture = state.capture;
     if (capture && sqlPublicationAnchor(capture.db) === sqlPublicationAnchor(db)) {
       const previous = new Map([...facts.keys()].map((key) => [key, capture.facts.get(key)]));
       if (
@@ -209,16 +211,19 @@ export function createKeyedStateDomainPublication<T>(codec: {
       stage(db, new Map(keys.map((key) => [key, { kind: "absent" }])));
     },
     capture<Result>(db: EngineConnection, operation: () => Result) {
-      const parent = state.capture.getStore();
-      return state.capture.run(
+      const parent = state.capture;
+      const capture: Capture =
         parent && sqlPublicationAnchor(parent.db) === sqlPublicationAnchor(db)
           ? parent
-          : { db, facts: new Map() },
-        () => {
-          const result = operation();
-          return { result, receipt: receiptFor(db, state.capture.getStore()!.facts) };
-        },
-      );
+          : { db, facts: new Map() };
+      // Captures produce their receipt inside a synchronous transaction callback.
+      state.capture = capture;
+      try {
+        const result = operation();
+        return { result, receipt: receiptFor(db, capture.facts) };
+      } finally {
+        state.capture = parent;
+      }
     },
     /** Leave space for sibling domains and the operation's existing settlement metadata. */
     bound(receipt: Receipt): Receipt | { kind: "unknown"; identity: string | symbol } {

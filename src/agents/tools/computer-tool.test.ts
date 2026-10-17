@@ -84,11 +84,7 @@ function executeMouseDown(
   input: Record<string, unknown> = {},
   signal?: AbortSignal,
 ) {
-  return tool.execute(
-    "down",
-    { action: "left_mouse_down", coordinate: [1, 2], frameId, ...input },
-    signal,
-  );
+  return executeClick(tool, frameId, { action: "left_mouse_down", ...input }, "down", signal);
 }
 
 function retargetToMacB(tool: ComputerTool, callId = "retarget") {
@@ -103,6 +99,16 @@ function invalidScrollCase(name: string, scrollAmount: unknown): InvalidCase {
 
 function invalidHoldCase(name: string, duration: unknown): InvalidCase {
   return [name, { action: "hold_key", text: "space", duration }, INVALID_HOLD_DURATION];
+}
+
+async function rejectsClick(
+  tool: ComputerTool,
+  frameId: string,
+  error: string | RegExp,
+  input: Record<string, unknown> = {},
+  callId = "click",
+) {
+  await expect(executeClick(tool, frameId, input, callId)).rejects.toThrow(error);
 }
 
 function mockComputerActError(error: Error, action?: string) {
@@ -192,14 +198,11 @@ describe("createComputerTool v1 execution", () => {
     expect(() => readLastComputerActParams()).toThrow(/missing computer\.act request/);
   });
 
-  it.each([{ coordinate: [-1, 2] }])(
-    "rejects malformed required coordinate input %#",
-    async ({ coordinate }) => {
-      await expect(executeComputerAction({ action: "left_click", coordinate })).rejects.toThrow(
-        /coordinate/,
-      );
-    },
-  );
+  it("rejects malformed required coordinate input", async () => {
+    await expect(
+      executeComputerAction({ action: "left_click", coordinate: [-1, 2] }),
+    ).rejects.toThrow(/coordinate/);
+  });
 
   it("omits an unchanged screenshot while retaining its frame and refreshing node coordinates", async () => {
     let screenshotCalls = 0;
@@ -252,7 +255,7 @@ describe("createComputerTool v1 execution", () => {
 
     expect(changed.content).toContainEqual(expect.objectContaining({ type: "image" }));
     expect(readFrameId(changed)).not.toBe(firstFrameId);
-    await expect(executeClick(tool, firstFrameId)).rejects.toThrow(/frameId does not match/);
+    await rejectsClick(tool, firstFrameId, /frameId does not match/);
   });
 
   it("preserves wait metadata when its follow-up screenshot is unchanged", async () => {
@@ -336,19 +339,19 @@ describe("createComputerTool v1 execution", () => {
     expect(actKeys[0]).not.toBe(actKeys[1]);
   });
 
-  it.each([
-    [
-      "surfaces the persistent deny remediation",
+  it("surfaces the persistent deny remediation", async () => {
+    mockComputerActError(
       new Error(
         'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
       ),
-      /remove computer\.act from gateway\.nodes\.commands\.deny/,
-    ],
-  ])("%s", async (_name, error, expected) => {
-    mockComputerActError(error);
+    );
     const { tool, frameId } = await createToolWithFrame({}, {}, "call");
-    await expect(executeClick(tool, frameId, { coordinate: [10, 10] }, "call")).rejects.toThrow(
-      expected,
+    await rejectsClick(
+      tool,
+      frameId,
+      /remove computer\.act from gateway\.nodes\.commands\.deny/,
+      { coordinate: [10, 10] },
+      "call",
     );
   });
 
@@ -358,29 +361,27 @@ describe("createComputerTool v1 execution", () => {
 
     contextEpoch.value += 1;
 
-    await expect(executeClick(tool, frameId, { coordinate: [5, 5] })).rejects.toThrow(
-      /screenshot/i,
-    );
+    await rejectsClick(tool, frameId, /screenshot/i, { coordinate: [5, 5] });
     expect(computerActBodies()).toHaveLength(0);
   });
 
-  it.each(["windowRef"] as const)(
-    "rejects a stale screenshot frame when %s is whitespace-only",
-    async (reference) => {
-      const { tool, frameId } = await createToolWithFrame();
-      const input = { [reference]: " \t " };
+  it("rejects a stale screenshot frame when windowRef is whitespace-only", async () => {
+    const { tool, frameId } = await createToolWithFrame();
+    const input = { windowRef: " \t " };
 
-      await expect(executeClick(tool, `${frameId}-stale`, input)).rejects.toThrow(
-        "computer: frameId does not match the most recent screenshot result; take a new screenshot",
-      );
-      expect(computerActBodies()).toHaveLength(0);
+    await rejectsClick(
+      tool,
+      `${frameId}-stale`,
+      "computer: frameId does not match the most recent screenshot result; take a new screenshot",
+      input,
+    );
+    expect(computerActBodies()).toHaveLength(0);
 
-      await expect(executeClick(tool, frameId, input)).resolves.toMatchObject({
-        details: { action: "left_click" },
-      });
-      expect(readLastComputerActParams()).not.toHaveProperty(reference);
-    },
-  );
+    await expect(executeClick(tool, frameId, input)).resolves.toMatchObject({
+      details: { action: "left_click" },
+    });
+    expect(readLastComputerActParams()).not.toHaveProperty("windowRef");
+  });
 
   it.each([
     [
@@ -434,30 +435,30 @@ describe("createComputerTool v1 execution", () => {
         : screenshotPayload(1),
     );
     const { tool, frameId } = await createToolWithFrame({}, { screenIndex: 1 }, "call");
-    await expect(
-      executeClick(tool, frameId, { coordinate: [10, 20], screenIndex: 0 }, "call"),
-    ).rejects.toThrow(/screenIndex does not match/);
+    await rejectsClick(
+      tool,
+      frameId,
+      /screenIndex does not match/,
+      { coordinate: [10, 20], screenIndex: 0 },
+      "call",
+    );
     expect(computerActBodies()).toHaveLength(0);
   });
 
   it("does not inherit another node's frame when a coordinate action names a different node", async () => {
     listNodesMock.mockResolvedValue(twoMacComputerNodes());
-    // Observe a frame on node A (screen 1).
     const { tool, frameId } = await createToolWithFrame(
       {},
       { node: "mac-a", screenIndex: 1 },
       "call",
     );
-    // A click naming node B must not apply node A's frame; it needs its own screenshot.
-    await expect(executeClick(tool, frameId, { node: "mac-b" }, "call")).rejects.toThrow(
-      /no screenshot of this computer/i,
-    );
+    await rejectsClick(tool, frameId, /no screenshot of this computer/i, { node: "mac-b" }, "call");
   });
 
   it("does not authorize coordinates when screenshot sanitization omits the image", async () => {
     callGatewayToolMock.mockResolvedValue(screenshotPayload(0, "not-base64!!!"));
     const { tool, frameId } = await createToolWithFrame({}, {}, "call");
-    await expect(executeClick(tool, frameId, {}, "call")).rejects.toThrow(/no screenshot/i);
+    await rejectsClick(tool, frameId, /no screenshot/i, {}, "call");
   });
 
   it("invalidates the old frame when the post-action screenshot fails", async () => {
@@ -468,9 +469,7 @@ describe("createComputerTool v1 execution", () => {
       details: { action: "left_click" },
     });
     expect(contextEpoch).toEqual({ value: 0 });
-    await expect(executeClick(tool, frameId, { coordinate: [2, 3] }, "call")).rejects.toThrow(
-      /no screenshot/i,
-    );
+    await rejectsClick(tool, frameId, /no screenshot/i, { coordinate: [2, 3] }, "call");
   });
 
   it("keeps target affinity for button release after a failed screenshot", async () => {
@@ -484,61 +483,51 @@ describe("createComputerTool v1 execution", () => {
     await tool.execute("up", { action: "left_mouse_up" });
 
     const actBodies = computerActBodies();
-    expect(actBodies).toHaveLength(2);
-    expect(actBodies[0]).toMatchObject({
-      nodeId: "mac-a",
-      params: { action: "left_mouse_down", screenIndex: 1 },
-    });
-    expect(actBodies[1]).toMatchObject({
-      nodeId: "mac-a",
-      params: { action: "left_mouse_up", screenIndex: 1 },
-    });
+    expect(actBodies).toMatchObject([
+      { nodeId: "mac-a", params: { action: "left_mouse_down", screenIndex: 1 } },
+      { nodeId: "mac-a", params: { action: "left_mouse_up", screenIndex: 1 } },
+    ]);
     expect(actBodies[1]?.params).not.toHaveProperty("displayFrameId");
   });
 
-  it.each([
-    [
-      "clears button affinity when the gateway definitively rejects mouse down",
+  it("clears button affinity when the gateway definitively rejects mouse down", async () => {
+    listNodesMock.mockResolvedValue(twoMacComputerNodes());
+    mockComputerActError(
       Object.assign(new Error("node command rejected before dispatch"), {
         name: "GatewayClientRequestError",
         details: { reason: "command not allowlisted", command: "computer.act" },
       }),
-      /enable Computer Control.*approve the pairing update/i,
-    ],
-  ])("%s", async (_name, error, expected) => {
-    listNodesMock.mockResolvedValue(twoMacComputerNodes());
-    mockComputerActError(error);
+    );
     const { tool, frameId } = await createToolWithFrame({}, { node: "mac-a" });
-
-    await expect(executeMouseDown(tool, frameId)).rejects.toThrow(expected);
+    await expect(executeMouseDown(tool, frameId)).rejects.toThrow(
+      /enable Computer Control.*approve the pairing update/i,
+    );
     await expect(retargetToMacB(tool)).resolves.toMatchObject({ details: { node: "mac-b" } });
   });
 
-  it.each([["node timeout", "TIMEOUT: node invoke timed out", "UNAVAILABLE", undefined]])(
-    "keeps button affinity after an ambiguous %s request error",
-    async (_label, message, gatewayCode, details) => {
-      listNodesMock.mockResolvedValue(twoMacComputerNodes());
-      mockComputerActError(
-        Object.assign(new Error(message), {
-          name: "GatewayClientRequestError",
-          gatewayCode,
-          details,
-        }),
-        "left_mouse_down",
-      );
-      const { tool, frameId } = await createToolWithFrame({}, { node: "mac-a" });
+  it("keeps button affinity after an ambiguous node timeout request error", async () => {
+    const message = "TIMEOUT: node invoke timed out";
+    listNodesMock.mockResolvedValue(twoMacComputerNodes());
+    mockComputerActError(
+      Object.assign(new Error(message), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+        details: undefined,
+      }),
+      "left_mouse_down",
+    );
+    const { tool, frameId } = await createToolWithFrame({}, { node: "mac-a" });
 
-      await expect(executeMouseDown(tool, frameId)).rejects.toThrow(message);
-      await expect(retargetToMacB(tool)).rejects.toThrow(
-        /left button may still be held on node mac-a/,
-      );
+    await expect(executeMouseDown(tool, frameId)).rejects.toThrow(message);
+    await expect(retargetToMacB(tool)).rejects.toThrow(
+      /left button may still be held on node mac-a/,
+    );
 
-      await expect(tool.execute("up", { action: "left_mouse_up" })).resolves.toBeDefined();
-      await expect(retargetToMacB(tool, "retarget-after-release")).resolves.toMatchObject({
-        details: { node: "mac-b" },
-      });
-    },
-  );
+    await expect(tool.execute("up", { action: "left_mouse_up" })).resolves.toBeDefined();
+    await expect(retargetToMacB(tool, "retarget-after-release")).resolves.toMatchObject({
+      details: { node: "mac-b" },
+    });
+  });
 
   it("does not claim button affinity when cancellation wins during target resolution", async () => {
     const controller = new AbortController();

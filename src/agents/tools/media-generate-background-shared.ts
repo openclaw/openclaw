@@ -71,8 +71,6 @@ const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
-export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
-
 function shouldDetachMediaGenerationTask(
   sessionKey: string | undefined,
   entry?: SessionEntry,

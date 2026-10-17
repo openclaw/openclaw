@@ -4,12 +4,14 @@ import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js"
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
+import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
@@ -25,7 +27,7 @@ import {
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
-  resolveComposerQuestionPanel,
+  createComposerQuestionPanel,
 } from "./components/chat-composer-question.tsx";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
@@ -157,7 +159,6 @@ function ChatComposerView(input: ChatViewInput) {
   return (
     <ChatComposer
       {...input.props}
-      renderRevision={input.frame}
       progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
       progressCardInitialLoading={
         input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
@@ -166,7 +167,6 @@ function ChatComposerView(input: ChatViewInput) {
       displayQueue={input.frame.displayQueue}
       footerContent={<ChatFooterContent {...input} />}
       notices={<ChatComposerNoticesView {...input.props} />}
-      onRequestUpdate={input.frame.requestUpdate}
       onToggleRealtimeTalk={
         input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
       }
@@ -176,19 +176,17 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
+  const questionPanel = createComposerQuestionPanel(
+    () => ({ ...input.props, asyncQuestions: input.frame.asyncQuestions }),
+    getChatComposerState(untrack(() => input.props.paneId)),
+  );
   return (
     <div class="chat-footer__context">
       <ChatFooterContent {...input} />
       <div class="agent-chat__composer-notices">
         <ChatComposerNoticesView {...input.props} />
       </div>
-      <ComposerQuestionDock
-        panel={resolveComposerQuestionPanel(
-          { ...input.props, asyncQuestions: input.frame.asyncQuestions },
-          getChatComposerState(input.props.paneId),
-          input.frame.requestUpdate,
-        )}
-      />
+      <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue
         composer={{ ...input.props, displayQueue: input.frame.displayQueue }}
         showAbortableUi={
@@ -265,6 +263,26 @@ export function ChatView(input: { props: ChatProps; application?: ApplicationCon
 
 function ChatContent(input: { props: ChatProps }) {
   const application = useOptionalApplication();
+  const gateway = application && projectGateway(application.gateway);
+  const skillFileHovercard = createSkillFileHovercard({
+    get client() {
+      return gateway?.read().snapshot.client ?? null;
+    },
+    get agentId() {
+      return input.props.currentAgentId ?? undefined;
+    },
+    get sessionKey() {
+      return input.props.sessionKey;
+    },
+    onOpenFile: (file, line) =>
+      input.props.onOpenSidebar?.({
+        kind: "file",
+        ...file,
+        name: "SKILL.md",
+        language: "markdown",
+        line,
+      }),
+  });
   const frame = createMemo(() => createChatViewFrame(input.props));
   const [presentationRevision, setPresentationRevision] = createSignal(0, { ownedWrite: true });
   createEffect(
@@ -397,6 +415,7 @@ function ChatContent(input: { props: ChatProps }) {
                 <div class="chat-main__conversation-frame">
                   <div
                     class="chat-main__conversation"
+                    ref={skillFileHovercard}
                     onWheel={(event) =>
                       forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
                     }

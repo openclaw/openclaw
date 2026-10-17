@@ -7,7 +7,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../plugins/control-ui-view.solid.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
@@ -16,7 +16,7 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
-import { renderApplicationShell } from "./app-shell-view.tsx";
+import { ApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 
@@ -36,7 +36,7 @@ async function mountShell() {
         host: owner.element,
         value: runtime.context,
         get children() {
-          return renderApplicationShell(owner);
+          return createComponent(ApplicationShell, { host: owner });
         },
       }),
     {
@@ -182,7 +182,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   let mobile = false;
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({ matches: mobile })),
+    vi.fn(() => Object.assign(new EventTarget(), { matches: mobile })),
   );
   const { owner, view } = await mountShell();
   const sidebar = view.container.querySelector("openclaw-app-sidebar");
@@ -217,7 +217,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
 it("keeps the mobile New Session action live across selection and access changes", async () => {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({ matches: true })),
+    vi.fn(() => Object.assign(new EventTarget(), { matches: true })),
   );
   const { owner, runtime, view } = await mountShell();
   owner.routeState = { routeId: "sessions" };
@@ -314,7 +314,7 @@ it("clears navigation resize feedback when the drag ends or its divider disconne
 it("keeps the focused gateway retry button across shell and error updates", async () => {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({ matches: true })),
+    vi.fn(() => Object.assign(new EventTarget(), { matches: true })),
   );
   const { owner, runtime, view } = await mountShell();
   const disconnected = {

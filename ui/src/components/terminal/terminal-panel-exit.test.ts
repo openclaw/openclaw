@@ -60,7 +60,7 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("terminal.open", expect.anything(), expect.anything()),
   );
-  await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+  await waitForFast(() => expect(panel.querySelector(".tp-connecting")).toBeNull());
   await panel.updateComplete;
   return { panel, controllers, request, emit };
 }
@@ -144,7 +144,7 @@ describe("terminal process exit", () => {
     await panel.updateComplete;
     expect(panel.hostedTabs).toEqual([]);
     expect(panel.terminalPanelOpen).toBe(true);
-    expect(panel.renderRoot.querySelector(".tabstrip-new")).not.toBeNull();
+    expect(panel.querySelector(".tabstrip-new")).not.toBeNull();
   });
 
   it("does not resurrect an early normal exit or open a replacement shell", async () => {

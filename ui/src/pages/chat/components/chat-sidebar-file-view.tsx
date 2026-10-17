@@ -103,7 +103,7 @@ function FileAction(props: {
       <button
         class={["btn btn--sm sidebar-file-view__action", props.class]}
         type="button"
-        // Ref callbacks are stable for this mount, independent of later control snapshots.
+        // Native refs run unowned; capture the callback in its rendering scope.
         ref={untrack(() => props.ref)}
         aria-label={props.label}
         aria-pressed={props.pressed === undefined ? undefined : props.pressed ? "true" : "false"}
@@ -278,6 +278,7 @@ export function SidebarFile(props: {
           <div class="file-view__search" onKeyDown={(event) => controls().onSearchKeydown(event)}>
             <input
               type="search"
+              // Resolve the narrowed Show accessor before the unowned ref callback runs.
               ref={untrack(() => controls().searchInputRef)}
               aria-label={t("chat.detailPanel.searchInFile")}
               placeholder={t("common.search")}
@@ -355,6 +356,7 @@ export function SidebarFile(props: {
         </Show>
         <Show when={mountIdentity()} keyed>
           {(_identity) => (
+            // The editor mount retains its callback through control replacement.
             <div class="file-view__mount" ref={untrack(() => props.controls?.editorRef)} />
           )}
         </Show>

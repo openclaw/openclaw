@@ -344,7 +344,7 @@ export type PluginRuntimeCore = {
   version: string;
   /** Optional host behavior guarantees; absent capabilities remain unsupported on older hosts. */
   readonly capabilities?: readonly string[];
-  decisions: import("../../decisions/types.js").DecisionRuntimeV1;
+  decisions: import("../../decisions/types-v2.js").DecisionRuntimeV2;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
     current: {
@@ -441,7 +441,7 @@ export type PluginRuntimeCore = {
           assertCurrent: () => void;
         }>
       >;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -451,7 +451,7 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -540,7 +540,7 @@ export type PluginRuntimeCore = {
     ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
-    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. */
+    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     listProviders: (
       params?: RuntimeProviderListParams,
     ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];

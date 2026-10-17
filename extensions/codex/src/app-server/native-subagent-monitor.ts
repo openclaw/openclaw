@@ -92,7 +92,6 @@ import {
   type NativeParentRegistration,
 } from "./native-subagent-parent-owner.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
-import { canPrepareNativeReceiver } from "./native-subagent-receiver.js";
 import {
   CodexNativeSubagentRecoveryCoordinator,
   logRecoveryFailure,
@@ -1551,19 +1550,42 @@ class Monitor {
     return known?.parent === state ? known.deliveryReceipts : state.deliveryReceipts;
   }
 
+  /** Read-only eligibility; transferring observation still needs fresh native lineage. */
   private canPrepareReceiverChild(state: ParentState, threadId: string): boolean {
     const child = this.knownChildren.get(threadId);
-    return canPrepareNativeReceiver(
-      state,
-      child?.parent ?? this.parentStates.get(threadId),
-      child,
-      threadId,
-      {
-        isCurrent: (parent) => this.isCurrentParent(parent),
-        isRetired: (parent) => this.retiredParentStates.has(parent),
-        hasChildCustody: (parent, id) => this.submissions.hasChildCustody(parent, id),
-      },
-    );
+    const previous = child?.parent ?? this.parentStates.get(threadId);
+    if (previous === state) {
+      return true;
+    }
+    if (
+      !this.isCurrentParent(state) ||
+      (child &&
+        (!child.assignment.terminal ||
+          child.pendingTurns.length > 0 ||
+          this.submissions.hasChildCustody(child.parent, threadId)))
+    ) {
+      return false;
+    }
+    if (!previous) {
+      return true;
+    }
+    if (
+      this.retiredParentStates.has(previous) ||
+      !state.requesterSessionKey ||
+      previous.requesterSessionKey !== state.requesterSessionKey ||
+      !previous.historyOwner ||
+      !state.historyOwner ||
+      !matchesNativeAssignmentLifecycle(previous.historyOwner, state.historyOwner) ||
+      ![...state.owners.values()].some((owner) => owner.completionCustody?.isCurrent())
+    ) {
+      return false;
+    }
+    try {
+      state.assignmentStore?.assertCurrent();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private prepareReceiverChild(

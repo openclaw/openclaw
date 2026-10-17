@@ -306,6 +306,7 @@ function AttachmentPreviewStrip(props: {
 }) {
   const presented = useContext(ContentPresentation);
   let host!: HTMLDivElement;
+  // Observe DOM scroll geometry only while this retained attachment strip is presented.
   createEffect(presented, (active) => {
     if (!active) {
       return undefined;

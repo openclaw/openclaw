@@ -26,6 +26,7 @@ type WorkerMemorySample = Pick<
 > & {
   heapSizeLimitBytes?: number;
   heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
   gc?: GcSample[];
 };
 
@@ -50,6 +51,7 @@ type WorkerSource = {
       arrayBuffers?: number;
       heapSizeLimitBytes?: number;
       heapSpaces?: WorkerMemorySample["heapSpaces"];
+      retainedData?: WorkerMemorySample["retainedData"];
     };
     sampledAt: number;
   };
@@ -441,12 +443,26 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         });
         return;
       }
-      // Known numeric payload bytes; object envelopes and GC/heap-space labels are excluded.
+      // Known numeric payload bytes; object envelopes and diagnostic labels are excluded.
       recordWorkerMessage(
         "memory",
         "from_worker",
         ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
           ("heapUsed" in record ? (record.heapSpaces?.length ?? 0) * 8 : 0) +
+          ("heapUsed" in record
+            ? (record.retainedData?.reduce(
+                (bytes, entry) =>
+                  bytes +
+                  16 +
+                  (entry.stringBytes === undefined ? 0 : 8) +
+                  (entry.objects === undefined ? 0 : 8) +
+                  (entry.generations === undefined ? 0 : 8) +
+                  (entry.providers === undefined ? 0 : 8) +
+                  (entry.accounts === undefined ? 0 : 8) +
+                  (entry.truncated === undefined ? 0 : 1),
+                0,
+              ) ?? 0)
+            : 0) +
           (record.gc?.length ?? 0) * 8,
       );
       // This private port is handed off by our isolate telemetry owner, not task input.

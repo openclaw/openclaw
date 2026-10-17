@@ -15,7 +15,7 @@ describe("AppSidebar session catalog request errors", () => {
         assistantAgentId: "roboclaw",
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -45,7 +45,7 @@ describe("AppSidebar session catalog request errors", () => {
         assistantAgentId: "roboclaw",
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       // A selection hello knows nothing about must not fetch the default's
@@ -72,7 +72,7 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -112,7 +112,7 @@ describe("AppSidebar session catalog request errors", () => {
       gateway.publish({
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar, context } = await mountSidebar(
@@ -151,7 +151,7 @@ describe("AppSidebar session catalog request errors", () => {
         assistantAgentId: "roboclaw",
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar, context } = await mountSidebar(
@@ -199,7 +199,7 @@ describe("AppSidebar session catalog request errors", () => {
         assistantAgentId: null,
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -231,7 +231,7 @@ describe("AppSidebar session catalog request errors", () => {
         suspensionPhase: "accepting",
         hello: {
           auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+          features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -292,7 +292,7 @@ describe("AppSidebar session catalog request errors", () => {
           suspensionPhase: "accepting",
           hello: {
             auth: { role: "operator", scopes: ["operator.read"] },
-            features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+            features: { methods: ["sessions.catalog.list"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
         const { sidebar } = await mountSidebar(

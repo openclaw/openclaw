@@ -42,6 +42,12 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /**
+   * Freeze the host continuation count before tools or inference, using the native
+   * owner's admitted Gateway-local cwd. Never pass a remote/container path.
+   * Repeat calls must use the same cwd; omission preserves the harness result budget.
+   */
+  prepareContinuationRetryCount?: (workspace: Readonly<{ cwd: string }>) => void;
   /** Capture admitted request ancestry for descendants that outlive this foreground turn. */
   captureRequestCustody?: () =>
     | import("../../infra/exec-request-context.js").ExecRequestCustody
@@ -143,7 +149,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
-  /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. */
+  /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,

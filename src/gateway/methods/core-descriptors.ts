@@ -564,6 +564,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     CONTROL_PLANE_WRITE,
   ],
+  [
+    "factory.githubPublication.redeem",
+    "factory-github-proof",
+    "operator.admin",
+    "2026.10",
+    { advertise: false },
+  ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
   // Evidence-aware member projection is additive so legacy method indices and
   // its required `addedBy` response contract remain unchanged.
@@ -739,5 +746,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["tools.github.search", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["openclaw.setup.runtime.start", "system-agent", "operator.admin", "2026.10"],
-  ["sessions.github.action", "sessions-github", "operator.write", "2026.10", CONTROL_PLANE_WRITE],
+  ["sessions.github.action", "sessions-github", "dynamic", "2026.10", CONTROL_PLANE_WRITE],
+  ["update.handoffSentinel", "update-handoff-sentinel", "operator.admin", "2026.10", UNADVERTISED],
+  ["skills.files.get", "skills", "operator.read", "2026.10"],
+  ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

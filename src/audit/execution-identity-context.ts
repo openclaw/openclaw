@@ -28,8 +28,8 @@ import {
   presentExecutionDecisionReceiptsInDatabase,
 } from "./execution-decision-receipts.js";
 import {
-  parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
+  type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionToken,
 } from "./execution-identity-admission.js";
 import {
@@ -221,12 +221,9 @@ export function pruneExpiredExecutionIdentityContextsInDatabase(params: {
 
 /** Worker-owned canonicalization and persistence for one accepted admission envelope. */
 function persistExecutionIdentityAdmissionEnvelope(
-  input: unknown,
+  envelope: ExecutionIdentityAdmissionEnvelope,
   options: ExecutionIdentityStoreOptions = {},
 ): ExecutionIdentityContextV1 {
-  // Structured clone removes the admission-side freeze. Revalidate all bounds
-  // before schema/key access so malformed messages never reach persistence.
-  const envelope = parseExecutionIdentityAdmissionEnvelope(input);
   ensureExecutionIdentityContextSchema(options);
   const executionId = envelope.executionId;
   const opened = openOpenClawStateDatabase(options);

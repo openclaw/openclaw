@@ -2,7 +2,7 @@
 # Import specifiers and the helper owner test/helpers/promise.ts are excluded.
 # Ratchet: counts may only shrink. New wall-clock test deadlines are not allowed.
 # Format: repo-relative path, tab, positive count. Zero-count files are omitted.
-packages/agent-core/src/agent-loop.async-tools.test.ts	10
+packages/agent-core/src/agent-loop.async-tools.test.ts	1
 packages/ai/src/transports/openai-responses-client.continuation.test.ts	2
 packages/gateway-client/src/scope-upgrade.test.ts	2
 packages/memory-host-sdk/src/host/batch-upload.test.ts	6
@@ -58,10 +58,9 @@ src/gateway/server-methods/models-dispatch.catalog.integration.test.ts	2
 src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts	2
 src/gateway/server-methods/send.scheduled-reads.integration.test.ts	2
 src/gateway/server-reload-channel-restart.test.ts	3
-src/gateway/server-session-events.test.ts	5
 src/gateway/server.approval-forwarding.test.ts	1
 src/gateway/server.chat.canonical-publication.test.ts	2
-src/gateway/server.cli-watchdog.test.ts	4
+src/gateway/server.cli-watchdog.test.ts	1
 src/gateway/server.codex-failure-recovery.test.ts	3
 src/gateway/server.config-patch.test.ts	2
 src/gateway/server.labs-hot-reload.test.ts	2
@@ -105,7 +104,7 @@ src/tui/tui-pty-local-test-support.ts	1
 src/utils/run-with-concurrency.test.ts	7
 src/worker/worker.runtime.test.ts	1
 test/cli-message-authority.integration.test.ts	1
-test/codex-node-cancellation.integration.test.ts	9
+test/codex-node-cancellation.integration.test.ts	1
 test/cron-message-read.integration.test.ts	4
 test/e2e/qa-lab/runtime/gateway-timeout-recovery-subagent.e2e.test.ts	1
 test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.ts	1

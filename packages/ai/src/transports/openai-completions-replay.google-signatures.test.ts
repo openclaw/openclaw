@@ -52,7 +52,7 @@ function geminiToolReplayContext(
           },
         ]
       : [assistant],
-    tools: [],
+    tools: [{ name: "echo_value", description: "Echo", parameters: { type: "object" } }],
   } as never;
 }
 

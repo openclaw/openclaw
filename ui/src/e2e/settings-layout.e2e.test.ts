@@ -97,14 +97,14 @@ const settingsRowRoutes = [
 const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
 
 const mobileStandaloneSettingsPageRoutes = [
-  "sessions",
-  "worktrees",
   "usage",
   "cron",
   "memory-import",
 ] as const satisfies readonly RouteId[];
 
 const mobileGeometryCases = [
+  { route: "sessions", contentSelector: ".settings-page" },
+  { route: "worktrees", contentSelector: ".settings-page" },
   { route: "appearance", contentSelector: ".settings-page" },
   { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },

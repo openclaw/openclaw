@@ -12,12 +12,12 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 
 const PAGE_URL = "https://example.test/page";
 const NEXT_URL = "https://example.test/next";
-const controllers: BrowserPanelController[] = [];
+const controllers: BrowserPanel[] = [];
 let sockets: TestScreencastSocket[];
 let createdUrls: string[];
 let revokedUrls: string[];
@@ -47,7 +47,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
+    controller.suspendView();
   }
 });
 
@@ -91,7 +91,7 @@ function setup(handle?: (envelope: BrowserRequestEnvelope) => Promise<unknown>) 
     { screencast: true },
   );
   const host = new TestBrowserPanelHost(gateway.client);
-  const controller = new BrowserPanelController(host);
+  const controller = host.createPanel();
   controller.synchronizeClient();
   controllers.push(controller);
   const calls = (path: string) =>
@@ -101,7 +101,7 @@ function setup(handle?: (envelope: BrowserRequestEnvelope) => Promise<unknown>) 
   return { ...gateway, host, controller, calls };
 }
 
-async function start(controller: BrowserPanelController) {
+async function start(controller: BrowserPanel) {
   const pending = controller.refreshAll();
   await flush();
   const socket = sockets.at(-1)!;
@@ -188,6 +188,23 @@ describe("Browser panel stream ownership", () => {
     sockets[2]!.disconnect(1006);
     await flush();
     expect(calls("/screenshot")).toHaveLength(2);
+  });
+
+  it("sizes the first stream from the viewport before any resize notification", async () => {
+    const { controller, host, calls } = setup();
+    const viewport = document.createElement("div");
+    Object.defineProperties(viewport, {
+      clientWidth: { value: 620 },
+      clientHeight: { value: 940 },
+    });
+    host.renderRoot.append(viewport);
+    controller.input.elements.viewport = viewport;
+
+    await start(controller);
+
+    expect(calls("/screencast")[0]?.[1]).toMatchObject({
+      body: { maxWidth: 620, maxHeight: 940 },
+    });
   });
 
   it("defers a resize restart until inspect ends", async () => {
@@ -465,7 +482,7 @@ describe("Browser panel stream ownership", () => {
       await vi.advanceTimersByTimeAsync(0);
       const screenshots = calls("/screenshot").length;
       if (kind === "disconnect") {
-        controller.hostDisconnected();
+        controller.suspendView();
       } else if (kind === "reset") {
         controller.resetBrowserState();
       } else if (kind === "tab") {

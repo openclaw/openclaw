@@ -9,6 +9,7 @@ import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
+  ReplyToMode,
   OpenClawConfig,
   SlackReactionNotificationMode,
   SlackSlashCommandConfig,
@@ -172,7 +173,7 @@ export type CreateSlackMonitorContextParams = {
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
   slashCommand: Required<SlackSlashCommandConfig>;

@@ -7,7 +7,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { registerPortalsEnglish } from "../../i18n/locales/en-portals.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createPortals, type PortalsModel, type PortalsPresentation } from "./portals-state.ts";
 import "./portals.css";
 
@@ -24,6 +24,7 @@ function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
   const model = createPortals(useApplication(), () => props);
   owners.set(host, model);
   onCleanup(() => owners.delete(host));
+  // Target and visibility changes retarget Gateway portal reads and environment polling.
   createEffect(
     () => ({ ...props }),
     (_value, previous) => model.presentationChanged(previous),

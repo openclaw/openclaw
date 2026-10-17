@@ -354,7 +354,7 @@ it("invalidates exact rewrites and dirty/rebuilt projections even when the lates
     if (rewritten.kind !== "value") {
       throw new Error("Exact rewrite left the projection unavailable");
     }
-    expect(rewritten.value.version.generation).not.toBe(retained.facts.generation);
+    expect(rewritten.value.version.generation).not.toBe(retained.facts?.generation);
     const beforeDirty = f.receipt();
     f.write(() => {
       markSessionTranscriptIndexDirtyInTransaction(f.database.db, f.scope.sessionId);
@@ -412,7 +412,7 @@ it("covers the first append after hydrating an empty actor", async () => {
     const actor = f.hydrate();
     f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([user])));
     const receipt = f.receipt(actor);
-    expect(receipt.facts.contextMetadata).toBeUndefined();
+    expect(receipt.facts?.contextMetadata).toBeUndefined();
     expect(
       withSessionTranscriptProjectionReceipt(receipt, () =>
         readSessionTranscriptBoundedActiveContextCore(f.scope, {
@@ -489,7 +489,7 @@ it("keeps stored header bytes, event limits and admitted-turn fences in the cove
       truncated: true,
     });
     expect(() => read(headerBytes - 1)).toThrow("header exceeds");
-    if (!receipt.facts.generation) {
+    if (!receipt.facts?.generation) {
       throw new Error("Transcript fixture requires a generation");
     }
     const fence = {

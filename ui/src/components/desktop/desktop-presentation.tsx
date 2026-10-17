@@ -1,15 +1,11 @@
-import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { DesktopFullscreen } from "../desktop-fullscreen.ts";
-import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
-import type { DesktopAudio } from "./desktop-audio.ts";
 import { DesktopDocumentView } from "./desktop-document-view.tsx";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
-import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
+import type { DesktopPanelOwner } from "./desktop-panel-owner.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import {
   DesktopPanelRecovery,
@@ -17,50 +13,11 @@ import {
   DesktopPicker,
   DesktopNotice,
   DesktopPanelView,
-  type DesktopSizingOptions,
 } from "./desktop-panel-view.tsx";
 import type { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
-type DesktopPresentationOptions = {
-  documentMode: boolean;
-  embedded: boolean;
-  workspaceControls: boolean;
-  content: {
-    state: DesktopPanelState;
-    loading: boolean;
-    automaticSource: boolean;
-    hasTarget: boolean;
-    errorText: string | null;
-    noticeText: string | null;
-    availability: Parameters<typeof DesktopNotice>[0]["availability"];
-    picker: Omit<Parameters<typeof DesktopPicker>[0], "loading">;
-    credentials: Parameters<typeof DesktopCredentials>[0];
-    recovery: Omit<Parameters<typeof DesktopPanelRecovery>[0], "inventoryError">;
-  };
-  controlling: boolean;
-  desktopApps: WorkerDesktopAppId[];
-  launchingApp: WorkerDesktopAppId | null;
-  startup: EnvironmentSummary | undefined;
-  sizing: DesktopSizingOptions;
-  mobileKeyboard: DesktopMobileKeyboard;
-  pictureInPicture: DesktopPictureInPicture;
-  audio: DesktopAudio;
-  dockLayout: DockLayoutController<"bottom" | "right">;
-  fullscreenMode: DesktopFullscreen;
-  onControlToggle: () => void;
-  onTakeControl: () => void;
-  onLaunch: (app: WorkerDesktopAppId) => void;
-  onClose: () => void;
-  onDocumentClose: () => void;
-  focusTarget: () => {
-    basePath: string;
-    source: string | null;
-    control: boolean;
-    workspaceControls: boolean;
-  };
-  onDisconnect: () => void;
-};
+type DesktopPresentationOptions = DesktopPanelOwner["view"];
 
 function PictureInPictureButton(props: {
   controller: DesktopPictureInPicture;
@@ -178,6 +135,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
       {props.view.documentMode ? (
         <DesktopDocumentView
           {...content}
+          surfaceRef={props.view.surfaceRef}
           controlling={props.view.controlling}
           sizing={props.view.sizing}
           keyboard={props.view.mobileKeyboard}
@@ -220,6 +178,7 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
           onClose={props.view.onClose}
           content={content}
           connection={{
+            surfaceRef: props.view.surfaceRef,
             get controlling() {
               return props.view.controlling;
             },

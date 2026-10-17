@@ -12,8 +12,8 @@ import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
@@ -40,6 +40,7 @@ declare module "@solidjs/web" {
 function MarkdownAttachment(props: { text: string; label: string }) {
   let article!: HTMLElement;
   const markdown = createMarkdownRef(() => ({
+    incremental: true,
     content: toSanitizedMarkdownHtml(props.text, {
       mode: "document",
       remoteImages: false,

@@ -18,7 +18,9 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { pinConfigDir } from "../../utils.js";
 import { mergeSkillRecords } from "../loading/skill-precedence.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
+import type { WorkspaceSkillSource } from "../loading/workspace-skill-sources.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import type { SkillEntry } from "../types.js";
 import {
   captureSkillsDiscoveryEnvironment,
   type SkillsDiscoveryInput,
@@ -26,16 +28,49 @@ import {
 } from "./discovery-worker-contract.js";
 import { captureSkillsSourcePlanInput } from "./discovery-worker-input.js";
 
-const worker = vi.hoisted(() => ({
-  handle: vi.fn<(input: unknown) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>>(),
-}));
+const worker = vi.hoisted(() =>
+  vi.fn<(input: unknown) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>>(),
+);
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
-  serveWorkerTasks: (handler: (input: unknown) => SkillsDiscoveryOutput) => {
-    worker.handle.mockImplementation(handler);
-  },
+  serveWorkerTasks: (handler: (input: unknown) => SkillsDiscoveryOutput) =>
+    worker.mockImplementation(handler),
 }));
 import "./discovery.worker.js";
+
+type ScanRequest = Extract<SkillsDiscoveryInput, { kind: "scan" }>["requests"][number];
+const request = (key: string, selection: ScanRequest["selection"]): ScanRequest => ({
+  key,
+  environment: captureSkillsDiscoveryEnvironment(),
+  selection,
+});
+const write = (dir: string, name: string, description: string) =>
+  writeSkill({ dir: path.join(dir, name), name, description });
+const localFact = (index: number) => [`local-${index}`, `Workspace ${index}`] as const;
+async function scan(requests: ScanRequest[]) {
+  const result = await worker({ kind: "scan", path: process.env.PATH, requests });
+  if (result.kind !== "scan") {
+    throw new Error("Expected scan results");
+  }
+  return result.results;
+}
+const facts = ({ skill }: SkillEntry) => [skill.name, skill.description] as const;
+function selected(
+  workspaceDir: string,
+  roots: WorkspaceSkillSource[],
+  limits = resolveSkillDiscoveryLimits(),
+  key = workspaceDir,
+) {
+  const sourcePlan = { workspaceDir, roots, managedSkillsDir: roots[0]!.dir, pluginSkillRoots: [] };
+  return request(key, { kind: "selected", request: { sourcePlan, limits, additionalBins: [] } });
+}
+async function workspaces(root: string) {
+  const dirs = [path.join(root, "first"), path.join(root, "second")];
+  for (const [index, dir] of dirs.entries()) {
+    await write(path.join(dir, "skills"), `local-${index}`, `Workspace ${index}`);
+  }
+  return dirs;
+}
 
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -58,20 +93,19 @@ it.each(["standalone", "gateway"])(
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     pinConfigDir();
     const pluginRoot = path.join(root, "plugin");
-    const workspaces = [path.join(root, "first-workspace"), path.join(root, "second-workspace")];
+    const dirs = await workspaces(root);
     const config: OpenClawConfig = {
       plugins: { load: { paths: [pluginRoot] }, entries: { fixture: { enabled: true } } },
     };
+    const planning = {
+      config,
+      bundledSkillsDir: "",
+      managedSkillsDir: path.join(stateDir, "skills"),
+      pluginSkillsDir: path.join(stateDir, "plugin-skills"),
+    };
     writeRegistryPackagePlugin(pluginRoot, { pluginId: "fixture" });
-    for (const [index, workspaceDir] of workspaces.entries()) {
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", `local-${index}`),
-        name: `local-${index}`,
-        description: `Workspace ${index}`,
-      });
-    }
     const publishPlugin = async (name: string) => {
-      await writeSkill({ dir: path.join(pluginRoot, name), name, description: "Original" });
+      await write(pluginRoot, name, "Original");
       await fs.writeFile(
         path.join(pluginRoot, "openclaw.plugin.json"),
         JSON.stringify({ id: "fixture", configSchema: { type: "object" }, skills: [name] }),
@@ -89,50 +123,29 @@ it.each(["standalone", "gateway"])(
         );
       }
     };
-    const scan = async (pluginName: string, description: string) => {
+    const assertInventory = async (pluginName: string, description: string) => {
       const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
-        const request: SkillsDiscoveryInput = {
-          kind: "scan",
-          path: process.env.PATH,
-          requests: workspaces.map((workspaceDir) => ({
-            key: workspaceDir,
-            environment: captureSkillsDiscoveryEnvironment(),
-            selection: {
-              kind: "planned",
-              plan: {
-                input: captureSkillsSourcePlanInput(workspaceDir, {
-                  config,
-                  bundledSkillsDir: "",
-                  managedSkillsDir: path.join(stateDir, "skills"),
-                  pluginSkillsDir: path.join(stateDir, "plugin-skills"),
-                }),
-              },
-              request: {
-                limits: resolveSkillDiscoveryLimits(),
-                additionalBins: [],
-              },
-            },
-          })),
-        };
-        const result = await worker.handle(structuredClone(request));
-        if (result.kind !== "scan") {
-          throw new Error("Expected scan results");
-        }
-        expect(
-          result.results.map(({ key, sources }) =>
-            mergeSkillRecords(sources.entries, key)
-              .map(({ skill }) => ({ name: skill.name, description: skill.description }))
-              .toSorted((first, second) => first.name.localeCompare(second.name)),
-          ),
-        ).toEqual(
-          workspaces.map((_, index) =>
-            [
-              { name: `local-${index}`, description: `Workspace ${index}` },
-              { name: pluginName, description },
-            ].toSorted((first, second) => first.name.localeCompare(second.name)),
+        const requests = dirs.map((workspaceDir) =>
+          request(workspaceDir, {
+            kind: "planned",
+            plan: { input: captureSkillsSourcePlanInput(workspaceDir, planning) },
+            request: { limits: resolveSkillDiscoveryLimits(), additionalBins: [] },
+          }),
+        );
+        const results = await scan(structuredClone(requests));
+        const expected = dirs.map((_, index) =>
+          [localFact(index), [pluginName, description] as const].toSorted((a, b) =>
+            a[0].localeCompare(b[0]),
           ),
         );
+        expect(
+          results.map(({ key, sources }) =>
+            mergeSkillRecords(sources.entries, key)
+              .map(facts)
+              .toSorted((a, b) => a[0].localeCompare(b[0])),
+          ),
+        ).toEqual(expected);
         expect(
           observed.queries.filter((sql) =>
             /^select "state_key", "value_json" from "config_machine_state"/i.test(sql),
@@ -143,15 +156,11 @@ it.each(["standalone", "gateway"])(
       }
     };
     await publishPlugin("original");
-    await scan("original", "Original");
-    await writeSkill({
-      dir: path.join(pluginRoot, "original"),
-      name: "original",
-      description: "Edited",
-    });
-    await scan("original", "Edited");
+    await assertInventory("original", "Original");
+    await write(pluginRoot, "original", "Edited");
+    await assertInventory("original", "Edited");
     await publishPlugin("successor");
-    await scan("successor", "Original");
+    await assertInventory("successor", "Original");
   },
 );
 
@@ -159,70 +168,27 @@ it("reads shared skill roots once per scan while retaining workspace entries and
   const root = temporary.make("skills-scan-shared-roots-");
   const sharedDir = path.join(root, "shared");
   const sharedFile = path.join(sharedDir, "guide", "SKILL.md");
-  const workspaces = [path.join(root, "first"), path.join(root, "second")];
-  for (const [index, workspaceDir] of workspaces.entries()) {
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", `local-${index}`),
-      name: `local-${index}`,
-      description: `Workspace ${index}`,
-    });
-  }
-  const request: SkillsDiscoveryInput = {
-    kind: "scan",
-    path: process.env.PATH,
-    requests: workspaces.map((workspaceDir, index) => ({
-      key: workspaceDir,
-      environment: captureSkillsDiscoveryEnvironment(),
-      selection: {
-        kind: "selected",
-        request: {
-          sourcePlan: {
-            workspaceDir,
-            managedSkillsDir: sharedDir,
-            pluginSkillRoots: [],
-            roots: [
-              {
-                dir: sharedDir,
-                source: "openclaw-managed",
-                tier: "managed",
-                order: index + 1,
-              },
-              {
-                dir: path.join(workspaceDir, "skills"),
-                source: "openclaw-workspace",
-                tier: "workspace",
-              },
-            ],
-          },
-          limits: resolveSkillDiscoveryLimits(),
-          additionalBins: [],
-        },
-      },
-    })),
-  };
+  const dirs = await workspaces(root);
+  const requests = dirs.map((workspaceDir, index) =>
+    selected(workspaceDir, [
+      { dir: sharedDir, source: "openclaw-managed", tier: "managed", order: index + 1 },
+      { dir: path.join(workspaceDir, "skills"), source: "openclaw-workspace", tier: "workspace" },
+    ]),
+  );
   const opened = vi.spyOn(boundaryFileRead, "openRootFileSync");
   for (const description of ["Original", "Edited"]) {
-    await writeSkill({ dir: path.dirname(sharedFile), name: "guide", description });
+    await write(sharedDir, "guide", description);
     opened.mockClear();
-    const result = await worker.handle(request);
-    expect(result.kind).toBe("scan");
-    if (result.kind !== "scan") {
-      throw new Error("Expected scan results");
-    }
+    const results = await scan(requests);
+    const expected = dirs.map((_, index) => [
+      ["guide", description, index + 1],
+      [...localFact(index), undefined],
+    ]);
     expect(
-      result.results.map(({ sources }) =>
-        sources.entries.map(({ skill, sourceOrder }) => ({
-          name: skill.name,
-          description: skill.description,
-          sourceOrder,
-        })),
+      results.map(({ sources }) =>
+        sources.entries.map((entry) => [...facts(entry), entry.sourceOrder]),
       ),
-    ).toEqual(
-      workspaces.map((_, index) => [
-        { name: "guide", description, sourceOrder: index + 1 },
-        { name: `local-${index}`, description: `Workspace ${index}`, sourceOrder: undefined },
-      ]),
-    );
+    ).toEqual(expected);
     expect(opened.mock.calls.filter(([params]) => params.absolutePath === sharedFile)).toHaveLength(
       1,
     );
@@ -232,51 +198,27 @@ it("reads shared skill roots once per scan while retaining workspace entries and
 it("keeps shared-root file limits and hardlink policies separate within a scan", async () => {
   const root = temporary.make("skills-scan-root-policy-");
   const sharedDir = path.join(root, "shared");
-  await writeSkill({ dir: path.join(sharedDir, "guide"), name: "guide", description: "Guide" });
-  const linkedDir = path.join(sharedDir, "linked");
-  await writeSkill({ dir: linkedDir, name: "linked", description: "Linked" });
-  await fs.link(path.join(linkedDir, "SKILL.md"), path.join(root, "other-link.md"));
+  await write(sharedDir, "guide", "Guide");
+  await write(sharedDir, "linked", "Linked");
+  await fs.link(path.join(sharedDir, "linked", "SKILL.md"), path.join(root, "other-link.md"));
   const policies = [
-    { rejectHardlinks: false, limits: resolveSkillDiscoveryLimits() },
-    {
-      rejectHardlinks: false,
-      limits: { ...resolveSkillDiscoveryLimits(), maxSkillFileBytes: 1 },
-    },
-    { rejectHardlinks: true, limits: resolveSkillDiscoveryLimits() },
-  ];
-  const result = await worker.handle({
-    kind: "scan",
-    path: process.env.PATH,
-    requests: policies.map(({ limits, rejectHardlinks }, index) => ({
-      key: String(index),
-      environment: captureSkillsDiscoveryEnvironment(),
-      selection: {
-        kind: "selected",
-        request: {
-          sourcePlan: {
-            workspaceDir: root,
-            managedSkillsDir: sharedDir,
-            pluginSkillRoots: [],
-            roots: [
-              {
-                dir: sharedDir,
-                source: "openclaw-managed",
-                tier: "managed",
-                rejectHardlinks,
-              },
-            ],
-          },
-          limits,
-          additionalBins: [],
-        },
-      },
-    })),
-  } satisfies SkillsDiscoveryInput);
-  expect(result.kind).toBe("scan");
-  if (result.kind !== "scan") {
-    throw new Error("Expected scan results");
-  }
-  expect(
-    result.results.map(({ sources }) => sources.entries.map(({ skill }) => skill.name)),
-  ).toEqual([["guide", "linked"], [], ["guide"]]);
+    [false, 256_000],
+    [false, 1],
+    [true, 256_000],
+  ] as const;
+  const results = await scan(
+    policies.map(([rejectHardlinks, maxSkillFileBytes], index) =>
+      selected(
+        root,
+        [{ dir: sharedDir, source: "openclaw-managed", tier: "managed", rejectHardlinks }],
+        { ...resolveSkillDiscoveryLimits(), maxSkillFileBytes },
+        String(index),
+      ),
+    ),
+  );
+  expect(results.map(({ sources }) => sources.entries.map(({ skill }) => skill.name))).toEqual([
+    ["guide", "linked"],
+    [],
+    ["guide"],
+  ]);
 });

@@ -123,7 +123,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                 ) {
                   host.onToggleSidebar?.();
                 }
-                host.requestUpdate();
+                host.invalidate();
               }}
             >
               <Icon
@@ -251,7 +251,7 @@ function renderRailPin(
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host)
     ) : (
       <Show
         when={session()}

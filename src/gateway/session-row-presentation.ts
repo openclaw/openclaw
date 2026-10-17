@@ -76,7 +76,7 @@ type Publication = {
     string,
     {
       rows?: GatewaySessionRow[];
-      previousRows?: GatewaySessionRow[];
+      rowHistory?: GatewaySessionRow[][];
       selection?: SessionEntrySelection;
       selectedAt?: number;
       activityExpiresAt?: number;
@@ -85,6 +85,15 @@ type Publication = {
   >;
 };
 type PublicationView = () => Publication;
+
+const SIDEBAR_ROW_HISTORY_LIMIT = 32;
+
+function retainSidebarRows(rows: GatewaySessionRow[], history: GatewaySessionRow[][] = []) {
+  if (history.push(rows) > SIDEBAR_ROW_HISTORY_LIMIT) {
+    history.shift();
+  }
+  return history;
+}
 
 const publications = new WeakMap<
   SessionRowProjection,
@@ -167,7 +176,7 @@ const sharedLists = new WeakMap<
 export function shareSidebarSessionRows(
   rows: GatewaySessionRow[],
   ifRowsRevision?: string,
-  previousRows?: GatewaySessionRow[],
+  rowHistory?: GatewaySessionRow[][],
 ): Pick<
   SessionsListResult,
   "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged" | "rowsDelta"
@@ -185,11 +194,11 @@ export function shareSidebarSessionRows(
   if (revision === shared.rowsRevision) {
     return { sessions: [], rowsRevision: shared.rowsRevision, rowsUnchanged: true };
   }
-  if (
-    baseRevision !== undefined &&
-    previousRows &&
-    sharedLists.get(previousRows)?.rowsRevision === baseRevision
-  ) {
+  const previousRows =
+    baseRevision === undefined
+      ? undefined
+      : rowHistory?.find((previous) => sharedLists.get(previous)?.rowsRevision === baseRevision);
+  if (baseRevision !== undefined && previousRows) {
     const previous = new Map(previousRows.map((row, index) => [row, index]));
     const changed: GatewaySessionRow[] = [];
     const order = rows.map(
@@ -252,12 +261,13 @@ export function prepareSessionRowPublication(
       });
       projection.onFactsChange((change) => {
         retained.factsRevision++;
-        // Retire wire snapshots even when no reader returns after a publication or disposal.
+        // Facts can change without retiring the view (for example, broad run activity).
+        // Keep its comparison history; selection/config/identity resets still retire the view.
         for (const list of retained.lists.values()) {
-          if (change.kind === "reset") {
-            list.previousRows = list.rows = undefined;
-          } else if (list.rows?.some((row) => row.key === change.key)) {
-            list.previousRows = list.rows[0]?.rowMode === "sidebar" ? list.rows : undefined;
+          if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
+            if (list.rows?.[0]?.rowMode === "sidebar") {
+              list.rowHistory = retainSidebarRows(list.rows, list.rowHistory);
+            }
             list.rows = undefined;
           }
         }
@@ -362,7 +372,7 @@ export function prepareProjectedSessionPresentation(
     }
     return view;
   };
-  const viewer = (value: SessionSharingTarget) => ({
+  const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => ({
     visibility: resolveSessionVisibility(value.entry),
     ...(profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
       ? {
@@ -373,13 +383,13 @@ export function prepareProjectedSessionPresentation(
             ).get(profileId)?.hidden ?? false,
         }
       : {}),
-    sharingRole: sharing.roleForTarget(value),
+    sharingRole,
     sendDisabledReason:
       authorizeSessionAgentRun(
         { cfg: policyConfig, client: client ?? null, target: value },
         { policy: sharing.policy },
       )?.message ??
-      sharing.authorizeTarget(value)?.message ??
+      sharing.authorizeTarget(value, sharingRole)?.message ??
       (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
         ? "send blocked by session policy"
         : null),
@@ -467,6 +477,7 @@ export function prepareProjectedSessionPresentation(
       facts.push(
         record.profileRevision,
         record.lastMessagePreview,
+        record.lastAssistantMessage,
         record.fallbackModel,
         liveModel?.provider,
         liveModel?.model,
@@ -533,7 +544,7 @@ export function prepareProjectedSessionPresentation(
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value)
+          }) && !sharing.authorizeTarget(value, viewerFacts?.sharingRole)
         : undefined;
     const signature =
       views &&
@@ -691,17 +702,17 @@ export function prepareProjectedSessionPresentation(
       const view = listView(opts);
       const previous = view.rows;
       if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        return { sessions: previous, previousRows: view.previousRows };
+        return { sessions: previous, rowHistory: view.rowHistory };
       }
       Object.freeze(rows);
       // Sidebar replies encode the fact-packed rows in shareSidebarSessionRows.
       if (opts.rowMode !== "sidebar") {
         registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
       } else if (previous) {
-        view.previousRows = previous;
+        view.rowHistory = retainSidebarRows(previous, view.rowHistory);
       }
       view.rows = rows;
-      return { sessions: rows, previousRows: view.previousRows };
+      return { sessions: rows, rowHistory: view.rowHistory };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);

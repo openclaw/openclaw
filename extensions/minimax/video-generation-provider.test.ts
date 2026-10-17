@@ -83,6 +83,27 @@ function oversizedJsonResponse(): Response {
 }
 
 describe("minimax video generation provider", () => {
+  it.each(["minimax", "minimax-portal"])(
+    "rejects an invalid %s media origin before resolving credentials or submitting video",
+    async (providerId) => {
+      await expect(
+        buildMinimaxVideoGenerationProvider(providerId).generateVideo(
+          videoRequest({
+            provider: providerId,
+            cfg: {
+              models: {
+                providers: { [providerId]: { baseUrl: "https://[", models: [] } },
+              },
+            },
+          }),
+        ),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+      expect(postJsonRequestMock).not.toHaveBeenCalled();
+      expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a duration that rounds to zero before submission", async () => {
     await expect(
       buildMinimaxVideoGenerationProvider().generateVideo(videoRequest({ durationSeconds: 0.4 })),

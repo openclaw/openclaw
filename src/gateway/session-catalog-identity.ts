@@ -152,7 +152,7 @@ function projectSourceActor(
 
 /**
  * Prepare portable creator claims for one synchronous page; claims never grant access.
- * @deprecated Use prepareSessionCatalogSourceActorProjector before rendering the page. Final compatibility day: 2026-12-31.
+ * @deprecated Use prepareSessionCatalogSourceActorProjector before rendering the page. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function createSessionCatalogSourceActorProjector(
   params: CatalogSourceIdentity & { actors: readonly (StoredSessionActor | undefined)[] },
@@ -284,7 +284,7 @@ export async function prepareSessionCatalogGitHubLinker(params: {
 
 /**
  * Snapshot attribution links once per catalog page; claims never grant access.
- * @deprecated Use prepareSessionCatalogGitHubLinker before rendering the page. Final compatibility day: 2026-12-31.
+ * @deprecated Use prepareSessionCatalogGitHubLinker before rendering the page. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function createSessionCatalogGitHubLinker() {
   warnPluginSdkDeprecation({

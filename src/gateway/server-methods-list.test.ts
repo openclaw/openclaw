@@ -1,15 +1,26 @@
 /** Tests authority policies on registered Gateway methods. */
 import { describe, expect, it } from "vitest";
+import { GATEWAY_EVENTS } from "./events.js";
 import {
   createCoreGatewayMethodDescriptors,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-method-policy.js";
-import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+import { listGatewayMethods } from "./server-methods-list.js";
 import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("listGatewayMethods", () => {
   const voiceSelectionMethods = ["talk.voice.get", "talk.voice.set", "talk.voice.complete"];
+
+  it("advertises avatar generation with admin authority and inference throttling", () => {
+    expect(listGatewayMethods()).toContain("agents.avatar.generate");
+    expect(coreGatewayHandlers["agents.avatar.generate"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "agents.avatar.generate",
+      ),
+    ).toMatchObject({ scope: "operator.admin", since: "2026.10", controlPlaneWrite: true });
+  });
 
   it("advertises private backgrounds with personal read/write scopes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);

@@ -26,19 +26,22 @@ compatibility day is **2026-12-31**. Removal ships in the **first January 2027
 stable release**, without a Plugin SDK major version. Other compatibility
 records retain their own separately announced windows.
 
-SQLite and SDK writer migrations use one shared runtime warning budget per plugin
-identity and deprecated capability family per Gateway process. Warnings occur on
-actual legacy use, never import, and survive plugin reloads. They name the invoked
-method, supported replacement, current compatibility promise, and removal in a
-later stable release after an announced deprecation period. Unknown direct SDK consumers share one bounded SDK-level
-warning per family. Diagnostics contain no database paths, credentials, payloads,
-or stack dumps. This policy replaces the earlier no-new-runtime-warnings rule for
-these writer migrations; documentation-only reader records retain their own policy.
+Synchronous SQLite migrations emit one runtime warning per plugin identity,
+deprecated capability family, and method per Gateway process. Other SDK writer
+migrations retain one warning per plugin identity and capability family. Warnings
+occur on actual legacy use, never import, and survive plugin reloads. They name
+the invoked method, supported replacement, current compatibility promise, and
+removal release. Unknown direct SDK consumers share an SDK-level budget with the
+same family and method rules. Diagnostics contain no database paths, credentials,
+payloads, or stack dumps. This policy replaces the earlier no-new-runtime-warnings
+rule for these migrations; unrelated documentation-only records retain their own
+policy.
 
 Synchronous compatibility writers that retain native adapters still commit before
 returning. Retired adapters reject calls as documented in their records below.
-Awaited mutations complete only after committed facts have been installed. SessionManager and its
-extension/provider adapters share the session-persistence warning budget.
+Awaited mutations complete only after committed facts have been installed.
+SessionManager and its extension/provider adapters share the session-persistence
+family, with a separate warning for each deprecated method.
 
 ### Harness deletion companions
 
@@ -747,6 +750,16 @@ Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+For legacy SQLite migrations, declare
+`sqliteOnly: { family: "state" }` (or the destination's other configurable
+database family) on `PluginDoctorStateMigration`. The host runs detection before
+porting that family to PostgreSQL and refuses pending work with
+`openclaw doctor --fix` guidance. When the family's effective engine is already
+PostgreSQL, the host skips detection, repair, and backup-resource callbacks and
+records an intentional non-outcome. An optional `postgresNote` in `sqliteOnly`
+can explain retained legacy artifacts or rebuilding from authoritative sources.
+Migrations without this declaration keep their existing behavior.
 
 Migrations may supply a read-only `collectBackupResources` callback, including
 through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with

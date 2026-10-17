@@ -464,9 +464,7 @@ function insertPreparedSessionTranscriptProjectionRows(
   }
   if (params.ftsRows && params.ftsRows.length > 0) {
     const insertFts = createSessionTranscriptFtsInserter(db, params.sessionId);
-    for (const row of params.ftsRows) {
-      insertFts(row);
-    }
+    insertFts(params.ftsRows);
   }
 }
 

@@ -142,7 +142,7 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     selectedScope,
     selectedAgent,
     agents,
-    allowlist: Array.isArray(allowlist) ? allowlist : [],
+    allowlist: allowlist ?? [],
     target,
     targetNodeId,
     targetNodes,
@@ -227,9 +227,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
 }
 
 function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
-  const rules = createMemo(() =>
-    props.snapshot.enabled && Array.isArray(props.snapshot.rules) ? props.snapshot.rules : [],
-  );
+  const rules = createMemo(() => (props.snapshot.enabled ? props.snapshot.rules : []));
   const defaultAction = createMemo(() =>
     props.snapshot.enabled
       ? props.snapshot.defaultAction

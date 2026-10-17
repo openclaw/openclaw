@@ -187,16 +187,19 @@ describe("chat pane session menu boundary", () => {
     expect(menu.session.label).toBe("Updated conversation");
     expect(menu.session.pinned).toBe(true);
     expect(dropdown.getAttribute("aria-label")).toContain("Updated conversation");
+    expect(dropdown.matches(":popover-open")).toBe(false);
+    const previousChecked = reasoning.getAttribute("aria-checked");
     state.settings = { ...state.settings, chatShowThinking: !state.settings.chatShowThinking };
     draw();
     await menu.updateComplete;
+    expect(reasoning.getAttribute("aria-checked")).toBe(previousChecked);
+    expect(menu.openMenu()).toBe(true);
+    flush();
     expect(menu.querySelector('[value="view:reasoning"]')).toBe(reasoning);
     expect(menu.querySelector('[value="view:reasoning"]')?.getAttribute("aria-checked")).toBe(
       String(state.settings.chatShowThinking),
     );
     const action = vi.spyOn(pane, "handleHeaderSessionAction").mockResolvedValue(undefined);
-    expect(menu.openMenu()).toBe(true);
-    flush();
     menu.querySelector<HTMLButtonElement>('[value="toggle-pin"]')!.click();
     await menu.updateComplete;
     expect(action).toHaveBeenCalledWith({ kind: "toggle-pin" }, session);

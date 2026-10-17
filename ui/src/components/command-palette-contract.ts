@@ -59,7 +59,7 @@ function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTa
 export function applyCommandPaletteTargetEvent(
   host: {
     commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-    requestUpdate(): void;
+    invalidate(): void;
   },
   event: Event,
 ): void {
@@ -72,7 +72,7 @@ export function applyCommandPaletteTargetEvent(
     : host.commandPaletteTarget?.owner === detail.owner
       ? undefined
       : host.commandPaletteTarget;
-  host.requestUpdate();
+  host.invalidate();
 }
 
 export type CommandPaletteElement = HTMLElement & {

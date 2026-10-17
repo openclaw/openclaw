@@ -22,7 +22,6 @@ import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/wor
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { root as fsRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   ensureStagedInputDirectory,
   isStagedInputPath,
@@ -72,7 +71,6 @@ import {
 import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
 
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
-const transferLog = createSubsystemLogger("node-host/worker-workspace");
 
 export type NodeWorkerTransferGateway = {
   url: string;
@@ -224,8 +222,6 @@ export function serializeNodeWorkerWorkspace<T>(
 }
 
 async function downloadWorkspace(params: WorkspaceTransferOperation<"download">): Promise<string> {
-  const startedAt = performance.now();
-  let packDownloadMs: number | undefined;
   let baseSource: "prepared-project-seed" | "gateway-pack" | undefined;
   params.setStage("manifest");
   const raw = await downloadBuffer(
@@ -332,7 +328,6 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
         if (!seeded) {
           baseSource = "gateway-pack";
           packPath = path.join(staging, ".openclaw-base.pack");
-          const packStartedAt = performance.now();
           await downloadFile({
             request: {
               ...params.request,
@@ -345,7 +340,6 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
             root: stagingRoot,
             relativePath: ".openclaw-base.pack",
           });
-          packDownloadMs = performance.now() - packStartedAt;
         }
         await initializeNodeWorkerGitWorkspace({
           workspaceDir: staging,
@@ -367,7 +361,6 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
       }
     }
     params.setStage("materialize");
-    const blobApplyStartedAt = performance.now();
     const stagingHashMemo: WorkspaceHashMemo = new Map();
     const downloadedBlobs = new Map<string, string>();
     for (const directory of checkpointBase ? [] : (manifest.directories ?? [])) {
@@ -439,7 +432,6 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
         downloadedBlobs.set(blobKey, entry.path);
       }
     });
-    const blobApplyMs = performance.now() - blobApplyStartedAt;
     // Reuse only hashes validated on this staging filesystem. Capture still checks
     // the complete tree and current handle identities before the atomic replacement.
     params.setStage("verify");
@@ -520,15 +512,6 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     if (params.hashMemo && !overlay && !checkpointBase) {
       replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, [...stagingHashMemo]);
     }
-    transferLog.debug("node worker workspace transfer completed", {
-      environmentId: params.environmentId,
-      direction: "download",
-      outcome: "succeeded",
-      durationMs: performance.now() - startedAt,
-      ...(baseSource === undefined ? {} : { baseSource }),
-      ...(packDownloadMs === undefined ? {} : { packDownloadMs }),
-      blobApplyMs,
-    });
     return params.transfer.manifestRef;
   } finally {
     await stagingWorkspace.cleanup();

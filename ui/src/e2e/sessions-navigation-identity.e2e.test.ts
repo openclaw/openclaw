@@ -147,6 +147,7 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}sessions`);
+        await page.getByRole("button", { name: "Search transcripts" }).click();
         const input = page.getByRole("searchbox", { name: "Search session transcripts" });
         await input.waitFor({ state: "visible" });
         await expect.poll(() => primaryKeys(page)).not.toBeNull();

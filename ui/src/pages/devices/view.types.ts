@@ -1,4 +1,5 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
+import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { DevicePairingList } from "../../lib/nodes/index.ts";
 import type {
@@ -10,7 +11,7 @@ import type {
 export type DevicesProps = {
   connected: boolean;
   loading: boolean;
-  nodes: Array<Record<string, unknown>>;
+  nodes: NodeListNode[];
   presence: PresenceEntry[];
   gatewayVersion: string | null;
   basePath: string;

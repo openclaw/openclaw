@@ -42,7 +42,8 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
   startProxy: startup.startProxy,
 }));
 
-vi.mock("../infra/net/proxy-env.js", () => ({
+vi.mock("../infra/net/proxy-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxy-env.js")>()),
   hasEnvHttpProxyAgentConfigured: () => true,
 }));
 

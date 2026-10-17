@@ -15,6 +15,10 @@ import { readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  resolveClientCredentialStorePath,
+  runClientCredentialOperation,
+} from "../client-credential-store.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { runLegacyStateMigrationSteps } from "../state-migrations.steps.js";
@@ -332,6 +336,12 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         [agent, OPENCLAW_AGENT_SCHEMA_VERSION],
       );
       const pluginRoots: string[] = [];
+      // Descriptor loading precedes publishing the complete plugin fixture config.
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
+      vi.stubEnv(
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        fileURLToPath(new URL("../../../extensions", import.meta.url)),
+      );
       for (const family of families) {
         const id = family.provider.id;
         const sourceRoot = fileURLToPath(new URL(`../../../extensions/${id}`, import.meta.url));
@@ -443,7 +453,41 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         await owner!.release();
       }
     });
-    it("captures a retained PostgreSQL agent and restores exact rows after candidate failure while preserving current update history", async () => {
+    it("captures a retained PostgreSQL agent and restores local credentials after candidate failure while preserving current update history", async () => {
+      const identity = {
+        identity_key: "node",
+        device_id: "synthetic-local-device",
+        public_key_pem: "synthetic-public-key",
+        private_key_pem: "synthetic-private-key",
+        created_at_ms: 11,
+        updated_at_ms: 12,
+      };
+      const key = {
+        device_id: identity.device_id,
+        role: "v2.synthetic.operator",
+        gateway_scope: "synthetic-gateway",
+      };
+      const token = {
+        device_id: key.device_id,
+        role: key.role,
+        token: "synthetic-original-client-token",
+        scopes_json: '["operator.read"]',
+        updated_at_ms: 13,
+      };
+      const socket = {
+        socket_key: "current" as const,
+        socket_path: path.join(root, "synthetic.sock"),
+        socket_token: "synthetic-original-socket-token",
+        updated_at_ms: 14,
+      };
+      runClientCredentialOperation(env, { kind: "identity.create", identity });
+      runClientCredentialOperation(env, {
+        kind: "token.replace",
+        key,
+        token,
+        expectedToken: null,
+      });
+      runClientCredentialOperation(env, { kind: "socket.create", socket });
       const owner = await acquireGatewayLock({
         env,
         role: "sqlite-maintenance",
@@ -487,6 +531,17 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             blob: new Uint8Array(agentBlob),
           });
         }
+        const local = backup.databases.find(
+          (entry) => entry.path === resolveClientCredentialStorePath(env),
+        );
+        expect(local).toMatchObject({ userVersion: 1 });
+        expect(local?.engine).toBeUndefined();
+        {
+          using captured = openNodeSqliteDatabase(local!.snapshotPath, { readOnly: true });
+          expect(
+            captured.prepare("SELECT socket_token FROM native_exec_socket_credentials").get(),
+          ).toEqual({ socket_token: socket.socket_token });
+        }
         const migration = await owner!.run(() =>
           runLegacyStateMigrationSteps([
             {
@@ -513,6 +568,21 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
                   `UPDATE "${agentNamespace}".cache_entries SET value_json = '"candidate"', blob = $1 WHERE scope = 'update-conformance' AND key = 'retained'`,
                   [Buffer.from([9, 8, 7])],
                 );
+                runClientCredentialOperation(env, {
+                  kind: "token.replace",
+                  key,
+                  token: { ...token, token: "synthetic-candidate-client-token", updated_at_ms: 21 },
+                  expectedToken: token.token,
+                });
+                runClientCredentialOperation(env, {
+                  kind: "socket.replace",
+                  socket: {
+                    ...socket,
+                    socket_token: "synthetic-candidate-socket-token",
+                    updated_at_ms: 22,
+                  },
+                  expectedToken: socket.socket_token,
+                });
                 throw new Error("candidate migration failed after committed data write");
               },
             },
@@ -526,6 +596,9 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             )
           ).rows,
         ).toEqual([{ value_json: '"candidate"' }]);
+        expect(runClientCredentialOperation(env, { kind: "token.read", key })).toMatchObject({
+          token: { token: "synthetic-candidate-client-token" },
+        });
       } finally {
         await owner!.release();
       }
@@ -540,6 +613,17 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         throw new Error("Recovery replaced the PostgreSQL anchor with SQLite data");
       }
       namespaces.add(restored.namespace);
+      expect(
+        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "node" }),
+      ).toEqual({ kind: "identity", identity });
+      expect(runClientCredentialOperation(env, { kind: "token.read", key })).toEqual({
+        kind: "token",
+        token,
+      });
+      expect(runClientCredentialOperation(env, { kind: "socket.read" })).toEqual({
+        kind: "socket",
+        socket,
+      });
       expect(
         (
           await client.query(

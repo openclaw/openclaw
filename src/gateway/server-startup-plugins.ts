@@ -342,7 +342,11 @@ export async function loadGatewayStartupPluginRuntime(params: {
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
+  const beforeBootstrapImport = performance.now();
   const { prepareGatewayPluginLoad } = await import("./server-plugin-bootstrap.js");
+  params.startupTrace?.detail("plugins.gateway-bootstrap-import", [
+    ["durationMs", performance.now() - beforeBootstrapImport],
+  ]);
   await params.pluginRuntimeClaim?.waitForUnblocked();
   if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
     const currentPluginRegistry = params.getCurrentPluginRegistry?.();

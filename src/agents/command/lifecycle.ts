@@ -3,9 +3,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
-import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
 import { getFailoverErrorCode } from "../failover/error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
@@ -88,11 +86,8 @@ export function createAgentCommandLifecycle(params: {
     terminal: EmbeddedAgentRunEntryTerminal,
     error = terminal.outcome.status === "timeout" ? terminal.outcome.error : undefined,
   ) => {
-    const { aborted, yielded, replayInvalid, terminalReply } = terminal.metadata;
-    const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
-      terminal.metadata.terminalDelivery,
-    );
-    const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
+    const { aborted, yielded, replayInvalid, terminalReply, terminalDelivery, terminalReceipt } =
+      terminal.metadata;
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
     const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
     emitAgentEvent({
@@ -177,9 +172,7 @@ export function createAgentCommandLifecycle(params: {
       if (params.state.lifecycleEnded) {
         return;
       }
-      const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
-        terminal.metadata.terminalDelivery,
-      );
+      const { terminalDelivery } = terminal.metadata;
       emitError(error, {
         ...(terminalDelivery ? { terminalDelivery } : {}),
         ...resolveAgentRunErrorLifecycleFields(error, params.abortSignal),

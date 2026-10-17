@@ -52,17 +52,20 @@ function createFleet() {
     }
   }
   const onAgentInspection = vi.fn();
+  const onRegisteredAgentDatabases = vi.fn();
   return {
     config,
     env,
     paths,
     onAgentInspection,
+    onRegisteredAgentDatabases,
     ready: () =>
       assertOpenClawDatabasesReady({
         env,
         config,
         operation: "gateway-startup",
         onAgentInspection,
+        onRegisteredAgentDatabases,
       }),
     inspect: (signal?: AbortSignal) =>
       preflightOpenClawDatabaseSchemas({
@@ -314,6 +317,12 @@ it("reads newly registered stores without copying admitted state after startup w
   await withAgentDatabaseStartupAdmission(
     async () => {
       await fleet.ready();
+      expect(fleet.onRegisteredAgentDatabases).toHaveBeenLastCalledWith(
+        fleet.paths.map((pathname, index) => ({
+          agentId: ["first", "second", "third"][index],
+          path: pathname,
+        })),
+      );
       const changedPath = openOpenClawAgentDatabase({ agentId: "newcomer", env: fleet.env }).path;
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
@@ -342,6 +351,10 @@ it("reads newly registered stores without copying admitted state after startup w
       expect(prepare.mock.calls.filter(([pathname]) => pathname === statePath)).toHaveLength(0);
       expect(fleet.onAgentInspection).toHaveBeenLastCalledWith(
         expect.objectContaining({ schemaInspectionCount: 1 }),
+      );
+      await fleet.ready();
+      expect(fleet.onRegisteredAgentDatabases).toHaveBeenLastCalledWith(
+        expect.arrayContaining([{ agentId: "newcomer", path: changedPath }]),
       );
     },
     { deferInspections: false },

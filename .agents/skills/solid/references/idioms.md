@@ -5,7 +5,7 @@ Use this when writing or auditing rendering consumers. The installed rc.14
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
 
-## Replace Lit-era controllers
+## Replace rendering controllers
 
 Replace a rendering controller with `createThing(deps)`, called inside the owning
 component or Solid root. Return accessors and actions. Local interaction state
@@ -52,12 +52,9 @@ test-only exports together. Keep an adapter only while `git grep` shows real
 callers. Tests assert public behavior and cleanup, not controller internals.
 
 Keep routes, keyboard/focus behavior, tags, selectors, and lazy boundaries.
-Before editing, check open `solid2/*` PRs and skip files owned by another lane.
-Keep each PR focused (about 40 files maximum) and reduce production LOC. Report
-before/after controller-pattern references, `createEffect`, `untrack`, native
-listener registrations, and LOC for touched production files. The existing Lit
-ratchet reports controller-pattern growth while legacy callers remain; after
-the production baseline reaches zero it rejects reintroductions.
+Keep each PR focused and reduce production LOC. When refactoring lifecycles,
+report before/after controller-pattern references, `createEffect`, `untrack`,
+native listener registrations, and LOC for touched production files.
 
 ## Choose the primitive
 

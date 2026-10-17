@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
@@ -13,6 +13,7 @@ import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import * as gateway from "../../agents/tools/in-process-gateway.js";
 import { createScreenTool } from "../../agents/tools/screen-tool.js";
 import {
   callPersonalToolUiCommand as call,
@@ -22,6 +23,8 @@ import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import type { GatewayClient } from "./types.js";
 import { uiCommandHandlers } from "./ui-command.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function client(
   connId: string,
@@ -127,20 +130,22 @@ describe("ui.command gateway method", () => {
     const requester = client("requester");
     const recipients = [requester, client("bystander")];
     const deliveries: Set<string>[] = [];
+    vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
+      async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
+        await Promise.resolve();
+        const result = await call(params, recipients);
+        expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
+        const delivery = expectDefined(result.broadcastToConnIds.mock.calls[0], "UI delivery");
+        deliveries.push(delivery[2]);
+        return { ok: true } as T;
+      },
+    );
     const screen = createGatewayToolCallerWrapper("main", {
       agentSessionKey: "agent:main:main",
       gatewayUiCommandTarget: { connId: requester.connId! },
     })(
       createScreenTool({
         agentSessionKey: "agent:main:main",
-        callGateway: async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
-          await Promise.resolve();
-          const result = await call(params, recipients);
-          expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
-          const delivery = expectDefined(result.broadcastToConnIds.mock.calls[0], "UI delivery");
-          deliveries.push(delivery[2]);
-          return { ok: true } as T;
-        },
       }),
     );
 
@@ -174,14 +179,15 @@ describe("ui.command gateway method", () => {
         client("bob-other-tab", undefined, undefined, steerer.profileId),
       ];
       const results: Awaited<ReturnType<typeof call>>[] = [];
-      const screen = createScreenTool({
-        callGateway: async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
+      vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
+        async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
           await Promise.resolve();
           const result = await call(params, recipients);
           results.push(result);
           return { ok: true } as T;
         },
-      });
+      );
+      const screen = createScreenTool();
       const execute = async (user?: string) => {
         await screen.execute("screen", { action: "sidebar_hide", ...(user ? { user } : {}) });
         return expectDefined(results.at(-1), "screen handler result");

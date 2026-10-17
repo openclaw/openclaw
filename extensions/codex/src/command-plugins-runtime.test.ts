@@ -30,7 +30,7 @@ import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
 import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import * as sharedClients from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { resolveCodexCommandDeps } from "./command-handler-deps.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 import * as commandRpc from "./command-rpc.js";
 
@@ -100,7 +100,7 @@ async function fixture(stableAccount = true) {
     plugins: { notes: { marketplaceName: "company-tools", pluginName: "notes", enabled: true } },
   };
   const bindingStore = createCodexTestBindingStore();
-  const deps = resolveCodexCommandDeps({
+  const deps = createCodexCommandHost({
     bindingStore,
     codexPluginsManagementIo: {
       readConfig: async () => structuredClone(current),

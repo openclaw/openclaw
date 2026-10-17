@@ -90,9 +90,6 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     timeoutMs: Math.max(params.timeoutMs, DEFAULT_UNDICI_STREAM_TIMEOUT_MS),
   });
 
-  log.debug(
-    `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
-  );
   const prepStages = createStageTimingTracker(Date.now);
   const emitPrepStageSummary = createEmbeddedRunStageSummaryEmitter({
     label: "prep stages",

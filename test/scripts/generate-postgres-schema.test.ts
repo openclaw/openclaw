@@ -217,6 +217,8 @@ describe("PostgreSQL schema generation", () => {
         "sqlite-daemon-catalogs.json",
         "sqlite-memory-catalogs.ts",
         "sqlite-memory-catalogs.json",
+        "sqlite-client-catalogs.ts",
+        "sqlite-client-catalogs.json",
         "state-port.json",
       ].toSorted(),
     );

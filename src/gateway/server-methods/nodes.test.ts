@@ -469,7 +469,7 @@ describe("nodeHandlers node.pair.approve", () => {
     expectApproved(approval.opts, nodeId);
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
     const message = send.mock.calls.at(-1)?.[0];
-    expect(typeof message === "string" && JSON.parse(message)).toMatchObject({
+    expect(JSON.parse(String(message))).toMatchObject({
       type: "event",
       event: "node.pair.resolved",
       payload: { requestId: pending.request.requestId, nodeId, decision: "approved" },

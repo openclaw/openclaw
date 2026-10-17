@@ -1,9 +1,9 @@
 import type { JSX } from "@solidjs/web";
 // Per-session virtualizer host: scroll anchoring, measurement, and row sync
-// for one transcript. Owned and swapped by ChatTranscriptController.
+// for one transcript. Owned and swapped by the chat transcript owner.
 import { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
@@ -157,7 +157,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private renderPreviousRows: (() => HTMLDivElement) | null = null;
   private focusedRowKey: string | null = null;
   private readonly announcement = new TranscriptAnnouncementState();
-  private readonly mcpAppUnmountGate: McpAppUnmountGate;
+  private readonly mcpAppUnmountGate: ReturnType<typeof createMcpAppUnmountGate>;
 
   constructor(
     private readonly invalidate: () => void,
@@ -165,7 +165,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
-    this.mcpAppUnmountGate = new McpAppUnmountGate({ requestUpdate: invalidate });
+    this.mcpAppUnmountGate = createMcpAppUnmountGate(invalidate);
     this.positionRail = createPositionRailGutter(
       () => this.scrollElement,
       () => this.threadInnerElement,
@@ -587,16 +587,22 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (this.offsetState.scrollCommand === null && !this.offsetState.pendingScrollOffset) {
       return;
     }
-    // Only smooth commands skip row measurements. Replaying ordinary auto
-    // scrolling's overscan sizes can move an already settled end anchor.
-    if (this.offsetState.scrollCommand?.behavior === "smooth") {
-      this.presentation.queueRowMeasure();
-    }
+    const measureSkippedRows = this.offsetState.scrollCommand?.behavior === "smooth";
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
     if (this.scrollRestoreHost.pendingScrollFrame !== null) {
       cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
       this.scrollRestoreHost.pendingScrollFrame = null;
+    }
+    // The smooth journey may already be automatic when its skipped sizes settle.
+    if (measureSkippedRows) {
+      const adjustScroll = this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
+      this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+      try {
+        this.presentation.measureRows();
+      } finally {
+        this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjustScroll;
+      }
     }
     const element = this.scrollElement;
     if (element) {

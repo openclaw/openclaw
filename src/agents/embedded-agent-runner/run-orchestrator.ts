@@ -63,6 +63,7 @@ import {
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { withRequiredSessionPlacement } from "../session-placement-admission.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import {
@@ -73,7 +74,7 @@ import {
 import { SessionManager } from "../sessions/session-manager.js";
 import { redactRunIdentifier } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
+import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
@@ -101,12 +102,7 @@ import {
 } from "./run/runtime-resolution.js";
 import { prepareEmbeddedRunSession } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
-import {
-  createUsageAccumulator,
-  mergeAttemptRunStatsIntoAccumulator,
-  mergeUsageIntoAccumulator,
-  toNormalizedUsage,
-} from "./usage-accumulator.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
@@ -228,7 +224,7 @@ async function runEmbeddedAgentForSession(
     if (!params.sessionManager || params.sessionManager.getSessionTarget()) {
       params.replyOperation?.markWaitingForDeferredMaintenance();
       try {
-        await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
+        await waitForSessionMaintenance(params.sessionKey);
         // Maintenance can finish while its transcript projection is still rebuilding.
         // Settle that projection before the next attempt reads the bounded history.
         await waitForSessionTranscriptProjection(runSessionTarget, laneController.abortSignal);
@@ -243,12 +239,14 @@ async function runEmbeddedAgentForSession(
       params = { ...params, onAgentEvent };
       const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
       const usage = createUsageAccumulator();
+      const diagnosticUsage = createUsageAccumulator();
       let refreshed = false;
       let generationCleanup = Promise.resolve();
       let terminal: ReturnType<typeof createAgentLifecycleTerminalBackstop> | undefined;
       let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
       const onAttemptStart = params.onAttemptStart;
+      const onAttemptTerminalReplaced = params.onAttemptTerminalReplaced;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
         assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
@@ -545,6 +543,10 @@ async function runEmbeddedAgentForSession(
                     runTerminal?.beginAttempt();
                     onAttemptStart?.();
                   },
+                  onAttemptTerminalReplaced: () => {
+                    runTerminal?.replaceAttemptTerminal();
+                    onAttemptTerminalReplaced?.();
+                  },
                   onAgentEvent: runTerminal
                     ? (event) => {
                         runTerminal.note(event);
@@ -647,8 +649,13 @@ async function runEmbeddedAgentForSession(
               : run());
             const continuation = refresh.takeContinuation();
             if (refreshed || continuation) {
-              mergeUsageIntoAccumulator(usage, result.meta.agentMeta?.usage);
-              mergeAttemptRunStatsIntoAccumulator(usage, result.meta.agentMeta ?? {});
+              mergeCompletedAgentUsage({
+                usage,
+                diagnosticUsage,
+                agentMeta: result.meta.agentMeta,
+                config: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
+                agentDir: params.agentDir,
+              });
             }
             if (!continuation) {
               if (refreshed && result.meta.agentMeta) {
@@ -659,11 +666,7 @@ async function runEmbeddedAgentForSession(
                     durationMs: Date.now() - started,
                     agentMeta: {
                       ...result.meta.agentMeta,
-                      usage: toNormalizedUsage(usage),
-                      costUsd:
-                        usage.cost && usage.cost !== "unavailable" ? usage.cost.total : undefined,
-                      assistantTurns: usage.assistantTurns,
-                      ...(usage.bridgeCalls ? { bridgeCalls: usage.bridgeCalls } : {}),
+                      ...buildCompletedAgentUsageMeta(usage, diagnosticUsage),
                     },
                   },
                 };

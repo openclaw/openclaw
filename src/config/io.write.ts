@@ -102,7 +102,7 @@ import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
-import { composeConfigWriteAssertions } from "./write-authority.js";
+import { bindConfigWriteLockGuard } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
@@ -112,23 +112,9 @@ export async function writeConfigFileFromContext(
   readSnapshot: () => Promise<ReadConfigFileSnapshotInternalResult>,
 ): Promise<InternalConfigWriteResult> {
   const { deps, configPath, options: ioOptions } = context;
-  let options = writeOptions;
   const sourceGuard = captureConfigWriteLockGuard(configPath);
   const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
-  if (sourceGuard) {
-    const original = options;
-    options = {
-      ...options,
-      assertConfigPathForWrite: composeConfigWriteAssertions(
-        sourceGuard,
-        original.assertConfigPathForWrite,
-      ),
-      beforeCommit: async () => {
-        await original.beforeCommit?.();
-        sourceGuard();
-      },
-    };
-  }
+  let options = bindConfigWriteLockGuard(writeOptions, sourceGuard);
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
@@ -342,7 +328,8 @@ export async function writeConfigFileFromContext(
   const includeFileHashes: Record<string, string> = {};
   const includeFileTargets: Record<string, string> = {};
   const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(
-    stampedOutputConfig,
+    // Receipts must reflect JSON omissions, just like a later read of this file.
+    JSON.parse(json),
     includeFileHashes,
     includeFileTargets,
     validationEnvBase,
@@ -548,6 +535,7 @@ export async function writeConfigFileFromContext(
     const result = withDeferredPluginMigrationsCurrent(
       { env: deps.env, configPath, expectedPending: pendingMigrations },
       () => {
+        options.assertBeforePublish?.();
         const published = preparedFile.publish();
         publication.phase = "published";
         return published;

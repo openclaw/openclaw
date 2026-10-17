@@ -53,6 +53,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -854,9 +855,6 @@ class TalkModeManager internal constructor(
       "talk.event" -> return handleRealtimeTalkEvent(payloadJson)
       "talk.voice.change" -> return handleRealtimeVoiceChange(payloadJson)
     }
-    if (ttsOnAllResponses) {
-      Log.d(tag, "gateway event: $event")
-    }
     if (event != "chat") return
     val obj = parseJsonParamsObject(payloadJson) ?: return
     val runId = obj["runId"].asJsonStringOrNull() ?: return
@@ -908,7 +906,6 @@ class TalkModeManager internal constructor(
       }
       return
     }
-    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
     val terminal =
       when (state) {
         "final" -> true
@@ -2403,10 +2400,8 @@ class TalkModeManager internal constructor(
         return
       }
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      Log.d(tag, "chat.send start sessionKey=$mainSessionKey chars=${transcript.length}")
       val ack = sendChat(transcript)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
-      Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
         setStatus(if (ack.normalizedStatus == "error") nativeText("Chat error") else nativeText("Aborted"))
         return
@@ -2427,7 +2422,6 @@ class TalkModeManager internal constructor(
         Log.w(tag, "assistant text timeout runId=$runId")
         return
       }
-      Log.d(tag, "assistant text ok chars=${assistant.length}")
       val playbackToken = cancelActivePlayback()
       // Muting owns only this reply's audio. Stopping capture still cancels the
       // parent turn and must never restart listening over a replacement PTT hold.
@@ -2579,7 +2573,7 @@ class TalkModeManager internal constructor(
       buildJsonObject {
         put("sessionKey", JsonPrimitive(mainSessionKey))
         put("message", JsonPrimitive(message))
-        put("timeoutMs", JsonPrimitive(30_000))
+        // Omit the run deadline so the Gateway's configured agent timeout applies.
         put("idempotencyKey", JsonPrimitive(runId))
       }
     try {
@@ -2605,17 +2599,41 @@ class TalkModeManager internal constructor(
 
     consumeRunCompletion(runId)?.let { return it }
 
-    val result =
+    val sessionKey = mainSessionKey
+    return coroutineScope {
+      // History backs up missed events; a slow probe must not delay completion or Stop.
+      val observer =
+        launch {
+          try {
+            do {
+              delay(chatFinalWaitMs)
+            } while (isRunInFlight(sessionKey, runId))
+          } catch (_: Exception) {
+            currentCoroutineContext().ensureActive()
+            // An unavailable snapshot falls through to the existing reply-history recovery.
+          }
+          deferred.complete(false)
+        }
       try {
-        withTimeout(chatFinalWaitMs) { deferred.await() }
-      } catch (_: TimeoutCancellationException) {
-        false
+        deferred.await()
+      } finally {
+        observer.cancel()
+        clearPendingRun(runId)
       }
-
-    if (!result && pendingRunId == runId) {
-      clearPendingRun(runId)
     }
-    return result
+  }
+
+  private suspend fun isRunInFlight(
+    sessionKey: String,
+    runId: String,
+  ): Boolean {
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        put("limit", JsonPrimitive(1))
+      }
+    val root = json.parseToJsonElement(requestGateway("chat.history", params.toString())).asObjectOrNull() ?: return false
+    return root["inFlightRun"].asObjectOrNull()?.get("runId").asJsonStringOrNull() == runId
   }
 
   private fun armPendingRun(runId: String): CompletableDeferred<Boolean> {
@@ -2707,7 +2725,7 @@ class TalkModeManager internal constructor(
       onBeforeSpeak()
       ensurePlaybackActive(playbackToken)
       val parsed = TalkDirectiveParser.parse(text)
-      if (parsed.unknownKeys.isNotEmpty()) Log.w(tag, "Unknown talk directive keys: ${parsed.unknownKeys}")
+      if (parsed.unknownKeys.isNotEmpty()) Log.w(tag, "Unknown talk directive keys: count=${parsed.unknownKeys.size}")
       val directive = parsed.directive
       val cleaned = parsed.stripped.trim()
       if (cleaned.isEmpty()) return
@@ -2717,13 +2735,11 @@ class TalkModeManager internal constructor(
         setStatus(nativeText("Generating voice…"), awaitingAgent = true)
       }
       try {
-        val started = SystemClock.elapsedRealtime()
         when (val result = talkSpeakClient.synthesize(text = cleaned, directive = directive)) {
           is TalkSpeakResult.Success -> {
             markAudioPlaybackStarting(playbackToken)
             talkAudioPlayer.play(result.audio)
             ensurePlaybackActive(playbackToken)
-            Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
 
           is TalkSpeakResult.FallbackToLocal -> {
@@ -2736,7 +2752,6 @@ class TalkModeManager internal constructor(
               beforeSpeak = { markAudioPlaybackStarting(playbackToken) },
             )
             ensurePlaybackActive(playbackToken)
-            Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
 
           is TalkSpeakResult.Failure -> {

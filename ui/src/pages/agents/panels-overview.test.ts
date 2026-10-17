@@ -102,32 +102,28 @@ it.each(["overview", "channels", "cron"] as const)(
 );
 
 it.each([
-  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false, text: "Save" },
-  {
-    label: "an active identity save",
-    canUpdateIdentity: true,
-    identitySaving: true,
-    text: "Saving…",
-  },
-])("shows the actual save state for $label", ({ canUpdateIdentity, identitySaving, text }) => {
-  const container = document.createElement("div");
-  const props = createProps();
-  mountSolid(
-    Agents,
-    {
-      ...props,
-      access: { ...props.access, canUpdateIdentity },
-      overview: { ...props.overview, identitySaving },
-    },
-    container,
-  );
+  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false },
+  { label: "an active identity save", canUpdateIdentity: true, identitySaving: true },
+])(
+  "keeps identity field permissions correct for $label",
+  ({ canUpdateIdentity, identitySaving }) => {
+    const container = document.createElement("div");
+    const props = createProps();
+    mountSolid(
+      Agents,
+      {
+        ...props,
+        access: { ...props.access, canUpdateIdentity },
+        overview: { ...props.overview, identitySaving },
+      },
+      container,
+    );
 
-  const save = container.querySelector<HTMLButtonElement>(
-    ".agent-identity-editor__actions button.primary",
-  );
-  expect(save?.textContent?.trim()).toBe(text);
-  expect(save?.disabled).toBe(true);
-});
+    expect(
+      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.disabled,
+    ).toBe(!canUpdateIdentity);
+  },
+);
 
 it("shows inherited skills in the Agent Context overview", () => {
   const container = document.createElement("div");

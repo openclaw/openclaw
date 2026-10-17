@@ -1,4 +1,3 @@
-// Sms plugin module owns inbound Twilio media downloads and outbound MMS hosting.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {

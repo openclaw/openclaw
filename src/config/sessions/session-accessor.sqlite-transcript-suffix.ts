@@ -15,13 +15,13 @@ import {
   type SqliteTranscriptStorageRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { insertTranscriptRowsWithoutProjectionInTransaction } from "./session-accessor.sqlite-transcript-batch.js";
 import {
   pruneTranscriptReactionsInTransaction,
   readTranscriptMutationStateInTransaction,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { insertTranscriptRowsWithoutProjectionInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { prepareIncrementalSuffixIdempotencyMutation } from "./session-accessor.sqlite-transcript-suffix-idempotency.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,

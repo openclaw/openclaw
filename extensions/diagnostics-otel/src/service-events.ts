@@ -43,6 +43,8 @@ export function createDiagnosticsEventHandler(params: {
     "diagnostic.gc": recorders.recordGcDuration.bind(recorders),
     "gateway.event_loop.sample": recorders.recordGatewayEventLoopSample.bind(recorders),
     "gateway.rpc": recorders.recordGatewayRpc.bind(recorders),
+    "gateway.ws.event": recorders.recordGatewayWsEvent.bind(recorders),
+    "gateway.ws.connections": recorders.recordGatewayWsConnections.bind(recorders),
     "model.usage": (evt, metadata, privateData) =>
       recorders.recordModelUsage(evt, metadata, privateData.hostPluginId),
     "webhook.received": recorders.recordWebhookReceived.bind(recorders),

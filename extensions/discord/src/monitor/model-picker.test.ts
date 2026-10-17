@@ -1,7 +1,8 @@
 // Discord tests cover model picker plugin behavior.
 import { ComponentType } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
-import { parseCustomId, serializePayload } from "../internal/discord.js";
+import { parseCustomId } from "../internal/components.base.js";
+import { serializePayload } from "../internal/discord.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   buildDiscordModelPickerCustomId,

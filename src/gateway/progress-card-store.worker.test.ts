@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as gateway from "../agents/tools/in-process-gateway.js";
 import { createProgressCardTool } from "../agents/tools/progress-card-tool.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -51,11 +52,10 @@ it.each([false, true])(
         expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
         return respond.mock.calls[0]?.[1];
       };
-      const tool = createProgressCardTool({
-        agentSessionKey: sessionKey,
-        callGateway: async <T>(_method: string, params: Record<string, unknown>) =>
-          (await invoke(params)) as T,
-      });
+      vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
+        async <T>(_method: string, params: Record<string, unknown>) => (await invoke(params)) as T,
+      );
+      const tool = createProgressCardTool({ agentSessionKey: sessionKey });
       const sql = observeHostDataSql();
       try {
         await tool.execute("create", {

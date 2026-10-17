@@ -351,7 +351,9 @@ function createOperationAdmission(
           }
         }
         const scope =
-          message.location === undefined ? undefined : { location: message.location, admissions };
+          message.location === undefined && admissions.length === 0
+            ? undefined
+            : { location: message.location, admissions };
         const cursor = databaseAdmissionCursors.get(admission);
         const reply = captureSqliteDatabaseAdmissions(
           cursor?.cursor ?? databaseAdmissionCursor,

@@ -28,6 +28,7 @@ import {
 } from "../plugins/plugin-cache.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import {
   withArtifactPreservingStateReads,
@@ -296,6 +297,7 @@ async function assertStartupStateReady(params: {
   );
   const agentCount = listAgentIds(params.cfg).length;
   const admissionMetrics: Record<string, number> = { agentCount };
+  let registeredDatabases: readonly { agentId: string; path: string }[] = [];
   await measureDoctorConfigPreflightStep(
     "admission.database-readiness",
     () =>
@@ -306,6 +308,12 @@ async function assertStartupStateReady(params: {
         onAgentInspection: (stats) => {
           Object.assign(admissionMetrics, stats);
         },
+        onRegisteredAgentDatabases: (targets) => {
+          registeredDatabases = targets.map((target) => ({
+            ...target,
+            agentId: normalizeAgentId(target.agentId),
+          }));
+        },
       }),
     undefined,
     () => admissionMetrics,
@@ -313,21 +321,11 @@ async function assertStartupStateReady(params: {
   const [
     { assertSessionStoreMigrationComplete },
     { resolveAllAgentSessionStoreCandidateTargetsSync },
-    { inspectOpenClawRegisteredAgentDatabases },
   ] = await measureDoctorConfigPreflightStep("admission.session-runtime-import", () =>
     Promise.all([
       import("../config/sessions/startup-migration.js"),
       import("../config/sessions/targets.js"),
-      import("../state/openclaw-agent-db-registry.js"),
     ]),
-  );
-  const registeredDatabases = await measureDoctorConfigPreflightStep(
-    "admission.agent-inventory",
-    () =>
-      inspectOpenClawRegisteredAgentDatabases({
-        env: params.env,
-        includeIncompatibleSchemaVersions: true,
-      }),
   );
   const targets = await measureDoctorConfigPreflightStep(
     "admission.session-targets",

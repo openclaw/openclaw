@@ -1,4 +1,9 @@
-import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
+import { createSignal, createStore } from "solid-js";
+import type {
+  ChatGoalDraftMode,
+  ChatQueueItem,
+  HumanMention,
+} from "../../../lib/chat/chat-types.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import {
@@ -7,39 +12,42 @@ import {
 } from "./chat-composer-dom.ts";
 import { createComposerEmojiMenu } from "./chat-composer-emoji.tsx";
 import { createHumanMentionMenu } from "./chat-composer-mention-menu.tsx";
-import { createSkillMenuState } from "./chat-composer-skill-menu.tsx";
-import { createSlashMenuState } from "./chat-composer-slash-menu.tsx";
+import { createSkillMenu } from "./chat-composer-skill-menu.tsx";
+import { createSlashMenu } from "./chat-composer-slash-menu.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
-  return {
-    ...createSlashMenuState(),
-    ...createSkillMenuState(),
-    composerComposing: false,
-    editRevision: 0,
-    mentionMenu: createHumanMentionMenu(),
-    emojiMenu: createComposerEmojiMenu(),
-    composingDraft: null,
-    composerInputIntentKey: null,
-    pendingClearedSubmittedDraft: null,
+  const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
+    dictationError: null,
     goalExpandedId: null,
-    goalComposer: null,
     activeQuestionKey: null,
     gatewayQuestionIds: new Set(),
     asyncQuestionIds: new Set(),
     questionCollapsed: false,
+  });
+  return {
+    // Admission survives composer remounts while the same goal mode is pending.
+    goalPending: createSignal<ChatGoalDraftMode | null>(null),
+    presentation,
+    updatePresentation,
+    slashMenu: createSlashMenu(),
+    skillMenu: createSkillMenu(),
+    slashCommandDispatchConnected: false,
+    composerComposing: false,
+    editRevision: 0,
+    mentionMenu: createHumanMentionMenu(),
+    emojiMenu: createComposerEmojiMenu(),
+    composerInputIntentKey: null,
+    pendingClearedSubmittedDraft: null,
     questionTakeoverActive: false,
     restoreComposerFocus: false,
     composerInput: null,
     composerTextarea: null,
     microphonePicker: null,
-    capabilityMenuOpen: false,
-    capabilityMenuView: "root",
     textareaRef: null,
     composerInputRef: null,
     dictation: null,
     composerDraftScope: null,
-    dictationError: null,
     dictationSelection: null,
   };
 }
@@ -47,12 +55,11 @@ function createChatComposerState(): ChatComposerState {
 const composerStates = new Map<string, ChatComposerState>();
 
 export function getChatComposerState(paneId: string): ChatComposerState {
-  const existing = composerStates.get(paneId);
-  if (existing) {
-    return existing;
+  let state = composerStates.get(paneId);
+  if (!state) {
+    state = createChatComposerState();
+    composerStates.set(paneId, state);
   }
-  const state = createChatComposerState();
-  composerStates.set(paneId, state);
   return state;
 }
 
@@ -106,23 +113,8 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined) {
     return;
   }
-  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
-  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
-  // Moving a token while typing prose changes its span, not the recipient strip.
-  if (
-    previousMentions.length !== nextMentions.length ||
-    previousMentions.some((previous, index) => {
-      const next = nextMentions[index]!;
-      return (
-        previous.profileId !== next.profileId ||
-        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
-      );
-    })
-  ) {
-    props.onRequestUpdate?.();
-  }
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
@@ -168,6 +160,8 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
+  state.slashMenu.dispose();
+  state.skillMenu.dispose();
   state.emojiMenu.dispose();
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
@@ -179,16 +173,14 @@ function disposeChatComposerState(state: ChatComposerState) {
 }
 
 export function resetChatComposerState(paneId?: string) {
-  if (paneId) {
-    const paneState = composerStates.get(paneId);
-    if (paneState) {
-      disposeChatComposerState(paneState);
+  for (const state of paneId ? [composerStates.get(paneId)] : composerStates.values()) {
+    if (state) {
+      disposeChatComposerState(state);
     }
+  }
+  if (paneId) {
     composerStates.delete(paneId);
-    return;
+  } else {
+    composerStates.clear();
   }
-  for (const state of composerStates.values()) {
-    disposeChatComposerState(state);
-  }
-  composerStates.clear();
 }

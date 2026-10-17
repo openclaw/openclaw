@@ -106,21 +106,21 @@ export async function runGatewayStartupObservers(params: {
       await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
         // Restored wakes start their admission budget at dispatch. Join reader startup
         // first, including maintenance that shares compute with foreground admission.
-        const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
-        await measureStartup(params.startupTrace, "sidecars.recovery-readers", () =>
-          prewarmGatewaySessionHistory(params.config, {
+        await measureStartup(params.startupTrace, "sidecars.recovery-readers", async () => {
+          const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
+          await prewarmGatewaySessionHistory(params.config, {
             includeMaintenance: true,
             isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
-          }),
-        );
+          });
+        });
         // A crash can leave agent databases under background integrity admission.
         // Discover saved deliveries only after the existing reader startup joins it.
         if (context && !params.signal.aborted && !params.isClosing?.()) {
           try {
-            const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
-            await measureStartup(params.startupTrace, "sidecars.delivery-recovery", () =>
-              recoverSessionSendDeliveries(context, params.signal),
-            );
+            await measureStartup(params.startupTrace, "sidecars.delivery-recovery", async () => {
+              const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
+              await recoverSessionSendDeliveries(context, params.signal, params.startupTrace);
+            });
           } catch (error) {
             if (!params.signal.aborted) {
               params.log.warn(
@@ -142,7 +142,11 @@ export async function runGatewayStartupObservers(params: {
             }
           });
         }
-        const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
+        const activateSubagentRegistry = await measureStartup(
+          params.startupTrace,
+          "sidecars.subagent-load",
+          params.loadSubagentRegistryActivation,
+        );
         if (!params.signal.aborted && params.isClosing?.() !== true) {
           await measureStartup(params.startupTrace, "sidecars.subagent-activation", () =>
             activateSubagentRegistry(params.resolveGatewayContext),

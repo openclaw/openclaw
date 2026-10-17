@@ -92,7 +92,9 @@ describe("projectSessionDisplayMessage", () => {
     ["NO_REPLY.", "NO_REPLY."],
     ['"NO_REPLY"', '"NO_REPLY"'],
     ['{"action":"NO_REPLY"}', '{"action":"NO_REPLY"}'],
-    ["no_reply", "no_reply"],
+    ["no_reply\nREADY", "READY"],
+    ["READY\nNo_Reply", "READY"],
+    ["no_reply\nNo_Reply", "No_Reply"],
     ["Done\nNO_REPLY", "Done"],
     ["NO_REPLY\nREADY", "READY"],
     ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
@@ -104,6 +106,10 @@ describe("projectSessionDisplayMessage", () => {
       role: "assistant",
       text,
     });
+  });
+
+  test.each(["NO_REPLY", "no_reply", "No_Reply"])("hides raw %s assistant history", (content) => {
+    expect(projectSessionDisplayMessage({ role: "assistant", content })).toBeNull();
   });
 
   test("preserves user text and explicit visible or final source replies", () => {

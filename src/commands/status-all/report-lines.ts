@@ -6,6 +6,7 @@ import type { BestEffortConfigSnapshot } from "../../config/io.js";
 import { formatStatusConfigDiagnosticEntries } from "../status.format.js";
 import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
+import type { buildStatusOverviewSurfaceRows } from "./format.js";
 import {
   buildStatusAgentTableRows,
   buildStatusChannelDetailSections,
@@ -14,12 +15,10 @@ import {
 } from "./report-tables.js";
 import { appendStatusReportHeading, appendStatusReportTable } from "./text-report.js";
 
-type OverviewRow = { Item: string; Value: string };
-
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
   configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
-  overviewRows: OverviewRow[];
+  overviewRows: ReturnType<typeof buildStatusOverviewSurfaceRows>;
   channels: {
     rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
     details: Parameters<typeof buildStatusChannelDetailSections>[0]["details"];

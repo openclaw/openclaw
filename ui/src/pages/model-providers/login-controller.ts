@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createSignal, onCleanup, onSettled } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
@@ -305,6 +305,7 @@ export function createModelProviderLogin(options: LoginOptions) {
           currentPicker = null;
         }
         notify();
+        onSettled(focusPickerTarget);
       }
     }
   }
@@ -353,10 +354,6 @@ export function createModelProviderLogin(options: LoginOptions) {
       }
     }
   }
-  createEffect(
-    () => ({ revision: view.revision(), provider: providerSelection() }),
-    focusPickerTarget,
-  );
   onCleanup(() => {
     listeners.clear();
     generation += 1;
@@ -468,6 +465,7 @@ export function createModelProviderLogin(options: LoginOptions) {
         setProvider(providerId);
         focusPicker = "method";
         notify();
+        onSettled(focusPickerTarget);
       },
       onChoice: (selected: (typeof groups)[number]["choices"][number]) => {
         if (!canSelect()) {
@@ -519,6 +517,7 @@ export function createModelProviderLogin(options: LoginOptions) {
         setProvider("");
         focusPicker = "search";
         notify();
+        onSettled(focusPickerTarget);
       },
     };
   }

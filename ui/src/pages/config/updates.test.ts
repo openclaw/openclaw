@@ -376,29 +376,6 @@ describe("renderUpdates", () => {
     expect(beta.checked).toBe(true);
   });
 
-  it("shows extended stable for an authored channel and disables auto-apply", () => {
-    mountUpdates(
-      createProps({
-        configObject: {
-          update: { channel: "extended-stable", auto: { enabled: true } },
-        },
-        update: {
-          updateSchedule: { channel: "extended-stable", autoEnabled: true },
-          updateAvailable: null,
-        },
-      }),
-    );
-
-    expect(
-      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
-        option.textContent?.trim(),
-      ),
-    ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
-    const automaticRow = row("Automatic updates");
-    expect(automaticRow.textContent).toContain("never installs them automatically");
-    expect(automaticRow.querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(true);
-  });
-
   it("reports a configless extended-stable package install by the Gateway channel and gates auto-apply", () => {
     // A direct `npm install -g openclaw@extended-stable` never writes update.channel;
     // the Gateway still resolves and publishes extended-stable as the schedule channel.
@@ -432,33 +409,7 @@ describe("renderUpdates", () => {
     const automatic = automaticUpdatesControl().toggle;
     expect(automatic.checked).toBe(false);
     expect(automatic.hasAttribute("disabled")).toBe(true);
-  });
-
-  it("keeps the authored channel ahead of the Gateway schedule channel", () => {
-    mountUpdates(
-      createProps({
-        configObject: { update: { channel: "beta", auto: { enabled: false } } },
-        update: {
-          updateSchedule: {
-            channel: "extended-stable",
-            autoEnabled: true,
-            install: { kind: "package" },
-          },
-          updateAvailable: null,
-        },
-      }),
-    );
-
-    const channel = row("Release channel").querySelector<HTMLElement>('[role="radiogroup"]');
-    expect(channel?.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe(
-      "beta",
-    );
-    expect(
-      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
-        option.textContent?.trim(),
-      ),
-    ).toEqual(["Stable", "Beta", "Dev"]);
-    expect(automaticUpdatesControl().toggle.hasAttribute("disabled")).toBe(false);
+    expect(row("Automatic updates").textContent).toContain("never installs them automatically");
   });
 
   it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {
@@ -723,26 +674,6 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector(".settings-status__dot")).toBeNull();
   });
 
-  it("surfaces the latest update failure ahead of passive availability", () => {
-    mountUpdates(
-      createProps({
-        update: {
-          updateStatusBanner: {
-            tone: "danger",
-            text: "Update error: build-failed. Fix the build error and retry.",
-          },
-        },
-      }),
-    );
-
-    expect(row("Status").textContent).toContain(
-      "Update error: build-failed. Fix the build error and retry.",
-    );
-    expect(row("Status").querySelector(".settings-status--danger")).not.toBeNull();
-    expect(row("Recovery").textContent).toContain("Retry update");
-    expect(row("CLI fallback").textContent).toContain("openclaw triage");
-  });
-
   it.each([
     { status: "succeeded", reason: null, recovery: false, reconciled: false },
     { status: "failed", reason: "build-failed", recovery: true, reconciled: false },
@@ -924,35 +855,6 @@ describe("renderUpdates", () => {
 
     const report = row("Failure report");
     expect(report.textContent).toContain("may have completed");
-    expect(report.querySelector("a")).toBeNull();
-  });
-
-  it("renders a definitely unstarted report as retryable rather than ambiguous", () => {
-    const run = createUpdateRunFixture({
-      status: "failed",
-      phase: "finished",
-      reason: "build-failed",
-    });
-    mountUpdates(
-      createProps({
-        update: {
-          updateRun: run,
-          reportableUpdateFailureId: run.runId,
-          updateFailureReportNotice: {
-            attemptId: run.runId,
-            result: {
-              status: "retryable",
-              message: "No issue submission was started; retry this action later.",
-            },
-          },
-        },
-      }),
-    );
-
-    const report = row("Failure report");
-    expect(report.textContent).toContain("No GitHub issue submission was started");
-    expect(report.textContent).toContain("retry this action later");
-    expect(report.textContent).not.toContain("may have completed");
     expect(report.querySelector("a")).toBeNull();
   });
 

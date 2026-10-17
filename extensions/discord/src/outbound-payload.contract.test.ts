@@ -2,7 +2,8 @@
 import { ChannelType } from "discord-api-types/v10";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DiscordError, RequestClient } from "./internal/discord.js";
+import { DiscordError } from "./internal/rest-errors.js";
+import { RequestClient } from "./internal/rest.js";
 import { discordOutbound } from "./outbound-adapter.js";
 import { recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import { sendMessageDiscord } from "./send.outbound.js";

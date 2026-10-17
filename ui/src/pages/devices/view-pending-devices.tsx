@@ -85,7 +85,7 @@ function PendingDevice(props: {
     () => normalizeOptionalString(props.req.displayName) || props.req.deviceId,
   );
   const age = createMemo(() =>
-    typeof props.req.ts === "number" ? formatRelativeTimestamp(props.req.ts) : t("common.na"),
+    props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
   );
   const approval = createMemo(() => resolvePendingDeviceApprovalState(props.req, props.paired));
   const repair = createMemo(() =>

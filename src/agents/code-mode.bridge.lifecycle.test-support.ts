@@ -9,6 +9,7 @@ import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attemp
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import type { Agent } from "./runtime/index.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search.js";
@@ -16,6 +17,7 @@ import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-searc
 export function createSubscribedCodeModeHarness(params: {
   name: string;
   sessionManager?: SessionManager;
+  agent?: Agent;
   onBlockReplyFlush?: () => Promise<void>;
   onToolResult?: EmbeddedRunAttemptParams["onToolResult"];
   onBlockReply?: EmbeddedRunAttemptParams["onBlockReply"];
@@ -39,7 +41,7 @@ export function createSubscribedCodeModeHarness(params: {
   guardSessionManager(sessionManager, { config: {}, runId, sessionKey });
   const activeSession = Object.assign(session, {
     sessionManager,
-    agent: { hasQueuedMessages: () => false },
+    agent: params.agent ?? { hasQueuedMessages: () => false },
     isStreaming: false,
     messages: [],
     pendingMessageCount: 0,

@@ -12,6 +12,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import {
   createPluginCache,
   retirePluginCache,
+  runOutsidePluginCache,
   waitForPluginCacheRetirement,
   withPluginCache,
 } from "./plugin-cache.js";
@@ -88,6 +89,14 @@ export function hasPluginLifecycleLease(): boolean {
 /** Detached observers must acquire ownership rather than borrow their writer's lease. */
 export function runOutsidePluginLifecycleLease<T>(run: () => T): T {
   return activePluginLifecycleLease.exit(run);
+}
+
+/**
+ * Committed runtime work reads the generation its owner published. Only management
+ * reads before the commit need the lease's fresh operation cache.
+ */
+export function runAfterPluginLifecycleCommit<T>(run: () => T): T {
+  return runOutsidePluginCache(run);
 }
 
 function resolveLifecycleLeaseEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {

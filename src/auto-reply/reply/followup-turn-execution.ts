@@ -1,3 +1,7 @@
+import {
+  isFreshChannelCronAuthorityTurn,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
@@ -198,6 +202,8 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
+    // Presentation defaults can belong to another source or an already settled ingress.
+    cronCreatorAuthorityCapability: undefined,
     isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
     internalEventExecution: turn.queued.run.internalEventExecution,
@@ -427,7 +433,31 @@ export async function executeFollowupTurn(params: {
       // Queued execution outlives its ingress scope. Re-enter the exact source
       // custody after lazy collection binds it, so runtime appends consume all sources.
       turn.operation.abortSignal.throwIfAborted();
-      execution = await withCurrentUserTurnInput(recorder, execute);
+      // Only the original fresh ingress can recreate authority for this new run.
+      // Maintenance copies and synthetic turns must not reuse the source factory.
+      const run = turn.queued.run;
+      const capability =
+        run.senderIsOwner &&
+        isFreshChannelCronAuthorityTurn({
+          messageProvider: run.messageProvider,
+          senderId: run.senderId,
+          isHeartbeat,
+          isRoomEvent: roomEvent,
+          inputProvenance: run.inputProvenance,
+          spawnedBy: run.spawnedBy,
+          suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+        })
+          ? turn.queued.createChannelCronAuthority?.(turn.runId)
+          : undefined;
+      progressOpts.cronCreatorAuthorityCapability = capability;
+      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      execution = capability
+        ? await runWithCronCreatorAuthorityCapability(
+            capability,
+            runWithInput,
+            turn.operation.abortSignal,
+          )
+        : await runWithInput();
     }
   } catch (error) {
     await drainPendingWork();

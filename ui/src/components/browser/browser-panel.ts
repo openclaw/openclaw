@@ -1,21 +1,10 @@
-import {
-  BrowserPanelPresentation,
-  type BrowserPanelElement,
-} from "./browser-panel-presentation.ts";
-import { defineBrowserPanelElement } from "./browser-panel-registration.tsx";
+import type { BrowserPanelElement } from "./browser-panel-presentation.ts";
 
-export {
-  BrowserPanelPresentation,
-  type BrowserPanelElement,
-  type BrowserPanelInputs,
-} from "./browser-panel-presentation.ts";
+export type { BrowserPanelElement, BrowserPanelInputs } from "./browser-panel-presentation.ts";
+export { BrowserPanelHost } from "./browser-panel-registration.tsx";
 
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-browser-panel": BrowserPanelElement;
   }
 }
-
-export const BrowserPanelHost = defineBrowserPanelElement(
-  (element) => new BrowserPanelPresentation(element),
-);

@@ -63,6 +63,40 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
+current selected repository base into this session's existing local managed
+workspace. The Gateway fetches with its host identity and preserves saved guest
+files, ignored guest data, and empty directories. The operation returns the exact
+`baseCommit`, changed paths, and conflicting paths; it does not publish or change
+the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
+session, or pull-request selector.
+
+Resolve any reported conflicts in the same workspace, then repeat `refresh_base`
+with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges
+that exact pending integration, including a deliberate choice to keep an unchanged
+binary file. Without acknowledgment, a retry keeps reporting conflicts. Remaining
+text conflict markers block completion. On completion, the calling sandbox imports
+only the selected base commit and source tree through bounded stdin, reusing
+available objects from host-selected snapshots when possible, then stages its
+current source. Guest HEAD, branches, and commit history remain unchanged.
+The result includes `review: { mode: "local", base: "<commit>" }`. Run tests and
+normal Auto Review with that exact target after refresh or conflict resolution,
+then publish to update the same draft. Reviewing against the old guest HEAD would
+also include upstream-only changes. The operation requires the prepared sandbox
+of the current agent; a direct RPC cannot supply another runtime. Publication
+refuses a pending integration and never silently merges new base changes into
+reviewed files. A retry or restart settles the existing retained source result
+through the workspace journal; host merge ancestry remains outside guest Git
+metadata. Worktree removal is deferred while the host integration is pending;
+finish refresh before retrying archive cleanup. Existing privileged PR actions
+still require full operator write access.
+
+Finish refresh and conflict resolution before downgrading. An interrupted transfer
+retains a source result that earlier Gateways reject instead of applying as ordinary
+workspace synchronization. Once both copies accept the transfer, that result is
+cleaned and native merge state owns any remaining conflict resolution. Return to a
+version supporting `refresh_base` to finish either pending phase.
+
 The private checkout is writable with `none` or `rw` workspace access; explicit
 `ro` remains read-only. This does not make the shared agent workspace writable.
 Other sandbox backends cannot use this local managed-project projection and

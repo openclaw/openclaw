@@ -73,6 +73,15 @@ function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
 describe("update cli option collisions", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it.each([
+    { args: ["--full-integrity-check"], target: updateCommand },
+    { args: ["repair", "--full-integrity-check"], target: updateFinalizeCommand },
+    { args: ["--full-integrity-check", "wizard"], target: updateWizardCommand },
+  ])("passes full migration integrity selection through $args", async ({ args, target }) => {
+    await run(["update", ...args]);
+    expect(firstCallOptions(target)).toMatchObject({ fullIntegrityCheck: true });
+  });
+
   const adoptionArgs = [
     "update",
     "adopt-immutable",
@@ -99,7 +108,12 @@ describe("update cli option collisions", () => {
   });
 
   it("requires explicit activation consent and binds native recovery to its root", async () => {
-    await run([...adoptionArgs, "--previous-updater-stopped", "--enable-activation"]);
+    await run([
+      ...adoptionArgs,
+      "--previous-updater-stopped",
+      "--enable-activation",
+      "--inspect-release-retention",
+    ]);
     expect(mocks.updateAdoptImmutableCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/opt/example",
@@ -114,6 +128,7 @@ describe("update cli option collisions", () => {
         runtime: "/usr/bin/node",
         previousUpdaterStopped: true,
         enableActivation: true,
+        inspectReleaseRetention: true,
       }),
     );
     await run(["update", "--timeout", "600", "--json", "recover", "--root", "/opt/example"]);
@@ -123,22 +138,6 @@ describe("update cli option collisions", () => {
       drainTimeout: undefined,
       json: true,
     });
-    expect(updateCommand).not.toHaveBeenCalled();
-  });
-
-  it("passes explicit release-retention inspection only to immutable adoption", async () => {
-    await run([
-      ...adoptionArgs,
-      "--previous-updater-stopped",
-      "--enable-activation",
-      "--inspect-release-retention",
-    ]);
-    expect(mocks.updateAdoptImmutableCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inspectReleaseRetention: true,
-        enableActivation: true,
-      }),
-    );
     expect(updateCommand).not.toHaveBeenCalled();
   });
 
@@ -213,12 +212,6 @@ describe("update cli option collisions", () => {
     expect(updateFinalizeCommand).not.toHaveBeenCalled();
     expect(updateWizardCommand).not.toHaveBeenCalled();
     expect(updateStatusCommand).not.toHaveBeenCalled();
-  });
-
-  it("forwards the wizard timeout", async () => {
-    await run(["update", "wizard", "--timeout", "13"]);
-    expect(updateWizardCommand).toHaveBeenCalledOnce();
-    expect(firstCallOptions(updateWizardCommand)).toMatchObject({ timeout: "13" });
   });
 
   it("rejects parent --dry-run before running update repair", async () => {

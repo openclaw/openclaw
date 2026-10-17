@@ -214,7 +214,7 @@ function registerBackupScheduleCommands(backup: Command): void {
 function registerBackupGitCommands(backup: Command): void {
   const git = backup
     .command("git")
-    .description("Create and restore reproducible versioned SQLite dumps in Git")
+    .description("Create and restore reproducible database exports in Git")
     .action(() => {
       git.outputHelp();
       process.exitCode = 1;
@@ -234,7 +234,11 @@ function registerBackupGitCommands(backup: Command): void {
     .command("create")
     .description("Dump selected OpenClaw databases and commit one Git revision")
     .requiredOption("--repository <path>", "Git backup repository directory")
-    .option("--all", "Back up the shared database and every registered agent database", false)
+    .option(
+      "--all",
+      "Back up shared state, every configured agent, and discovered PostgreSQL stores",
+      false,
+    )
     .option("--global", "Back up the shared OpenClaw state database", false)
     .option("--agent <id>", "Back up an agent database (repeatable)", collectOption, [])
     .option("--push", "Push the current branch to origin", false)
@@ -270,8 +274,8 @@ function registerBackupGitCommands(backup: Command): void {
       .command(operation)
       .description(
         restore
-          ? "Restore one database snapshot from a Git ref to a fresh SQLite file"
-          : "Restore and verify one database snapshot from a Git ref",
+          ? "Restore one database snapshot from a Git ref to a fresh database path"
+          : "Verify one database snapshot from a Git ref",
       )
       .action(
         backupAction(async () => {
@@ -290,6 +294,7 @@ function registerBackupGitCommands(backup: Command): void {
       .option("--ref <commit>", `Commit or ref to ${operation}`, "HEAD")
       .option("--global", `${verb} the shared state database`, false)
       .option("--agent <id>", `${verb} one agent database`)
+      .option("--store <id>", `${verb} one plugin store by its recorded Git backup identity`)
       .option("--json", "Output JSON", false);
   }
 }

@@ -58,9 +58,8 @@ async function migrateLegacyInterruption(sessionKey: string, stateDir: string) {
   const { db } = openOpenClawAgentDatabase({ agentId: "main" });
   // Retain certification with legacy bytes; startup must still normalize them.
   db.prepare(
-    "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', 'running') WHERE session_key = ?",
+    "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', 'running'), entry_valid = 1 WHERE session_key = ?",
   ).run(sessionKey);
-  db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(sessionKey);
   await closeOpenClawAgentDatabasesAsync(stateDir);
   await prepareGatewayStartupSessions({
     cfg: { agents: { entries: { main: {} } } },
@@ -77,6 +76,7 @@ it.each([
 ] as const)("resumes restart-safe work across shutdown and upgrade (%s)", async (order) => {
   await withOpenClawTestState({ label: "restart-aborted-chat" }, async (state) => {
     await captureRuntimeConfigAsyncReader()();
+    const automationDrain = order === "automation drain";
     const sessionKey = "agent:main:dashboard:restart-chat";
     const sessionId = "restart-chat-session";
     const runId = "interrupted-chat-run";
@@ -138,16 +138,12 @@ it.each([
         activeRuns: [{ sessionKey, sessionId, runId, lifecycleGeneration }],
         isActiveRun: () => isActive,
       });
-    if (
-      order === "before settlement" ||
-      order === "after settlement" ||
-      order === "automation drain"
-    ) {
+    if (order === "before settlement" || order === "after settlement" || automationDrain) {
       if (order === "before settlement") {
         await mark(true);
       }
       const controller = new AbortController();
-      if (order === "automation drain") {
+      if (automationDrain) {
         const release = registerActiveCronTaskRun({ runId, controller });
         try {
           expect(abortActiveCronTaskRuns()).toBe(1);
@@ -155,11 +151,10 @@ it.each([
           release?.();
         }
       }
-      const error =
-        order === "automation drain"
-          ? new Error("Provider request cancelled during drain")
-          : createAgentRunRestartAbortError();
-      const abortSignal = order === "automation drain" ? controller.signal : undefined;
+      const error = automationDrain
+        ? new Error("Provider request cancelled during drain")
+        : createAgentRunRestartAbortError();
+      const abortSignal = automationDrain ? controller.signal : undefined;
       const terminalData = {
         phase: "error",
         error,
@@ -167,7 +162,7 @@ it.each([
       };
       // The command's finally can finish before the Gateway's queued lifecycle
       // publication and shutdown discovery; its outer signal need not be aborted.
-      const cleanup = {
+      await finishAgentCommandCleanup({
         prepared: {
           ...target,
           sessionAgentId: "main",
@@ -187,8 +182,7 @@ it.each([
         sessionWorkAdmission: undefined,
         cleanupInternalModelRunTargets: async () => {},
         releaseForeground: undefined,
-      };
-      await finishAgentCommandCleanup(cleanup);
+      });
       await persistGatewaySessionLifecycleEvent({
         sessionKey,
         event: {
@@ -197,13 +191,12 @@ it.each([
           lifecycleGeneration,
           ts: 200,
           // Shutdown may publish the embedded owner's restart after caller cleanup.
-          data:
-            order === "automation drain"
-              ? { ...terminalData, aborted: true, stopReason: "restart" }
-              : terminalData,
+          data: automationDrain
+            ? { ...terminalData, aborted: true, stopReason: "restart" }
+            : terminalData,
         },
       });
-      if (order === "after settlement" || order === "automation drain") {
+      if (order === "after settlement" || automationDrain) {
         expect(await mark(false)).toEqual({ marked: 0, skipped: 0 });
       }
       const interrupted = loadSessionEntry(target);
@@ -225,6 +218,12 @@ it.each([
       getDispatchSettlement: () => dispatchSettlement.promise,
       sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
     });
+    const recover = (activeSessionIds?: string[]) =>
+      recoverRestartAbortedMainSessions({
+        stateDir: state.stateDir,
+        gatewayRuntime: runtime,
+        ...(activeSessionIds ? { activeSessionIds } : {}),
+      });
     try {
       if (order === "persisted interruption") {
         const info = vi.spyOn(mainSessionRecoveryLog, "info");
@@ -233,13 +232,12 @@ it.each([
             stateDir: state.stateDir,
             activeSessionIds: [sessionId],
           });
-          expect(
-            await recoverRestartAbortedMainSessions({
-              stateDir: state.stateDir,
-              activeSessionIds: [sessionId],
-              gatewayRuntime: runtime,
-            }),
-          ).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+          expect(await recover([sessionId])).toEqual({
+            started: 0,
+            settled: 0,
+            failed: 0,
+            skipped: 1,
+          });
           expect(dispatch).not.toHaveBeenCalled();
           expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds).toEqual([
             "previous-completed-run",
@@ -254,10 +252,7 @@ it.each([
         }
       }
       await markStartupOrphanedMainSessionsForRecovery({ stateDir: state.stateDir });
-      const result = await recoverRestartAbortedMainSessions({
-        stateDir: state.stateDir,
-        gatewayRuntime: runtime,
-      });
+      const result = await recover();
       expect(result).toMatchObject({ started: 1, failed: 0, skipped: 0 });
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -275,13 +270,8 @@ it.each([
         mainRestartRecovery: expect.objectContaining({ chargedAttempts: 1 }),
       });
       expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
-      if (order === "automation drain") {
-        expect(
-          await recoverRestartAbortedMainSessions({
-            stateDir: state.stateDir,
-            gatewayRuntime: runtime,
-          }),
-        ).toMatchObject({ started: 0, failed: 0 });
+      if (automationDrain) {
+        expect(await recover()).toMatchObject({ started: 0, failed: 0 });
         expect(dispatch).toHaveBeenCalledTimes(1);
       }
       if (order === "persisted interruption") {

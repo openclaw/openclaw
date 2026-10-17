@@ -200,6 +200,10 @@ readers use it without loading session storage, artifact cleanup, or archive
 compression. Filename parsing shares a pure grammar with the artifact helpers.
 Existing memory session facades retain these exports for installed plugin compatibility.
 
+The private official-plugin runtime `node-crypto-runtime` exposes `sha256Hex`
+for hashing strings or bytes without loading memory indexing helpers. It is a
+JavaScript-only host runtime export, not a typed public Plugin SDK entrypoint.
+
 ### Bundled plugin helper subpaths
 
 Bundled-only helper modules are private-local after the July 2026 sweep.
@@ -425,7 +429,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `createOwnedStdioProcess` / `closeOwnedStdioProcess` and `OwnedStdioProcess` / `OwnedStdioProcessOptions` for bidirectional CLI lifetime and cleanup, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; Darwin process snapshots and tree inspection (native under Bun, bounded ps under Node), bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `createOwnedStdioProcess` / `closeOwnedStdioProcess` and `OwnedStdioProcess` / `OwnedStdioProcessOptions` for bidirectional CLI lifetime and cleanup, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
@@ -461,7 +465,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId`. Use `normalizeAgentId` when omitted input should resolve to `main`; use the Result-returning `normalizeAgentIdStrict` for an explicitly supplied ID that must not fall back to the default agent. |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Private-local after July 2026; Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization and ASCII control-character detection helpers |
+    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization, ASCII control-character detection, literal chat-display sanitization, and POSIX shell-argument quoting helpers |
     | `plugin-sdk/request-url` | Private-local after July 2026; Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
@@ -505,6 +509,8 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/transport-ready-runtime` | Private-local after July 2026; Transport readiness wait helper |
     | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
+    | `plugin-sdk/collection-input-runtime` | Private-local bundled runtime; `isStringArray`, `ensureRecord`, and `normalizeOptionalTrimmedStringRecord` for collection admission and normalization; not a typed public SDK contract |
+    | `plugin-sdk/http-response-runtime` | Private-local bundled runtime; JSON charset, cache, framing, and header-commit policies with their established serialization timing; not a typed public SDK contract |
     | `plugin-sdk/diagnostic-flags` | `isDiagnosticFlagEnabled` for flag-only consumers without event, trace, or redaction initialization |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |

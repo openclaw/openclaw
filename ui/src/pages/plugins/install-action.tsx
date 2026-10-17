@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, For } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
@@ -31,40 +31,27 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
   const [open, setOpen] = createSignal(false);
   let popover: PopoverHandle | undefined;
   const [now, setNow] = createSignal(Date.now());
-  let pinned = false;
+  const idle = createMemo(() => !props.progress && !props.busy);
+  // An idle action retires pinning; progress updates preserve the operator's choice.
+  const [pinned, setPinned] = createSignal<boolean>((previous) => !idle() && Boolean(previous));
   let hovering = false;
   const progressId = `plugin-install-progress-${generateUUID()}`;
   const dismiss = () => {
-    pinned = false;
+    setPinned(false);
     popover?.overlay.request(false, "return");
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     popover = undefined;
   });
-  createEffect(
-    () => open() && Boolean(props.progress),
-    (expanded) => {
-      host.toggleAttribute("open", expanded);
-    },
-  );
-  createEffect(
-    () => props.progress && props.progress.finishedAt === undefined,
-    (running) => {
-      if (!running) {
-        return undefined;
-      }
-      const timer = setInterval(() => setNow(Date.now()), 1000);
-      return () => clearInterval(timer);
-    },
-  );
-  createEffect(
-    () => !props.progress && !props.busy,
-    (idle) => {
-      if (idle) {
-        pinned = false;
-      }
-    },
-  );
+  const running = createMemo(() => props.progress && props.progress.finishedAt === undefined);
+  // The timer supplies elapsed wall-clock time while the installer is running.
+  createEffect(running, (active) => {
+    if (!active) {
+      return undefined;
+    }
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  });
   const progress = () => props.progress;
   const failed = () => props.progress?.finishedAt !== undefined;
   const active = () => Boolean(progress()) || props.busy;
@@ -78,6 +65,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
       : 0;
   return (
     <openclaw-plugin-install-action
+      open={open() && Boolean(props.progress)}
       ref={(element) => {
         host = Object.assign(element, { dismiss });
       }}
@@ -90,7 +78,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
         }}
         onMouseLeave={() => {
           hovering = false;
-          if (!pinned && !host.contains(document.activeElement)) {
+          if (!pinned() && !host.contains(document.activeElement)) {
             popover?.hide();
           }
         }}
@@ -105,7 +93,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
         }}
         onFocusOut={(event: FocusEvent) => {
           if (
-            !pinned &&
+            !pinned() &&
             !hovering &&
             !(event.relatedTarget instanceof Node && host.contains(event.relatedTarget))
           ) {
@@ -150,8 +138,9 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
                 props.onInstall?.();
               }
             } else {
-              pinned = !pinned;
-              if (pinned) {
+              const nextPinned = !pinned();
+              setPinned(nextPinned);
+              if (nextPinned) {
                 popover?.show();
               } else {
                 popover?.hide();
@@ -181,7 +170,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
             ref={(handle) => {
               popover = handle;
               setOpen(handle.overlay.open);
-              if (hovering || pinned || host.contains(document.activeElement)) {
+              if (hovering || pinned() || host.contains(document.activeElement)) {
                 handle.show();
               }
             }}
@@ -189,7 +178,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
             dismissOutsideFocus={false}
             onOpenChange={(value) => {
               if (!value) {
-                pinned = false;
+                setPinned(false);
               }
               setOpen(value);
             }}
@@ -217,7 +206,10 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
                 <For each={props.progress!.activities}>
                   {(activity) => (
                     <li
-                      class={`plugin-install-progress__activity plugin-install-progress__activity--${activity.status}`}
+                      class={[
+                        "plugin-install-progress__activity",
+                        `plugin-install-progress__activity--${activity.status}`,
+                      ]}
                     >
                       <span class="plugin-install-progress__icon" aria-hidden="true">
                         {activity.status === "completed" ? (
@@ -265,7 +257,7 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-plugin-install-action": HTMLAttributes<HTMLElement>;
+      "openclaw-plugin-install-action": HTMLAttributes<HTMLElement> & { open?: boolean };
     }
   }
 }

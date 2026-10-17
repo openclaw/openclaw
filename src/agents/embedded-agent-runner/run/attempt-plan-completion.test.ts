@@ -28,6 +28,7 @@ afterEach(() => {
     stream.subscription.unsubscribe();
     clearActiveEmbeddedRun("session-output-schema", stream.queueHandle, "agent:main:main");
   }
+  vi.restoreAllMocks();
 });
 
 it.each([
@@ -219,11 +220,11 @@ it("keeps a reply that already reports the blocker as the only reply after the c
     { step: "List files", status: "completed" as const },
     { step: "Delete the largest file", status: "pending" as const },
   ];
+  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue({
+    card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
+  });
   const progress = createProgressCardTool({
     agentSessionKey: "agent:main:main",
-    callGateway: vi.fn().mockResolvedValue({
-      card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-    }),
     onPlanSaved: (unfinished) => {
       completionCheck.unfinishedPlan = unfinished;
     },
@@ -294,7 +295,7 @@ it.each([
   const initial = {
     card: { sessionKey: "agent:main:main", steps: pending, revision: 1, updatedAt: 1 },
   };
-  const gateway = vi.fn().mockResolvedValue(initial);
+  const gateway = vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(initial);
   const replacementArgs =
     replacement === "completed"
       ? { plan: [{ step: "Await external permission", status: "completed" }] }
@@ -328,7 +329,6 @@ it.each([
   }
   const progress = createProgressCardTool({
     agentSessionKey: "agent:main:main",
-    callGateway: gateway,
     onPlanSaved: (unfinished) => {
       completionCheck.unfinishedPlan = unfinished;
     },
@@ -397,11 +397,11 @@ it.each([
 ])("preserves $owner policy with $checks completion checks", async ({ owner, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: false };
   const plan = [{ step: "Remaining repair", status: "pending" as const }];
+  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue({
+    card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
+  });
   const progress = createProgressCardTool({
     agentSessionKey: "agent:main:main",
-    callGateway: vi.fn().mockResolvedValue({
-      card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-    }),
     onPlanSaved: (unfinished) => {
       completionCheck.unfinishedPlan = unfinished;
     },

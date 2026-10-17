@@ -130,6 +130,16 @@ type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
     };
 
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
+  /** One durable admission for a transport batch; optional for external queue implementations. */
+  enqueueBatch?(
+    events: ReadonlyArray<{
+      id: string;
+      payload: TPayload;
+      metadata?: TMetadata;
+      receivedAt?: number;
+      laneKey?: string;
+    }>,
+  ): Promise<Array<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>>;
   enqueue(
     id: string,
     payload: TPayload,
@@ -181,7 +191,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
     id: string,
-    options?: { ownerId?: string },
+    options?: { ownerId?: string; laneKey?: string },
   ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   refreshClaim?(
     claim: ChannelIngressQueueClaimRef,

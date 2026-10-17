@@ -82,15 +82,7 @@ export function projectUserProfileSnapshot(
       Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)),
   );
   return {
-    profiles: ordered.map((row) =>
-      Object.assign(toUserProfile(row), {
-        emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
-          Buffer.compare(Buffer.from(left), Buffer.from(right)),
-        ),
-        githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
-        hasAvatar: row.has_avatar === 1,
-      }),
-    ),
+    profiles: ordered.map((row) => projectUserProfileListItem(row, bindings)),
     ...(githubAccountIds
       ? {
           githubProfiles: ordered.flatMap((row) =>
@@ -102,6 +94,20 @@ export function projectUserProfileSnapshot(
           ),
         }
       : {}),
+  };
+}
+
+export function projectUserProfileListItem(
+  row: ProfileDisplayRow,
+  bindings: UserProfileEmailBindingIndex,
+) {
+  return {
+    ...toUserProfile(row),
+    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right)),
+    ),
+    githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
+    hasAvatar: row.has_avatar === 1,
   };
 }
 

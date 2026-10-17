@@ -279,7 +279,10 @@ describe("OpenAI-compatible completions compatibility", () => {
     let replayPayload: unknown;
     await streamOpenAICompletions(
       model,
-      { messages: [result] },
+      {
+        messages: [result],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      },
       {
         apiKey: "test",
         onPayload(payload) {

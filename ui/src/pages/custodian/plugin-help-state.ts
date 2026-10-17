@@ -40,10 +40,12 @@ export function pluginHelpState(context: PluginHelpContext): HelpState {
     };
     states.set(context, state);
     const owned = state;
+    // Gateway receipts retire scoped publications and drafts before pending help requests can complete.
     context.gateway.subscribe(() => {
       synchronize(context, owned);
       notifyPluginHelp(owned);
     });
+    // Navigation immediately retires the publication epoch used by pending help requests.
     context.router.subscribe(() => {
       if (owned.publication && owned.publication.pathname !== pluginHelpPathname(context)) {
         owned.publication = undefined;
@@ -72,9 +74,7 @@ function synchronize(context: PluginHelpContext, state: HelpState): void {
 }
 
 export function notifyPluginHelp(state: HelpState): void {
-  for (const listener of state.listeners) {
-    listener();
-  }
+  state.listeners.forEach((listener) => listener());
 }
 
 export function subscribePluginHelp(context: PluginHelpContext, listener: () => void): () => void {

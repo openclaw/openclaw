@@ -48,18 +48,17 @@ loads or applies CSS itself.
 
 Solid consumers import `t` from `lib/reactive/i18n.ts` and keep the call shape
 `t("key", params)`. It reads a locale/catalog revision through `projectI18n()`.
-The existing Lit translator and English registrars are unchanged. Locale loading,
-fallback, persistence, and stale-load rejection stay in the i18n manager. Solid
-consumers call `registerEnglishCatalog(registerPageEnglish)` before reading that
-page's lazy keys. This delegates to the existing owner and notifies the Solid
-projections; repeated English registration does not trigger render loops.
-Calling a legacy registrar directly does not notify Solid readers.
+Locale loading, fallback, persistence, and stale-load rejection stay in the i18n
+manager. Solid consumers call `registerEnglishCatalog(registerPageEnglish)`
+before reading that page's lazy keys. This delegates to the existing owner and
+notifies the Solid projections; repeated English registration does not trigger
+render loops. Calling a legacy registrar directly does not notify Solid readers.
 
 `ApplicationContext` and its supporting types live in `app/context-types.ts`.
-`app/context.ts` retains the Lit token during migration. Solid callers use
-`ApplicationProvider` and `useApplication()` from `context.ts` in this directory;
-both renderers receive the same capability object. Providers do not assume
-ownership of those capabilities.
+`app/context.ts` defines the native context-request token. Solid callers use
+`ApplicationProvider` and `useApplication()` from `context.ts` in this directory.
+Native hosts request the same capability object through the DOM context
+transport. Providers do not assume ownership of those capabilities.
 
 These foundations do not mount new product UI. The tests exercise real owner
 publication paths plus shared subscription, replacement, and disposal contracts.
@@ -87,6 +86,4 @@ phase, after DOM bindings. Requests made from a callback wait for the following
 generation. ResizeObserver, child custom elements, images, and overlay animations
 retain their own settlement contracts. The method owns returned cleanup until the
 callback calls `complete`, is cancelled, the pane parks, or the owner disposes.
-Pending callbacks wait through parking; disposal cancels them. Lit callers keep
-using the renderer-neutral interface and the existing controller adapter until
-their port lands.
+Pending callbacks wait through parking; disposal cancels them.

@@ -1,7 +1,6 @@
 import { execFile, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
-import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveForwardedNodeCompilerArgs } from "../bootstrap/node-compiler-args.js";
@@ -11,6 +10,11 @@ import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
+import {
+  assertChildRuntimeAvailable,
+  classifyChildRuntimeFailure,
+  observeChildRuntime,
+} from "./child-runtime-viability.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
@@ -478,6 +482,7 @@ export function runOneShotSqliteInspection<T>(params: {
     deadlineReached: boolean,
   ) => T;
 }): Promise<T> {
+  assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget(params.operation, params.pathname);
   return new Promise<T>((resolve, reject) => {
     let output: Extract<SqliteReadOnlyWorkerOutput, { kind: "launched" }> = {
@@ -493,6 +498,7 @@ export function runOneShotSqliteInspection<T>(params: {
       params.argv,
       {
         encoding: "utf8",
+        windowsHide: true,
         env: params.env ?? resolveNodeCompileCacheEnv(),
         cwd: params.cwd,
         maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
@@ -521,6 +527,7 @@ export function runOneShotSqliteInspection<T>(params: {
         };
       },
     );
+    const runtimeFailure = observeChildRuntime(child);
     const interrupt = () => {
       if (params.interrupt) {
         params.interrupt(child);
@@ -560,6 +567,10 @@ export function runOneShotSqliteInspection<T>(params: {
       clearTimeout(timer);
       params.signal?.removeEventListener("abort", abort);
       try {
+        const failure = runtimeFailure();
+        if (failure) {
+          throw failure;
+        }
         resolve(params.read(output, deadlineReached));
       } catch (workerError) {
         reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
@@ -573,21 +584,29 @@ export function runSqliteReadOnlyWorkerSync(
   stagingRoot: string | undefined,
   mode: "sync" | "content-version" | "file-generation" = "sync",
 ): string {
+  assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
-  const started = log.isEnabled("trace") ? performance.now() : undefined;
   const result = spawnSync(
     process.execPath,
     sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }).argv,
     {
       encoding: "utf8",
+      windowsHide: true,
+      stdio: "pipe",
       env: resolveNodeCompileCacheEnv(),
       maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
       timeout: timeoutMs,
       killSignal: "SIGKILL",
     },
   );
-  if (started !== undefined) {
-    log.trace(`SQLite read-only snapshot child durationMs=${performance.now() - started}`);
+  const runtimeFailure = classifyChildRuntimeFailure({
+    error: result.error,
+    stderr: result.stderr,
+    signal: result.signal,
+    started: Boolean(result.stdout),
+  });
+  if (runtimeFailure) {
+    throw runtimeFailure;
   }
   // A spawnSync error does not carry a readable result; Node may not have created its pipes.
   const output: SqliteReadOnlyWorkerOutput = result.error

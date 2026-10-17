@@ -5,12 +5,12 @@ import { MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  captureSqliteDatabaseAdmissions,
-  withSqliteDatabaseAdmissionExchange,
+  captureSqliteDatabaseAdmissions as captureAdmissions,
+  withSqliteDatabaseAdmissionExchange as withAdmissionExchange,
 } from "../infra/sqlite-database-admission.js";
 import {
-  createSqliteWorkerOperationAdmission,
-  withSqliteWorkerOperationAdmission,
+  createSqliteWorkerOperationAdmission as createAdmission,
+  withSqliteWorkerOperationAdmission as withAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 
 const chmodFailHook = vi.hoisted(() => ({
@@ -44,16 +44,18 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const chmodSync: typeof actual.chmodSync = ((target: unknown, mode: unknown) => {
-    chmodFailHook.calls.push(target);
-    if (chmodFailHook.error) {
-      throw chmodFailHook.error;
-    }
-    if (chmodFailHook.removeTarget && target === chmodFailHook.removeTarget) {
-      actual.unlinkSync(chmodFailHook.removeTarget);
-    }
-    return (actual.chmodSync as (...args: unknown[]) => unknown)(target, mode);
-  }) as typeof actual.chmodSync;
+  const chmodSync = new Proxy(actual.chmodSync, {
+    apply(target, receiver, args) {
+      chmodFailHook.calls.push(args[0]);
+      if (chmodFailHook.error) {
+        throw chmodFailHook.error;
+      }
+      if (chmodFailHook.removeTarget && args[0] === chmodFailHook.removeTarget) {
+        actual.unlinkSync(chmodFailHook.removeTarget);
+      }
+      return Reflect.apply(target, receiver, args);
+    },
+  });
   const countStat = <T extends typeof actual.statSync | typeof actual.lstatSync>(stat: T): T =>
     new Proxy(stat, {
       apply(target, receiver, args) {
@@ -63,26 +65,29 @@ vi.mock("node:fs", async (importOriginal) => {
     });
   const statSync = countStat(actual.statSync);
   const lstatSync = countStat(actual.lstatSync);
-  return {
-    ...actual,
-    chmodSync,
-    statSync,
-    lstatSync,
-    default: { ...actual, chmodSync, statSync, lstatSync },
-  };
+  const mocked = { ...actual, chmodSync, statSync, lstatSync };
+  return { ...mocked, default: mocked };
 });
 
 const {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
+  closeOpenClawAgentDatabasesForTest: closeAgents,
+  openOpenClawAgentDatabase: openAgent,
+  runOpenClawAgentWriteTransaction: writeAgent,
 } = await import("./openclaw-agent-db.js");
 const { openExistingSqliteWorkerBackend } = await import("./openclaw-agent-execution.worker.js");
-const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
-  await import("./openclaw-state-db.js");
+const {
+  closeOpenClawStateDatabaseForTest: closeStateForTest,
+  openOpenClawStateDatabase: openState,
+} = await import("./openclaw-state-db.js");
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const backends = new Set<ReturnType<typeof openExistingSqliteWorkerBackend>>();
+const makeOptions = () => ({
+  agentId: "worker-1",
+  env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-permissions-") },
+});
+const permissionFailure = (message: string) =>
+  Object.assign(new Error(message), { code: "EACCES" });
 
 describe("agent database permission repair", () => {
   afterEach(async () => {
@@ -93,20 +98,17 @@ describe("agent database permission repair", () => {
     workerAdmission.mockReset();
     await Promise.all([...backends].map((backend) => Promise.resolve(backend.close())));
     backends.clear();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    closeAgents();
+    closeStateForTest();
   });
 
   it("rolls back a warm borrowed write after commit authority is refused", async () => {
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-worker-permissions-") },
-    };
-    const seeded = openOpenClawAgentDatabase(options);
+    const options = makeOptions();
+    const seeded = openAgent(options);
     const databasePath = seeded.path;
     seeded.db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
-    closeOpenClawAgentDatabasesForTest();
-    const shared = openOpenClawStateDatabase({ env: options.env });
+    closeAgents();
+    const shared = openState({ env: options.env });
     const backend = openExistingSqliteWorkerBackend(
       {
         agentId: options.agentId,
@@ -119,15 +121,15 @@ describe("agent database permission repair", () => {
     );
     backends.add(backend);
     const execute = (command: Parameters<typeof backend.execute>[0]) => {
-      const admission = createSqliteWorkerOperationAdmission(() => {}, {
+      const admission = createAdmission(() => {}, {
         kind: "agent-execution",
         startupJournal: false,
       });
       try {
-        return withSqliteWorkerOperationAdmission(admission, () =>
+        return withAdmission(admission, () =>
           // This fixture runs both owners in one isolate; a port round trip would deadlock.
-          withSqliteDatabaseAdmissionExchange(
-            () => captureSqliteDatabaseAdmissions(),
+          withAdmissionExchange(
+            () => captureAdmissions(),
             () => backend.execute(command),
           ),
         );
@@ -136,7 +138,11 @@ describe("agent database permission repair", () => {
       }
     };
     execute({ type: "database.prepareWrite", input: undefined });
-    const database = openOpenClawAgentDatabase(options);
+    const database = openAgent(options);
+    const expectValues = (...values: string[]) =>
+      expect(database.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual(
+        values.map((value) => ({ value })),
+      );
     const bind = {
       type: "database.domain.bind" as const,
       input: {
@@ -159,9 +165,7 @@ describe("agent database permission repair", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(databasePath, 0o644);
     }
-    const refused = Object.assign(new Error("authority refused before commit"), {
-      code: "EACCES",
-    });
+    const refused = permissionFailure("authority refused before commit");
     chmodFailHook.calls = [];
     workerAdmission.mockClear();
     workerAdmission.mockImplementation((request) => {
@@ -177,55 +181,41 @@ describe("agent database permission repair", () => {
     });
     expect(chmodFailHook.calls).toEqual([]);
     backend.assertSettled?.();
-    expect(database.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
-      { value: "accepted" },
-    ]);
+    expectValues("accepted");
 
     chmodFailHook.error = undefined;
     workerAdmission.mockReset();
     append("recovered");
-    expect(database.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
-      { value: "accepted" },
-      { value: "recovered" },
-    ]);
+    expectValues("accepted", "recovered");
     if (process.platform !== "win32") {
       expect(fs.statSync(databasePath).mode & 0o7777).toBe(0o644);
     }
   });
 
   it("refuses to open a database when permission repair fails", () => {
-    const stateDir = tempDirs.make("openclaw-agent-chmod-");
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    };
-    const database = openOpenClawAgentDatabase(options);
-    closeOpenClawAgentDatabasesForTest();
-    const permissionError = Object.assign(new Error("EACCES: chmod failed"), {
-      code: "EACCES",
-    });
+    const options = makeOptions();
+    const database = openAgent(options);
+    closeAgents();
+    const permissionError = permissionFailure("EACCES: chmod failed");
     if (process.platform !== "win32") {
       fs.chmodSync(database.path, 0o644);
     }
     chmodFailHook.error = permissionError;
 
-    expect(() => openOpenClawAgentDatabase(options)).toThrow(permissionError);
+    expect(() => openAgent(options)).toThrow(permissionError);
     chmodFailHook.error = undefined;
-    expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
+    expect(openAgent(options).db.isOpen).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
     "bounds warm write filesystem checks and repairs permission drift on reopen",
     () => {
-      const options = {
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-chmod-") },
-      };
-      const database = openOpenClawAgentDatabase(options);
+      const options = makeOptions();
+      const database = openAgent(options);
       const directory = path.dirname(database.path);
       const files = [database.path, `${database.path}-wal`, `${database.path}-shm`];
       const write = () =>
-        runOpenClawAgentWriteTransaction(({ db }) => {
+        writeAgent(({ db }) => {
           db.prepare("UPDATE schema_meta SET updated_at = updated_at + 1").run();
         }, options);
 
@@ -244,8 +234,8 @@ describe("agent database permission repair", () => {
       }
       write();
       expect(fs.statSync(database.path).mode & 0o7777).toBe(0o4600);
-      closeOpenClawAgentDatabasesForTest();
-      openOpenClawAgentDatabase(options);
+      closeAgents();
+      openAgent(options);
       expect(fs.statSync(directory).mode & 0o7777).toBe(0o700);
       expect(fs.statSync(database.path).mode & 0o7777).toBe(0o600);
     },
@@ -295,17 +285,14 @@ describe("agent database permission repair", () => {
   });
 
   it("opens when a transient sidecar disappears during permission repair", () => {
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-sidecar-") },
-    };
-    const database = openOpenClawAgentDatabase(options);
+    const options = makeOptions();
+    const database = openAgent(options);
     const journal = `${database.path}-journal`;
-    closeOpenClawAgentDatabasesForTest();
+    closeAgents();
     fs.writeFileSync(journal, "", { mode: 0o644 });
     fs.chmodSync(journal, 0o644);
     chmodFailHook.removeTarget = journal;
-    expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
+    expect(openAgent(options).db.isOpen).toBe(true);
     expect(fs.existsSync(journal)).toBe(false);
   });
 });

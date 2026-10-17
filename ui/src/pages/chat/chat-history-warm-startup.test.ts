@@ -10,6 +10,7 @@ import {
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
+  chatHistoryRequests,
   resetChatHistoryProjection,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
@@ -66,7 +67,6 @@ function mountPane(
   ) as unknown as TestChatPane;
   panes.push(pane);
   vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-  vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({
       offlineRecoveryScope: "test-recovery-scope",
@@ -84,7 +84,7 @@ function mountPane(
   vi.spyOn(pane.chatState, "attach").mockImplementation(() => {
     throw attached;
   });
-  expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(attached);
+  expect(() => getPaneTestRuntime(pane).start()).toThrow(attached);
   const state = pane.state;
   const liveResult = {
     messages: liveMessages,
@@ -232,7 +232,7 @@ describe("first chat startup snapshot ordering", () => {
         expect(h.state.chatMessages).toEqual([]);
       }
       record.resolve({
-        projectionVersion: 2,
+        projectionVersion: 3,
         savedAt: Date.now(),
         sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
         sessionId: snapshot.sessionId,
@@ -321,6 +321,38 @@ describe("first chat startup snapshot ordering", () => {
     );
   });
 
+  it("shares the restored cursor request when the cache settles during stream admission", async () => {
+    const h = mountPane();
+    const admission = createDeferred<boolean>();
+    chatHistoryRequests(h.state).subscriptionReady = admission.promise;
+    const delta = {
+      kind: "delta" as const,
+      messages: [],
+      sessionInfo: h.liveResult.sessionInfo,
+      deltaCursor: "live-cursor",
+    };
+    const response = createDeferred<typeof delta>();
+    h.request.mockReturnValueOnce(response.promise);
+    h.connect();
+    const loading = h.start();
+    h.read.resolve(stored);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.chatMessages).toEqual(stored.messages);
+    expect(h.request).not.toHaveBeenCalled();
+    admission.resolve(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+      "chat.startup",
+      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+    );
+    const shared = h.start();
+    response.resolve(delta);
+    await Promise.all([loading, shared]);
+    expect(h.request).toHaveBeenCalledTimes(1);
+    expect(h.state.chatMessages).toEqual(stored.messages);
+  });
+
   it("shares an immediate startup between callers while the local read is pending", async () => {
     const h = mountPane();
     h.connect();
@@ -399,7 +431,7 @@ describe("first chat startup snapshot ordering", () => {
     const loading = h.start();
     expect(h.request).toHaveBeenCalledOnce();
     record.resolve({
-      projectionVersion: 2,
+      projectionVersion: 3,
       savedAt: Date.now(),
       sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
       sessionId: stored.sessionId,

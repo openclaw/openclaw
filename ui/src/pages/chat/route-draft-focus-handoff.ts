@@ -113,6 +113,7 @@ export class RouteDraftComposerFocus {
         this.timer = undefined;
         return;
       }
+      // Route replacement remounts pane bridges; resolve their current composer for this handoff.
       const pane = [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
         (candidate) =>
           candidate.active &&

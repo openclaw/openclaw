@@ -11,8 +11,12 @@ import { validateSetupWorkspacePath } from "./setup.workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const writeConfig = vi.hoisted(() => vi.fn());
-vi.mock("./setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: async () => ({ exists: false, valid: true, config: {} }),
+vi.mock("./setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup.shared.js")>()),
+  readSetupConfigAuthority: async () => ({
+    snapshot: { exists: false, valid: true, config: {} },
+    assertCurrent: () => {},
+  }),
   requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
   requestTelemetryConsent: async ({ config }: { config: OpenClawConfig }) => config,
   resolveQuickstartGatewayDefaults: () => ({ port: 19791 }),

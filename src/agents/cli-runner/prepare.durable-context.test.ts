@@ -11,13 +11,14 @@ import { stageSessionPendingInput } from "../../config/sessions/session-accessor
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../cli-runner.test-helpers.js";
-import * as maintenance from "../embedded-agent-runner/context-engine-maintenance.js";
+import * as maintenance from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { executePreparedCliRun } from "./execute.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -328,22 +329,20 @@ describe("CLI durable session context", () => {
     });
     const history = await prepareOwnedHistory();
     const { sessionTarget } = fixture.session;
-    const wait = vi
-      .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
-      .mockImplementation(async () => {
-        history.appendTranscript({
-          id: "completed-maintenance-note",
-          parentId: null,
-          timestamp: new Date(1).toISOString(),
-          message: {
-            role: "custom",
-            customType: "openclaw.system-note",
-            content: "FACT_AFTER_MAINTENANCE",
-            display: false,
-            timestamp: 1,
-          },
-        });
+    const wait = vi.spyOn(maintenance, "waitForSessionMaintenance").mockImplementation(async () => {
+      history.appendTranscript({
+        id: "completed-maintenance-note",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "custom",
+          customType: "openclaw.system-note",
+          content: "FACT_AFTER_MAINTENANCE",
+          display: false,
+          timestamp: 1,
+        },
       });
+    });
     const context = await history.prepare({ sessionKey: sessionTarget.sessionKey });
     try {
       expect(wait).toHaveBeenCalledExactlyOnceWith(sessionTarget.sessionKey);
@@ -472,6 +471,52 @@ describe("CLI durable session context", () => {
         expect(context.openClawHistoryPrompt).toBeUndefined();
       } finally {
         await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
+
+  it.each([{ changeAccount: false }, { changeAccount: true }])(
+    "replays owned uncompacted history to a session-less backend, changeAccount=$changeAccount",
+    async ({ changeAccount }) => {
+      const backend = buildDefaultTestCliBackend({ reseedFromRawTranscriptWhenUncompacted: true });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          { ...backend, config: { ...backend.config, sessionMode: "none" } },
+        ],
+      });
+      const history = await prepareOwnedHistory();
+      history.appendTranscript({
+        id: "prior-ask",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: "the invoice is in the blue folder", timestamp: 1 },
+      });
+      const { sessionTarget } = fixture.session;
+      // Reply execution admits the current user turn before CLI preparation.
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "latest ask", idempotencyKey: "stateless-current-turn" },
+        target: {
+          ...sessionTarget,
+          sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+        },
+      });
+      await recorder.persistApproved();
+      expect(recorder.getAdmissionReceipt()).toBeDefined();
+      const context = await history.prepare({
+        userTurnTranscriptRecorder: recorder,
+        ...(changeAccount ? { authProfileId: "history-test:other" } : {}),
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+
+      expect(context.reusableCliSession).toEqual({ mode: "none" });
+      if (changeAccount) {
+        expect(context.openClawHistoryPrompt).toBeUndefined();
+      } else {
+        expect(context.openClawHistoryPrompt).toEqual(
+          expect.stringContaining("User: the invoice is in the blue folder"),
+        );
+        expect(context.openClawHistoryPrompt?.split("latest ask")).toHaveLength(2);
       }
     },
   );

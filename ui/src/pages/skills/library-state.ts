@@ -25,7 +25,7 @@ export type LibraryDraft = {
   entry: SkillLibraryEntry | null;
   slug: string;
   content: string;
-  files: SkillLibraryFile[];
+  files: readonly Readonly<SkillLibraryFile>[];
   baseFiles: readonly Readonly<SkillLibraryFile>[];
   revisions: SkillsLibraryReadResult["revisions"];
   selectedFile: string;
@@ -39,7 +39,7 @@ function libraryDraft(read?: SkillsLibraryReadResult): LibraryDraft {
     slug: read ? read.entry.slug : "",
     content: read ? read.content : "",
     files: read ? read.files : [],
-    baseFiles: read ? read.files.map((file) => ({ ...file })) : [],
+    baseFiles: read ? read.files : [],
     revisions: read ? read.revisions : [],
     selectedFile: "SKILL.md",
     rollbackRevision: "",
@@ -281,7 +281,7 @@ export function createSkillLibrary(
           assertUploadsEnabled(config());
         }
         const client = connection.client;
-        const savedFiles = draft.files.map((file) => ({ ...file }));
+        const savedFiles = draft.files;
         const baseFiles = new Map(draft.baseFiles.map((file) => [file.path, file]));
         const retainFiles: string[] = [];
         const files = savedFiles.filter((file) => {
@@ -365,7 +365,7 @@ export function createSkillLibrary(
           }
           draft.content = read.content;
           draft.files = read.files;
-          draft.baseFiles = read.files.map((file) => ({ ...file }));
+          draft.baseFiles = read.files;
           draft.revisions = read.revisions;
           draft.selectedFile = "SKILL.md";
           draft.rollbackRevision = "";

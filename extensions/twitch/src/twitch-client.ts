@@ -60,7 +60,7 @@ export class TwitchClientManager {
       });
 
       try {
-        const userId = await authProvider.addUserForToken(
+        await authProvider.addUserForToken(
           {
             accessToken: normalizedToken,
             refreshToken: account.refreshToken ?? null,
@@ -69,7 +69,6 @@ export class TwitchClientManager {
           },
           TWITCH_CHAT_AUTH_INTENTS,
         );
-        this.logger.info(`Added user ${userId} to RefreshingAuthProvider for ${account.username}`);
       } catch (err) {
         throw new Error(
           `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
@@ -79,25 +78,13 @@ export class TwitchClientManager {
         );
       }
 
-      authProvider.onRefresh((userId, token) => {
-        this.logger.info(
-          `Access token refreshed for user ${userId} (expires in ${token.expiresIn ? `${token.expiresIn}s` : "unknown"})`,
-        );
-      });
-
       authProvider.onRefreshFailure((userId, error) => {
         this.logger.error(`Failed to refresh access token for user ${userId}: ${error.message}`);
       });
 
-      const refreshStatus = account.refreshToken
-        ? "automatic token refresh enabled"
-        : "token refresh disabled (no refresh token)";
-      this.logger.info(`Using RefreshingAuthProvider for ${account.username} (${refreshStatus})`);
-
       return authProvider;
     }
 
-    this.logger.info(`Using StaticAuthProvider for ${account.username} (no clientSecret provided)`);
     return new StaticAuthProvider(clientId, normalizedToken);
   }
 
@@ -149,11 +136,8 @@ export class TwitchClientManager {
       );
     }
 
-    this.logger.debug?.(`Using ${tokenResolution.source} token source for ${account.username}`);
-
     if (!account.clientId) {
-      this.logger.error(`Missing Twitch client ID for account ${account.username}`);
-      throw new Error("Missing Twitch client ID");
+      throw new Error(`Missing Twitch client ID for account ${account.username}`);
     }
 
     const normalizedToken = normalizeToken(tokenResolution.token);
@@ -175,7 +159,12 @@ export class TwitchClientManager {
             switch (level) {
               case LogLevel.CRITICAL:
               case LogLevel.ERROR:
-                this.logger.error(message);
+                // ircv3 parser errors can quote the raw incoming line or parameter.
+                this.logger.error(
+                  message.startsWith("Error parsing message: ")
+                    ? "Twitch IRC message parsing failed"
+                    : message,
+                );
                 break;
               case LogLevel.WARNING:
                 this.logger.warn(message);
@@ -206,7 +195,7 @@ export class TwitchClientManager {
       }
     }
 
-    this.setupClientHandlers(client, account);
+    this.setupClientHandlers(client);
     this.client = client;
     this.logger.info(`Connected to Twitch as ${account.username}`);
 
@@ -256,9 +245,6 @@ export class TwitchClientManager {
             this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
           }
           if (authRetryPending && !manual) {
-            this.logger.debug?.(
-              `Twitch disconnected during auth retry for ${account.username}: ${formatErrorMessage(reason)}`,
-            );
             return;
           }
           finish(
@@ -284,15 +270,10 @@ export class TwitchClientManager {
     });
   }
 
-  private setupClientHandlers(client: ChatClient, account: TwitchAccountConfig): void {
+  private setupClientHandlers(client: ChatClient): void {
     client.onMessage((channelName, _user, messageText, msg) => {
       const handler = this.messageHandler?.handler;
       if (handler) {
-        const from = `twitch:${msg.userInfo.userName}`;
-        this.logger.debug?.(
-          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length}`,
-        );
-
         handler({
           username: msg.userInfo.userName,
           displayName: msg.userInfo.displayName,
@@ -319,8 +300,6 @@ export class TwitchClientManager {
         this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
       }
     });
-
-    this.logger.info(`Set up handlers for ${account.username}:${account.channel}`);
   }
 
   onMessage(handler: (message: TwitchChatMessage) => void): () => void {
@@ -342,7 +321,6 @@ export class TwitchClientManager {
     this.connectionPromise = undefined;
     this.client = undefined;
     this.messageHandler = undefined;
-    this.logger.info(" Disconnected all clients");
   }
 
   async sendMessage(
@@ -386,7 +364,6 @@ export class TwitchClientManager {
         throw error;
       }
       const errorMessage = formatErrorMessage(error);
-      this.logger.error(`Failed to send message: ${errorMessage}`);
       return { ok: false, error: errorMessage };
     }
   }

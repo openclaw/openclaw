@@ -9,6 +9,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
@@ -27,7 +28,6 @@ import {
   runSqliteReadOnlyOperation,
 } from "./sqlite-readonly-worker.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
-import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "./sqlite-worker-transfer.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -48,22 +48,27 @@ let expectedIdentity: string;
 let env: NodeJS.ProcessEnv;
 let child: ChildProcess;
 let sourceDigest: string;
-const contents = JSON.stringify({
-  providers: {
-    fixture: {
-      models: [{ id: "fixture-model", name: `${"catalog".repeat(1_300_000)}🌊` }],
-    },
-  },
-});
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
-function read(pluginIds: string[], signal?: AbortSignal) {
-  return scope.run(() =>
-    runSqliteReadOnlyOperation(
-      source,
-      { type: "pluginCatalog.read", input: { agentId: "main", pluginIds } },
-      { source: "canonical", expectedIdentity, env, signal },
+function readCommand(pathname = source) {
+  return {
+    type: "agentRetirement.sessionStoreBlocker" as const,
+    input: prepareAgentSessionStoreDeletionSafety(
+      { agents: { entries: { survivor: {} } }, session: { store: pathname } },
+      "main",
+      env,
     ),
+  };
+}
+
+function read(signal?: AbortSignal) {
+  return scope.run(() =>
+    runSqliteReadOnlyOperation(source, readCommand(), {
+      source: "canonical",
+      expectedIdentity,
+      env,
+      signal,
+    }),
   );
 }
 
@@ -74,36 +79,13 @@ beforeAll(async () => {
   createCurrentOpenClawAgentDatabaseFixtures(path.join(root, "template.sqlite"), [
     { path: source, agentId: "main" },
   ]);
-  const database = new DatabaseSync(source);
-  try {
-    const insert = database.prepare(
-      "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
-    );
-    insert.run("plugin-model-catalog-v1", "fixture", contents, 1);
-    insert.run("plugin-model-catalog-v1", "small", "small catalog", 1);
-  } finally {
-    database.close();
-  }
   expectedIdentity = readDatabasePathIdentitySync(source).key;
   sourceDigest = digest(readFileSync(source));
-  await read(["small"]);
+  await read();
   child = vi.mocked(spawn).mock.results[0]?.value;
 });
 
-it("preserves bounded catalog reads, queued inputs, and cancellation ownership", async ({
-  signal,
-}) => {
-  const frames: number[] = [];
-  const observeFrame = (message: unknown) => {
-    if (!isRecord(message) || !isRecord(message.result)) {
-      return;
-    }
-    const frame = message.result.frame;
-    if (isRecord(frame) && typeof frame.bytes === "string") {
-      frames.push(Buffer.from(frame.bytes, "base64").byteLength);
-    }
-  };
-  child.on("message", observeFrame);
+it("preserves off-thread reads, queued inputs, and cancellation ownership", async ({ signal }) => {
   const sql = [
     ...(["exec", "prepare", "close"] as const).map((method) =>
       vi.spyOn(DatabaseSync.prototype, method),
@@ -113,23 +95,12 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
     ),
   ];
   try {
-    const rows = await read(["fixture"]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.pluginId).toBe("fixture");
-    expect(digest(rows[0]?.contents ?? "")).toBe(digest(contents));
-    expect(frames.length).toBeGreaterThan(1);
-    expect(frames.every((bytes) => bytes > 0 && bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES)).toBe(
-      true,
-    );
-    expect(frames.reduce((total, bytes) => total + bytes, 0)).toBeGreaterThan(
-      SQLITE_WORKER_TRANSFER_FRAME_BYTES,
-    );
+    await expect(read()).resolves.toEqual({ blocker: "survivor" });
     expect(digest(readFileSync(source))).toBe(sourceDigest);
     for (const operation of sql) {
       expect(operation).not.toHaveBeenCalled();
     }
   } finally {
-    child.off("message", observeFrame);
     for (const operation of sql) {
       operation.mockRestore();
     }
@@ -169,23 +140,23 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
   const activeAbort = new AbortController();
   const pending: Promise<unknown>[] = [];
   try {
-    const first = read(["small"]);
+    const first = read();
     pending.push(first);
     const release = await withinTest(
       awaitGateBeforeSettlement(paused.promise, first, "Read settled before its transfer started"),
       signal,
     );
     now = 10;
+    const prepared = readCommand();
     const command = {
-      type: "pluginCatalog.read" as const,
+      type: prepared.type,
       input: {
-        agentId: "main",
-        pluginIds: ["small"],
+        ...prepared.input,
         synthetic: {
           count: 9_007_199_254_740_993n,
           absent: undefined,
           owners: new Map([["fixture", "captured"]]),
-          selected: new Set(["small"]),
+          selected: new Set(["main"]),
         },
       },
     };
@@ -197,12 +168,12 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
       }),
     );
     pending.push(captured);
-    command.input.pluginIds[0] = "fixture";
+    command.input.agentId = "other";
     command.input.synthetic.count = 1n;
     command.input.synthetic.owners.set("fixture", "changed");
     command.input.synthetic.selected.add("fixture");
-    const queuedFailure = new Error("queued catalog read cancelled");
-    const queued = read(["fixture"], queuedAbort.signal);
+    const queuedFailure = new Error("queued ownership read cancelled");
+    const queued = read(queuedAbort.signal);
     pending.push(queued);
     const rejectedQueued = expect(queued).rejects.toBe(queuedFailure);
     queuedAbort.abort(queuedFailure);
@@ -210,8 +181,8 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
     expect(events.at(-1)).toMatchObject({ phase: "completed", queueDepth: 1 });
     now = 25;
     release();
-    await expect(first).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
-    await expect(captured).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
+    await expect(first).resolves.toEqual({ blocker: "survivor" });
+    await expect(captured).resolves.toEqual({ blocker: "survivor" });
     await rejectedQueued;
     const requests = () =>
       send.mock.calls.flatMap(([message]) =>
@@ -223,25 +194,25 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
       throw new Error("Expected a serialized operation command");
     }
     const decoded: unknown = deserialize(Buffer.from(encoded, "base64"));
-    expect(decoded).toStrictEqual({
-      type: "pluginCatalog.read",
-      input: {
-        agentId: "main",
-        pluginIds: ["small"],
-        synthetic: {
-          count: 9_007_199_254_740_993n,
-          absent: undefined,
-          owners: new Map([["fixture", "captured"]]),
-          selected: new Set(["small"]),
-        },
-      },
+    expect(decoded).toMatchObject({
+      type: "agentRetirement.sessionStoreBlocker",
+      input: { agentId: "main" },
+    });
+    if (!isRecord(decoded) || !isRecord(decoded.input)) {
+      throw new Error("Expected a deserialized operation input");
+    }
+    expect(decoded.input.synthetic).toStrictEqual({
+      count: 9_007_199_254_740_993n,
+      absent: undefined,
+      owners: new Map([["fixture", "captured"]]),
+      selected: new Set(["main"]),
     });
 
     paused = createDeferredCore<() => boolean>();
     pauseNextStart = true;
-    const active = read(["small"], activeAbort.signal);
+    const active = read(activeAbort.signal);
     pending.push(active);
-    const activeFailure = new Error("active catalog read cancelled");
+    const activeFailure = new Error("active ownership read cancelled");
     const rejectedActive = expect(active).rejects.toBe(activeFailure);
     await withinTest(
       awaitGateBeforeSettlement(paused.promise, active, "Read settled before cancellation"),
@@ -284,47 +255,33 @@ it("reuses workers across closed scopes without carrying database or inspection 
   const root = tempDirs.make("openclaw-readonly-second-");
   const other = path.join(root, "openclaw-agent.sqlite");
   createCurrentOpenClawAgentDatabaseFixtures(path.join(root, "template.sqlite"), [
-    { path: other, agentId: "main" },
+    { path: other, agentId: "other" },
   ]);
-  const database = new DatabaseSync(other);
-  try {
-    database
-      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run("plugin-model-catalog-v1", "small", "other database", 1);
-  } finally {
-    database.close();
-  }
   const start = vi.mocked(spawn).mock.calls.length;
   const query = async (pathname: string, artifactPreserving?: true) => {
     const request = createSqliteReadOnlyWorkerScope();
     try {
       return await request.run(() =>
-        runSqliteReadOnlyOperation(
-          pathname,
-          { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
-          {
-            source: "snapshot",
-            expectedIdentity: readDatabasePathIdentitySync(pathname).key,
-            env,
-            artifactPreserving,
-          },
-        ),
+        runSqliteReadOnlyOperation(pathname, readCommand(pathname), {
+          source: "snapshot",
+          expectedIdentity: readDatabasePathIdentitySync(pathname).key,
+          env,
+          artifactPreserving,
+        }),
       );
     } finally {
       await request.close();
     }
   };
-  await expect(query(source, true)).resolves.toEqual([
-    { pluginId: "small", contents: "small catalog" },
-  ]);
-  await expect(query(other)).resolves.toEqual([{ pluginId: "small", contents: "other database" }]);
+  await expect(query(source, true)).resolves.toEqual({ blocker: "survivor" });
+  await expect(query(other)).resolves.toEqual({ blocker: undefined });
   await expect(
-    runSqliteReadOnlyOperation(
-      source,
-      { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
-      { source: "canonical", expectedIdentity, env },
-    ),
-  ).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
+    runSqliteReadOnlyOperation(source, readCommand(), {
+      source: "canonical",
+      expectedIdentity,
+      env,
+    }),
+  ).resolves.toEqual({ blocker: "survivor" });
   expect(vi.mocked(spawn).mock.calls.length - start).toBe(1);
   const reusedChild = vi.mocked(spawn).mock.results.at(-1)?.value;
   expect(reusedChild.exitCode).toBeNull();
@@ -332,15 +289,12 @@ it("reuses workers across closed scopes without carrying database or inspection 
   await new Promise<void>((resolve) => {
     reusedChild.once("close", resolve);
   });
-  await expect(query(other)).resolves.toEqual([{ pluginId: "small", contents: "other database" }]);
+  await expect(query(other)).resolves.toEqual({ blocker: undefined });
   expect(vi.mocked(spawn).mock.calls.length - start).toBe(2);
 });
 
 it("closes a queued scope without waiting for an unrelated active transfer", async ({ signal }) => {
-  const command = {
-    type: "pluginCatalog.read" as const,
-    input: { agentId: "main", pluginIds: ["small"] },
-  };
+  const command = readCommand();
   const options = { source: "canonical" as const, expectedIdentity, env };
   await runSqliteReadOnlyOperation(source, command, options);
   const activeChild = vi.mocked(spawn).mock.results.at(-1)?.value;
@@ -395,7 +349,7 @@ it("closes a queued scope without waiting for an unrelated active transfer", asy
     await Promise.allSettled([active, queued, closing]);
     await firstScope.close();
   }
-  await expect(active).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
+  await expect(active).resolves.toEqual({ blocker: "survivor" });
 });
 
 it("bounds concurrent incompatible launches to four live reader processes", async () => {
@@ -414,20 +368,14 @@ it("bounds concurrent incompatible launches to four live reader processes", asyn
   try {
     const rows = await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
-        runSqliteReadOnlyOperation(
-          source,
-          { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
-          {
-            source: "canonical",
-            expectedIdentity,
-            env: { ...env, OPENCLAW_POOL_FIXTURE: String(index) },
-          },
-        ),
+        runSqliteReadOnlyOperation(source, readCommand(), {
+          source: "canonical",
+          expectedIdentity,
+          env: { ...env, OPENCLAW_POOL_FIXTURE: String(index) },
+        }),
       ),
     );
-    expect(rows).toEqual(
-      Array.from({ length: 8 }, () => [{ pluginId: "small", contents: "small catalog" }]),
-    );
+    expect(rows).toEqual(Array.from({ length: 8 }, () => ({ blocker: "survivor" })));
     expect(peak).toBeLessThanOrEqual(4);
   } finally {
     await cleanupSnapshotOperations();
@@ -453,7 +401,7 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
   });
   const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
   const start = vi.mocked(spawn).mock.calls.length;
-  const readSmall = () =>
+  const readOwner = () =>
     readPool.run(
       source,
       {
@@ -461,25 +409,25 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
         source: "canonical",
         expectedIdentity,
         env,
-        command: { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
+        command: readCommand(),
       },
       launch,
     );
   try {
     for (let index = 0; index < 4; index++) {
-      await expect(readSmall()).rejects.toThrow("SQLite read and child cleanup failed");
+      await expect(readOwner()).rejects.toThrow("SQLite read and child cleanup failed");
       expect(vi.mocked(spawn).mock.calls.length - start).toBe(index + 1);
       expect(closeMocks[index]).toHaveBeenCalledTimes(2);
       if (index < 3) {
         capabilities.mockReturnValue(qualified);
-        await expect(readSmall()).resolves.toEqual({
-          operation: "pluginCatalog.read",
-          value: [{ pluginId: "small", contents: "small catalog" }],
+        await expect(readOwner()).resolves.toEqual({
+          operation: "agentRetirement.sessionStoreBlocker",
+          value: { blocker: "survivor" },
         });
         capabilities.mockReturnValue(unqualified);
       }
     }
-    await expect(readSmall()).rejects.toThrow("capacity is held by unconfirmed cleanup");
+    await expect(readOwner()).rejects.toThrow("capacity is held by unconfirmed cleanup");
     expect(vi.mocked(spawn).mock.calls.length - start).toBe(4);
     for (const close of closeMocks) {
       expect(close).toHaveBeenCalledTimes(2);
@@ -534,7 +482,7 @@ it.skipIf(process.platform !== "linux")(
           source: "canonical",
           expectedIdentity,
           env,
-          command: { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
+          command: readCommand(),
         },
         launch,
       );
@@ -575,15 +523,11 @@ it.skipIf(process.platform !== "linux")(
       const secondChild: ChildProcess = vi.mocked(spawn).mock.results.at(-1)?.value;
       expect(secondChild).not.toBe(firstChild);
       for (let index = 0; index < 5; index++) {
-        await runSqliteReadOnlyOperation(
-          source,
-          { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
-          {
-            source: "canonical",
-            expectedIdentity,
-            env: { ...env, OPENCLAW_POOL_FIXTURE: `paced-${index}` },
-          },
-        );
+        await runSqliteReadOnlyOperation(source, readCommand(), {
+          source: "canonical",
+          expectedIdentity,
+          env: { ...env, OPENCLAW_POOL_FIXTURE: `paced-${index}` },
+        });
       }
       const progress = await first.run(() =>
         runSqliteReadOnlyOperation(
@@ -634,18 +578,18 @@ it.skipIf(process.platform !== "linux")(
           ),
         ),
       );
-      const readSmall = () =>
-        runSqliteReadOnlyOperation(
-          source,
-          { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
-          { source: "canonical", expectedIdentity, env },
-        );
+      const readOwner = () =>
+        runSqliteReadOnlyOperation(source, readCommand(), {
+          source: "canonical",
+          expectedIdentity,
+          env,
+        });
       let settled = false;
-      const queued = waiting.run(readSmall).then((rows) => {
+      const queued = waiting.run(readOwner).then((rows) => {
         settled = true;
         return rows;
       });
-      const cancelled = aborting.run(readSmall);
+      const cancelled = aborting.run(readOwner);
       const rejected = expect(cancelled).rejects.toThrow("scope closed");
       await aborting.close();
       await rejected;
@@ -653,9 +597,7 @@ it.skipIf(process.platform !== "linux")(
       expect(settled).toBe(false);
       expect(vi.mocked(spawn).mock.calls.length - start).toBe(4);
       await warmers[0]!.close();
-      await expect(withinTest(queued, signal)).resolves.toEqual([
-        { pluginId: "small", contents: "small catalog" },
-      ]);
+      await expect(withinTest(queued, signal)).resolves.toEqual({ blocker: "survivor" });
     } finally {
       await Promise.all([...warmers, waiting, aborting].map((request) => request.close()));
     }
@@ -668,20 +610,20 @@ it.skipIf(process.platform !== "linux")(
     const first = createSpawnBrokerHost();
     const second = createSpawnBrokerHost();
     const readerScope = createSqliteReadOnlyWorkerScope();
-    const readSmall = () =>
+    const readOwner = () =>
       readerScope.run(() =>
-        runSqliteReadOnlyOperation(
-          source,
-          { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["small"] } },
-          { source: "canonical", expectedIdentity, env },
-        ),
+        runSqliteReadOnlyOperation(source, readCommand(), {
+          source: "canonical",
+          expectedIdentity,
+          env,
+        }),
       );
     const firstSpawn = vi.spyOn(first, "spawn");
     const secondSpawn = vi.spyOn(second, "spawn");
     try {
       await Promise.all([first.ready(), second.ready()]);
-      await runWithSpawnBroker(second, readSmall);
-      await runWithSpawnBroker(first, readSmall);
+      await runWithSpawnBroker(second, readOwner);
+      await runWithSpawnBroker(first, readOwner);
       const firstChild = firstSpawn.mock.results[0]!.value;
       const secondChild = secondSpawn.mock.results[0]!.value;
       expect(firstChild.exitCode).toBeNull();
@@ -694,11 +636,9 @@ it.skipIf(process.platform !== "linux")(
       expect(firstChild.exitCode).toBe(0);
       expect(firstChild.connected).toBe(false);
       expect(secondChild.exitCode).toBeNull();
-      await expect(runWithSpawnBroker(second, readSmall)).resolves.toEqual([
-        { pluginId: "small", contents: "small catalog" },
-      ]);
+      await expect(runWithSpawnBroker(second, readOwner)).resolves.toEqual({ blocker: "survivor" });
       expect(secondSpawn).toHaveBeenCalledTimes(1);
-      await expect(runWithSpawnBroker(first, readSmall)).rejects.toThrow("broker is closing");
+      await expect(runWithSpawnBroker(first, readOwner)).rejects.toThrow("broker is closing");
     } finally {
       try {
         await readerScope.close();

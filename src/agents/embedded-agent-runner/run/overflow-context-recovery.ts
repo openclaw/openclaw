@@ -225,15 +225,6 @@ export async function recoverEmbeddedRunOverflow(
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
-  const logCompactionDecision = (branch: "compact" | "give_up", attempt: number) => {
-    if (log.isEnabled("debug")) {
-      log.debug(
-        `[compaction-diag] decision diagId=${overflowDiagId} branch=${branch} ` +
-          `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
-          `attempt=${attempt} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-      );
-    }
-  };
 
   // Compaction here budgets against the model's context window, so it cannot make the request fit
   // under the provider's own ceiling, and every retry re-sends a payload already rejected. Stop
@@ -277,7 +268,6 @@ export async function recoverEmbeddedRunOverflow(
     input.attemptCompactionCount === 0 &&
     input.state.overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
   ) {
-    logCompactionDecision("compact", input.state.overflowCompactionAttempts + 1);
     input.state.overflowCompactionAttempts += 1;
     log.warn(
       `${pressureDescription} detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.modelSelection.provider}/${input.modelSelection.model}`,
@@ -428,12 +418,6 @@ export async function recoverEmbeddedRunOverflow(
     }
   }
 
-  if (
-    isCompactionFailure ||
-    input.state.overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS
-  ) {
-    logCompactionDecision("give_up", input.state.overflowCompactionAttempts);
-  }
   const preflightCompactionFailed = isPreflightRecovery && failedCompactionReason !== undefined;
   const reasonClass = classifyCompactionReason(failedCompactionReason);
   const unshrinkableRequest = reasonClass === "unshrinkable_request";

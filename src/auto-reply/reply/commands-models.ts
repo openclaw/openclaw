@@ -139,7 +139,7 @@ async function resolveProviderLabelAsync(params: ProviderLabelParams): Promise<s
   );
 }
 
-/** @deprecated Use formatModelsAvailableHeaderAsync. Supported through 2026-12-31. */
+/** @deprecated Use formatModelsAvailableHeaderAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;

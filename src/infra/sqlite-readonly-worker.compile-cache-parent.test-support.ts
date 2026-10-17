@@ -4,6 +4,7 @@ import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
 import { runScopedSqliteReadOnlyOperation } from "./sqlite-readonly-worker.js";
 import {
@@ -79,14 +80,17 @@ await withSqliteSnapshotWorker(new AbortController().signal, async (worker, dire
   const result = await runScopedSqliteReadOnlyOperation(
     worker,
     source,
-    { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: [] } },
+    {
+      type: "agentRetirement.sessionStoreBlocker",
+      input: prepareAgentSessionStoreDeletionSafety({}, "main", process.env),
+    },
     {
       source: "snapshot",
       expectedIdentity: readDatabasePathIdentitySync(source).key,
       env: process.env,
     },
   );
-  assert.deepEqual(result, []);
+  assert.deepEqual(result, { blocker: undefined });
   assert.ok(
     cacheEntries() > startupEntries,
     "retained child must persist later operation bytecode before close",

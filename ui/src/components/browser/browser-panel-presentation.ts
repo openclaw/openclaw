@@ -1,18 +1,16 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
-import { DockLayoutController } from "../dock-layout-controller.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { createDockLayout } from "../dock-layout.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import { SolidPanelController } from "../solid-panel-controller.ts";
 import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
-import {
-  BrowserPanelController,
-  type BrowserPanelControllerHost,
-} from "./browser-panel-controller.ts";
+import { createBrowserPanel, type BrowserPanelHost } from "./browser-panel-owner.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import {
   browserTabKey,
@@ -22,227 +20,254 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-export class BrowserPanelPresentation
-  extends SolidPanelController
-  implements BrowserPanelControllerHost
-{
-  /** Gateway client used for browser.request RPCs; null until connected. */
-  client: GatewayBrowserClient | null = null;
-  /** Whether the connected gateway advertises browser.request to this operator. */
-  available = false;
-  /** Gateway browser features remain separately gated on native hosts. */
-  remoteAvailable = true;
-  /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
-  suppressed = false;
-  /** Gateway HTTP resource mount used for the authenticated media fetch. */
-  resourceBasePath = "";
-  /** Bearer credential for the assistant-media screenshot fetch. */
-  authToken: string | null = null;
-  /** Hosted by the chat side panel, which owns visibility and geometry. */
-  embedded = false;
-  /** The hosting side-panel header presents this panel's tabs. */
-  tabsInHeader = false;
-  /** This embedded instance is the active pane's visible Browser presenter. */
-  presented = false;
-  /** Whether presentation owns initial work instead of a pending explicit toggle. */
-  refreshOnPresentation = true;
+export type BrowserPanelInputs = {
+  client: GatewayBrowserClient | null;
+  available: boolean;
+  remoteAvailable: boolean;
+  suppressed: boolean;
+  resourceBasePath: string;
+  authToken: string | null;
+  embedded: boolean;
+  tabsInHeader: boolean;
+  presented: boolean;
+  refreshOnPresentation: boolean;
+  sessionKey: string;
+  sessionTabs: BrowserTabTarget[];
+  preferredTab: BrowserTabSelection | undefined;
+  fixedTab: BrowserTabTarget | undefined;
+  dashboardTarget: BrowserDashboardTarget | undefined;
+};
 
-  sessionKey = "";
-  sessionTabs: BrowserTabTarget[] = [];
-  preferredTab?: BrowserTabSelection;
-  /** A dashboard presents only its owned remote tab; its owner controls removal and restart. */
-  fixedTab?: BrowserTabTarget;
-  dashboardTarget?: BrowserDashboardTarget;
+export type BrowserPanelPresentation = ReturnType<typeof createBrowserPanelPresentation>;
+export type BrowserPanelMethods = Pick<
+  BrowserPanelPresentation,
+  "browserPanelIsOpen" | "toggle" | "handleToggleRequest" | "selectHostedTab" | "closeHostedTab"
+>;
+export type BrowserPanelElement = HTMLElement &
+  BrowserPanelInputs &
+  BrowserPanelMethods &
+  Pick<BrowserPanelPresentation, "hostedTabs" | "activeHostedTabId" | "updateComplete">;
 
-  private activeSessionKey = "";
-  private activeDashboardKey: string | undefined;
-  private activeSessionTabsKey: string | undefined;
-  private consumedPreferredRevision?: string;
-  readonly browserPanelController = new BrowserPanelController(this);
-  readonly dockLayout = new DockLayoutController(this, {
+/** Keeps browser admission synchronous while Solid consumes its published presentation. */
+export function createBrowserPanelPresentation(element: HTMLElement & BrowserPanelInputs) {
+  let connected = false;
+  let activeSessionKey = "";
+  let activeDashboardKey: string | undefined;
+  let activeSessionTabsKey: string | undefined;
+  let consumedPreferredRevision: string | undefined;
+  let completion: Promise<boolean> = Promise.resolve(true);
+  let complete: ((value: boolean) => void) | undefined;
+  const listeners = new Set<() => void>();
+  let changes = new Set<keyof BrowserPanelInputs>([
+    "client",
+    "available",
+    "embedded",
+    "presented",
+    "suppressed",
+  ]);
+  function publish() {
+    if (!connected) {
+      return;
+    }
+    completion = complete
+      ? completion
+      : new Promise((resolve) => {
+          complete = resolve;
+        });
+    for (const listener of listeners) {
+      listener();
+    }
+  }
+  const dockLayout = createDockLayout({
+    notify: publish,
+    isEmbedded: () => element.embedded,
     layout: browserPanelLayout,
     reservationPrefix: "browser",
-    isAvailable: () => this.available,
+    isAvailable: () => element.available,
   });
+  const host: BrowserPanelHost = {
+    get client() {
+      return element.client;
+    },
+    get sessionKey() {
+      return element.sessionKey;
+    },
+    get sessionTabs() {
+      return element.sessionTabs;
+    },
+    get available() {
+      return element.available;
+    },
+    get remoteAvailable() {
+      return element.remoteAvailable;
+    },
+    get fixedTab() {
+      return element.fixedTab;
+    },
+    get dashboardTarget() {
+      return element.dashboardTarget;
+    },
+    get resourceBasePath() {
+      return element.resourceBasePath;
+    },
+    get authToken() {
+      return element.authToken;
+    },
+    get isConnected() {
+      return connected && element.isConnected;
+    },
+    get renderRoot() {
+      return element;
+    },
+    get updateComplete() {
+      return completion;
+    },
+    browserPanelIsOpen,
+  };
+  const browser = createBrowserPanel(host, publish);
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    if (!this.embedded) {
-      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    }
-    // A settings takeover can already own the viewport when the panel mounts.
-    // Suppress before the restored open state refreshes a dock nobody can see.
-    this.dockLayout.setSuppressed(this.suppressed);
-    if (!this.embedded && this.dockLayout.open) {
-      void this.browserPanelController.refreshAll();
-    }
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-  }
-
-  override updated(changed: Map<PropertyKey, unknown>): void {
-    if (changed.has("embedded")) {
-      if (this.embedded) {
-        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      } else {
-        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-      }
-    }
+  function updatePresentation(changed: ReadonlySet<keyof BrowserPanelInputs>): void {
     if (changed.has("suppressed")) {
-      const restored = this.dockLayout.setSuppressed(this.suppressed);
-      if (this.suppressed) {
-        this.browserPanelController.suspendView();
-      } else if (restored && this.browserPanelIsOpen()) {
-        void this.browserPanelController.refreshAll();
+      const restored = dockLayout.setSuppressed(element.suppressed);
+      if (element.suppressed) {
+        browser.suspendView();
+      } else if (restored && browserPanelIsOpen()) {
+        void browser.refreshAll();
       }
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     const presentationChanged =
-      this.embedded && (changed.has("embedded") || changed.has("presented"));
-    const contextChanged = this.synchronizeBrowserContext();
+      element.embedded && (changed.has("embedded") || changed.has("presented"));
+    const contextChanged = synchronizeBrowserContext();
     const sessionTabsKey =
-      !this.dashboardTarget && this.sessionKey.trim()
-        ? JSON.stringify(browserRequestReferencedTabs(this.sessionTabs).map(browserTabKey))
+      !element.dashboardTarget && element.sessionKey.trim()
+        ? JSON.stringify(browserRequestReferencedTabs(element.sessionTabs).map(browserTabKey))
         : undefined;
-    const sessionTabsChanged = this.activeSessionTabsKey !== sessionTabsKey;
-    this.activeSessionTabsKey = sessionTabsKey;
+    const sessionTabsChanged = activeSessionTabsKey !== sessionTabsKey;
+    activeSessionTabsKey = sessionTabsKey;
     // Keep preferred metadata for the explicit handler to consume, but let the
     // pending toggle choose its route before any automatic follow or refresh.
-    const followedPreferred = this.refreshOnPresentation && this.followPreferredTab();
-    if (this.embedded) {
-      if (!this.presented || !this.available || (!this.client && !hasNativeBrowserBridge())) {
+    const followedPreferred = element.refreshOnPresentation && followPreferredTab();
+    if (element.embedded) {
+      if (
+        !element.presented ||
+        !element.available ||
+        (!element.client && !hasNativeBrowserBridge())
+      ) {
         if (presentationChanged || gatewayAvailabilityChanged) {
-          this.browserPanelController.suspendView();
+          browser.suspendView();
         }
       } else if (
-        this.refreshOnPresentation &&
+        element.refreshOnPresentation &&
         !followedPreferred &&
         (contextChanged || presentationChanged || gatewayAvailabilityChanged || sessionTabsChanged)
       ) {
-        void this.browserPanelController.refreshAll();
+        void browser.refreshAll();
       }
     } else if (gatewayAvailabilityChanged) {
-      if (!this.available && this.dockLayout.open) {
+      if (!element.available && dockLayout.open) {
         // Surface disappeared (disconnect/scope loss): hide without persisting
         // so the open preference survives a reconnect.
-        this.dockLayout.hideWithoutPersisting();
-        this.browserPanelController.resetBrowserState();
+        dockLayout.hideWithoutPersisting();
+        browser.resetBrowserState();
       } else if (
-        this.available &&
-        (this.dockLayout.restoreOpenState() || (contextChanged && this.browserPanelIsOpen())) &&
+        element.available &&
+        (dockLayout.restoreOpenState() || (contextChanged && browserPanelIsOpen())) &&
         !followedPreferred
       ) {
         // Hello arrived after mount (or a reconnect): restore the persisted
         // open state now that the surface is actually available.
-        void this.browserPanelController.refreshAll();
+        void browser.refreshAll();
       }
     }
-    this.browserPanelController.native.presentation.update();
-    this.dockLayout.syncReservation();
-    this.browserPanelController.input.paintOverlay();
-    const controller = this.browserPanelController;
-    notifyPanelHostedTabsChanged(this.element, [
-      controller.activeTargetId,
-      controller.tabs.map((tab) => [tab.id, tab.kind, tab.title, tab.url, tab.favicon]),
+    browser.native.presentation.update();
+    dockLayout.syncReservation();
+    browser.input.paintOverlay();
+    notifyPanelHostedTabsChanged(element, [
+      browser.activeTargetId,
+      browser.tabs.map((tab) => [tab.id, tab.kind, tab.title, tab.url, tab.favicon]),
     ]);
   }
 
-  get hostedTabs() {
-    return browserPanelHostedTabs(this.browserPanelController.tabs, this.ownerDocument);
-  }
-
-  get activeHostedTabId(): string | null {
-    return this.browserPanelController.activeTargetId;
-  }
-
-  selectHostedTab(id: string): void {
-    void this.browserPanelController.selectTab(id);
-  }
-
-  closeHostedTab(id: string): Promise<void> {
-    return this.browserPanelController.closeTab(id);
-  }
-
-  private synchronizeBrowserContext(): boolean {
-    const clientChanged = this.browserPanelController.synchronizeClient();
-    const sessionChanged = this.activeSessionKey !== this.sessionKey;
-    const dashboardKey = JSON.stringify(this.dashboardTarget);
-    const dashboardChanged = this.activeDashboardKey !== dashboardKey;
+  function synchronizeBrowserContext(): boolean {
+    const clientChanged = browser.synchronizeClient();
+    const sessionChanged = activeSessionKey !== element.sessionKey;
+    const dashboardKey = JSON.stringify(element.dashboardTarget);
+    const dashboardChanged = activeDashboardKey !== dashboardKey;
     if (sessionChanged || dashboardChanged) {
-      this.activeSessionKey = this.sessionKey;
-      this.activeDashboardKey = dashboardKey;
-      this.browserPanelController.operations.resetRoute();
-      this.browserPanelController.resetBrowserState();
+      activeSessionKey = element.sessionKey;
+      activeDashboardKey = dashboardKey;
+      browser.operations.resetRoute();
+      browser.resetBrowserState();
     }
     if (clientChanged || sessionChanged || dashboardChanged) {
-      this.browserPanelController.native.cancelPendingActivation();
-      this.browserPanelController.native.cancelCapture();
-      this.consumedPreferredRevision = undefined;
+      browser.native.cancelPendingActivation();
+      browser.native.cancelCapture();
+      consumedPreferredRevision = undefined;
     }
     return clientChanged || sessionChanged || dashboardChanged;
   }
 
-  private preferredRevision(): string | undefined {
-    const preferred = this.preferredSelection;
+  function preferredRevision(): string | undefined {
+    const preferred = preferredSelection();
     return preferred && readBrowserTabTarget(preferred.tab)
       ? JSON.stringify([browserTabKey(preferred.tab), preferred.revision])
       : undefined;
   }
 
-  private get preferredSelection(): BrowserTabSelection | undefined {
-    return this.fixedTab ? { tab: this.fixedTab, revision: "dashboard" } : this.preferredTab;
+  function preferredSelection(): BrowserTabSelection | undefined {
+    return element.fixedTab
+      ? { tab: element.fixedTab, revision: "dashboard" }
+      : element.preferredTab;
   }
 
-  private followPreferredTab(): boolean {
-    const revision = this.preferredRevision();
-    const preferred = this.preferredSelection;
+  function followPreferredTab(): boolean {
+    const revision = preferredRevision();
+    const preferred = preferredSelection();
     if (
-      !this.browserPanelIsOpen() ||
-      !this.available ||
-      !this.client ||
+      !browserPanelIsOpen() ||
+      !element.available ||
+      !element.client ||
       !preferred ||
       !revision ||
-      revision === this.consumedPreferredRevision
+      revision === consumedPreferredRevision
     ) {
       return false;
     }
-    this.consumedPreferredRevision = revision;
+    consumedPreferredRevision = revision;
     const tab = readBrowserTabTarget(preferred.tab);
     if (tab) {
       // Session results own the panel route and view, not the user's physical browser focus.
-      void this.browserPanelController.selectTab(tab.targetId, tab, { focusBrowserTab: false });
+      void browser.selectTab(tab.targetId, tab, { focusBrowserTab: false });
     }
     return true;
   }
 
-  browserPanelIsOpen(): boolean {
-    return this.embedded ? this.presented && !this.suppressed : this.dockLayout.open;
+  function browserPanelIsOpen(): boolean {
+    return element.embedded ? element.presented && !element.suppressed : dockLayout.open;
   }
 
-  toggle(): void {
-    if (!this.available) {
+  function toggle(): void {
+    if (!element.available) {
       return;
     }
-    if (this.dockLayout.open) {
-      this.closePanel();
+    if (dockLayout.open) {
+      closePanel();
     } else {
-      this.dockLayout.setOpen(true);
-      void this.browserPanelController.refreshAll();
+      dockLayout.setOpen(true);
+      void browser.refreshAll();
     }
   }
 
-  readonly handleToggleRequest = (event: Event): void => {
-    if (this.fixedTab) {
+  const handleToggleRequest = (event: Event): void => {
+    if (element.fixedTab) {
       return;
     }
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as BrowserPanelToggleDetail) // SAFETY: shared panel event payload; consumed fields are validated below.
         : null;
-    this.synchronizeBrowserContext();
+    synchronizeBrowserContext();
     const browserTab = readBrowserTabTarget(detail?.browserTab);
     if (detail?.browserTab !== undefined && !browserTab) {
       return;
@@ -250,83 +275,120 @@ export class BrowserPanelPresentation
     const normalizedRequestedUrl =
       typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
     let shouldRefresh = true;
-    if (this.embedded) {
-      if (!this.browserPanelIsOpen() || detail?.open === false || !this.available) {
+    if (element.embedded) {
+      if (!browserPanelIsOpen() || detail?.open === false || !element.available) {
         return;
       }
     } else {
       if (detail?.dock === "right" || detail?.dock === "bottom") {
-        this.dockLayout.setDock(detail.dock, false);
+        dockLayout.setDock(detail.dock, false);
       }
       if (detail?.open === false) {
-        this.closePanel();
+        closePanel();
         return;
       }
       if (!normalizedRequestedUrl && detail?.open !== true) {
-        this.toggle();
+        toggle();
         return;
       }
-      if (!this.available) {
+      if (!element.available) {
         return;
       }
-      shouldRefresh = !this.dockLayout.open;
-      this.dockLayout.setOpen(true);
+      shouldRefresh = !dockLayout.open;
+      dockLayout.setOpen(true);
     }
     if (normalizedRequestedUrl) {
-      void this.browserPanelController.openUrl(normalizedRequestedUrl, {
+      void browser.openUrl(normalizedRequestedUrl, {
         newTab: true,
         native: detail?.native,
       });
     } else if (browserTab) {
       // Consume the current result so it cannot replace this explicit card choice.
-      this.consumedPreferredRevision = this.preferredRevision();
-      void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
+      consumedPreferredRevision = preferredRevision();
+      void browser.selectTab(browserTab.targetId, browserTab);
     } else if (detail?.newTab === true) {
-      this.browserPanelController.beginNewTab();
-    } else if (shouldRefresh && !this.followPreferredTab()) {
-      void this.browserPanelController.refreshAll();
+      browser.beginNewTab();
+    } else if (shouldRefresh && !followPreferredTab()) {
+      void browser.refreshAll();
     }
   };
 
-  closePanel(): void {
-    this.browserPanelController.suspendView();
-    this.dockLayout.setOpen(false);
+  function closePanel(): void {
+    browser.suspendView();
+    dockLayout.setOpen(false);
   }
+  return {
+    inputs: element,
+    browser,
+    dockLayout,
+    browserPanelIsOpen,
+    toggle,
+    handleToggleRequest,
+    closePanel,
+    selectHostedTab: (id: string) => {
+      void browser.selectTab(id);
+    },
+    closeHostedTab: (id: string) => browser.closeTab(id),
+    get hostedTabs() {
+      return browserPanelHostedTabs(browser.tabs, element.ownerDocument);
+    },
+    get activeHostedTabId() {
+      return browser.activeTargetId;
+    },
+    get updateComplete() {
+      return completion;
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    inputsChanged(key: keyof BrowserPanelInputs) {
+      changes.add(key);
+      publish();
+    },
+    attach() {
+      // Native state must seed tabs before a restored dock can refresh them.
+      const stopNative = browser.native.mount();
+      connected = true;
+      dockLayout.connect();
+      const stops = [
+        listen(window, BROWSER_PANEL_TOGGLE_EVENT, (event) => {
+          if (!element.embedded) {
+            handleToggleRequest(event);
+          }
+        }),
+        i18n.subscribe(publish),
+      ];
+      // A takeover already owning the viewport suppresses the restored dock first.
+      dockLayout.setSuppressed(element.suppressed);
+      if (!element.embedded && dockLayout.open) {
+        void browser.refreshAll();
+      }
+      // A retained owner must resume the view suspended by its previous root.
+      changes.add("presented");
+      publish();
+      return () => {
+        connected = false;
+        browser.suspendView();
+        stops.forEach((stop) => stop());
+        dockLayout.dispose();
+        stopNative?.();
+        complete?.(false);
+        complete = undefined;
+      };
+    },
+    rendered() {
+      if (!connected) {
+        return;
+      }
+      const resolve = complete;
+      complete = undefined;
+      const changed = changes;
+      changes = new Set();
+      updatePresentation(changed);
+      resolve?.(true);
+    },
+  };
 }
-
-export type BrowserPanelInputs = Pick<
-  BrowserPanelPresentation,
-  | "client"
-  | "available"
-  | "remoteAvailable"
-  | "suppressed"
-  | "resourceBasePath"
-  | "authToken"
-  | "embedded"
-  | "tabsInHeader"
-  | "presented"
-  | "refreshOnPresentation"
-  | "sessionKey"
-  | "sessionTabs"
-  | "preferredTab"
-  | "fixedTab"
-  | "dashboardTarget"
->;
-
-export type BrowserPanelElement = HTMLElement &
-  BrowserPanelInputs &
-  Pick<
-    BrowserPanelPresentation,
-    | "browserPanelIsOpen"
-    | "toggle"
-    | "handleToggleRequest"
-    | "selectHostedTab"
-    | "closeHostedTab"
-    | "requestUpdate"
-    | "renderRoot"
-    | "hasUpdated"
-    | "hostedTabs"
-    | "activeHostedTabId"
-    | "browserPanelController"
-    | "updateComplete"
-  >;

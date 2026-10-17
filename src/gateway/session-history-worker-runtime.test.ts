@@ -654,7 +654,7 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
   ]);
 });
 
-it.each(["rpc limit", "rpc store", "http cursor"] as const)(
+it.each(["rpc limit", "rpc store", "rpc deflate", "http cursor"] as const)(
   "keeps distinct %s selectors separate in coalescing and byte admission",
   async (selector) => {
     const makeRequest = (different: boolean): SessionHistoryWorkerRequest =>
@@ -672,7 +672,9 @@ it.each(["rpc limit", "rpc store", "http cursor"] as const)(
             different
               ? selector === "rpc limit"
                 ? { max: 2 }
-                : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
+                : selector === "rpc deflate"
+                  ? { deflateResponse: true }
+                  : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
               : {},
           );
     const first = readSessionHistoryPageInWorker(makeRequest(false));
@@ -740,6 +742,7 @@ it.each([
     try {
       const reply = page("shared result");
       const bytes = new TextEncoder().encode(JSON.stringify(reply.page.messages));
+      const deflated = new Uint8Array([0, 0, 255, 255]);
       if (encoded) {
         reply.page.messages = [];
         reply.page.encodedResponse = {
@@ -748,6 +751,7 @@ it.each([
           responseHistoryBytes: 1024,
           omission: { omittedCount: 1, normalizedBytes: 2048 },
         };
+        reply.page.encodedMessagesDeflate = deflated;
       }
       queued[0]!.result.resolve(reply);
       const results = await settled;
@@ -764,6 +768,7 @@ it.each([
         for (const result of pages) {
           // A coalesced page transfers its immutable wire buffer only once.
           expect(result.encodedResponse?.messages).toBe(bytes);
+          expect(result.encodedMessagesDeflate).toBe(deflated);
         }
         pages[0]!.encodedResponse!.omission!.omittedCount = 9;
         expect(pages[1]!.encodedResponse!.omission!.omittedCount).toBe(1);

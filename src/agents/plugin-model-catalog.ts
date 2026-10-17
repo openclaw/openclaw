@@ -551,7 +551,6 @@ export async function replacePersistedPluginModelCatalogs(params: {
     env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
   };
   options.path = resolvePathViaExistingAncestorSync(options.path);
-  const authSnapshot = params.authSnapshot && structuredClone(params.authSnapshot);
   const planned = new Map<string, string>();
   for (const [relativePath, contents] of Object.entries(params.pluginCatalogWrites)) {
     const pluginId = decodePluginModelCatalogRelativePathPluginId(relativePath);
@@ -574,7 +573,7 @@ export async function replacePersistedPluginModelCatalogs(params: {
     withPluginModelCatalogWorker(options, planned.size > 0, (scope) =>
       scope.execute({
         type: "catalog.replace",
-        input: { planned: [...planned], authSnapshot, env: options.env },
+        input: { planned: [...planned], authSnapshot: params.authSnapshot, env: options.env },
       }),
     ),
   );
@@ -669,7 +668,7 @@ export function resolvePluginModelCatalogOwnerPluginId(params: {
     owners.modelCatalogProviders.get(providerId),
     owners.providers.get(providerId),
     owners.setupProviders.get(providerId),
-  ].find((entry): entry is readonly string[] => Array.isArray(entry) && entry.length > 0);
+  ].find((entry): entry is readonly string[] => Boolean(entry?.length));
   const pluginId = candidates?.length === 1 ? candidates[0] : undefined;
   if (!pluginId) {
     return undefined;

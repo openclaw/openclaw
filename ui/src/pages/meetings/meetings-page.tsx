@@ -541,23 +541,23 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         previousListParams = listParams;
       }),
   );
+  // Route and archive commits settle before focus moves into the rendered reader or search field.
   createEffect(
-    () => [routeSearch(), summary(), readerPages(), readerDenial()],
-    () =>
-      untrack(() => {
-        if (!focusSelection) {
-          return;
-        }
-        const target = selection().selector
-          ? host.querySelector<HTMLElement>(
-              ".transcripts-reader h1, .transcripts-reader [role=alert]",
-            )
-          : host.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
-        if (target) {
-          target.focus();
-          focusSelection = false;
-        }
-      }),
+    () => [routeSearch(), selection().selector, summary(), readerPages(), readerDenial()] as const,
+    ([, selector]) => {
+      if (!focusSelection) {
+        return;
+      }
+      const target = selector
+        ? host.querySelector<HTMLElement>(
+            ".transcripts-reader h1, .transcripts-reader [role=alert]",
+          )
+        : host.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
+      if (target) {
+        target.focus();
+        focusSelection = false;
+      }
+    },
   );
   const timer = globalThis.setInterval(() => refreshLive(), 3_000);
   const activate = () => refreshLive(true);

@@ -14,7 +14,6 @@ import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
-import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
@@ -44,11 +43,6 @@ import type { NormalizedUsage } from "./usage.js";
 
 type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
-  trace?: (message: string, meta?: Record<string, unknown>) => void;
-  isEnabled?: (
-    level: "trace" | "debug" | "info" | "warn" | "error" | "fatal",
-    target?: "any" | "console" | "file",
-  ) => boolean;
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -79,6 +73,26 @@ export type AssistantStreamData = {
   managedMediaUrls?: string[];
   phase?: AssistantPhase;
   itemId?: string;
+};
+
+export type StreamingReplyResolver = (params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  appendDelta: string | null;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  previousAudioDirectiveCount: number;
+  rawDirectiveSource?: string;
+  rawDirectiveDelta?: string;
+}) => {
+  text: string;
+  delta: string;
+  replace: boolean;
+  hasText: boolean;
+  replyDirectives: ReplyDirectiveParseResult | null;
+  audioDirectiveCount: number;
 };
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
@@ -162,6 +176,7 @@ export type EmbeddedAgentSubscribeState = {
    * would publish reasoning/commentary bytes as assistant text.
    */
   deltaBufferIsCommentary: boolean;
+  nextCommentaryAt?: number;
   /** Whether timeout settlement committed visible text for this message. */
   hasFlushedPartialText: boolean;
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState };
@@ -173,7 +188,7 @@ export type EmbeddedAgentSubscribeState = {
     projection?: {
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;
-      directiveCodePrefix?: StreamDirectiveCodePrefix;
+      resolveReply: StreamingReplyResolver;
     };
   };
   lastStreamedReasoning?: string;

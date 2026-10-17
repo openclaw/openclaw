@@ -11,11 +11,11 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
   prependCodexOpenClawPromptContext,
-  readContextEngineThreadBootstrapProjection,
   resolveCodexDeliveryHintPreservedInputRange,
-  resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import { isNonEmptyString } from "./attempt-workspace-context.js";
+import { reserveCodexHistoryBudget } from "./context-engine-history-items.js";
+import { prepareCodexContextEngineHistory } from "./context-engine-history.js";
 import {
   CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
@@ -32,11 +32,6 @@ import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
-import { buildContextEngineBinding } from "./thread-context-engine.js";
-import {
-  codexDynamicToolsFingerprint,
-  codexLegacyDynamicToolsFingerprint,
-} from "./thread-fingerprints.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import {
@@ -205,6 +200,28 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     if (!activeContextEngine) {
       return;
     }
+    const promptBudget = configuredContextBudget
+      ? {
+          contextTokens: configuredContextBudget,
+          reserveTokens:
+            configuredContextBudget -
+            resolveProjectionPromptBudgetTokens({ contextTokenBudget: configuredContextBudget }),
+          inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
+          systemPrompt: joinPresentSections(
+            baseDeveloperInstructions,
+            refreshableInstructions,
+            buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
+            JSON.stringify(toolBridge.specs),
+          ),
+          prompt: joinPresentSections(
+            params.prompt,
+            params.currentInboundContext?.text,
+            buildOpenClawPromptContext(true),
+            inputAttachmentNote,
+          ),
+        }
+      : undefined;
+    const historyBudget = reserveCodexHistoryBudget(promptBudget);
     try {
       const assembled = await assembleHarnessContextEngine({
         contextEngine: activeContextEngine,
@@ -212,31 +229,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         sessionKey: contextSessionKey,
         messages: historyState.messages,
         tokenBudget: effectiveContextTokenBudget,
-        ...(configuredContextBudget
-          ? {
-              promptBudget: {
-                contextTokens: configuredContextBudget,
-                reserveTokens:
-                  configuredContextBudget -
-                  resolveProjectionPromptBudgetTokens({
-                    contextTokenBudget: configuredContextBudget,
-                  }),
-                inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
-                systemPrompt: joinPresentSections(
-                  baseDeveloperInstructions,
-                  refreshableInstructions,
-                  buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
-                  JSON.stringify(toolBridge.specs),
-                ),
-                prompt: joinPresentSections(
-                  params.prompt,
-                  params.currentInboundContext?.text,
-                  buildOpenClawPromptContext(true),
-                  inputAttachmentNote,
-                ),
-              },
-            }
-          : {}),
+        ...(historyBudget ? { promptBudget: historyBudget.promptBudget } : {}),
         availableTools: new Set(availableToolNames()),
         citationsMode: params.config?.memory?.citations,
         sandboxed: sandbox?.enabled === true,
@@ -253,43 +246,30 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       if (!assembled) {
         throw new Error("context engine assemble returned no result");
       }
-      const contextEngineProjection = readContextEngineThreadBootstrapProjection(
-        assembled.contextProjection,
-      );
-      const projectionDecision =
-        contextEngineProjection && !params.continuation
-          ? resolveContextEngineBootstrapProjectionDecision({
-              startupBinding: decisionStartupBinding,
-              expectedBinding: buildContextEngineBinding(
-                { ...runtimeParams },
-                contextEngineProjection,
-              ),
-              dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
-              legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
-            })
-          : { project: true, reason: "per-turn-projection" };
-      const renderProjection = (includeAttachments: boolean) =>
-        projectContextEngineAssemblyForCodex({
-          assembledMessages: [...assembled.messages, ...(params.continuation?.messages ?? [])],
+      const history = await prepareCodexContextEngineHistory({
+        assembled,
+        runtimeParams,
+        startupBinding: decisionStartupBinding,
+        toolSpecs: toolBridge.specs,
+        hasContinuation: Boolean(params.continuation),
+        continuationMessages: params.continuation?.messages,
+        preserveToolPayload: Boolean(
+          params.continuation || params.pluginRuntimeRefreshMessages || preserveForkedToolResults,
+        ),
+        projectionParams: {
           prompt: params.prompt,
-          systemPromptAddition: assembled.systemPromptAddition,
           maxRenderedContextChars: codexContextProjectionMaxChars,
-          toolPayloadMode:
-            contextEngineProjection ||
-            params.continuation ||
-            params.pluginRuntimeRefreshMessages ||
-            preserveForkedToolResults
-              ? "preserve"
-              : "elide",
-          ...(includeAttachments ? { prepareFileContext } : {}),
+          prepareFileContext,
           currentUserTurnIdempotencyKey,
           currentUserMessage: admittedMessage,
-        });
-      const projection = await renderProjection(projectionDecision.project);
-      assertProjectionCurrent();
-      preparedBootstrapProjection = contextEngineProjection
-        ? () => renderProjection(true)
-        : undefined;
+        },
+        historyTokenBudget: historyBudget?.tokenBudget,
+        baseDeveloperInstructions,
+        assertCurrent: assertProjectionCurrent,
+      });
+      const { projectionDecision, projection } = history;
+      const { contextEngineProjection } = history.promptState;
+      preparedBootstrapProjection = history.preparedBootstrapProjection;
       contextEngineBootstrapPromptApplied = projectionDecision.project;
       contextImageGroups = projectionDecision.project ? (projection.imageGroups ?? []) : [];
       embeddedAgentLog.info("codex app-server context-engine projection decision", {
@@ -309,16 +289,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         projectedPromptChars: projection.promptText.length,
         developerInstructionAdditionChars: projection.developerInstructionAddition?.length ?? 0,
       });
-      // Projection metadata and rendered prompt must advance together or retries can skip context.
-      promptState.contextEngineProjection = contextEngineProjection;
-      promptState.promptText = projectionDecision.project ? projection.promptText : params.prompt;
-      promptState.promptContextRange = projectionDecision.project
-        ? projection.promptContextRange
-        : undefined;
-      promptState.developerInstructions = joinPresentSections(
-        baseDeveloperInstructions,
-        projection.developerInstructionAddition,
-      );
+      Object.assign(promptState, history.promptState);
+      if (history.promptState.historyBootstrapItems !== undefined) {
+        contextImageGroups = [];
+      }
     } catch (assembleErr) {
       if (
         assembleErr instanceof CodexContextAttachmentError ||
@@ -584,6 +558,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
               message.content.some((part) => part.type === "text" && part.text.trim())))),
     );
     if (activeContextEngine) {
+      if (configuredContextBudget !== undefined) {
+        return false;
+      }
       if (
         action !== "started" ||
         contextEngineBootstrapPromptApplied ||
