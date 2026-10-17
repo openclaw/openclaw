@@ -1,3 +1,4 @@
+import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
@@ -105,40 +106,30 @@ describe("agent DB conversation migration", () => {
 
     ensureSessionAdditiveColumns(database);
     ensureSessionAdditiveColumns(database);
-    database
-      .prepare(
-        "UPDATE session_conversations SET route_context_json = ? WHERE session_id = ? AND conversation_id = ?",
-      )
-      .run(
-        '{"version":1,"writeId":"candidate-write","observedAt":1,"context":{"guildId":"guild-a"}}',
-        "session-a",
-        "conversation-a",
-      );
-    database
-      .prepare(
-        "UPDATE session_conversations SET route_context_json = ?, last_seen_at = ? WHERE session_id = ? AND conversation_id = ?",
-      )
-      .run(
-        '{"version":1,"writeId":"current-write","observedAt":1,"context":{"guildId":"guild-a"}}',
-        1,
-        "session-a",
-        "conversation-a",
-      );
+    const update = (columns: string, ...values: SQLInputValue[]) =>
+      database
+        .prepare(
+          `UPDATE session_conversations SET ${columns} WHERE session_id = ? AND conversation_id = ?`,
+        )
+        .run(...values, "session-a", "conversation-a");
+    const route = (writeId: string) =>
+      JSON.stringify({
+        version: 1,
+        writeId,
+        observedAt: 1,
+        context: { guildId: "guild-a" },
+      });
+    const currentRoute = route("current-write");
+    update("route_context_json = ?", route("candidate-write"));
+    update("route_context_json = ?, last_seen_at = ?", currentRoute, 1);
     expect(
       database
         .prepare(
           "SELECT route_context_json FROM session_conversations WHERE session_id = 'session-a'",
         )
         .get(),
-    ).toEqual({
-      route_context_json:
-        '{"version":1,"writeId":"current-write","observedAt":1,"context":{"guildId":"guild-a"}}',
-    });
-    database
-      .prepare(
-        "UPDATE session_conversations SET last_seen_at = ? WHERE session_id = ? AND conversation_id = ?",
-      )
-      .run(1, "session-a", "conversation-a");
+    ).toEqual({ route_context_json: currentRoute });
+    update("last_seen_at = ?", 1);
 
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
     expect(
