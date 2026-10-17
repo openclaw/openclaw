@@ -1,4 +1,5 @@
 // Exercise registered sessions_spawn through real Gateway, storage, and provider HTTP.
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, IncomingMessage } from "node:http";
@@ -7,10 +8,8 @@ import path from "node:path";
 import { json } from "node:stream/consumers";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeRestartToolCall } from "../../test/gateway-restart.test-support.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
@@ -30,6 +29,7 @@ import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import {
   createGatewayConfigPath,
   removeGatewayTempHome,
@@ -49,6 +49,7 @@ import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const PRIMARY = "proof-primary/primary";
 const BACKUP = "proof-backup/backup";
@@ -63,7 +64,6 @@ type History = {
   messages: Array<{
     role?: string;
     content?: unknown;
-    stopReason?: string;
     openclawRunError?: { runId: string; summary: string };
   }>;
 };
@@ -93,98 +93,63 @@ async function startProvider(scenario: Scenario) {
   let primaryRateLimited = !scenario.directAgent;
   const server = createServer((request, response) => {
     void (async () => {
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      const { model, input } = (await json(request)) as ProviderRequest;
-      const child = JSON.stringify(input.filter((item) => item.role === "user")).includes(WORKER);
-      const title = JSON.stringify(
-        input.filter((item) => item.role === "developer" || item.role === "system"),
-      ).includes("Generate a concise session title");
-      const { authorization } = request.headers;
-      requests.push({ model, child: child && !title, authorization });
-      if (child && !title && model === "primary" && primaryRateLimited) {
-        response.writeHead(429, { "content-type": "application/json" });
-        const type = "rate_limit_exceeded";
-        const error = { message: "Rate limit exceeded for primary", type, code: type };
-        response.end(JSON.stringify({ error }));
-        return;
-      }
-      const output = input.find(
-        (item) => item.type === "function_call_output" && item.call_id === "call_qa_spawn",
-      )?.output;
-      if (output) {
-        spawn = JSON.parse(output) as Receipt;
-      }
-      if (title || child || spawnRequested) {
-        if (!title && !child && !spawn) {
-          errors.push(new Error("Missing sessions_spawn receipt"));
+      try {
+        if (request.method !== "POST" || request.url !== "/v1/responses") {
+          response.writeHead(404).end();
+          return;
         }
-        writeOpenAiResponsesText(response, {
-          text: title
-            ? "Fallback proof"
-            : child
-              ? primaryRateLimited
-                ? SUCCESS
-                : INITIAL_SUCCESS
-              : "Parent complete",
-          messageId: `msg_${requests.length}`,
-          responseId: `resp_${requests.length}`,
-        });
-        return;
-      }
-      spawnRequested = true;
-      const item = {
-        type: "function_call",
-        id: "fc_call_qa_spawn",
-        call_id: "call_qa_spawn",
-        name: "sessions_spawn",
-        arguments: JSON.stringify({
+        const { model, input } = (await json(request)) as ProviderRequest;
+        const child = JSON.stringify(input.filter((item) => item.role === "user")).includes(WORKER);
+        const title = JSON.stringify(
+          input.filter((item) => item.role === "developer" || item.role === "system"),
+        ).includes("Generate a concise session title");
+        const { authorization } = request.headers;
+        requests.push({ model, child: child && !title, authorization });
+        if (child && !title && model === "primary" && primaryRateLimited) {
+          response.writeHead(429, { "content-type": "application/json" });
+          const type = "rate_limit_exceeded";
+          const error = { message: "Rate limit exceeded for primary", type, code: type };
+          response.end(JSON.stringify({ error }));
+          return;
+        }
+        const output = input.find(
+          (item) => item.type === "function_call_output" && item.call_id === "call_qa_0",
+        )?.output;
+        if (output) {
+          spawn = JSON.parse(output) as Receipt;
+        }
+        if (title || child || spawnRequested) {
+          if (!title && !child && !spawn) {
+            errors.push(new Error("Missing sessions_spawn receipt"));
+          }
+          const childText = primaryRateLimited ? SUCCESS : INITIAL_SUCCESS;
+          writeOpenAiResponsesText(response, {
+            text: title ? "Fallback proof" : child ? childText : "Parent complete",
+            messageId: `msg_${requests.length}`,
+            responseId: `resp_${requests.length}`,
+          });
+          return;
+        }
+        spawnRequested = true;
+        const spawnArgs = {
           task: `Return exactly ${SUCCESS}. ${WORKER}`,
           visible: scenario.visible !== false,
           mode: "run",
           expectsCompletionMessage: false,
           ...(scenario.model ? { model: scenario.model } : {}),
-        }),
-      };
-      writeOpenAiResponsesSse(response, [
-        { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-        {
-          type: "response.function_call_arguments.delta",
-          item_id: item.id,
-          output_index: 0,
-          delta: item.arguments,
-        },
-        { type: "response.output_item.done", output_index: 0, item },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_spawn",
-            status: "completed",
-            output: [item],
-            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-          },
-        },
-      ]);
-    })().catch((error: unknown) => {
-      errors.push(error);
-      if (!response.headersSent) {
-        response.writeHead(500);
+        };
+        writeRestartToolCall(response, "qa", "sessions_spawn", spawnArgs, 0);
+      } catch (error) {
+        errors.push(error);
+        if (!response.headersSent) {
+          response.writeHead(500);
+        }
+        response.end();
       }
-      response.end();
-    });
+    })();
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Provider did not bind");
-  }
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: await listenProvider(server),
     requests,
     errors,
     get spawn() {
@@ -193,31 +158,16 @@ async function startProvider(scenario: Scenario) {
     rateLimitPrimary() {
       primaryRateLimited = true;
     },
-    async stop() {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    stop: () => closeProvider(server),
   };
 }
 
 function providerConfig(baseUrl: string, ids: string[]) {
   return {
-    baseUrl,
+    ...buildMockOpenAiResponsesProvider(baseUrl).config,
     apiKey: "synthetic-key",
-    api: "openai-responses" as const,
     request: { allowPrivateNetwork: true },
-    models: ids.map((id) => ({
-      id,
-      name: id,
-      api: "openai-responses" as const,
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 4096,
-    })),
+    models: ids.map((id) => buildMockOpenAiResponsesProvider(baseUrl, id).config.models[0]),
   };
 }
 
@@ -248,34 +198,31 @@ async function withProofGateway(
           ? `${PRIMARY}@${PROFILE}`
           : PRIMARY;
       const ladder = { primary, fallbacks: [BACKUP] };
+      const childLadder =
+        !scenario.cli && (scenario.inherited || scenario.emptyFallbacks || scenario.directAgent);
+      const params = { transport: "sse", openaiWsWarmup: false };
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
             workspace: home.workspaceDir,
             skipBootstrap: true,
             heartbeat: { every: "0m" },
-            ...(scenario.cli
-              ? { model: CHILD_BACKUP }
-              : scenario.inherited
-                ? { model: ladder }
-                : {}),
+            model: scenario.cli ? CHILD_BACKUP : scenario.inherited ? ladder : undefined,
             models: Object.fromEntries(
               [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [
                 ref,
                 {
                   ...(scenario.configuredAlias && ref === PRIMARY ? { alias: "fast" } : {}),
-                  params: { transport: "sse", openaiWsWarmup: false },
+                  params: { ...params },
                 },
               ]),
             ),
             subagents: {
               allowAgents: ["*"],
-              ...(!scenario.cli ? { maxConcurrent: 2 } : {}),
-              ...(scenario.inherited ||
-              scenario.emptyFallbacks ||
-              (scenario.directAgent && !scenario.cli)
-                ? { model: { fallbacks: scenario.emptyFallbacks ? [] : [CHILD_BACKUP] } }
-                : {}),
+              maxConcurrent: scenario.cli ? undefined : 2,
+              model: childLadder
+                ? { fallbacks: scenario.emptyFallbacks ? [] : [CHILD_BACKUP] }
+                : undefined,
             },
           },
           ...(!scenario.cli && !scenario.inherited ? { entries: { main: { model: ladder } } } : {}),
@@ -342,7 +289,15 @@ async function withProofGateway(
         },
       });
     },
-    () => gateway && drainHeartbeatWakes(),
+    // Flush older delayed notices before this Gateway closes.
+    () =>
+      gateway &&
+      requestHeartbeatAndWait({
+        source: "manual",
+        intent: "immediate",
+        reason: "wake",
+        coalesceMs: 0,
+      }),
     () => gateway && disconnectGatewayClient(gateway.client),
     () => gateway?.server.close({ reason: `${prefix} complete` }),
     () => provider?.stop(),
@@ -377,23 +332,10 @@ const scenarios: Scenario[] = [
   { name: "explicit model and profile pin", model: `${PRIMARY}@${PROFILE}` },
   { name: "explicit empty child ladder", inherited: true, emptyFallbacks: true },
   { name: "hidden child control", visible: false, backup: "backup" },
-];
-
-const directAgentScenarios: Scenario[] = [
   { name: "direct agent distinct child ladder", directAgent: true, backup: "child-backup" },
   { name: "direct agent empty child ladder", directAgent: true, emptyFallbacks: true },
   { name: "direct agent explicit model pin", directAgent: true, directModel: PRIMARY },
 ];
-
-function drainHeartbeatWakes() {
-  // The global immediate wake settles older delayed notices before this Gateway closes.
-  return requestHeartbeatAndWait({
-    source: "manual",
-    intent: "immediate",
-    reason: "wake",
-    coalesceMs: 0,
-  });
-}
 
 // Each Gateway owns a fresh state directory; completed children must not cross fixtures.
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
@@ -414,28 +356,25 @@ describe("sessions_spawn model fallback through the Gateway", () => {
     restoreRetrySleep();
     resetGatewayTestState();
   });
-  it.each([...scenarios, ...directAgentScenarios])(
+  it.each(scenarios)(
     "$name",
-    async (scenario) => {
-      await withProofGateway(scenario, async ({ provider, client, onSessionChanged }) => {
+    (scenario) =>
+      withProofGateway(scenario, async ({ provider, client, onSessionChanged }) => {
+        const start = (method: string, params: Record<string, unknown>) =>
+          client.request<{ runId: string; status: string }>(
+            method,
+            { deliver: false, ...params },
+            { expectFinal: false },
+          );
         const parentKey = `agent:main:proof-${randomUUID()}`;
-        const accepted = await client.request<{ runId: string; status: string }>(
-          "chat.send",
-          {
-            sessionKey: parentKey,
-            message: "Spawn one worker now.",
-            deliver: false,
-            idempotencyKey: randomUUID(),
-          },
-          { expectFinal: false },
-        );
+        const accepted = await start("chat.send", {
+          sessionKey: parentKey,
+          message: "Spawn one worker now.",
+          idempotencyKey: randomUUID(),
+        });
         expect(accepted.status).toBe("started");
         const wait = (runId: string) => waitForRun(client, runId);
-        const parentTerminal = await wait(accepted.runId);
-        expect(
-          parentTerminal.status,
-          JSON.stringify({ parentTerminal, requests: provider.requests }),
-        ).toBe("ok");
+        expect(await wait(accepted.runId)).toMatchObject({ status: "ok" });
         if (scenario.configuredAlias) {
           expect(provider.requests.filter((request) => !request.child)).toContainEqual(
             expect.objectContaining({ model: "primary" }),
@@ -448,9 +387,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           runId: expect.any(String),
         });
         const spawn = provider.spawn;
-        if (!spawn) {
-          throw new Error("Parent did not receive the sessions_spawn result");
-        }
+        assert(spawn, "Parent did not receive the sessions_spawn result");
         const { childSessionKey: childKey } = spawn;
         let settledRunId = spawn.runId;
         let terminal = await wait(settledRunId);
@@ -481,17 +418,12 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             }
           });
           await client.request("sessions.subscribe", {});
-          const followup = await client.request<{ runId: string; status: string }>(
-            "agent",
-            {
-              sessionKey: childKey,
-              message: `Return exactly ${SUCCESS}. ${WORKER}`,
-              deliver: false,
-              idempotencyKey: followupRunId,
-              ...(scenario.directModel ? { model: scenario.directModel } : {}),
-            },
-            { expectFinal: false },
-          );
+          const followup = await start("agent", {
+            sessionKey: childKey,
+            message: `Return exactly ${SUCCESS}. ${WORKER}`,
+            idempotencyKey: followupRunId,
+            ...(scenario.directModel ? { model: scenario.directModel } : {}),
+          });
           expect(followup).toMatchObject({ status: "accepted", runId: followupRunId });
           settledRunId = followup.runId;
           terminal = await wait(settledRunId);
@@ -518,9 +450,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
         const childRequests = provider.requests
           .slice(requestOffset)
           .filter((request) => request.child);
-        expect(terminal.status, JSON.stringify({ terminal, requests: provider.requests })).toBe(
-          scenario.backup ? "ok" : "error",
-        );
+        expect(terminal).toMatchObject({ status: scenario.backup ? "ok" : "error" });
         expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");
         if (!scenario.model && !scenario.inherited) {
           expect(entry).toMatchObject({
@@ -528,7 +458,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             modelOverrideFallbackOriginModel: "primary",
           });
         }
-        expect(childRequests).toContainEqual(expect.objectContaining({ model: "primary" }));
         expect(childRequests.filter((request) => request.model === "primary")).toHaveLength(1);
         expect(provider.errors).toEqual([]);
         if (scenario.backup) {
@@ -565,8 +494,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           }
           expect(entry?.modelOverride).not.toContain("@");
         }
-      });
-    },
+      }),
     600_000,
   );
 });
@@ -578,16 +506,14 @@ describe("CLI model inheritance through MCP", () => {
     { visible: true, nativeModel: "primary[1m]" },
   ])(
     "inherits the logical model with visible=$visible and native=$nativeModel",
-    async ({ visible, nativeModel }) => {
-      await withProofGateway(
+    ({ visible, nativeModel }) =>
+      withProofGateway(
         { name: "CLI model inheritance", directAgent: true, cli: true },
         async ({ cfg, workspaceDir, provider, client }) => {
           const parentKey = `agent:main:cli-model-proof:${randomUUID()}`;
           await client.request("sessions.patch", { key: parentKey, model: BACKUP });
           const parent = readEntry(parentKey);
-          if (!parent?.sessionId) {
-            throw new Error("CLI proof parent was not created");
-          }
+          assert(parent?.sessionId, "CLI proof parent was not created");
           const parentOverride = {
             providerOverride: "proof-backup",
             modelOverride: "backup",
@@ -636,9 +562,7 @@ describe("CLI model inheritance through MCP", () => {
             expect(activateMcpLoopbackClientGrantCapture(capture)).toBeTruthy();
             run.requesterModel.model = "later-input-mutation";
             const currentGrant = resolveMcpLoopbackClientGrant(capture);
-            if (!currentGrant) {
-              throw new Error("CLI proof grant is not active");
-            }
+            assert(currentGrant, "CLI proof grant is not active");
             const httpRequest = new IncomingMessage(new Socket());
             const context = resolveMcpRequestContext(httpRequest, cfg, {
               senderIsOwner: true,
@@ -688,14 +612,11 @@ describe("CLI model inheritance through MCP", () => {
             };
             const spawn = JSON.parse(payload.result.content[0]!.text) as Receipt;
             expect(spawn).toMatchObject({ status: "accepted", runId: expect.any(String) });
-            const terminal = await waitForRun(client, spawn.runId);
-            expect(terminal.status).toBe("ok");
+            expect((await waitForRun(client, spawn.runId)).status).toBe("ok");
             const childRequests = provider.requests.filter((request) => request.child);
-            expect(childRequests.length).toBeGreaterThan(0);
-            expect(
-              childRequests.every((request) => request.model === "primary"),
-              JSON.stringify(childRequests),
-            ).toBe(true);
+            expect(new Set(childRequests.map((request) => request.model))).toEqual(
+              new Set(["primary"]),
+            );
             expect(readEntry(spawn.childSessionKey)).toMatchObject({
               ...primaryOverride,
               modelOverrideSource: "auto",
@@ -713,8 +634,7 @@ describe("CLI model inheritance through MCP", () => {
           }
           expect(provider.errors).toEqual([]);
         },
-      );
-    },
+      ),
     600_000,
   );
 });

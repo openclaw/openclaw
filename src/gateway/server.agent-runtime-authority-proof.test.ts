@@ -158,51 +158,6 @@ describe("agent RPC real delegated-authority effects", () => {
     }
   });
 
-  it("retains an actually committed reset for a new valid caller's same-key retry", async ({
-    signal,
-  }) => {
-    const f = await fixture();
-    const execution = await holdExecution(signal);
-    const { entered, release, finish } = pause(f, signal, execution);
-    const before = await readEntry(f);
-    const perform = resets.performGatewaySessionReset;
-    const observer = vi
-      .spyOn(resets, "performGatewaySessionReset")
-      .mockImplementationOnce(async (params) => {
-        const result = await perform(params);
-        expect(result.ok).toBe(true);
-        entered.resolve();
-        await release.promise;
-        return result;
-      });
-    let request: Promise<Response> | undefined;
-    try {
-      const params = { message: "/reset continue with retained proof input" };
-      request = f.dispatch(params);
-      await reach(entered.promise, request);
-      const committed = await expectReset(f, before);
-      const resetTranscript = transcript(f);
-      expect(resetTranscript).not.toEqual(f.before);
-      f.owner.revoke();
-      release.resolve();
-      const response = await request;
-      expectInactive(response);
-      await f.drain();
-      expect(await pendingCount(f)).toBe(0);
-      expect(execution.observer).not.toHaveBeenCalled();
-      const retry = await f.dispatch(params, await f.freshCaller());
-      await f.drain();
-      expectResetReply(retry, f, expect.stringContaining("before the follow-up ran"));
-      expect(observer).toHaveBeenCalledOnce();
-      expect(await readEntry(f)).toEqual(committed);
-      expect(transcript(f)).toEqual(resetTranscript);
-      expect(agentCommandMock).not.toHaveBeenCalled();
-      expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
-    } finally {
-      await finish([request], [observer]);
-    }
-  });
-
   it.for(["revoked", "accepted custody", "ordinary raw input", "replaced after reset"] as const)(
     "real pending-input transaction: %s",
     async (mode, { signal }) => {
@@ -425,55 +380,79 @@ describe("agent RPC real delegated-authority effects", () => {
     },
   );
 
-  it.for(["bare", "with suffix"] as const)(
-    "finishes adopted existing reset after parent closure: %s",
+  it.for(["already committed", "adopted bare", "adopted with suffix"] as const)(
+    "retains reset across parent closure and same-key retry: %s",
     async (mode, { signal }) => {
-      const { f, sink, recordingAdapterRetained, attempts } =
-        await createResetDeliveryFixture(fixture);
+      const adopted = mode !== "already committed";
+      const delivery = adopted ? await createResetDeliveryFixture(fixture) : undefined;
+      const f = delivery?.f ?? (await fixture());
       const execution = await holdExecution(signal);
       const { entered, release, finish } = pause(f, signal, execution);
       const cleanup = await import("../plugins/host-hook-cleanup.js");
       const performCleanup = cleanup.runPluginHostCleanup;
-      const cleanupObserver = vi
-        .spyOn(cleanup, "runPluginHostCleanup")
-        .mockImplementation(async (params) => {
+      const performReset = resets.performGatewaySessionReset;
+      const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
+      const cleanupObserver = vi.spyOn(cleanup, "runPluginHostCleanup");
+      if (adopted) {
+        cleanupObserver.mockImplementation(async (params) => {
           const result = await performCleanup(params);
           if (params.reason === "reset" && params.sessionKey === f.sessionKey) {
             expect(result.failures).toEqual([]);
-            // Real runtime cleanup has already adopted the existing generation;
-            // the real lifecycle transaction has not begun. Do not fake its commit.
+            // Pause after real generation adoption, before the reset transaction.
             entered.resolve();
             await release.promise;
           }
           return result;
         });
-      const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
+      } else {
+        resetObserver.mockImplementationOnce(async (params) => {
+          const result = await performReset(params);
+          expect(result.ok).toBe(true);
+          entered.resolve();
+          await release.promise;
+          return result;
+        });
+      }
       const before = await readEntry(f);
+      const captureReset = async () => {
+        const entry = await expectReset(f, before);
+        const events = transcript(f);
+        expect(events).not.toEqual(f.before);
+        return { entry, events };
+      };
+      const expectNoDelivery = async () => {
+        if (delivery) {
+          expect(delivery.attempts()).toBe(0);
+          await expectAbsent(delivery.sink);
+        }
+      };
       let request: Promise<Response> | undefined;
       try {
-        expect(recordingAdapterRetained).toBe(true);
-        const followUpPending = mode === "with suffix";
+        if (delivery) {
+          expect(delivery.recordingAdapterRetained).toBe(true);
+        }
+        const followUpPending = mode !== "adopted bare";
         const params = {
-          ...resetDelivery,
+          ...(adopted ? resetDelivery : {}),
           message: followUpPending ? "/reset do not admit this suffix" : "/reset",
         };
         request = f.dispatch(params);
         await reach(entered.promise, request);
-        expect(await readEntry(f)).toEqual(before);
-        expect(transcript(f)).toEqual(f.before);
-        expect(attempts()).toBe(0);
-        await expectAbsent(sink);
+        const alreadyCommitted = adopted ? undefined : await captureReset();
+        if (adopted) {
+          expect(await readEntry(f)).toEqual(before);
+          expect(transcript(f)).toEqual(f.before);
+          await expectNoDelivery();
+        }
         f.owner.revoke();
         release.resolve();
         const response = await request;
-        const committed = await expectReset(f, before);
-        const resetTranscript = transcript(f);
-        expect(resetTranscript).not.toEqual(f.before);
+        const committed = alreadyCommitted ?? (await captureReset());
         expectInactive(response);
+        await f.drain();
         expect(await pendingCount(f)).toBe(0);
         expect(execution.observer).not.toHaveBeenCalled();
-        expect(attempts()).toBe(0);
-        await expectAbsent(sink);
+        await expectNoDelivery();
         const retry = await f.dispatch(params, await f.freshCaller());
         await f.drain();
         expectResetReply(
@@ -484,13 +463,12 @@ describe("agent RPC real delegated-authority effects", () => {
             : "✅ Session reset.",
         );
         expect(resetObserver).toHaveBeenCalledOnce();
-        expect(await readEntry(f)).toEqual(committed);
-        expect(transcript(f)).toEqual(resetTranscript);
+        expect(await readEntry(f)).toEqual(committed.entry);
+        expect(transcript(f)).toEqual(committed.events);
         expect(await pendingCount(f)).toBe(0);
         expect(execution.observer).not.toHaveBeenCalled();
         expect(agentCommandMock).not.toHaveBeenCalled();
-        expect(attempts()).toBe(0);
-        await expectAbsent(sink);
+        await expectNoDelivery();
         expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
       } finally {
         await finish([request], [resetObserver, cleanupObserver]);
