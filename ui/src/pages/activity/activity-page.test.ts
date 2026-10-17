@@ -78,10 +78,6 @@ function expandFirst(page: TestActivityPage) {
   return row;
 }
 
-function mountActivityPage(page: TestActivityPage) {
-  return page.container;
-}
-
 function gateway(): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
@@ -228,14 +224,53 @@ async function bindActivity(
   source: ApplicationContext["gateway"],
   basePath = "",
 ): Promise<TestActivityPage> {
-  const page = createActivityPage(activityContext(source, basePath), {
-    pathname: `${basePath}/activity`,
-    search: "?view=live",
-    hash: "",
-  });
+  const page = createActivityPage(
+    activityContext(source, basePath),
+    activityRoute("?view=live", basePath),
+  );
   await syncActivityRoster(page);
   return page;
 }
+
+async function livePage(basePath = "") {
+  const store = activityGateway();
+  const page = await bindActivity(store.gateway, basePath);
+  return { ...store, page, container: page.container };
+}
+
+function activityRoute(search: string, basePath = ""): RouteLocation {
+  return { pathname: `${basePath}/activity`, search, hash: "" };
+}
+
+function unavailableInspection(): AuditRunInspectResult {
+  return {
+    schemaVersion: 1,
+    run: { runId: "run-1", status: "unknown" },
+    identity: {
+      state: "unknown",
+      reasonCode: "run_not_found",
+      missingEvidence: ["run.record"],
+      remediation: [],
+    },
+    decisionDisplays: [],
+    coverage: { state: "unknown", missingEvidence: ["run.record"] },
+  };
+}
+
+function setFilter(
+  element: HTMLInputElement | HTMLSelectElement,
+  value: string,
+  event: "input" | "change",
+) {
+  element.value = value;
+  element.dispatchEvent(new Event(event, { bubbles: true }));
+  flush();
+}
+
+const toolSelection = (tool: HTMLSelectElement) => [
+  tool.value,
+  tool.selectedOptions[0]?.textContent,
+];
 
 function activityRoster(
   sessions: GatewaySessionRow[] = [
@@ -312,8 +347,7 @@ describe("ActivityPage gateway lifecycle", () => {
   it("renders localized summaries and timestamps across locale changes", async () => {
     const previousLocale = i18n.getLocale();
     const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
+    const { page, current } = await livePage();
     const now = vi.spyOn(Date, "now");
     try {
       for (const [index, updatedAt] of [
@@ -377,12 +411,10 @@ describe("ActivityPage gateway lifecycle", () => {
 
   it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
     await i18n.setLocale("en");
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source, "/control");
+    const { container, current } = await livePage("/control");
     current().opts.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
     current().opts.onEvent?.(toolEvent("read"));
     flush();
-    const container = page.container;
     const toolbar = container.querySelector(".activity-live-toolbar");
     expect(
       toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
@@ -424,43 +456,34 @@ describe("ActivityPage gateway lifecycle", () => {
     const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
       ".activity-page .settings-section__actions button",
     );
-    expand?.click();
-    flush();
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
-        (row) => row.open,
-      ),
-    ).toEqual([true, true]);
-    collapse?.click();
-    flush();
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
-        (row) => row.open,
-      ),
-    ).toEqual([false, false]);
+    for (const [button, open] of [
+      [expand, true],
+      [collapse, false],
+    ] as const) {
+      button?.click();
+      flush();
+      expect(
+        Array.from(
+          container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
+          (row) => row.open,
+        ),
+      ).toEqual([open, open]);
+    }
 
     const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
     if (!search) {
       throw new Error("Expected the live activity search input");
     }
-    search.value = "no matching activity";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    setFilter(search, "no matching activity", "input");
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
-    search.value = "run";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    setFilter(search, "run", "input");
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
 
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
     if (!tool) {
       throw new Error("Expected the live activity tool filter");
     }
-    tool.value = "read";
-    tool.dispatchEvent(new Event("change", { bubbles: true }));
-    flush();
+    setFilter(tool, "read", "change");
     expect(
       Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
         entry.textContent?.trim(),
@@ -470,21 +493,16 @@ describe("ActivityPage gateway lifecycle", () => {
 
   it("retains the selected tool when Live entries change", async () => {
     await i18n.setLocale("en");
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
+    const { container, current } = await livePage();
     current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
     current().opts.onEvent?.(toolEvent("read"));
     flush();
-    const container = page.container;
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
     if (!tool) {
       throw new Error("Expected the live activity tool filter");
     }
-    tool.value = "read";
-    tool.dispatchEvent(new Event("change", { bubbles: true }));
-    flush();
-    expect(tool?.value).toBe("read");
-    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    setFilter(tool, "read", "change");
+    expect(toolSelection(tool)).toEqual(["read", "read"]);
     expect(
       Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
         entry.textContent?.trim(),
@@ -494,82 +512,32 @@ describe("ActivityPage gateway lifecycle", () => {
     container.querySelector<HTMLButtonElement>(".activity-page button.danger")?.click();
     current().opts.onEvent?.(toolEvent("read"));
     flush();
-    expect(tool?.value).toBe("read");
-    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(toolSelection(tool)).toEqual(["read", "read"]);
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
 
     current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
-    tool.value = "";
-    tool.dispatchEvent(new Event("change", { bubbles: true }));
-    flush();
-    expect(tool?.value).toBe("");
-    expect(tool?.selectedOptions[0]?.textContent).toBe("All tools");
+    setFilter(tool, "", "change");
+    expect(toolSelection(tool)).toEqual(["", "All tools"]);
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
   });
 
-  it("renders selected answer candidates without tool-only facts", async () => {
-    await i18n.setLocale("en");
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
-    current().opts.onEvent?.(
-      createGatewayEvent("agent", {
-        stream: "item",
-        runId: "run-1",
-        sessionKey: "main",
-        data: {
-          kind: "answer_candidate",
-          itemId: "answer-1",
-          status: "selected",
-          progressText: "Final answer",
-        },
-      }),
-    );
-    flush();
-    const container = page.container;
-    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe(
-      "Answer candidate",
-    );
-    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
-      "Selected answer",
-    );
-    expect(container.querySelector(".activity-entry__facts")?.textContent).toContain(
-      "Item: answer-1",
-    );
-    expect(container.querySelector(".activity-entry__facts")?.textContent).not.toContain(
-      "arguments hidden",
-    );
-  });
-
   it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
-    const page = createActivityPage(activityContext(gateway()), {
-      pathname: "/activity",
-      search: mode === "run" ? "?view=run" : "",
-      hash: "",
-    });
+    const page = createActivityPage(
+      activityContext(gateway()),
+      activityRoute(mode === "run" ? "?view=run" : ""),
+    );
     expect(page.container.querySelector(".activity-page")).toBeNull();
-    page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
+    page.setRouteLocation(activityRoute("?view=live"));
     expect(page.container.querySelector(".activity-page")).not.toBeNull();
   });
 
-  it("starts empty on initial bind and source replacement", async () => {
-    const first = activityGateway();
-    const page = await bindActivity(first.gateway);
-    first.current().opts.onEvent?.(toolEvent("old"));
-    expect(previews(page)).toEqual(["old output"]);
-    page.dispose();
-    const next = activityGateway();
-    const replacement = await bindActivity(next.gateway);
-    expect(previews(replacement)).toEqual([]);
-  });
-
   it("does not collect live events in sessions mode", async () => {
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
+    const { page, current } = await livePage();
     current().opts.onEvent?.(toolEvent("first"));
     expandFirst(page);
-    page.setRouteLocation({ pathname: "/activity", search: "", hash: "" });
+    page.setRouteLocation(activityRoute(""));
     current().opts.onEvent?.(toolEvent("while-away"));
-    page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
+    page.setRouteLocation(activityRoute("?view=live"));
     await syncActivityRoster(page);
     expect(previews(page)).toEqual(["first output"]);
     expect(page.container.querySelector<HTMLDetailsElement>(".activity-entry")?.open).toBe(true);
@@ -579,19 +547,13 @@ describe("ActivityPage gateway lifecycle", () => {
 
   it("waits for route data before querying sessions on the first Gateway bind", () => {
     const { gateway: source, current } = activityGateway();
-    const request = current().request.mockResolvedValue({
-      ts: 1,
-      path: "",
-      count: 0,
-      sessions: [],
-      defaults: { model: null, modelProvider: null, contextTokens: null },
-    });
+    const request = current().request.mockResolvedValue(activityRoster([]));
     request.mockClear();
     const page = createActivityPage(activityContext(source));
 
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([]);
 
-    page.setRouteLocation({ pathname: "/activity", search: "?q=alpha", hash: "" });
+    page.setRouteLocation(activityRoute("?q=alpha"));
 
     expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toEqual([
       ["sessions.list", expect.objectContaining({ search: "alpha" }), expect.anything()],
@@ -599,8 +561,7 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it("retires the mounted session's activity after an account change", async () => {
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
+    const { gateway: source, page, current } = await livePage();
     current().opts.onEvent?.(toolEvent("old"));
     expect(previews(page)).toEqual(["old output"]);
     expandFirst(page);
@@ -623,8 +584,7 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it("keeps streamed previews and expansion across ordinary appends and reconnects", async () => {
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
+    const { gateway: source, page, current } = await livePage();
     current().opts.onEvent?.(toolEvent("first"));
     const firstRow = expandFirst(page);
 
@@ -689,6 +649,7 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it("collects delivered answer candidates only from the mounted roster", async () => {
+    await i18n.setLocale("en");
     const { gateway: source, current } = activityGateway();
     const roster = activityRoster([
       { key: "main", kind: "direct", hasActiveRun: true },
@@ -708,11 +669,7 @@ describe("ActivityPage gateway lifecycle", () => {
       { runId: "unscoped" },
     ];
     const acquisitions = vi.spyOn(activityContext(source).sessions, "subscribeMessages");
-    const page = createActivityPage(activityContext(source), {
-      pathname: "/activity",
-      search: "?view=live",
-      hash: "",
-    });
+    const page = createActivityPage(activityContext(source), activityRoute("?view=live"));
     try {
       await syncActivityRoster(page);
       await Promise.all(acquisitions.mock.results.map((result) => result.value));
@@ -726,7 +683,7 @@ describe("ActivityPage gateway lifecycle", () => {
           stream: "item",
           data: {
             kind: "answer_candidate",
-            itemId: "shared-item",
+            itemId: "answer-1",
             status: "selected",
             progressText: `${origin.runId} output`,
           },
@@ -735,6 +692,19 @@ describe("ActivityPage gateway lifecycle", () => {
     }
 
     flush();
+    const container = page.container;
+    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe(
+      "Answer candidate",
+    );
+    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
+      "Selected answer",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).toContain(
+      "Item: answer-1",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).not.toContain(
+      "arguments hidden",
+    );
     expect(
       [...page.container.querySelectorAll<HTMLAnchorElement>(".activity-entry__run-link")].map(
         (link) => new URL(link.href).searchParams.get("run"),
@@ -792,8 +762,7 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it("retires the connection when a failed release would leave an orphaned observer", async () => {
-    const { gateway: source, current, clients } = activityGateway();
-    const page = await bindActivity(source);
+    const { gateway: source, page, current, clients } = await livePage();
     const previous = current();
     const previousIdentity = source.snapshot.client;
     const retired = createDeferred();
@@ -829,12 +798,8 @@ describe("ActivityPage gateway lifecycle", () => {
           ? activityRoster([{ key: "main", kind: "direct", hasActiveRun: true }])
           : activityResponse(method, params),
     );
-    const page = createActivityPage(activityContext(source), {
-      pathname: "/activity",
-      search: "?view=live",
-      hash: "",
-    });
-    const container = mountActivityPage(page);
+    const page = createActivityPage(activityContext(source), activityRoute("?view=live"));
+    const container = page.container;
     await syncActivityRoster(page);
     flush();
     const sessions = activityContext(source).sessions;
@@ -862,8 +827,7 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it("preserves activity and Clear when the selected chat changes", async () => {
-    const { gateway: source, current } = activityGateway();
-    const page = await bindActivity(source);
+    const { gateway: source, page, current, container } = await livePage();
     current().opts.onEvent?.(toolEvent("original"));
     const originalRow = expandFirst(page);
     source.setSessionKey("agent:other:work");
@@ -874,7 +838,6 @@ describe("ActivityPage gateway lifecycle", () => {
     current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
     expect(previews(page)).toEqual(["original output", "other output"]);
 
-    const container = mountActivityPage(page);
     const clear = container.querySelector<HTMLButtonElement>(".activity-page button.danger");
     expect(clear?.textContent?.trim()).toBe("Clear");
     clear?.click();
@@ -885,26 +848,14 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it("renders the safe-only inspection response through its route", async () => {
-    const result = {
-      schemaVersion: 1,
-      run: { runId: "run-1", status: "unknown" },
-      identity: {
-        state: "unknown",
-        reasonCode: "run_not_found",
-        missingEvidence: ["run.record"],
-        remediation: [],
-      },
-      decisionDisplays: [],
-      coverage: { state: "unknown", missingEvidence: ["run.record"] },
-    } satisfies AuditRunInspectResult;
+    const result = unavailableInspection();
     const request = vi.fn(async () => result);
     const client = createTestGatewayClient(request);
     const activeGateway = inspectorGateway(client);
-    const page = createActivityPage(activityContext(activeGateway), {
-      pathname: "/activity",
-      search: "?view=run&run=run-1",
-      hash: "",
-    });
+    const page = createActivityPage(
+      activityContext(activeGateway),
+      activityRoute("?view=run&run=run-1"),
+    );
     await waitForSolid(() =>
       expect(page.container.querySelector(".run-inspector__result-state")?.textContent).toContain(
         "run_not_found",
@@ -918,29 +869,17 @@ describe("ActivityPage gateway lifecycle", () => {
   });
 
   it("retires a run inspector when route data disappears and excludes its late response", async () => {
-    const result = {
-      schemaVersion: 1,
-      run: { runId: "run-1", status: "unknown" },
-      identity: {
-        state: "unknown",
-        reasonCode: "run_not_found",
-        missingEvidence: ["run.record"],
-        remediation: [],
-      },
-      decisionDisplays: [],
-      coverage: { state: "unknown", missingEvidence: ["run.record"] },
-    } satisfies AuditRunInspectResult;
+    const result = unavailableInspection();
     const pending = createDeferred<AuditRunInspectResult>();
     const request = vi.fn(
       (_method: string, _params: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
     );
     const client = createTestGatewayClient(request);
     const activeGateway = inspectorGateway(client);
-    const page = createActivityPage(activityContext(activeGateway), {
-      pathname: "/activity",
-      search: "?view=run&run=run-1",
-      hash: "",
-    });
+    const page = createActivityPage(
+      activityContext(activeGateway),
+      activityRoute("?view=run&run=run-1"),
+    );
     try {
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "audit.run.inspect",
@@ -984,11 +923,10 @@ describe("ActivityPage gateway lifecycle", () => {
   ] as const)("classifies a %s cursor failure", async (_label, error, recovery) => {
     const client = createTestGatewayClient(vi.fn(() => Promise.reject(error)));
     const activeGateway = inspectorGateway(client);
-    const page = createActivityPage(activityContext(activeGateway), {
-      pathname: "/activity",
-      search: "?view=run&run=run-1&receipt=receipt-1&decision=cursor-1",
-      hash: "",
-    });
+    const page = createActivityPage(
+      activityContext(activeGateway),
+      activityRoute("?view=run&run=run-1&receipt=receipt-1&decision=cursor-1"),
+    );
     await waitForSolid(() =>
       expect(page.container.querySelector('[role="alert"] button')?.textContent).toBe(
         recovery === "restart" ? "Restart inspection" : "Retry inspection",

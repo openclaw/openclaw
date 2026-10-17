@@ -59,11 +59,7 @@ function presentResult(): RunInspectorResult {
         schemaVersion: 1,
         selectorId: "receipt-1",
         occurredAt: 1,
-        action: {
-          family: "run",
-          operation: "admission",
-          summary: "Run admission was recorded without identity-aware evaluation.",
-        },
+        action: { family: "run", operation: "admission", summary: "Admission" },
         decision: { outcome: "not-applicable", reasonCode: "identity_not_evaluated" },
         enforcement: {
           coverageState: "unattributed",
@@ -102,35 +98,38 @@ function unavailableResult(
   };
 }
 
-type ViewTestState =
-  | Exclude<RunInspectorState, { status: "ready" }>
-  | (Omit<Extract<RunInspectorState, { status: "ready" }>, "receiptPageCursors"> & {
-      receiptPageCursors?: ReadonlyMap<string, string | undefined>;
-    });
+function ready(
+  result: RunInspectorResult,
+  executionPageStatus?: "loading" | "error",
+): RunInspectorState {
+  return {
+    status: "ready",
+    result,
+    executionPageStatus,
+    receiptPageCursors: new Map(
+      result.decisionDisplays.map((receipt) => [receipt.selectorId, undefined]),
+    ),
+  };
+}
 
-function renderState(state: ViewTestState, onLoadMoreExecutions = vi.fn()) {
-  const normalizedState: RunInspectorState =
-    state.status === "ready"
-      ? {
-          ...state,
-          receiptPageCursors:
-            state.receiptPageCursors ??
-            new Map(
-              state.result.decisionDisplays.map((receipt) => [receipt.selectorId, undefined]),
-            ),
-        }
-      : state;
+function viewProps(state: () => RunInspectorState, onLoadMoreExecutions = vi.fn()) {
+  return {
+    basePath: "/operator",
+    get state() {
+      return state();
+    },
+    selector: { kind: "run" as const, id: "run-1" },
+    selectorId: null,
+    onLoadMoreDecisions: vi.fn(),
+    onLoadMoreExecutions,
+    onRestart: vi.fn(),
+    onRetry: vi.fn(),
+  };
+}
+
+function renderState(state: RunInspectorState, onLoadMoreExecutions = vi.fn()) {
   const { container } = mountSolid(() =>
-    renderRunInspector({
-      basePath: "/operator",
-      state: normalizedState,
-      selector: { kind: "run", id: "run-1" },
-      selectorId: null,
-      onLoadMoreDecisions: vi.fn(),
-      onLoadMoreExecutions,
-      onRestart: vi.fn(),
-      onRetry: vi.fn(),
-    }),
+    renderRunInspector(viewProps(() => state, onLoadMoreExecutions)),
   );
   flush();
   return container;
@@ -143,20 +142,7 @@ describe("renderRunInspector", () => {
       waitingForGateway: false,
     });
 
-    const { container } = mountSolid(() =>
-      renderRunInspector({
-        basePath: "/operator",
-        get state() {
-          return state();
-        },
-        selector: { kind: "run", id: "run-1" },
-        selectorId: null,
-        onLoadMoreDecisions: vi.fn(),
-        onLoadMoreExecutions: vi.fn(),
-        onRestart: vi.fn(),
-        onRetry: vi.fn(),
-      }),
-    );
+    const { container } = mountSolid(() => renderRunInspector(viewProps(state)));
     flush();
     expect(container.textContent).toContain("Loading run inspection");
 
@@ -173,7 +159,7 @@ describe("renderRunInspector", () => {
   });
 
   it("renders every identity dimension with explicit text states and safe refs", () => {
-    const container = renderState({ status: "ready", result: presentResult() });
+    const container = renderState(ready(presentResult()));
 
     expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe(
       "Inspection coverage: Unattributed",
@@ -191,6 +177,15 @@ describe("renderRunInspector", () => {
       "Applicable grant 1",
       "Assurance evidence 1",
       "Lineage",
+      hmacRef,
+      "Additional decision receipts are available",
+      "Not applicable",
+      "Unattributed",
+      "identity_not_evaluated",
+      "Verified producer",
+      "run-admission",
+      "Do not treat this as authorization.",
+      "Best-effort audit warning",
     ]) {
       expect(text).toContain(label);
     }
@@ -198,40 +193,28 @@ describe("renderRunInspector", () => {
       expect(text).toContain(state);
       expect(container.querySelector(`[aria-label="Evidence state: ${state}"]`)).not.toBeNull();
     }
-    expect(text).toContain(hmacRef);
-    expect(text).not.toContain("receipt-1");
-    expect(text).not.toContain("context-1");
-    expect(text).not.toContain("execution-1");
-    expect(text).toContain("Additional decision receipts are available");
-    expect(text).toContain("Not applicable");
-    expect(text).toContain("Unattributed");
-    expect(text).toContain("identity_not_evaluated");
-    expect(text).toContain("Verified producer");
-    expect(text).toContain("run-admission");
-    expect(text).toContain("Do not treat this as authorization.");
-    expect(text).toContain("Best-effort audit warning");
+    for (const ref of ["receipt-1", "context-1", "execution-1"]) {
+      expect(text).not.toContain(ref);
+    }
     expect(
       container.querySelector<HTMLAnchorElement>('a[href*="view=run"]')?.getAttribute("href"),
     ).toBe("/operator/activity?view=run&run=parent-run");
   });
 
   it.each([
-    [{ status: "empty" } satisfies RunInspectorState, "No run selected"],
-    [
-      { status: "loading", waitingForGateway: false } satisfies RunInspectorState,
-      "Loading run inspection",
-    ],
-    [
-      { status: "loading", waitingForGateway: true } satisfies RunInspectorState,
-      "Waiting for the Gateway",
-    ],
-    [{ status: "disconnected" } satisfies RunInspectorState, "Gateway disconnected"],
-    [{ status: "unauthorized" } satisfies RunInspectorState, "Operator read access required"],
-    [{ status: "unsupported" } satisfies RunInspectorState, "Run inspection unsupported"],
-    [{ status: "error", recovery: "retry" } satisfies RunInspectorState, "Run inspection failed"],
-  ])("renders the explicit panel state", (state, expected) => {
-    expect(renderState(state).textContent).toContain(expected);
-  });
+    [{ status: "empty" }, "No run selected"],
+    [{ status: "loading", waitingForGateway: false }, "Loading run inspection"],
+    [{ status: "loading", waitingForGateway: true }, "Waiting for the Gateway"],
+    [{ status: "disconnected" }, "Gateway disconnected"],
+    [{ status: "unauthorized" }, "Operator read access required"],
+    [{ status: "unsupported" }, "Run inspection unsupported"],
+    [{ status: "error", recovery: "retry" }, "Run inspection failed"],
+  ] satisfies [RunInspectorState, string][])(
+    "renders the explicit panel state",
+    (state, expected) => {
+      expect(renderState(state).textContent).toContain(expected);
+    },
+  );
 
   it("renders the localized restart control with its accessible name", () => {
     const button = renderState({ status: "error", recovery: "restart" }).querySelector("button");
@@ -252,7 +235,7 @@ describe("renderRunInspector", () => {
       "Identity evidence unsupported",
     ],
   ])("renders the Gateway's typed diagnostic state", (result, expected) => {
-    expect(renderState({ status: "ready", result }).textContent).toContain(expected);
+    expect(renderState(ready(result)).textContent).toContain(expected);
   });
 
   it("links an ambiguous run candidate to exact execution inspection", () => {
@@ -274,7 +257,7 @@ describe("renderRunInspector", () => {
     };
 
     const onLoadMoreExecutions = vi.fn();
-    const container = renderState({ status: "ready", result }, onLoadMoreExecutions);
+    const container = renderState(ready(result), onLoadMoreExecutions);
     const link = container.querySelector<HTMLAnchorElement>('a[href*="execution="]');
     expect(link?.textContent).toContain("execution:a/b");
     expect(link?.getAttribute("href")).toBe(
@@ -286,11 +269,11 @@ describe("renderRunInspector", () => {
     loadMore?.click();
     expect(onLoadMoreExecutions).toHaveBeenCalledOnce();
 
-    const loading = renderState({ status: "ready", result, executionPageStatus: "loading" });
+    const loading = renderState(ready(result, "loading"));
     expect(loading.querySelector("button")?.disabled).toBe(true);
     expect(loading.textContent).toContain("Loading executions…");
 
-    const failed = renderState({ status: "ready", result, executionPageStatus: "error" });
+    const failed = renderState(ready(result, "error"));
     expect(failed.querySelector('[role="alert"]')?.textContent).toContain(
       "More executions could not be loaded",
     );

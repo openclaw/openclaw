@@ -13,11 +13,18 @@ const result = {
 };
 let client: GatewayBrowserClient;
 let controller: ReturnType<typeof createSessionActivity>;
+const dayAt = (month: number, day: number, hour = 0, minute = 0, year = 2026) =>
+  new Date(year, month, day, hour, minute);
+const mockRequest = () => vi.spyOn(client, "request").mockResolvedValue(result);
+let request: ReturnType<typeof mockRequest>;
+const pulse = (index: number) =>
+  request.mock.calls[index]![1] as { activityPulseBoundaries: number[]; activeMinutes?: number };
 beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(Math, "random").mockReturnValue(0);
   client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   controller = createSessionActivity(() => {});
+  request = mockRequest();
 });
 afterEach(() => {
   controller.dispose();
@@ -27,39 +34,21 @@ afterEach(() => {
 });
 
 it("requests calendar-aligned pulse windows, including clock-change dates", async () => {
-  const request = vi.spyOn(client, "request").mockResolvedValue(result);
   const windows = [
-    [
-      "24h",
-      new Date(2026, 8, 27, 14, 30),
-      26,
-      new Date(2026, 8, 26, 14),
-      new Date(2026, 8, 27, 15),
-      1440,
-    ],
-    ["7d", new Date(2026, 8, 27, 14, 30), 9, new Date(2026, 8, 20), new Date(2026, 8, 28), 10080],
-    ["30d", new Date(2026, 8, 27, 14, 30), 32, new Date(2026, 7, 28), new Date(2026, 8, 28), 43200],
-    [
-      "all",
-      new Date(2026, 8, 27, 14, 30),
-      13,
-      new Date(2025, 9, 1),
-      new Date(2026, 9, 1),
-      undefined,
-    ],
-    ["24h", new Date(2026, 3, 5, 15, 30), 26, null, new Date(2026, 3, 5, 16), 1440],
-    ["24h", new Date(2026, 9, 4, 15, 30), 26, null, new Date(2026, 9, 4, 16), 1440],
-    ["7d", new Date(2026, 2, 10, 12), 9, new Date(2026, 2, 3), new Date(2026, 2, 11), 10080],
-    ["7d", new Date(2026, 10, 3, 12), 9, new Date(2026, 9, 27), new Date(2026, 10, 4), 10080],
+    ["24h", dayAt(8, 27, 14, 30), 26, dayAt(8, 26, 14), dayAt(8, 27, 15), 1440],
+    ["7d", dayAt(8, 27, 14, 30), 9, dayAt(8, 20), dayAt(8, 28), 10080],
+    ["30d", dayAt(8, 27, 14, 30), 32, dayAt(7, 28), dayAt(8, 28), 43200],
+    ["all", dayAt(8, 27, 14, 30), 13, dayAt(9, 1, 0, 0, 2025), dayAt(9, 1), undefined],
+    ["24h", dayAt(3, 5, 15, 30), 26, null, dayAt(3, 5, 16), 1440],
+    ["24h", dayAt(9, 4, 15, 30), 26, null, dayAt(9, 4, 16), 1440],
+    ["7d", dayAt(2, 10, 12), 9, dayAt(2, 3), dayAt(2, 11), 10080],
+    ["7d", dayAt(10, 3, 12), 9, dayAt(9, 27), dayAt(10, 4), 10080],
   ] as const;
   for (const [index, [time, now, count, first, last, activeMinutes]] of windows.entries()) {
     vi.setSystemTime(now);
     await controller.load(client, { personId: null, time, query: "" });
     expect(request).toHaveBeenCalledTimes(index + 1);
-    const params = request.mock.calls[index]![1] as {
-      activityPulseBoundaries: number[];
-      activeMinutes?: number;
-    };
+    const params = pulse(index);
     const boundaries = params.activityPulseBoundaries;
     const oldest = new Date(now.getTime() - 24 * 3_600_000);
     expect(boundaries).toHaveLength(count);
@@ -101,12 +90,9 @@ it.each([
   "refreshes $time at the bucket end or next midnight and leaves current work unaggregated",
   async ({ time, month, day, hour }) => {
     vi.setSystemTime(new Date(2026, month, day, hour, 59));
-    const request = vi.spyOn(client, "request").mockResolvedValue(result);
     const filters = { personId: null, time, query: "" };
     await controller.load(client, filters);
-    const { activityPulseBoundaries: initial } = request.mock.calls[0]![1] as {
-      activityPulseBoundaries: number[];
-    };
+    const { activityPulseBoundaries: initial } = pulse(0);
     await controller.load(client, filters);
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -114,9 +100,7 @@ it.each([
     expect(request).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5_001);
     expect(request).toHaveBeenCalledTimes(2);
-    const { activityPulseBoundaries: refreshed } = request.mock.calls[1]![1] as {
-      activityPulseBoundaries: number[];
-    };
+    const { activityPulseBoundaries: refreshed } = pulse(1);
     if (time === "all") {
       expect(refreshed).toEqual(initial);
     } else {
@@ -147,8 +131,7 @@ it.each([
 ])("bypasses automatic Activity $phase for an explicit $action", async ({ action, phase }) => {
   const replacement = { ...result, ts: 2 };
   const stale = createDeferred<typeof result>();
-  const request = vi
-    .spyOn(client, "request")
+  request
     .mockResolvedValueOnce(result)
     .mockReturnValueOnce(stale.promise)
     .mockResolvedValue(replacement);
@@ -185,7 +168,7 @@ it.each([
 
 it("keeps the same-query snapshot during invalidation and clears it on person changes", async () => {
   const resolved = { ...result, involvingProfileId: "current" };
-  const request = vi.spyOn(client, "request").mockResolvedValue(resolved);
+  request.mockResolvedValue(resolved);
   const filters = { personId: "former", time: "all" as const, query: "" };
   await controller.load(client, filters);
   expect(controller.result).toEqual(resolved);
@@ -215,11 +198,7 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
   vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
   vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
   controller = createSessionActivity(() => {});
-  let complete!: (value: typeof result) => void;
-  const pending = new Promise<typeof result>((resolve) => {
-    complete = resolve;
-  });
-  const request = vi.spyOn(client, "request").mockResolvedValue(result);
+  const { promise: pending, resolve: complete } = createDeferred<typeof result>();
   try {
     const filters = { personId: null, time: "7d" as const, query: "" };
     void controller.load(client, filters);
