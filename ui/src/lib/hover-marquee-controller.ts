@@ -176,7 +176,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     observer?.disconnect();
     contentObserver?.disconnect();
     visibilityObserver?.disconnect();
-    stopListeners.forEach((stop) => stop());
+    stopListeners.forEach((release) => release());
   });
   return {
     labelRef: (element: HTMLElement) => (label = element),

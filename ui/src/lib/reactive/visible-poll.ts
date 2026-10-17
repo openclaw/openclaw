@@ -3,17 +3,15 @@ import { listen } from "./listener.ts";
 
 /** A page-owned timer that pauses while hidden and catches up once on return. */
 export function useVisiblePoll(intervalMs: number, tick: () => void) {
-  let timer: ReturnType<typeof globalThis.setInterval> | null = null;
+  let timer: ReturnType<typeof globalThis.setInterval> | undefined;
   let stopVisibility: (() => void) | undefined;
 
   const clearTimer = () => {
-    if (timer !== null) {
-      globalThis.clearInterval(timer);
-      timer = null;
-    }
+    globalThis.clearInterval(timer);
+    timer = undefined;
   };
   const startTimer = () => {
-    if (timer !== null || document.visibilityState === "hidden") {
+    if (timer !== undefined || document.visibilityState === "hidden") {
       return false;
     }
     timer = globalThis.setInterval(() => {
