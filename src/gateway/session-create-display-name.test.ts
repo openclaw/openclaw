@@ -45,8 +45,8 @@ const labelConflict = (label: string) => ({
 afterEach(() => memorySessionActorOwners.reset());
 it.each(["durable", "incognito", "cross-agent", "shared"])(
   "does not retain a fork that loses its label claim in %s storage",
-  async (storage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (storage) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const incognito = storage === "incognito";
       const childAgent = storage === "cross-agent" || storage === "shared" ? "other" : "main";
       const storePath = storage === "shared" ? state.statePath("shared.sqlite") : undefined;
@@ -130,12 +130,12 @@ it.each(["durable", "incognito", "cross-agent", "shared"])(
         expect(memory.owner?.readSession(childKey, memory.authority)).toBeUndefined();
       } else {
         const sql = (query: string) => database!.db.prepare(query);
-        expect(
-          sql("SELECT session_key FROM session_nodes WHERE session_key = ?").get(childKey),
-        ).toBeUndefined();
-        expect(
-          sql("SELECT session_id FROM session_windows WHERE session_key = ?").all(childKey),
-        ).toEqual([]);
+        expect({
+          node: sql("SELECT session_key FROM session_nodes WHERE session_key = ?").get(childKey),
+          windows: sql("SELECT session_id FROM session_windows WHERE session_key = ?").all(
+            childKey,
+          ),
+        }).toEqual({ node: undefined, windows: [] });
       }
       expect(transcriptIds()).toEqual(
         [...beforeIds, { session_id: winner.entry.sessionId }].toSorted((a, b) =>
@@ -144,14 +144,13 @@ it.each(["durable", "incognito", "cross-agent", "shared"])(
       );
       expect(await loadTranscriptEvents(parentScope)).toEqual(parentEvents);
       expect(loadSessionEntry({ sessionKey: winnerKey, storePath })?.label).toBe("Contended");
-    });
-  },
+    }),
 );
 
 it.for(["durable", "incognito", "shared"])(
   "reserves concurrent explicit labels atomically in %s storage",
-  async (storage, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (storage, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const incognito = storage === "incognito";
       const storePath = storage === "shared" ? state.statePath("shared.sqlite") : undefined;
       const cfg = { agents: { entries: { main: {}, other: {} } }, session: { store: storePath } };
@@ -207,12 +206,11 @@ it.for(["durable", "incognito", "shared"])(
         await Promise.allSettled(creations);
         owner.release();
       }
-    });
-  },
+    }),
 );
 
-it("rejects a label claimed by a canonical write after creation preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("rejects a label claimed by a canonical write after creation preparation", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const siblingKey = "agent:main:sibling";
     const sibling = await createSession({ cfg: {}, key: siblingKey, label: "Old label" });
     assert(sibling.ok);
@@ -237,8 +235,7 @@ it("rejects a label claimed by a canonical write after creation preparation", as
         .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
         .get("agent:main:contender"),
     ).toBeUndefined();
-  });
-});
+  }));
 
 it.each([
   { kind: "trimmed", title: "  Native title  ", expected: "Native title" },
@@ -249,8 +246,8 @@ it.each([
     expected: "界".repeat(499),
   },
   { kind: "whole surrogates", title: "🦞".repeat(300), expected: "🦞".repeat(250) },
-])("bounds a create-only $kind title snapshot", async ({ title, expected }) => {
-  await withOpenClawTestState({ label: "create-display-title" }, async () => {
+])("bounds a create-only $kind title snapshot", ({ title, expected }) =>
+  withOpenClawTestState({ label: "create-display-title" }, async () => {
     const create = (key: string) => createSession({ cfg: {}, key, displayName: title });
     const first = await create("agent:main:title-first");
     const second = await create("agent:main:title-second");
@@ -270,11 +267,11 @@ it.each([
       first.entry.sessionId,
       expected,
     ]);
-  });
-});
+  }),
+);
 
-it("preserves explicit labels and still rejects equivalent duplicate labels", async () => {
-  await withOpenClawTestState({ label: "create-title-with-label" }, async () => {
+it("preserves explicit labels and still rejects equivalent duplicate labels", () =>
+  withOpenClawTestState({ label: "create-title-with-label" }, async () => {
     const create = (key: string, label: string) =>
       createSession({
         cfg: {},
@@ -290,5 +287,4 @@ it("preserves explicit labels and still rejects equivalent duplicate labels", as
     await expect(create("agent:main:operator-second", "  Operator label  ")).resolves.toMatchObject(
       labelConflict("Operator label"),
     );
-  });
-});
+  }));

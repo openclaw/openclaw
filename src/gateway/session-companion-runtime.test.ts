@@ -8,13 +8,11 @@ import {
   readRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import * as internalSessions from "../agents/internal-session-effects.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
@@ -41,10 +39,9 @@ vi.mock("../agents/embedded-agent-runner/run-loop.js", () => ({
   runPreparedEmbeddedLoop: runLoop,
 }));
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
   runLoop.mockReset();
-  await resetPreparedModelRuntimeSnapshotsForTest();
 });
 
 it.each(["success", "request-abort", "disconnected"] as const)(
@@ -97,13 +94,13 @@ it.each(["success", "request-abort", "disconnected"] as const)(
         getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
       },
     });
-    const observedTools: string[][] = [];
     const observedModels: Array<{
       model: string | undefined;
       authority: AdmittedRunOperatorAuthority | undefined;
     }> = [];
     const internalTargets: Parameters<typeof SessionManager.open>[0][] = [];
     const seededHistory: unknown[][] = [];
+    const answer = "The selected session is ready.";
     runLoop.mockImplementation(async (_refresh, { runParams }) => {
       observedModels.push({
         model: runParams.model,
@@ -111,49 +108,27 @@ it.each(["success", "request-abort", "disconnected"] as const)(
       });
       const target = runParams.sessionTarget;
       assert(target?.agentId && target.sessionId && target.sessionKey && target.storePath);
-      internalTargets.push({
+      const internalTarget = {
         ...target,
         agentId: target.agentId,
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         storePath: target.storePath,
-      });
-      seededHistory.push(
-        (await SessionManager.openAsync(internalTargets.at(-1)!)).buildSessionContext().messages,
-      );
-      const surface = createAgentHarnessToolSurfaceRuntimeCore({
-        config: runParams.config,
-        agentId: runParams.agentId,
-        sessionId: runParams.sessionId,
-        sessionKey: runParams.sessionKey,
-        runId: runParams.runId,
-        modelProvider: "test-provider",
-        modelId: "test-model",
-        codeModeOverride: runParams.codeModeOverride,
-        disableToolSearch: runParams.disableToolSearch,
-        toolsAllow: runParams.toolsAllow,
-        modelToolsEnabled: true,
-        executeTool: async () => ({ content: [], details: {} }),
-      });
-      try {
-        expect.soft(surface.toolSearchControlsEnabled).toBe(false);
-        observedTools.push(
-          surface
-            .compactTools(["read", "sessions_history", "sessions_search"].map(createStubTool))
-            .tools.map((tool) => tool.name),
-        );
-        expect.soft(runParams).toMatchObject({
-          requireWorkspaceOnly: true,
-          sessionReadScopeKey: "agent:main:selected",
-          config: { messages: { responsePrefix: "committed" } },
-        });
-        expect.soft(runParams.sessionKey).not.toBe(runParams.sessionReadScopeKey);
-      } finally {
-        surface.cleanup();
-      }
-      return {
-        meta: { durationMs: 1, finalAssistantVisibleText: "The selected session is ready." },
       };
+      internalTargets.push(internalTarget);
+      seededHistory.push(
+        (await SessionManager.openAsync(internalTarget)).buildSessionContext().messages,
+      );
+      expect.soft(runParams).toMatchObject({
+        requireWorkspaceOnly: true,
+        sessionReadScopeKey: "agent:main:selected",
+        config: { messages: { responsePrefix: "committed" } },
+        codeModeOverride: false,
+        disableToolSearch: true,
+        toolsAllow: ["read", "sessions_history", "sessions_search"],
+      });
+      expect.soft(runParams.sessionKey).not.toBe(runParams.sessionReadScopeKey);
+      return { meta: { durationMs: 1, finalAssistantVisibleText: answer } };
     });
     try {
       await state.writeConfig(cfg);
@@ -295,7 +270,7 @@ it.each(["success", "request-abort", "disconnected"] as const)(
           sql.restore();
         };
       };
-      const syncProbe = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
+      vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
         const finish = observeHydration();
         try {
           return syncOpen.apply(SessionManager, args);
@@ -303,23 +278,18 @@ it.each(["success", "request-abort", "disconnected"] as const)(
           finish();
         }
       });
-      const asyncProbe = vi
-        .spyOn(SessionManager, "openAsync")
-        .mockImplementation(async (...args) => {
-          const finish = observeHydration();
-          try {
-            return await asyncOpen.apply(SessionManager, args);
-          } finally {
-            finish();
-          }
-        });
+      vi.spyOn(SessionManager, "openAsync").mockImplementation(async (...args) => {
+        const finish = observeHydration();
+        try {
+          return await asyncOpen.apply(SessionManager, args);
+        } finally {
+          finish();
+        }
+      });
       try {
         for (const question of ["What is it doing?", "What did I ask before?"]) {
           const respond = await invoke(question);
-          expect(respond).toHaveBeenCalledWith(true, {
-            answer: "The selected session is ready.",
-            ts: expect.any(Number),
-          });
+          expect(respond).toHaveBeenCalledWith(true, { answer, ts: expect.any(Number) });
         }
         const ask = (operator: AdmittedRunOperatorAuthority, question: string, connId: string) =>
           companion.ask({
@@ -331,13 +301,13 @@ it.each(["success", "request-abort", "disconnected"] as const)(
           });
         await expect(
           ask(authority, "What is it doing now?", "restricted-connection"),
-        ).resolves.toMatchObject({ answer: "The selected session is ready." });
+        ).resolves.toMatchObject({ answer });
         await expect(
           ask(deniedAuthority, "Use another model?", "denied-connection"),
         ).rejects.toThrow("Side chat");
       } finally {
-        syncProbe.mockRestore();
-        asyncProbe.mockRestore();
+        vi.mocked(SessionManager.open).mockRestore();
+        vi.mocked(SessionManager.openAsync).mockRestore();
       }
       expect(observedModels).toEqual([
         { model: "utility-model", authority: undefined },
@@ -346,32 +316,26 @@ it.each(["success", "request-abort", "disconnected"] as const)(
       ]);
       expect(observedModels[2]?.authority).toBe(authority);
       expect(new Set(hydrationSqlCounts)).toEqual(new Set([0]));
+      const assistant = (text: unknown) =>
+        expect.objectContaining({ role: "assistant", content: [{ type: "text", text }] });
       expect(seededHistory[0]).toEqual([
-        expect.objectContaining({
-          role: "assistant",
-          content: [
-            { type: "text", text: expect.stringContaining("Inspect the synthetic project.") },
-          ],
-        }),
+        assistant(expect.stringContaining("Inspect the synthetic project.")),
       ]);
       expect(seededHistory[1]).toEqual([
         expect.objectContaining({ role: "assistant" }),
         expect.objectContaining({ role: "user", content: "What is it doing?" }),
-        expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: "The selected session is ready." }],
-        }),
+        assistant(answer),
       ]);
       for (const target of internalTargets) {
         expect(loadExactSessionEntry(target)).toBeUndefined();
       }
       expect((await SessionManager.openAsync(selected)).getPersistedEntries()).toEqual(retained);
-      expect(observedTools).toEqual(
-        Array.from({ length: 3 }, () => ["read", "sessions_history", "sessions_search"]),
-      );
-      expect(cfg.tools?.toolSearch).toEqual({ enabled: true, mode: "directory" });
-      expect(cfg.tools?.sessions?.visibility).toBe("all");
-      expect(cfg.tools?.fs?.workspaceOnly).toBe(false);
+      expect(cfg.tools).toEqual({
+        codeMode: true,
+        toolSearch: { enabled: true, mode: "directory" },
+        sessions: { visibility: "all" },
+        fs: { workspaceOnly: false },
+      });
     } finally {
       companion.dispose();
       await resetPreparedModelRuntimeSnapshotsForTest();
