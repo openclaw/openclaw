@@ -52,8 +52,6 @@ describe("realtime Talk conversation", () => {
   });
 
   it("inserts spacing after punctuation-ended user transcript fragments", () => {
-    let state = createRealtimeTalkConversationState();
-
     state = updateRealtimeTalkConversation(state, {
       role: "user",
       text: "Ready.",
@@ -73,8 +71,6 @@ describe("realtime Talk conversation", () => {
   });
 
   it("keeps per-character assistant deltas verbatim across punctuation boundaries", () => {
-    let state = createRealtimeTalkConversationState();
-
     for (const [index, char] of "Version 1.2 is on docs.openclaw.ai today.".split("").entries()) {
       state = updateRealtimeTalkConversation(state, {
         role: "assistant",
@@ -128,7 +124,6 @@ describe("realtime Talk conversation", () => {
   });
 
   it("does not expose dangling surrogates at a bounded transcript edge", () => {
-    let state = createRealtimeTalkConversationState();
     const transcript = `${"a".repeat(8_000)}🚀${"b".repeat(7_740)}`;
 
     state = updateRealtimeTalkConversation(state, {
@@ -146,8 +141,6 @@ describe("realtime Talk conversation", () => {
   });
 
   it("does not trust a natural truncation marker outside the bounded prefix", () => {
-    let state = createRealtimeTalkConversationState();
-
     state = updateRealtimeTalkConversation(state, {
       role: "assistant",
       text: `${"a".repeat(7_998)}\n…\n${"b".repeat(500)}NEWEST`,
@@ -163,7 +156,6 @@ describe("realtime Talk conversation", () => {
   it.each([255, 256])(
     "does not retain a lone high surrogate before a natural marker at offset %i",
     (markerOffset) => {
-      let state = createRealtimeTalkConversationState();
       const retainedText = "a".repeat(markerOffset - 1);
 
       state = updateRealtimeTalkConversation(state, {
@@ -186,8 +178,6 @@ describe("realtime Talk conversation", () => {
   it.each(["user", "assistant"] as const)(
     "bounds oversized final %s entries while retaining the newest text",
     (role) => {
-      let state = createRealtimeTalkConversationState();
-
       state = updateRealtimeTalkConversation(state, {
         role,
         text: `Useful opening. ${"x".repeat(9_000)}NEWEST`,
@@ -203,9 +193,7 @@ describe("realtime Talk conversation", () => {
   );
 
   it("keeps alternating realtime turns as separate bubbles", () => {
-    let state = createRealtimeTalkConversationState();
-
-    for (const update of [
+    for (const turn of [
       { role: "user" as const, text: "Hey, what time is it?", final: true },
       {
         role: "assistant" as const,
@@ -221,7 +209,7 @@ describe("realtime Talk conversation", () => {
       { role: "user" as const, text: "Turn on the basement lights", final: true },
       { role: "assistant" as const, text: "Got it, let me check on that.", final: true },
     ]) {
-      state = updateRealtimeTalkConversation(state, update);
+      state = updateRealtimeTalkConversation(state, turn);
     }
 
     expect(state.entries).toMatchObject([
