@@ -99,6 +99,8 @@ function nativeParams(config = {}, env = {}, workspaceDir = "/workspace") {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolveProviderRuntimePlugin.mockReset();
+  resolvePluginDiscoveryProvidersRuntime.mockReset();
   nativeProvider.prepareSyntheticAuth.mockReset().mockResolvedValue(nativeAuth);
 });
 
@@ -128,31 +130,24 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
   it("publishes and reuses native unavailability through runtime wrappers", async () => {
     const params = nativeParams();
     nativeProvider.prepareSyntheticAuth.mockResolvedValue(undefined);
-    await resolveProviderRuntimePlugin.withImplementation(
-      () => ({ ...nativeProvider }),
-      async () =>
-        await resolvePluginDiscoveryProvidersRuntime.withImplementation(
-          () => [],
-          async () => {
-            expect(resolveProviderSyntheticAuthWithPlugin(params)).toBeUndefined();
-            expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
-            expect(
-              await Promise.all([
-                prepareProviderSyntheticAuthWithPlugin(params),
-                prepareProviderSyntheticAuthWithPlugin(params),
-              ]),
-            ).toEqual([undefined, undefined]);
-            expect(
-              await prepareProviderSyntheticAuthWithPlugin({
-                ...params,
-                signal: new AbortController().signal,
-              }),
-            ).toBeUndefined();
-            expect(resolveProviderSyntheticAuthWithPlugin(params)).toBeUndefined();
-            expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
-          },
-        ),
-    );
+    resolveProviderRuntimePlugin.mockImplementation(() => ({ ...nativeProvider }));
+    resolvePluginDiscoveryProvidersRuntime.mockReturnValue([]);
+    expect(resolveProviderSyntheticAuthWithPlugin(params)).toBeUndefined();
+    expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
+    expect(
+      await Promise.all([
+        prepareProviderSyntheticAuthWithPlugin(params),
+        prepareProviderSyntheticAuthWithPlugin(params),
+      ]),
+    ).toEqual([undefined, undefined]);
+    expect(
+      await prepareProviderSyntheticAuthWithPlugin({
+        ...params,
+        signal: new AbortController().signal,
+      }),
+    ).toBeUndefined();
+    expect(resolveProviderSyntheticAuthWithPlugin(params)).toBeUndefined();
+    expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
   });
 
   it("keeps pure runtime auth ahead of unrelated discovery", async () => {
@@ -163,19 +158,12 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
       auth: [],
       resolveSyntheticAuth,
     };
-    await resolveProviderRuntimePlugin.withImplementation(
-      () => provider,
-      async () =>
-        await resolvePluginDiscoveryProvidersRuntime.withImplementation(
-          () => {
-            throw new Error("Unrelated provider discovery must stay lazy");
-          },
-          async () => {
-            expect(
-              await prepareSyntheticLocalProviderAuth({ cfg: {}, provider: provider.id }),
-            ).toEqual(nativeAuth);
-          },
-        ),
+    resolveProviderRuntimePlugin.mockReturnValue(provider);
+    resolvePluginDiscoveryProvidersRuntime.mockImplementation(() => {
+      throw new Error("Unrelated provider discovery must stay lazy");
+    });
+    expect(await prepareSyntheticLocalProviderAuth({ cfg: {}, provider: provider.id })).toEqual(
+      nativeAuth,
     );
     expect(resolveSyntheticAuth).toHaveBeenCalledOnce();
   });
@@ -199,41 +187,34 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
         auth: [],
         resolveSyntheticAuth: () => result,
       };
-      await resolveProviderRuntimePlugin.withImplementation(
-        () => provider,
-        async () =>
-          await resolvePluginDiscoveryProvidersRuntime.withImplementation(
-            () => [],
-            async () => {
-              expect(
-                await prepareSyntheticLocalProviderAuth({
-                  cfg: {},
-                  provider: provider.id,
-                  allowPluginSyntheticAuth: false,
-                }),
-              ).toEqual(result === marker ? marker : null);
-              if (result === marker) {
-                expect(
-                  await prepareSyntheticLocalProviderAuth({
-                    cfg: {
-                      models: {
-                        providers: {
-                          [provider.id]: {
-                            apiKey: { source: "env", provider: "default", id: "MISSING_KEY" },
-                            baseUrl: "https://fixture.example/v1",
-                            models: [],
-                          },
-                        },
-                      },
-                    },
-                    provider: provider.id,
-                    allowPluginSyntheticAuth: false,
-                  }),
-                ).toBeNull();
-              }
+      resolveProviderRuntimePlugin.mockReturnValue(provider);
+      resolvePluginDiscoveryProvidersRuntime.mockReturnValue([]);
+      expect(
+        await prepareSyntheticLocalProviderAuth({
+          cfg: {},
+          provider: provider.id,
+          allowPluginSyntheticAuth: false,
+        }),
+      ).toEqual(result === marker ? marker : null);
+      if (result === marker) {
+        expect(
+          await prepareSyntheticLocalProviderAuth({
+            cfg: {
+              models: {
+                providers: {
+                  [provider.id]: {
+                    apiKey: { source: "env", provider: "default", id: "MISSING_KEY" },
+                    baseUrl: "https://fixture.example/v1",
+                    models: [],
+                  },
+                },
+              },
             },
-          ),
-      );
+            provider: provider.id,
+            allowPluginSyntheticAuth: false,
+          }),
+        ).toBeNull();
+      }
     }
   });
 

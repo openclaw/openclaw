@@ -1,4 +1,3 @@
-// Verifies provider usage can be contributed by a runtime harness without a text provider.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -59,6 +58,49 @@ function makeCodexManifestEnv(): NodeJS.ProcessEnv {
   return makeIsolatedEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir });
 }
 
+const usageSnapshot = {
+  provider: "openai" as const,
+  displayName: "OpenAI",
+  windows: [{ label: "5h", usedPercent: 9 }],
+};
+
+function usageParams(
+  provider = "codex",
+  config: OpenClawConfig = {},
+  env: NodeJS.ProcessEnv = {},
+  workspaceDir = process.cwd(),
+) {
+  return {
+    provider,
+    config,
+    env,
+    workspaceDir,
+    context: {
+      config,
+      env,
+      provider: "openai",
+      token: "test-token-placeholder",
+      timeoutMs: 5_000,
+      fetchFn: fetch,
+    },
+  };
+}
+
+function registerUsageHarness(
+  id: string,
+  fetchUsageSnapshot: NonNullable<Parameters<typeof registerAgentHarness>[0]["fetchUsageSnapshot"]>,
+) {
+  registerAgentHarness({
+    id,
+    label: id === "codex" ? "Codex" : "OpenAI harness",
+    supports: () => ({ supported: true }),
+    runAttempt: async () => {
+      throw new Error("not used");
+    },
+    fetchUsageSnapshot,
+  });
+}
+
 describe("provider runtime harness usage", () => {
   afterEach(() => {
     clearAgentHarnesses();
@@ -73,26 +115,9 @@ describe("provider runtime harness usage", () => {
 
     await expect(
       withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
-        resolveProviderUsageSnapshotWithPlugin({
-          provider: "codex",
-          config: {},
-          env,
-          workspaceDir,
-          context: {
-            config: {},
-            env,
-            provider: "openai",
-            token: "test-token-placeholder",
-            timeoutMs: 5_000,
-            fetchFn: fetch,
-          },
-        }),
+        resolveProviderUsageSnapshotWithPlugin(usageParams("codex", {}, env, workspaceDir)),
       ),
-    ).resolves.toEqual({
-      provider: "openai",
-      displayName: "OpenAI",
-      windows: [{ label: "5h", usedPercent: 9 }],
-    });
+    ).resolves.toEqual(usageSnapshot);
   });
 
   it.each([
@@ -109,27 +134,17 @@ describe("provider runtime harness usage", () => {
   ])("preserves $name in cold usage diagnostics", async ({ config, expectedReason }) => {
     const workspaceDir = makeTempDir();
     const env = makeCodexManifestEnv();
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR ?? "");
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "");
-    vi.stubEnv(
+    for (const key of [
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
       "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
-      env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ?? "",
-    );
+    ]) {
+      vi.stubEnv(key, env[key] ?? "");
+    }
 
-    const error = await resolveProviderUsageSnapshotWithPlugin({
-      provider: "codex",
-      config,
-      env,
-      workspaceDir,
-      context: {
-        config,
-        env,
-        provider: "openai",
-        token: "test-token-placeholder",
-        timeoutMs: 5_000,
-        fetchFn: fetch,
-      },
-    }).catch((cause: unknown) => cause);
+    const error = await resolveProviderUsageSnapshotWithPlugin(
+      usageParams("codex", config, env, workspaceDir),
+    ).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain(expectedReason);
@@ -138,41 +153,12 @@ describe("provider runtime harness usage", () => {
   });
 
   it("routes a synthetic hook id to the matching harness", async () => {
-    const fetchUsageSnapshot = vi.fn(async () => ({
-      provider: "openai" as const,
-      displayName: "OpenAI",
-      windows: [{ label: "5h", usedPercent: 9 }],
-    }));
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      fetchUsageSnapshot,
-    });
+    const fetchUsageSnapshot = vi.fn(async () => structuredClone(usageSnapshot));
+    registerUsageHarness("codex", fetchUsageSnapshot);
 
-    await expect(
-      resolveProviderUsageSnapshotWithPlugin({
-        provider: "codex",
-        config: {},
-        env: {},
-        workspaceDir: process.cwd(),
-        context: {
-          config: {},
-          env: {},
-          provider: "openai",
-          token: "test-token-placeholder",
-          timeoutMs: 5_000,
-          fetchFn: fetch,
-        },
-      }),
-    ).resolves.toEqual({
-      provider: "openai",
-      displayName: "OpenAI",
-      windows: [{ label: "5h", usedPercent: 9 }],
-    });
+    await expect(resolveProviderUsageSnapshotWithPlugin(usageParams())).resolves.toEqual(
+      usageSnapshot,
+    );
     expect(fetchUsageSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", token: "test-token-placeholder" }),
     );
@@ -180,31 +166,10 @@ describe("provider runtime harness usage", () => {
 
   it("does not probe a harness for an ordinary provider usage miss", async () => {
     const fetchUsageSnapshot = vi.fn();
-    registerAgentHarness({
-      id: "openai",
-      label: "OpenAI harness",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      fetchUsageSnapshot,
-    });
+    registerUsageHarness("openai", fetchUsageSnapshot);
 
     await expect(
-      resolveProviderUsageSnapshotWithPlugin({
-        provider: "openai",
-        config: {},
-        env: {},
-        workspaceDir: process.cwd(),
-        context: {
-          config: {},
-          env: {},
-          provider: "openai",
-          token: "test-token-placeholder",
-          timeoutMs: 5_000,
-          fetchFn: fetch,
-        },
-      }),
+      resolveProviderUsageSnapshotWithPlugin(usageParams("openai")),
     ).resolves.toBeUndefined();
     expect(fetchUsageSnapshot).not.toHaveBeenCalled();
   });
