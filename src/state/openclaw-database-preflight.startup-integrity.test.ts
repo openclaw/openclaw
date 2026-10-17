@@ -16,11 +16,14 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
+import * as snapshots from "../infra/sqlite-snapshot.js";
 import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
+  supportedVersions,
   closeDatabases,
+  databaseFixture,
   agentConfig,
   expectFiles,
   openRawDatabase,
@@ -33,18 +36,14 @@ import {
 } from "./openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
 import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -60,8 +59,8 @@ function transcriptRows(reader: OpenClawAgentReadOnlyDatabase) {
 }
 
 it("cold-loads a complete prior-build seal without validation SQL or snapshots", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-clean-startup-") };
-  const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env });
+  const fixture = databaseFixture(tempDirs.make("openclaw-clean-startup-"));
+  const { path: agentPath } = fixture.agent();
   closeOpenClawAgentDatabaseByPath(agentPath);
   closeOpenClawStateDatabase();
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
@@ -80,12 +79,7 @@ it("cold-loads a complete prior-build seal without validation SQL or snapshots",
   rejectSnapshot(agentPath, "No space for a full agent database snapshot");
   const onAgentInspection = vi.fn();
   await expect(
-    assertOpenClawDatabasesReady({
-      env,
-      operation: "gateway-startup",
-      config: {},
-      onAgentInspection,
-    }),
+    fixture.ready(undefined, "gateway-startup", { onAgentInspection }),
   ).resolves.toBeUndefined();
   expect(onAgentInspection).toHaveBeenLastCalledWith(
     expect.objectContaining({ schemaSnapshotCount: 0, schemaProcessCount: 0 }),
@@ -96,12 +90,10 @@ it("cold-loads a complete prior-build seal without validation SQL or snapshots",
 });
 
 it("admits every previously sealed same-version agent before transcript readers run", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("startup-additive-seal-") };
+  const fixture = databaseFixture(tempDirs.make("startup-additive-seal-"));
+  const { env } = fixture;
   const ids = ["claude", "codex", "openclaw", "node-livetest", "roboclaw-x"];
-  const agents = ids.map((agentId) => ({
-    agentId,
-    path: openOpenClawAgentDatabase({ agentId, env }).path,
-  }));
+  const agents = ids.map((agentId) => ({ agentId, path: fixture.agent(agentId).path }));
   closeDatabases();
   for (const agent of agents) {
     const identity = sqliteDatabaseSealSchemaFor("agent");
@@ -147,9 +139,7 @@ it("admits every previously sealed same-version agent before transcript readers 
   }
   const config = agentConfig(ids, "claude");
   await withAgentDatabaseStartupAdmission(async (admission) => {
-    await expect(
-      assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
-    ).resolves.toBeUndefined();
+    await expect(fixture.ready(config)).resolves.toBeUndefined();
     const owner = admission.adopt();
     try {
       for (const { agentId } of agents) {
@@ -171,19 +161,13 @@ it("admits every previously sealed same-version agent before transcript readers 
         },
         migrateAgent: async ({ agentId, paths }) => {
           for (const pathname of paths) {
-            const read = withFreshOpenClawAgentDatabaseReadOnly(
-              (reader) => {
-                expect(transcriptRows(reader)).toEqual([]);
-                expect(reader.db.prepare("PRAGMA table_info(session_windows)").all()).toEqual(
-                  expect.arrayContaining([
-                    expect.objectContaining({ name: "row_transcript_json" }),
-                    expect.objectContaining({ name: "row_transcript_updated_at" }),
-                  ]),
-                );
-              },
-              { agentId, path: pathname, env },
-            );
-            expect(read.found).toBe(true);
+            expect(
+              withFreshOpenClawAgentDatabaseReadOnly(transcriptRows, {
+                agentId,
+                path: pathname,
+                env,
+              }),
+            ).toEqual({ found: true, value: [] });
           }
         },
         publishAgent: async () => {},
@@ -199,8 +183,8 @@ it("admits every previously sealed same-version agent before transcript readers 
 });
 
 it("prioritizes newer schema refusal over missing same-version reader columns", () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("startup-newer-additive-") };
-  const agent = openOpenClawAgentDatabase({ agentId: "main", env });
+  const fixture = databaseFixture(tempDirs.make("startup-newer-additive-"));
+  const agent = fixture.agent();
   closeDatabases();
   revokeSqliteDatabaseAdmissionsForPath(agent.path);
   using writer = new (requireNodeSqlite().DatabaseSync)(agent.path);
@@ -209,13 +193,13 @@ it("prioritizes newer schema refusal over missing same-version reader columns", 
     `ALTER TABLE session_windows DROP COLUMN row_transcript_json; PRAGMA user_version=${version + 1};`,
   );
   expect(() =>
-    openOpenClawAgentDatabaseReadOnly({ agentId: "main", path: agent.path, env }),
+    openOpenClawAgentDatabaseReadOnly({ agentId: "main", path: agent.path, env: fixture.env }),
   ).toThrow(/newer schema version/iu);
 });
 
 it("reads a replacement database's committed WAL after loading the old clean seal", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-startup-replaced-seal-") };
-  const { path: statePath } = openOpenClawStateDatabase({ env });
+  const fixture = databaseFixture(tempDirs.make("openclaw-startup-replaced-seal-"));
+  const { path: statePath } = fixture.state();
   await closeOpenClawStateDatabaseAsync();
   const replacementPath = `${statePath}.replacement`;
   const archivedPath = `${statePath}.previous`;
@@ -242,20 +226,18 @@ it("reads a replacement database's committed WAL after loading the old clean sea
   replacement.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA wal_autocheckpoint=0;
-      PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1};
+      PRAGMA user_version=${supportedVersions.state + 1};
     `);
   expect(fs.statSync(`${statePath}-wal`).size).toBeGreaterThan(0);
 
-  await expect(
-    assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
-  ).rejects.toMatchObject({
+  await expect(fixture.ready()).rejects.toMatchObject({
     name: "OpenClawDatabaseSchemaPreflightError",
     incompatibleDatabases: [
       expect.objectContaining({
         kind: "state",
         path: statePath,
-        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
-        supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        foundVersion: supportedVersions.state + 1,
+        supportedVersion: supportedVersions.state,
       }),
     ],
   });
@@ -265,11 +247,10 @@ it.each(["DELETE", "WAL", "closed WAL"])(
   "freshly checks startup integrity off the main thread and preserves %s source artifacts",
   async (mode) => {
     const stateDir = tempDirs.make("openclaw-startup-integrity-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const fixture = databaseFixture(stateDir);
     const agentPath = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
-    openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env });
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    fixture.agent("main", agentPath);
+    closeDatabases();
     // These raw writers model unclean external mutation, outside the lease owner.
     revokeSqliteDatabaseAdmissionsForPath(agentPath);
     const { DatabaseSync } = requireNodeSqlite();
@@ -308,11 +289,7 @@ it.each(["DELETE", "WAL", "closed WAL"])(
           stateDir,
           mode === "WAL" ? agentPath : undefined,
         );
-        const readiness = assertOpenClawDatabasesReady({
-          env,
-          operation: "gateway-startup",
-          config: {},
-        });
+        const readiness = fixture.ready();
         if (damaged) {
           await expect(readiness).rejects.toMatchObject({
             name: "SqliteIntegrityError",
@@ -342,21 +319,15 @@ it.each(["DELETE", "WAL", "closed WAL"])(
 );
 
 it("isolates a corrupt foreign secondary before reporting its integrity failure", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-startup-foreign-") };
-  const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+  const fixture = databaseFixture(tempDirs.make("openclaw-startup-foreign-"));
+  const agentPath = fixture.agent("worker").path;
   closeDatabases();
   using writer = openRawDatabase(agentPath);
   writer.exec(
     "PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=OFF; UPDATE schema_meta SET agent_id='foreign'; CREATE TABLE probe_parent(id INTEGER PRIMARY KEY); CREATE TABLE probe_child(parent_id REFERENCES probe_parent(id)); INSERT INTO probe_child VALUES (42);",
   );
-  await expect(
-    assertOpenClawDatabasesReady({
-      env,
-      operation: "gateway-startup",
-      config: agentConfig(["main", "worker"], "main"),
-    }),
-  ).resolves.toBeUndefined();
-  expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
+  await expect(fixture.ready(agentConfig(["main", "worker"], "main"))).resolves.toBeUndefined();
+  expect(readAgentDatabaseAdmissionRefusal("worker", { env: fixture.env })).toMatchObject({
     embeddedOwnerId: "foreign",
   });
 });

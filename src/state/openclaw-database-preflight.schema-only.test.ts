@@ -6,6 +6,7 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   compatible,
+  databaseFixture,
   supportedVersions,
   versionRow,
   failureRow,
@@ -13,12 +14,6 @@ import {
   openRawDatabase,
   rejectSnapshot,
 } from "./database-preflight-fixtures.test-support.js";
-import { openOpenClawAgentDatabase, OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db.js";
-import {
-  assertOpenClawDatabasesReady,
-  preflightOpenClawDatabaseSchemas,
-} from "./openclaw-database-preflight.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -26,7 +21,6 @@ import {
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -36,101 +30,91 @@ afterEach(() => {
 });
 
 it("upgrades the subagent authority format without rewriting rows and refuses schema-24 targets", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("subagent-authority-format-") };
-  const pathname = openOpenClawStateDatabase({ env }).path;
+  const fixture = databaseFixture(tempDirs.make("subagent-authority-format-"));
+  const pathname = fixture.state().path;
   await closeOpenClawStateDatabaseAsync();
   const payload = JSON.stringify({
     runId: "interrupted-child",
     operatorRecoverySource: {
       version: 1,
-      snapshot: {
-        profileId: "original-operator",
-        scopes: ["operator.write"],
-      },
+      snapshot: { profileId: "original-operator", scopes: ["operator.write"] },
     },
   });
   const catalogSql = "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name";
   let catalog;
   {
-    using fixture = openRawDatabase(pathname);
-    fixture.exec(`PRAGMA user_version = 24;
+    using writer = openRawDatabase(pathname);
+    writer.exec(`PRAGMA user_version = 24;
       UPDATE schema_meta SET schema_version = 24 WHERE meta_key = 'primary';
       UPDATE config_machine_state SET value_json = '24'
         WHERE state_key = 'state.schema.contentVersion';`);
-    fixture
+    writer
       .prepare(`INSERT INTO subagent_runs
       (run_id, child_session_key, requester_session_key, created_at, payload_json)
       VALUES ('interrupted-child', 'agent:main:subagent:child', 'agent:main:main', 1, ?)`)
       .run(payload);
-    catalog = fixture.prepare(catalogSql).all();
+    catalog = writer.prepare(catalogSql).all();
   }
   // A prior process's file must acquire fresh physical admission, not cached version facts.
   fs.renameSync(pathname, `${pathname}.v24`);
   fs.copyFileSync(`${pathname}.v24`, pathname);
-  const { db } = openOpenClawStateDatabase({ env });
+  const { db } = fixture.state();
   expect(db.prepare("PRAGMA user_version").get()).toEqual({
-    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    user_version: supportedVersions.state,
   });
   expect(
     db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-  ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+  ).toEqual({ schema_version: supportedVersions.state });
   expect(
     db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = 'interrupted-child'").get(),
   ).toEqual({ payload_json: payload });
   expect(db.prepare(catalogSql).all()).toEqual(catalog);
   await closeOpenClawStateDatabaseAsync();
   expect(
-    await preflightOpenClawDatabaseSchemas({
-      env,
+    await fixture.inspect({
       scope: "state",
-      supportedVersions: { state: 24, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+      supportedVersions: { state: 24, agent: supportedVersions.agent },
     }),
   ).toMatchObject({
-    incompatible: [versionRow("state", pathname, OPENCLAW_STATE_SCHEMA_VERSION, 24)],
+    incompatible: [versionRow("state", pathname, supportedVersions.state, 24)],
     indeterminate: [],
   });
 });
 
 it("keeps readiness on the admitted shared-state snapshot and observes changes in the next admission", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-admitted-snapshot-") };
-  const state = openOpenClawStateDatabase({ env });
-  const inspect = () =>
-    preflightOpenClawDatabaseSchemas({
-      env,
-      scope: "state",
-      requireStartupMigrationReadiness: true,
-    });
+  const fixture = databaseFixture(tempDirs.make("schema-admitted-snapshot-"));
+  const state = fixture.state();
+  const inspect = () => fixture.inspect({ scope: "state", requireStartupMigrationReadiness: true });
   try {
     await withArtifactPreservingStateReads(() =>
       withOpenClawStateDatabaseReadSnapshot(
         async () => {
-          state.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+          state.db.exec(`PRAGMA user_version = ${supportedVersions.state + 1};`);
           expect(await inspect()).toEqual(compatible);
         },
-        { env },
+        { env: fixture.env },
       ),
     );
     expect(await inspect()).toMatchObject({
-      incompatible: [versionRow("state", state.path, OPENCLAW_STATE_SCHEMA_VERSION + 1)],
+      incompatible: [versionRow("state", state.path, supportedVersions.state + 1)],
       indeterminate: [],
     });
   } finally {
-    state.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+    state.db.exec(`PRAGMA user_version = ${supportedVersions.state};`);
   }
 });
 
 it.each(["DELETE", "WAL"])(
   "checks committed shared-state metadata without snapshot space (%s)",
   async (journalMode) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("state-schema-only-") };
-    const pathname = openOpenClawStateDatabase({ env }).path;
+    const fixture = databaseFixture(tempDirs.make("state-schema-only-"));
+    const pathname = fixture.state().path;
     closeOpenClawStateDatabaseForTest();
     using writer = openRawDatabase(pathname);
     writer.exec(`PRAGMA journal_mode=${journalMode}; PRAGMA wal_autocheckpoint=0;`);
     rejectSnapshot(pathname, "No space for a shared-state snapshot", true);
     const inspect = () =>
-      preflightOpenClawDatabaseSchemas({
-        env,
+      fixture.inspect({
         scope: "state",
         preserveSourceArtifacts: false,
         verifyCurrentSchemaShape: true,
@@ -144,12 +128,12 @@ it.each(["DELETE", "WAL"])(
     } finally {
       writer.exec("ROLLBACK;");
     }
-    writer.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+    writer.exec(`PRAGMA user_version=${supportedVersions.state + 1};`);
     expect(await inspect()).toMatchObject({
-      incompatible: [versionRow("state", pathname, OPENCLAW_STATE_SCHEMA_VERSION + 1)],
+      incompatible: [versionRow("state", pathname, supportedVersions.state + 1)],
       indeterminate: [],
     });
-    writer.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}; DROP TABLE schema_meta;`);
+    writer.exec(`PRAGMA user_version=${supportedVersions.state}; DROP TABLE schema_meta;`);
     expect(await inspect()).toMatchObject({
       incompatible: [],
       indeterminate: [{ kind: "state", path: pathname }],
@@ -158,8 +142,8 @@ it.each(["DELETE", "WAL"])(
 );
 
 it("checks fresh metadata without space for an agent snapshot", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-only-preflight-") };
-  const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+  const fixture = databaseFixture(tempDirs.make("schema-only-preflight-"));
+  const agentPath = fixture.agent("worker").path;
   closeDatabases();
   using writer = openRawDatabase(agentPath);
   writer.exec("PRAGMA journal_mode=DELETE; PRAGMA wal_autocheckpoint=0;");
@@ -169,19 +153,11 @@ it("checks fresh metadata without space for an agent snapshot", async () => {
   rejectSnapshot(agentPath, "No space for a full agent database snapshot", true);
   const config = { agents: { entries: { worker: {} } } };
   const ready = (operation: "doctor" | "gateway-restart" | "gateway-startup") =>
-    assertOpenClawDatabasesReady({
-      env,
-      config,
-      operation,
-      configuredAgentDatabaseTargets: [{ agentId: "worker", path: agentPath }],
-    });
+    operation === "doctor"
+      ? fixture.doctor([{ agentId: "worker", path: agentPath }], config)
+      : fixture.ready(config, operation);
   const inspect = (verifyCurrentSchemaShape: boolean) =>
-    preflightOpenClawDatabaseSchemas({
-      env,
-      verifyCurrentSchemaShape,
-      agentAdmissionConfig: config,
-      supportedVersions,
-    });
+    fixture.inspect({ verifyCurrentSchemaShape, agentAdmissionConfig: config, supportedVersions });
   await expect(ready("doctor")).resolves.toBeUndefined();
   await expect(ready("gateway-restart")).resolves.toBeUndefined();
   await expect(ready("gateway-startup")).resolves.toBeUndefined();
@@ -199,7 +175,7 @@ it("checks fresh metadata without space for an agent snapshot", async () => {
   } finally {
     writer.exec("ROLLBACK;");
   }
-  writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+  writer.exec(`PRAGMA user_version=${supportedVersions.agent + 1};`);
   for (const verifyCurrentSchemaShape of [false, true]) {
     expect(
       await inspect(verifyCurrentSchemaShape),
@@ -207,24 +183,21 @@ it("checks fresh metadata without space for an agent snapshot", async () => {
     ).toMatchObject({
       incompatible: [
         {
-          ...versionRow("agent", agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1),
+          ...versionRow("agent", agentPath, supportedVersions.agent + 1),
           writerAppVersion: "inspection-fixture",
         },
       ],
       indeterminate: [],
     });
   }
-  writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+  writer.exec(`PRAGMA user_version=${supportedVersions.agent};`);
   writer.prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'").run("foreign");
   for (const verifyCurrentSchemaShape of [false, true]) {
     expect(
       (await inspect(verifyCurrentSchemaShape)).agentRefusals,
       `shape=${verifyCurrentSchemaShape}`,
     ).toEqual([
-      expect.objectContaining({
-        agentId: "worker",
-        code: "agent-database-ownership-mismatch",
-      }),
+      expect.objectContaining({ agentId: "worker", code: "agent-database-ownership-mismatch" }),
     ]);
   }
   await expect(ready("doctor")).rejects.toThrow("belongs to agent foreign");
@@ -256,10 +229,10 @@ it.each([
 ] as const)(
   "finishes sibling inspections after private snapshot cleanup $cleanupFailure ($mode)",
   async ({ mode, cleanupFailure }) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-owned-snapshot-") };
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+    const fixture = databaseFixture(tempDirs.make("schema-owned-snapshot-"));
+    const agentPath = fixture.agent("worker").path;
     for (const agentId of ["sibling", "queued"]) {
-      openOpenClawAgentDatabase({ agentId, env });
+      fixture.agent(agentId);
     }
     closeDatabases();
     const snapshotPath = path.join(tempDirs.make("schema-owned-copy-"), "snapshot.sqlite");
@@ -279,8 +252,7 @@ it.each([
     );
     const inspect = () => {
       const run = () =>
-        preflightOpenClawDatabaseSchemas({
-          env,
+        fixture.inspect({
           preserveSourceArtifacts: true,
           verifyCurrentSchemaShape: mode !== "header",
           requireStartupMigrationReadiness: mode === "startup",

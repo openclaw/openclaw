@@ -5,9 +5,60 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { closeOpenClawAgentDatabasesForTest } from "./openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "./openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  assertOpenClawDatabasesReady,
+  preflightOpenClawDatabaseSchemas,
+} from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+export function databaseFixture(dir: string, extraEnv?: NodeJS.ProcessEnv) {
+  const env = { ...extraEnv, OPENCLAW_STATE_DIR: dir };
+  return {
+    dir,
+    env,
+    statePath: resolveOpenClawStateSqlitePath(env),
+    agentPath: (agentId = "main") => resolveOpenClawAgentSqlitePath({ agentId, env }),
+    state: () => openOpenClawStateDatabase({ env }),
+    agent: (agentId = "main", pathname?: string) =>
+      openOpenClawAgentDatabase({ agentId, path: pathname, env }),
+    close: closeDatabases,
+    doctor: (
+      configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[] = [],
+      config?: OpenClawConfig,
+    ) =>
+      assertOpenClawDatabasesReady({
+        env,
+        config,
+        operation: "doctor",
+        configuredAgentDatabaseTargets,
+      }),
+    ready: (
+      config?: OpenClawConfig,
+      operation: "gateway-startup" | "gateway-restart" = "gateway-startup",
+      callbacks: Pick<
+        Parameters<typeof assertOpenClawDatabasesReady>[0],
+        "onAgentInspection" | "onRegisteredAgentDatabases"
+      > = {},
+    ) =>
+      operation === "gateway-startup"
+        ? assertOpenClawDatabasesReady({ env, config: config ?? {}, operation, ...callbacks })
+        : assertOpenClawDatabasesReady({ env, config, operation, ...callbacks }),
+    inspect: (
+      options: Omit<Parameters<typeof preflightOpenClawDatabaseSchemas>[0], "env"> = {},
+      purpose?: Parameters<typeof preflightOpenClawDatabaseSchemas>[1],
+    ) => preflightOpenClawDatabaseSchemas({ env, ...options }, purpose),
+  };
+}
 
 export const supportedVersions = {
   state: OPENCLAW_STATE_SCHEMA_VERSION,

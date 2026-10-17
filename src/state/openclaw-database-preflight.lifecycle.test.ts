@@ -12,18 +12,14 @@ import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-supp
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   compatible,
+  databaseFixture,
   supportedVersions,
   expectFiles,
   closeDatabases,
   execSql,
   trackSettlement,
 } from "./database-preflight-fixtures.test-support.js";
-import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
-import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -47,11 +43,11 @@ beforeEach(() => {
 });
 
 function createPreflightState(stateDir: string) {
-  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const fixture = databaseFixture(stateDir);
   // Reader lifecycle fixtures need known empty deletion history; missing history holds stores.
-  const statePath = fs.realpathSync.native(openOpenClawStateDatabase({ env }).path);
+  const statePath = fs.realpathSync.native(fixture.state().path);
   closeOpenClawStateDatabaseForTest();
-  return { env, statePath };
+  return { ...fixture, statePath };
 }
 
 it.each([
@@ -70,14 +66,12 @@ it.each([
   "joins all $source children and closes their readers before $outcome settlement (owner=$owner)",
   async ({ source, outcome, owner }) => {
     const root = tempDirs.make("openclaw-preflight-reader-lifecycle-");
-    const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
-    const paths = [
-      openOpenClawAgentDatabase({ agentId: "first", env: initializedEnv }).path,
-      openOpenClawAgentDatabase({ agentId: "second", env: initializedEnv }).path,
-      openOpenClawAgentDatabase({ agentId: "queued", env: initializedEnv }).path,
-    ] as const;
+    const initialized = databaseFixture(path.join(root, "initialized"));
+    const paths = ["first", "second", "queued"].map((id) => initialized.agent(id).path);
     closeDatabases();
-    const { env, statePath } = createPreflightState(path.join(root, "active-state"));
+    const { inspect: inspectDatabases, statePath } = createPreflightState(
+      path.join(root, "active-state"),
+    );
     for (const [index, pathname] of paths.entries()) {
       execSql(
         pathname,
@@ -175,8 +169,7 @@ it.each([
       });
     }
     const inspect = () =>
-      preflightOpenClawDatabaseSchemas({
-        env,
+      inspectDatabases({
         supportedVersions,
         configuredAgentDatabaseCandidatePaths: paths,
         verifyCurrentSchemaShape: true,
@@ -312,7 +305,7 @@ it.each([
 );
 
 function createSnapshotCandidates() {
-  const { env } = createPreflightState(tempDirs.make("openclaw-preflight-lifecycle-state-"));
+  const { inspect } = createPreflightState(tempDirs.make("openclaw-preflight-lifecycle-state-"));
   const directory = tempDirs.make("openclaw-preflight-lifecycle-agents-");
   const paths = [0, 1, 2].map((index) => path.join(directory, `agent-${index}.sqlite`));
 
@@ -325,7 +318,7 @@ function createSnapshotCandidates() {
     expectFiles([`${pathname}-wal`, `${pathname}-shm`], false);
   }
 
-  return { env, paths };
+  return { inspect, paths };
 }
 
 it.each(["cancel", "failure"] as const)(
@@ -391,8 +384,7 @@ it.each(["cancel", "failure"] as const)(
       },
     );
     const controller = new AbortController();
-    const run = preflightOpenClawDatabaseSchemas({
-      env: fixture.env,
+    const run = fixture.inspect({
       supportedVersions,
       requireStartupMigrationReadiness: true,
       configuredAgentDatabaseCandidatePaths: fixture.paths,

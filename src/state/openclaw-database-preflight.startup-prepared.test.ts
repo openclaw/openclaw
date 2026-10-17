@@ -8,19 +8,16 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
+  supportedVersions,
   compatible,
+  databaseFixture,
   agentConfig,
   versionRow,
   closeDatabases,
   execSql,
   trackSettlement,
 } from "./database-preflight-fixtures.test-support.js";
-import { openOpenClawAgentDatabase, OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db.js";
 import * as schemaInspection from "./openclaw-agent-schema-inspection-worker.js";
-import {
-  assertOpenClawDatabasesReady,
-  preflightOpenClawDatabaseSchemas,
-} from "./openclaw-database-preflight.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -32,10 +29,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 function createFleet() {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("preflight-startup-prepared-") };
+  const base = databaseFixture(tempDirs.make("preflight-startup-prepared-"));
   const agentIds = ["first", "second", "third"];
   const config = agentConfig(agentIds, "first");
-  const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
+  const paths = agentIds.map((agentId) => base.agent(agentId).path);
   closeDatabases();
   for (const pathname of paths) {
     execSql(pathname, "PRAGMA journal_mode=DELETE;");
@@ -43,8 +40,8 @@ function createFleet() {
   const onAgentInspection = vi.fn();
   const onRegisteredAgentDatabases = vi.fn();
   return {
+    ...base,
     config,
-    env,
     paths,
     agentIds,
     onAgentInspection,
@@ -56,24 +53,13 @@ function createFleet() {
           : expect.objectContaining({ schemaInspectionCount: count }),
       ),
     ready: () =>
-      assertOpenClawDatabasesReady({
-        env,
-        config,
-        operation: "gateway-startup",
-        onAgentInspection,
-        onRegisteredAgentDatabases,
-      }),
+      base.ready(config, "gateway-startup", { onAgentInspection, onRegisteredAgentDatabases }),
     inspect: (
-      overrides: Partial<Parameters<typeof preflightOpenClawDatabaseSchemas>[0]> = {},
-      purpose?: Parameters<typeof preflightOpenClawDatabaseSchemas>[1],
+      overrides: Parameters<typeof base.inspect>[0] = {},
+      purpose?: Parameters<typeof base.inspect>[1],
     ) =>
-      preflightOpenClawDatabaseSchemas(
-        {
-          env,
-          reuseStartupSchemaPreparation: true,
-          onAgentInspection,
-          ...overrides,
-        },
+      base.inspect(
+        { reuseStartupSchemaPreparation: true, onAgentInspection, ...overrides },
         purpose,
       ),
   };
@@ -85,7 +71,7 @@ function withImmediateAdmission(run: Parameters<typeof withAgentDatabaseStartupA
 
 it("skips an unconfigured system-agent database across startup passes while keeping Doctor strict", async () => {
   const fleet = createFleet();
-  const leftover = openOpenClawAgentDatabase({ agentId: "openclaw", env: fleet.env }).path;
+  const leftover = fleet.agent("openclaw").path;
   closeDatabases();
   fs.writeFileSync(leftover, "not a configured database");
   const before = fs.readFileSync(leftover);
@@ -98,14 +84,7 @@ it("skips an unconfigured system-agent database across startup passes while keep
     fleet.expectInspections(0);
     expect(readAgentDatabaseAdmissionRefusal("openclaw", { env: fleet.env })).toBeUndefined();
   });
-  await expect(
-    assertOpenClawDatabasesReady({
-      env: fleet.env,
-      config: fleet.config,
-      operation: "doctor",
-      configuredAgentDatabaseTargets: [],
-    }),
-  ).rejects.toThrow();
+  await expect(fleet.doctor([], fleet.config)).rejects.toThrow();
   expect(fs.readFileSync(leftover)).toEqual(before);
 });
 
@@ -122,7 +101,7 @@ it.each(["historical", "retired shared"] as const)(
     if (kind === "retired shared") {
       fleet.config.session = { store: historyPath };
     }
-    openOpenClawAgentDatabase({ agentId, path: historyPath, env: fleet.env });
+    fleet.agent(agentId, historyPath);
     closeDatabases();
     revokeSqliteDatabaseAdmissionsForPath(historyPath);
     execSql(historyPath, "PRAGMA journal_mode=DELETE;");
@@ -156,10 +135,7 @@ it.for(["native", "ACP-only"] as const)(
       fleet.config.acp = { enabled: true, allowedAgents: ["codex"] };
     }
     const agentId = kind === "ACP-only" ? "codex" : "first";
-    const pathname =
-      kind === "ACP-only"
-        ? openOpenClawAgentDatabase({ agentId, env: fleet.env }).path
-        : fleet.paths[0]!;
+    const pathname = kind === "ACP-only" ? fleet.agent(agentId).path : fleet.paths[0]!;
     closeDatabases();
     execSql(pathname, "PRAGMA journal_mode=WAL;");
     const entered = createDeferred();
@@ -264,15 +240,15 @@ it("reads newly registered stores without copying admitted state after startup w
         path: pathname,
       })),
     );
-    const changedPath = openOpenClawAgentDatabase({ agentId: "newcomer", env: fleet.env }).path;
+    const changedPath = fleet.agent("newcomer").path;
     closeDatabases();
     execSql(
       changedPath,
-      `PRAGMA journal_mode=DELETE; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`,
+      `PRAGMA journal_mode=DELETE; PRAGMA user_version=${supportedVersions.agent + 1};`,
     );
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
     expect(await fleet.inspect()).toMatchObject({
-      incompatible: [versionRow("agent", changedPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1)],
+      incompatible: [versionRow("agent", changedPath, supportedVersions.agent + 1)],
       indeterminate: [],
     });
     const statePath = fs.realpathSync.native(
