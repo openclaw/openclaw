@@ -109,6 +109,7 @@ export function createDashboardHarness(
   const client = createGatewayBrowserClientFixture({ request });
   const harness = createTestChatPane({ client });
   const pane = harness.pane as DashboardPane;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   patchSettings({
     sessionKey: current.key,
     sidebarSessionLayouts: options.savedLayout ? { [current.key]: options.savedLayout } : {},
@@ -132,6 +133,7 @@ export function createDashboardHarness(
   state.hello = pane.context.gateway.snapshot.hello;
   state.sessionKey = current.key;
   state.sessionsResult = options.metadataPending ? null : sessionsResult([current], 10);
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   const mount = document.body.appendChild(document.createElement("div"));
   const publishRow = (row: GatewaySessionRow) => {
     current = row;

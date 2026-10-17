@@ -176,6 +176,54 @@ it("updates command intent without rendering ordinary composer keystrokes", asyn
   expect(updates).toHaveBeenCalledOnce();
 });
 
+it("publishes comment attachments to the pane independently of ordinary draft changes", async () => {
+  const { pane, updates } = await mountPane(true, (current) => ({
+    label: current.state.chatAttachments
+      .map((attachment) => attachment.selectionAnnotation?.comment)
+      .join(" "),
+  }));
+  const state = pane.state;
+  const { onAttachmentsChange } = getPaneTestRuntime(pane).chatState.attachmentInputProps(state);
+  const attachment = {
+    id: "frame-comment",
+    mimeType: "text/plain",
+    dataUrl: "data:text/plain;base64,Y29tbWVudA==",
+    selectionAnnotation: {
+      sessionKey: state.sessionKey,
+      text: "Selected text",
+      start: 0,
+      end: 13,
+      comment: "First comment",
+    },
+  };
+  await task(() => onAttachmentsChange([attachment]));
+  await pane.updateComplete;
+  expect(pane.textContent).toContain("First comment");
+  expect(updates).toHaveBeenCalledOnce();
+
+  await task(() => state.handleChatDraftChange("ordinary draft"));
+  await pane.updateComplete;
+  expect(updates).toHaveBeenCalledOnce();
+
+  await task(() =>
+    onAttachmentsChange([
+      {
+        ...attachment,
+        selectionAnnotation: { ...attachment.selectionAnnotation, comment: "Edited comment" },
+      },
+    ]),
+  );
+  await pane.updateComplete;
+  expect(pane.textContent).toContain("Edited comment");
+  expect(pane.textContent).not.toContain("First comment");
+  expect(updates).toHaveBeenCalledTimes(2);
+
+  await task(() => onAttachmentsChange([]));
+  await pane.updateComplete;
+  expect(pane.textContent).not.toContain("Edited comment");
+  expect(updates).toHaveBeenCalledTimes(3);
+});
+
 it("keeps an unpresented pane parked when the document becomes visible", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);

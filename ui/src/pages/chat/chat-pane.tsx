@@ -61,7 +61,7 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
     }
     // Native callers and pane startup need synchronous input facts before the first render.
     createRenderEffect(
-      () => Object.fromEntries(chatPanePropertyKeys.map((key) => [key, Reflect.get(props, key)])),
+      () => Object.fromEntries(chatPanePropertyKeys.map((key) => [key, props[key]])),
       (next) => {
         const changes: ChatPaneInputChanges = {
           sessionKey: !Object.is(runtime.sessionKey, next.sessionKey),
@@ -69,12 +69,7 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
           draft: !Object.is(runtime.draft, next.draft),
           focusComposer: !Object.is(runtime.focusComposer, next.focusComposer),
         };
-        for (const [key, value] of Object.entries(next)) {
-          const previous = Reflect.get(runtime, key);
-          if (!Object.is(previous, value)) {
-            Reflect.set(runtime, key, value);
-          }
-        }
+        Object.assign(runtime, next);
         if (runtime.isConnected) {
           // Input ownership and ordered commands remain live while the frame is parked.
           runtime.synchronizeInputs(changes);

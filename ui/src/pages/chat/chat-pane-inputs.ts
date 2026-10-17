@@ -73,5 +73,5 @@ export const chatPaneProperties = {
   boardProvider: { default: undefined },
 } satisfies { [Key in keyof ChatPaneProps]-?: { default: ChatPaneProps[Key] } };
 
-// This checked literal owns every enumerable input key.
+// SAFETY: This checked literal owns every enumerable input key.
 export const chatPanePropertyKeys = Object.keys(chatPaneProperties) as (keyof ChatPaneProps)[];

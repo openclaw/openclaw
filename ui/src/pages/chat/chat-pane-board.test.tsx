@@ -101,7 +101,10 @@ type TestChatPane = HTMLElement & {
 
 let theme: ReturnType<typeof createApplicationTheme>;
 
-function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
+function createTestPane(
+  sessions: SessionCapability = {} as SessionCapability,
+  sessionKey = "agent:main:current",
+) {
   const client = {
     request: vi.fn(async () => ({ session: { key: "agent:main:current", kind: "direct" } })),
   } as unknown as GatewayBrowserClient;
@@ -120,8 +123,9 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     ChatPaneRuntime,
     () => context,
   ) as unknown as TestChatPane;
-  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   pane.context = context;
+  pane.sessionKey = sessionKey;
   pane.state = {
     ...createInitialChatRealtimeState(),
     chatError: null,
@@ -136,7 +140,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     connected: true,
     lastError: null,
     renderLifecycle: { afterCommit: () => () => {} },
-    sessionKey: "agent:main:current",
+    sessionKey,
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,
     sidebarLayout: { columns: [] },
@@ -153,6 +157,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   };
   pane.connectedClient = client;
   pane.connectionGeneration = 1;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   return pane;
 }
 
@@ -163,7 +168,7 @@ function createGatewayBoardPane(params: {
   capabilities?: readonly string[];
   lifecycleConnected?: boolean;
 }) {
-  const pane = createTestPane();
+  const pane = createTestPane(undefined, params.sessionKey);
   const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
   const removeListener = vi.fn();
   const request = vi.fn<
@@ -232,7 +237,6 @@ describe("chat pane board shell", () => {
     "keeps an explicitly closed empty dashboard closed when its first content arrives (%s)",
     async (sessionKey) => {
       const { pane, request } = createGatewayBoardPane({ sessionKey });
-      pane.sessionKey = sessionKey;
       pane.routeFace = "chat";
       pane.onFaceChange = vi.fn();
       if (sessionKey === "global") {
@@ -265,10 +269,8 @@ describe("chat pane board shell", () => {
   );
 
   it("opens split view once when the current task first gains a dashboard", async () => {
-    const pane = createTestPane();
+    const pane = createTestPane(undefined, "agent:main:first-dashboard");
     const provider = createMockBoardProvider("agent:main:first-dashboard");
-    pane.state.sessionKey = "agent:main:first-dashboard";
-    pane.sessionKey = "agent:main:first-dashboard";
     pane.boardProvider = provider;
     pane.routeFace = "chat";
     pane.onFaceChange = vi.fn();
@@ -326,10 +328,9 @@ describe("chat pane board shell", () => {
   it.each(["terminal", "dashboard"] as const)(
     "applies a focused dashboard link over saved %s main only once",
     (slot) => {
-      const pane = createTestPane();
+      const pane = createTestPane(undefined, "agent:main:expanded-route");
+      Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
       pane.boardProvider = createMockBoardProvider("agent:main:expanded-route");
-      pane.state.sessionKey = "agent:main:expanded-route";
-      pane.sessionKey = "agent:main:expanded-route";
       pane.routeFace = "dashboard";
       pane.dashboardExpanded = true;
       const savedLayout = {
@@ -338,6 +339,7 @@ describe("chat pane board shell", () => {
       };
       pane.state.sidebarLayout = savedLayout;
       patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
+      Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
 
       pane.prepareRender();
       pane.commitRender();
@@ -358,9 +360,7 @@ describe("chat pane board shell", () => {
   );
 
   it("restores a closed saved task layout on an ordinary dashboard revisit", () => {
-    const pane = createTestPane();
-    pane.state.sessionKey = "agent:main:saved-dashboard-layout";
-    pane.sessionKey = pane.state.sessionKey;
+    const pane = createTestPane(undefined, "agent:main:saved-dashboard-layout");
     pane.boardProvider = createMockBoardProvider(pane.sessionKey);
     pane.routeFace = "dashboard";
     pane.onFaceChange = vi.fn();

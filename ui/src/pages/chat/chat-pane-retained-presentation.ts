@@ -373,7 +373,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (
       !state ||
       !this.presented ||
-      document.visibilityState === "hidden" ||
+      !this.presentation.documentVisible ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey) ||
       (!this.transcriptReady && !state.currentSessionId && !getAcceptedChatHistorySession(state))
@@ -410,7 +410,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       if (
         state.connected &&
         (!this.presented ||
-          document.visibilityState === "hidden" ||
+          !this.presentation.documentVisible ||
           (!this.transcriptReady && !getAcceptedChatHistorySession(state)) ||
           (this.initialProgressCardTarget() && progress.loading && !progress.error))
       ) {

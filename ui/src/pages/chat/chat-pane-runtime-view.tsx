@@ -9,6 +9,7 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
   availableLinkReaders,
@@ -45,43 +46,40 @@ import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
   const viewOwner = getOwner();
-  projectChatFields(runtime.tasks);
-  projectChatFields(runtime.publication);
-  projectChatFields(runtime.repository);
-  projectChatFields(runtime.headerPresentation);
-  projectChatFields(runtime.collaboration);
-  projectChatFields(runtime.companionIntents);
-  projectChatFields(runtime, chatPanePropertyKeys);
+  for (const owner of [
+    runtime.tasks,
+    runtime.publication,
+    runtime.repository,
+    runtime.headerPresentation,
+    runtime.collaboration,
+    runtime.companionIntents,
+    runtime.presentation,
+    runtime.resetConfirmation,
+    runtime.progressVisibility,
+    runtime.dashboardPresentation,
+    runtime.sessionCreation,
+    runtime.swarm,
+    runtime.boardPresentation,
+    runtime.pendingPanelToggles,
+    runtime.workspaceConflicts,
+  ]) {
+    projectChatFields(owner);
+  }
   projectChatFields(runtime, [
+    ...chatPanePropertyKeys,
     "paneWidth",
     "desktopFocus",
     "replyNavigationSessionKey",
     "replyNavigationId",
   ]);
-  projectChatFields(runtime.presentation);
-  projectChatFields(runtime.resetConfirmation);
-  projectChatFields(runtime.progressVisibility);
-  projectChatFields(runtime.dashboardPresentation);
-  projectChatFields(runtime.sessionCreation);
-  projectChatFields(runtime.swarm);
-  projectChatFields(runtime.boardPresentation);
-  projectChatFields(runtime.pendingPanelToggles);
-  projectChatFields(runtime.workspaceConflicts);
   const [ready, setReady] = createSignal(false);
   let disposed = false;
-  let pendingCommit: { promise: Promise<boolean>; resolve: (value: boolean) => void } | undefined;
+  let pendingCommit: Deferred<boolean> | undefined;
   let previousFocusComposer: boolean | undefined;
   let focusPending = false;
 
   function waitForCommit(): Promise<boolean> {
-    if (!pendingCommit) {
-      let resolve!: (value: boolean) => void;
-      const promise = new Promise<boolean>((finish) => {
-        resolve = finish;
-      });
-      pendingCommit = { promise, resolve };
-    }
-    return pendingCommit.promise;
+    return (pendingCommit ??= createDeferredCore<boolean>()).promise;
   }
 
   Object.defineProperty(runtime, "updateComplete", {
@@ -166,9 +164,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const state = runtime.readState();
     const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
     const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
-    const realtimeOwner = createMemo(() => runtime.realtimeTalk);
     const realtime = createMemo(() => {
-      const owner = realtimeOwner();
+      const owner = runtime.realtimeTalk;
       return owner && projectOwner(owner, (source) => source.snapshot);
     });
     const inputOwner = projectOwner(chatInputOwnerForContext(context), (owner) => owner.current);
@@ -176,6 +173,11 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const controlCommand = projectOwner(
       runtime.chatState.composerDraft,
       (source) => isChatControlCommand(source.read().draft),
+      Object.is,
+    );
+    const attachments = projectOwner(
+      runtime.chatState.composerDraft,
+      (source) => source.read().attachments,
       Object.is,
     );
     const questions = projectOwner(runtime.questionPromptState, (owner) => owner);
@@ -205,7 +207,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           ]
         : [];
     });
-    const presented = () => runtime.presented;
     runtime.mountPanelActions();
     runtime.mountToolIcons(() => gateway.read().snapshot);
     const progressScope = createMemo(
@@ -240,8 +241,12 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     });
     const sources = [
       runtime.context.plugins,
+      runtime.context.agents,
+      runtime.context.config,
+      runtime.context.overlays,
       runtime.context.navigation,
       runtime.context.placementStartup,
+      runtime.context.runtimeConfig,
       nativeGatewaysCapability(),
       lazySidebarElements,
     ].map((source) => source && projectOwner(source, (capability) => capability));
@@ -266,6 +271,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         resources.read();
         inputOwner.read();
         controlCommand.read();
+        attachments.read();
         questions.read();
         queuedEdit?.read();
         discussion.read();
@@ -278,7 +284,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         prepareRender();
         return runtime.render(() => providerReview);
       },
-      () => presented() && runtime.presentation.documentVisible,
+      () => runtime.presented && runtime.presentation.documentVisible,
     );
     const providerReview: ChatProviderReviewOwner = createChatProviderReview({
       source: () => frame().providerReviewSource,
@@ -286,7 +292,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     });
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(
-      () => ({ frame: frame(), presented: presented() }),
+      () => ({ frame: frame(), presented: runtime.presented }),
       (next, previous) => {
         if (next.frame !== previous?.frame) {
           commitRender();
@@ -298,14 +304,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         }
       },
     );
-    const sessionKey = () => {
-      frame();
-      return runtime.sessionKey;
-    };
-    const agentId = () => {
-      frame();
-      return runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId;
-    };
     // Keep this passthrough host cold: the shared hover bootstrap upgrades it on intent.
     // Importing its renderer here makes the optional runtime a required boot dependency.
     return (
@@ -316,8 +314,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         prop:readers={availableLinkPreviewReaders(gateway.read().snapshot)}
         prop:claimedReaders={availableLinkReaders(gateway.read().snapshot)}
         prop:pagePreviewContext={context}
-        prop:agentId={agentId()}
-        prop:sessionKey={sessionKey()}
+        prop:agentId={runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId}
+        prop:sessionKey={runtime.sessionKey}
       >
         <PaneLayout layout={frame().layout} />
         <ChatProviderReviewDialog owner={providerReview} />

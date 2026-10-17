@@ -106,7 +106,8 @@ export function createMountedPanes(
             "openclaw-chat-runtime-test",
             ChatPaneRuntime,
           ) as unknown as TestChatPane);
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+    // Configure the detached owner before the view starts its connection lifecycle.
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.context = context;
     pane.sessionKey = sessionKey;
     // Composer and transcript state belongs to each mounted presentation.

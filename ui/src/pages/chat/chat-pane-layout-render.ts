@@ -134,6 +134,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             ]),
             onRestored: () => {
               this.chatState.composerPersistence.restore();
+              this.chatState.composerPersistence.persistChangedState();
             },
           };
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
