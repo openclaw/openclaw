@@ -561,6 +561,9 @@ export function createAgentDatabaseNativeGeneration(
       publication?.assertPublished();
       assertOperationCurrent();
       if (!store) {
+        if (createIfMissing && expectedIdentity) {
+          throw new Error("Captured agent database file disappeared before writable preparation");
+        }
         return undefined;
       }
       const schema = createIfMissing
