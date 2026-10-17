@@ -17,6 +17,7 @@ describe("chat content context copy", () => {
   beforeEach(() => {
     writeText.mockClear();
     vi.stubGlobal("navigator", { clipboard: { writeText } });
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
     owner = document.createElement("section");
     owner.addEventListener("contextmenu", (event) =>
       handleTranscriptContextMenu(event, { paneId: "copy-test", onSetReply: vi.fn() }),

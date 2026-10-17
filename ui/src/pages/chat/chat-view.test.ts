@@ -4699,6 +4699,15 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
+  beforeEach(() =>
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })),
+  );
+  afterEach(() => vi.unstubAllGlobals());
+
   const replyTarget = { messageId: "msg-1", text: "quoted", senderLabel: "User" };
   const renderReply = (overrides: Partial<ChatProps> = {}) =>
     renderChatView({ replyTarget, ...overrides });
