@@ -129,6 +129,9 @@ type SessionsSendDeliveryParams = {
   /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
   preparedTargetSessionId?: string;
   retainAcceptance?: boolean;
+  /** Returned input can retain its exact recipient generation through consumption. */
+  recipientGeneration?: { assertCurrent: () => void; release: () => void };
+  onQueueAccepted?: (accepted: boolean) => void;
   assertDispatchCurrent?: () => void;
   // Destination policy fences input commit, not an already accepted acknowledgment.
   assertSendCurrent?: () => void;
@@ -191,6 +194,7 @@ export async function trySessionsSendActiveRunDelivery(
         let accepted = false;
         const assertInputCurrent = () => {
           assertCurrent();
+          params.recipientGeneration?.assertCurrent();
           if (!accepted) {
             params.assertSendCurrent?.();
           }
@@ -200,11 +204,20 @@ export async function trySessionsSendActiveRunDelivery(
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
           ...lifecycle,
-          ...(params.assertSendCurrent
+          ...(params.recipientGeneration
+            ? {
+                onQueueSettled: () => {
+                  params.recipientGeneration?.release();
+                  lifecycle.onQueueSettled?.();
+                },
+              }
+            : {}),
+          ...(params.assertSendCurrent || params.onQueueAccepted
             ? {
                 onQueueAccepted: (value: boolean) => {
                   // The receiving queue owns accepted input, not the sender's later policy.
                   accepted ||= value;
+                  params.onQueueAccepted?.(value);
                   lifecycle.onQueueAccepted?.(value);
                 },
               }
