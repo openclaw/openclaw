@@ -490,7 +490,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     },
     widgetChanged(previous: BoardWidget, current: BoardWidget | undefined): void {
       if (previous.name !== current?.name || previous.revision !== current?.revision) {
-        resetFailures(false);
+        resetFailures();
         return;
       }
       if (!frameError) {
@@ -500,7 +500,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       if (nextFrameUrl && nextFrameUrl !== lastFrameUrl) {
         // A newly minted ticket gets one authorization probe, but keeps the
         // existing remint budget until that probe proves the frame healthy.
-        setError("", false);
+        setError("");
       }
     },
     update(): void {
