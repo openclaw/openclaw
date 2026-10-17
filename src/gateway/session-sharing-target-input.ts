@@ -171,6 +171,10 @@ function resolveSessionGroupsPutMutationTargets(
   if (!Array.isArray(names)) {
     return undefined;
   }
+  // Append-only puts retain every existing group, so no session loses membership.
+  if (asOptionalRecord(requestParams)?.appendOnly === true) {
+    return [];
+  }
   const requested = new Set(normalizeUniqueTrimmedStringList(names));
   const dropped = readSessionGroupCatalog()
     .groups.map((group) => group.name)

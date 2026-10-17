@@ -105,7 +105,7 @@ class SidebarCollapsibleHeaderTest {
           }
         }
       }
-      val header = composeRule.onNodeWithText(nativeString("Recent")).performScrollTo()
+      val header = composeRule.onNodeWithText(nativeString("Other")).performScrollTo()
 
       fun capture(name: String) {
         File(evidence, "$name.png").outputStream().use {

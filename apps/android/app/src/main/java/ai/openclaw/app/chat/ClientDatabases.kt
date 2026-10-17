@@ -23,7 +23,13 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -76,8 +82,8 @@ internal interface ClientStateControlDao {
 
 /** Disposable gateway-derived projections. Schema mismatches and corruption rebuild this file. */
 @Database(
-  entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class],
-  version = 3,
+  entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class, CachedSessionGroupCatalogEntity::class],
+  version = 4,
   exportSchema = true,
 )
 internal abstract class GatewayCacheDatabase : RoomDatabase() {
@@ -531,6 +537,27 @@ internal class AndroidClientDatabases private constructor(
 
   fun commandOutbox(): ChatCommandOutbox = commandOutbox
 
+  fun observeSessionGroupCatalog(gatewayId: String): Flow<CachedSessionGroupCatalog?> =
+    flow {
+      emitAll(
+        ready()
+          .gatewayCache
+          .dao()
+          .observeSessionGroupCatalog(gatewayId)
+          .map { it?.toCatalog() },
+      )
+    }
+
+  suspend fun saveSessionGroupCatalog(
+    gatewayId: String,
+    names: List<String>,
+    sectionOrder: List<String>,
+  ) {
+    ready().gatewayCache.dao().upsertSessionGroupCatalog(
+      CachedSessionGroupCatalogEntity(gatewayId, Json.encodeToString(names), Json.encodeToString(sectionOrder)),
+    )
+  }
+
   suspend fun stageGatewayRemoval(gatewayId: String) = ready().stageGatewayRemoval(gatewayId)
 
   suspend fun cancelGatewayRemoval(gatewayId: String) = ready().cancelGatewayRemoval(gatewayId)
@@ -559,3 +586,5 @@ internal class AndroidClientDatabases private constructor(
 }
 
 private fun scopedGatewayId(gatewayId: String): String? = gatewayId.trim().takeIf { it.isNotEmpty() }
+
+private fun CachedSessionGroupCatalogEntity.toCatalog(): CachedSessionGroupCatalog = CachedSessionGroupCatalog(Json.decodeFromString(namesJson), Json.decodeFromString(sectionOrderJson))

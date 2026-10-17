@@ -297,6 +297,35 @@ describe("session sharing group mutations", () => {
       expect(
         groupAuthorization(context, viewer, "put", { names: [" Projects "] }).error,
       ).toBeNull();
+      for (const requestParams of [
+        { names: ["New"], appendOnly: true },
+        { names: [], appendOnly: true, sectionOrder: ["ungrouped", "category:Projects"] },
+      ]) {
+        const admission = resolveSessionMutationAuthorization({
+          client: viewer,
+          method: "sessions.groups.put",
+          requestParams,
+          context,
+        });
+        expect(admission.error).toBeNull();
+        const respond = vi.fn();
+        await sessionGroupHandlers["sessions.groups.put"]?.({
+          params: requestParams,
+          client: viewer,
+          context,
+          sessionMutationAuthorization: admission.authorization,
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+        expect(readSessionGroupCatalog().groups.map((group) => group.name)).toEqual([
+          "Projects",
+          "New",
+        ]);
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: "agent:main:restricted-put-member" })
+            ?.category,
+        ).toBe("Projects");
+      }
     });
   });
 

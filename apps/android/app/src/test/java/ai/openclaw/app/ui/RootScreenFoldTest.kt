@@ -286,7 +286,7 @@ class RootScreenFoldTest {
         },
       ) { model ->
         composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
-        composeRule.onNodeWithText("Recent").performScrollTo().performClick()
+        composeRule.onNodeWithText("Other").performScrollTo().performClick()
         val row = composeRule.onNodeWithText("Android QA").performScrollTo()
         val session = model.chatSessions.value.single { it.key == "discord:android" }
         val expectedPatch =
@@ -408,7 +408,7 @@ class RootScreenFoldTest {
     withRoot(completed = true, destination = HomeDestination.Chat) {
       emit(listOf(testFold(Rect(0, 400, view.width, 420))))
       composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
-      composeRule.onNodeWithText("Recent").performScrollTo().performClick()
+      composeRule.onNodeWithText("Other").performScrollTo().performClick()
       composeRule.onNodeWithText("Android QA").performScrollTo().assertIsDisplayed()
       val scroll = composeRule.onNode(hasScrollAction() and hasAnyAncestor(hasTestTag("sidebar-drawer")))
       val position = scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
@@ -581,7 +581,7 @@ class RootScreenFoldTest {
     withRoot(completed = true) {
       val hinge = Rect(400, 0, 420, view.height)
       emit(listOf(testFold(hinge)))
-      composeRule.onNodeWithText("Recent").performScrollTo().performClick()
+      composeRule.onNodeWithText("Other").performScrollTo().performClick()
       composeRule.onNodeWithText("Android QA").performScrollTo().assertIsDisplayed()
       val sidebarScroll = hasScrollAction() and hasAnyAncestor(hasTestTag("sidebar-permanent") or hasTestTag("sidebar-drawer"))
       val scroll =

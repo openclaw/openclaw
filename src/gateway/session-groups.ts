@@ -39,37 +39,9 @@ export class SessionGroupNotEmptyError extends Error {
   }
 }
 
-function normalizeSidebarSectionOrder(
-  sectionOrder: readonly string[],
-  groupNames: readonly string[],
-): string[] {
-  const groups = new Set(groupNames);
-  const normalized = new Set<string>();
-  for (const raw of sectionOrder) {
-    const sectionId = raw.trim();
-    let canonical: string | null = null;
-    if (sectionId === "ungrouped" || sectionId === "groups" || sectionId === "work") {
-      canonical = sectionId;
-    } else if (sectionId.startsWith("category:")) {
-      const name = normalizeOptionalString(sectionId.slice("category:".length));
-      if (name && groups.has(name)) {
-        canonical = `category:${name}`;
-      }
-    } else if (sectionId.startsWith("catalog:")) {
-      const catalogId = normalizeOptionalString(sectionId.slice("catalog:".length));
-      if (catalogId) {
-        canonical = `catalog:${catalogId}`;
-      }
-    }
-    if (canonical) {
-      normalized.add(canonical);
-    }
-  }
-  return [...normalized];
-}
-
 /**
- * Replaces the ordered catalog. Dropping a name whose group still has member
+ * Replaces the ordered catalog, or atomically appends without dropping existing names.
+ * Dropping a name whose group still has member
  * sessions is rejected: member sweeps stay owned by sessions.groups.delete,
  * so a put can never leave dangling categories that resurrect the group.
  */
@@ -77,6 +49,7 @@ export async function putSessionGroups(params: {
   cfg: OpenClawConfig;
   names: readonly string[];
   sectionOrder?: readonly string[];
+  appendOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   assertTargetCurrent?: (target: { agentId?: string; sessionKey: string }) => void;
@@ -84,13 +57,12 @@ export async function putSessionGroups(params: {
   const { cfg, names, sectionOrder, env = process.env } = params;
   await ensureSessionGroupCatalog(env);
   const normalized = normalizeUniqueTrimmedStringList(names);
-  const normalizedSectionOrder =
-    sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
   const result = await mutateSessionGroupCatalog(
     {
       kind: "put",
       names: normalized,
-      sectionOrder: normalizedSectionOrder,
+      sectionOrder: sectionOrder === undefined ? undefined : [...sectionOrder],
+      appendOnly: params.appendOnly,
       cfg: { agents: cfg.agents, session: cfg.session },
     },
     env,

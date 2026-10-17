@@ -6,6 +6,7 @@ import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
 import androidx.room3.withWriteTransaction
+import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -146,8 +147,29 @@ internal data class CachedGatewayOwnerEntity(
   val agentId: String,
 )
 
+@Entity(tableName = "cached_session_group_catalogs", primaryKeys = ["gatewayId"])
+internal data class CachedSessionGroupCatalogEntity(
+  val gatewayId: String,
+  val namesJson: String,
+  val sectionOrderJson: String,
+)
+
+internal data class CachedSessionGroupCatalog(
+  val names: List<String>,
+  val sectionOrder: List<String>,
+)
+
 @Dao
 internal interface ChatCacheDao {
+  @Query("SELECT * FROM cached_session_group_catalogs WHERE gatewayId = :gatewayId")
+  fun observeSessionGroupCatalog(gatewayId: String): Flow<CachedSessionGroupCatalogEntity?>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsertSessionGroupCatalog(row: CachedSessionGroupCatalogEntity)
+
+  @Query("DELETE FROM cached_session_group_catalogs WHERE gatewayId = :gatewayId")
+  suspend fun deleteSessionGroupCatalog(gatewayId: String)
+
   @Query("SELECT agentId FROM cached_gateway_owners WHERE gatewayId = :gatewayId")
   suspend fun lastDefaultAgentId(gatewayId: String): String?
 
@@ -529,6 +551,7 @@ class RoomChatTranscriptCache internal constructor(
       dao.deleteMessages(gateway)
       dao.deleteSessionsForGateway(gateway)
       dao.deleteGatewayOwner(gateway)
+      dao.deleteSessionGroupCatalog(gateway)
     }
   }
 

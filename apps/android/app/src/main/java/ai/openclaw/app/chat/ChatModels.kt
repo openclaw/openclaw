@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.SessionObserverDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -452,6 +453,8 @@ data class ChatSessionEntry(
   /** In-memory presentation fallback; never server metadata or cached session state. */
   val localFallbackTitle: String? = null,
   val category: String? = null,
+  /** Gateway row kind. "group" is a channel group chat (Telegram, Discord, Slack), not a folder. */
+  val kind: String? = null,
   val color: String? = null,
   val hasColorMetadata: Boolean = color != null,
   val pinned: Boolean? = null,
@@ -551,6 +554,7 @@ internal data class ChatSessionPatch(
   val archived: Boolean? = null,
   val unread: Boolean? = null,
   val unreadExpectation: ChatSessionUnreadExpectation? = null,
+  val requestLease: GatewaySession.RequestLease? = null,
 )
 
 data class ChatSessionUnreadExpectation(

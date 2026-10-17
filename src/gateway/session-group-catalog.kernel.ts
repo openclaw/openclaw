@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -22,6 +23,35 @@ const SIDEBAR_ORDER = "sidebar.sectionOrder";
 const defaultsDatabases = new WeakSet<EngineConnection>();
 const kyselyFor = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, "session_groups" | "config_machine_state">>(db);
+
+function normalizeSidebarSectionOrder(
+  sectionOrder: readonly string[],
+  groupNames: readonly string[],
+): string[] {
+  const groups = new Set(groupNames);
+  const normalized = new Set<string>();
+  for (const raw of sectionOrder) {
+    const sectionId = raw.trim();
+    let canonical: string | null = null;
+    if (sectionId === "ungrouped" || sectionId === "groups" || sectionId === "work") {
+      canonical = sectionId;
+    } else if (sectionId.startsWith("category:")) {
+      const name = normalizeOptionalString(sectionId.slice("category:".length));
+      if (name && groups.has(name)) {
+        canonical = `category:${name}`;
+      }
+    } else if (sectionId.startsWith("catalog:")) {
+      const catalogId = normalizeOptionalString(sectionId.slice("catalog:".length));
+      if (catalogId) {
+        canonical = `catalog:${catalogId}`;
+      }
+    }
+    if (canonical) {
+      normalized.add(canonical);
+    }
+  }
+  return [...normalized];
+}
 
 function hasDefaults(db: EngineConnection): boolean {
   return (
@@ -105,13 +135,20 @@ export function mutateSessionGroupCatalogInDatabase(
   const result = runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = kyselyFor(db);
-      const names = executeSqliteQuerySync(
+      const catalogRows = executeSqliteQuerySync(
         db,
-        kysely.selectFrom("session_groups").select("name").orderBy("position").orderBy("name"),
-      ).rows.map((row) => row.name);
+        kysely
+          .selectFrom("session_groups")
+          .select(["name", "position"])
+          .orderBy("position")
+          .orderBy("name"),
+      ).rows;
+      const names = catalogRows.map((row) => row.name);
       const selected =
         input.kind === "put"
-          ? names.filter((name) => !input.names.includes(name))
+          ? input.appendOnly
+            ? []
+            : names.filter((name) => !input.names.includes(name))
           : input.kind === "defaults" || input.kind === "retire"
             ? [input.name]
             : [];
@@ -143,22 +180,42 @@ export function mutateSessionGroupCatalogInDatabase(
         }
         const now = Date.now();
         const existing = new Set(names);
-        executeSqliteQuerySync(
-          db,
-          input.names.length === 0
-            ? kysely.deleteFrom("session_groups")
-            : kysely.deleteFrom("session_groups").where("name", "not in", input.names),
-        );
-        input.names.forEach((name, position) =>
+        if (!input.appendOnly) {
+          executeSqliteQuerySync(
+            db,
+            input.names.length === 0
+              ? kysely.deleteFrom("session_groups")
+              : kysely.deleteFrom("session_groups").where("name", "not in", input.names),
+          );
+        }
+        const nextPosition = (catalogRows.at(-1)?.position ?? -1) + 1;
+        const additions = input.appendOnly
+          ? input.names.filter((name) => !existing.has(name))
+          : input.names;
+        additions.forEach((name, index) =>
           executeSqliteQuerySync(
             db,
             existing.has(name)
-              ? kysely.updateTable("session_groups").set({ position }).where("name", "=", name)
-              : kysely.insertInto("session_groups").values({ name, position, created_at: now }),
+              ? kysely
+                  .updateTable("session_groups")
+                  .set({ position: index })
+                  .where("name", "=", name)
+              : kysely.insertInto("session_groups").values({
+                  name,
+                  position: input.appendOnly ? nextPosition + index : index,
+                  created_at: now,
+                }),
           ),
         );
-        if (input.sectionOrder) {
-          updateSidebarOrder(db, () => input.sectionOrder);
+        const requestedOrder = input.sectionOrder;
+        if (requestedOrder) {
+          const liveNames = input.appendOnly ? [...names, ...additions] : input.names;
+          updateSidebarOrder(db, (current) =>
+            normalizeSidebarSectionOrder(
+              input.appendOnly ? [...requestedOrder, ...(current ?? [])] : requestedOrder,
+              liveNames,
+            ),
+          );
         }
         changed = true;
       } else if (input.kind === "defaults") {

@@ -462,7 +462,7 @@ class CommandPaletteLogicTest {
         }
         if (sidebar) {
           composeRule.onNodeWithTag("sidebar-open-settings").performClick()
-          composeRule.onNodeWithText(nativeString("Recent")).performScrollTo().performClick()
+          composeRule.onNodeWithText(nativeString("Other")).performScrollTo().performClick()
           for ((title, state) in listOf("Activity active" to "Queued", "Activity queued" to "Queued", "Activity idle" to null, "Activity finished" to null)) {
             val row =
               composeRule

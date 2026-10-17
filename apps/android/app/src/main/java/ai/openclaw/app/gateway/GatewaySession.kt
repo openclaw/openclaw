@@ -414,6 +414,9 @@ class GatewaySession(
 
     fun supportsMethod(method: String): Boolean = method in advertisedMethods
 
+    /** False when hello omitted the method catalog; callers must not treat that as "put is absent". */
+    fun hasAdvertisedMethods(): Boolean = advertisedMethods.isNotEmpty()
+
     suspend fun closeTalkSession(
       sessionId: String,
       disposition: TalkSessionCloseDisposition,

@@ -51,7 +51,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     async ({ respond }) => {
       await ensureSessionGroupCatalog();
       const { groups, sectionOrder } = readSessionGroupCatalog();
-      respond(true, { groups, sectionOrder }, undefined);
+      respond(true, { groups, sectionOrder, appendOnly: true }, undefined);
     },
   ),
   "sessions.groups.defaults": defineValidatedGatewayHandler(
@@ -78,6 +78,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         cfg: context.getRuntimeConfig(),
         names: params.names,
         sectionOrder: params.sectionOrder,
+        appendOnly: params.appendOnly,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
