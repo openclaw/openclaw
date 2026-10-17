@@ -45,15 +45,31 @@ describe("cron failure alert outcome write-back", () => {
       nowMs: () => endedAt,
       sendCronFailureAlert: params.sendCronFailureAlert,
     });
-    await finalizeAlertOutcome({
+    await fail(state, job);
+    return { store, state, job };
+  }
+
+  function fail(
+    state: ReturnType<typeof createAlertState>,
+    job: CronJob,
+    startedAt = dueAt,
+    error = "provider unavailable",
+  ) {
+    return finalizeAlertOutcome({
       state,
       job,
       status: "error",
-      error: "provider unavailable",
-      startedAt: dueAt,
-      endedAt,
+      error,
+      startedAt,
+      endedAt: startedAt + 10,
     });
-    return { store, state, job };
+  }
+
+  async function drain(state: ReturnType<typeof createAlertState>) {
+    await Promise.resolve();
+    await state.op;
+    await Promise.resolve();
+    await state.op;
   }
 
   it.each([
@@ -79,14 +95,7 @@ describe("cron failure alert outcome write-back", () => {
       });
       state.deps.defaultAgentId = undefined;
       state.deps.resolveDefaultAgentId = () => currentDefault;
-      await finalizeAlertOutcome({
-        state,
-        job,
-        status: "error",
-        error: "provider unavailable",
-        startedAt: dueAt,
-        endedAt,
-      });
+      await fail(state, job);
       expect(send).toHaveBeenCalledOnce();
       currentDefault = "beta";
       delivery.resolve();
@@ -151,14 +160,7 @@ describe("cron failure alert outcome write-back", () => {
           finished();
         }
       };
-      await finalizeAlertOutcome({
-        state,
-        job,
-        status: "error",
-        error: "provider unavailable",
-        startedAt: dueAt,
-        endedAt,
-      });
+      await fail(state, job);
       expect(finished).toHaveBeenCalledOnce();
       expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
         lastRunStatus: "error",
@@ -260,14 +262,7 @@ describe("cron failure alert outcome write-back", () => {
         });
         const siblingJob = structuredClone(job);
         siblingJob.state.runningAtMs = laterAt;
-        await finalizeAlertOutcome({
-          state: sibling,
-          job: siblingJob,
-          status: "error",
-          error: "provider unavailable again",
-          startedAt: laterAt - 10,
-          endedAt: laterAt,
-        });
+        await fail(sibling, siblingJob, laterAt - 10, "provider unavailable again");
         expect(siblingSend).toHaveBeenCalledOnce();
         await siblingSend.mock.results[0]?.value;
         expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
@@ -279,22 +274,12 @@ describe("cron failure alert outcome write-back", () => {
           throw new Error("expected persisted cron job");
         }
         currentJob.state.runningAtMs = laterAt;
-        await finalizeAlertOutcome({
-          state,
-          job: currentJob,
-          status: "error",
-          error: "provider still unavailable",
-          startedAt: laterAt,
-          endedAt: laterAt + 10,
-        });
+        await fail(state, currentJob, laterAt, "provider still unavailable");
         expect(send).toHaveBeenCalledOnce();
       }
       gate.resolve();
       await send.mock.results[0]?.value;
-      await Promise.resolve();
-      await state.op;
-      await Promise.resolve();
-      await state.op;
+      await drain(state);
       const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
       if (replacement === "sibling cycle") {
         expect(persisted?.lastFailureAlertAtMs).toBe(laterAt);
@@ -338,20 +323,16 @@ describe("cron failure alert outcome write-back", () => {
     try {
       sendGate.resolve();
       await sendCronFailureAlert.mock.results[0]?.value;
-      await Promise.resolve();
-      await state.op;
-      await Promise.resolve();
-      await state.op;
+      await drain(state);
 
       // The live gateway must not report an outcome SQLite refused to commit.
       const live = state.store?.jobs[0]?.state;
-      expect(live?.lastFailureNotificationDeliveryStatus).toBe("unknown");
-      expect(live?.lastFailureNotificationDelivered).toBeUndefined();
-      expect(live?.lastFailureNotificationDeliveryError).toBeUndefined();
       const durable = (await loadCronStore(store.storePath)).jobs[0]?.state;
-      expect(durable?.lastFailureNotificationDeliveryStatus).toBe("unknown");
-      expect(durable?.lastFailureNotificationDelivered).toBeUndefined();
-      expect(durable?.lastFailureNotificationDeliveryError).toBeUndefined();
+      for (const result of [live, durable]) {
+        expect(result?.lastFailureNotificationDeliveryStatus).toBe("unknown");
+        expect(result?.lastFailureNotificationDelivered).toBeUndefined();
+        expect(result?.lastFailureNotificationDeliveryError).toBeUndefined();
+      }
       expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_outcome_write;");

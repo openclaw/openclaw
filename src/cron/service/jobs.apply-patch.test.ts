@@ -1,4 +1,3 @@
-// Cron job patch tests cover applying partial updates to scheduled jobs.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
@@ -24,18 +23,30 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
+function makeMainJob(delivery?: CronJob["delivery"]) {
+  return makeJob({
+    sessionTarget: "main",
+    payload: { kind: "systemEvent", text: "tick" },
+    delivery,
+  });
+}
+
+const clearFailureDestination = { channel: null, to: null, accountId: null, mode: null };
+const clearedFailureDestination = {
+  channel: undefined,
+  to: undefined,
+  accountId: undefined,
+  mode: undefined,
+};
+const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
+
 describe("applyJobPatch schedule retention", () => {
-  it.each([{ schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: undefined }])(
-    "defaults $schedule.kind to cleanup when converting it to at",
-    (previous) => {
-      const job = makeJob(previous);
-
-      applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
-
-      expect(job.schedule.kind).toBe("at");
-      expect(job.deleteAfterRun).toBe(true);
-    },
-  );
+  it("defaults cron to cleanup when converting it to at", () => {
+    const job = makeJob({ schedule: { kind: "cron", expr: "0 * * * *" } });
+    applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
+    expect(job.schedule.kind).toBe("at");
+    expect(job.deleteAfterRun).toBe(true);
+  });
 
   it("preserves an explicit keep policy when converting a recurring job to at", () => {
     const job = makeJob({ deleteAfterRun: true });
@@ -86,15 +97,7 @@ describe("schedule activation ownership", () => {
       },
     } as unknown as CronJobCreate;
 
-    const job = createJob(
-      {
-        deps: {
-          nowMs: () => now,
-          defaultAgentId: "main",
-        },
-      } as never,
-      input,
-    );
+    const job = createJob({ deps: { nowMs: () => now, defaultAgentId: "main" } }, input);
 
     expect(job.state.scheduleActivatedAtMs).toBeUndefined();
     expect(job.state.runningScheduleChangeId).toBeUndefined();
@@ -114,18 +117,12 @@ describe("schedule activation ownership", () => {
     expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
   });
 
-  it.each(["startupCatchupAtMs"] as const)(
-    "rejects out-of-Date-range caller state for %s",
-    (field) => {
-      const job = makeJob({ enabled: false });
-      const patch = {
-        state: { [field]: MAX_DATE_TIMESTAMP_MS + 1 },
-      } as CronJobPatch;
-
-      expect(() => applyJobPatch(job, patch)).toThrow(`cron state.${field}`);
-      expect(job.state[field]).toBeUndefined();
-    },
-  );
+  it("rejects out-of-Date-range caller state for startupCatchupAtMs", () => {
+    const job = makeJob({ enabled: false });
+    const patch = { state: { startupCatchupAtMs: MAX_DATE_TIMESTAMP_MS + 1 } };
+    expect(() => applyJobPatch(job, patch)).toThrow("cron state.startupCatchupAtMs");
+    expect(job.state.startupCatchupAtMs).toBeUndefined();
+  });
 });
 
 describe("applyJobPatch delivery merge", () => {
@@ -148,11 +145,7 @@ describe("applyJobPatch delivery merge", () => {
   ] satisfies Array<{ name: string; delivery: NonNullable<CronJobPatch["delivery"]> }>)(
     "preserves main-session no-delivery semantics for $name",
     ({ delivery }) => {
-      const job = makeJob({
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "tick" },
-        delivery: undefined,
-      });
+      const job = makeMainJob();
 
       applyJobPatch(job, { delivery });
 
@@ -164,7 +157,6 @@ describe("applyJobPatch delivery merge", () => {
   it.each<{
     name: string;
     delivery: NonNullable<CronJobPatch["delivery"]>;
-    existingDelivery?: CronJob["delivery"];
   }>([
     { name: "announce mode", delivery: { mode: "announce" } },
     {
@@ -173,43 +165,27 @@ describe("applyJobPatch delivery merge", () => {
         completionDestination: { mode: "webhook", to: "https://example.com/completed" },
       },
     },
-  ])(
-    "rejects an authored $name on main instead of silently clearing it",
-    ({ delivery, existingDelivery }) => {
-      const job = makeJob({
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "tick" },
-        delivery: existingDelivery,
-      });
+  ])("rejects an authored $name on main instead of silently clearing it", ({ delivery }) => {
+    const job = makeMainJob();
 
-      expect(() => applyJobPatch(job, { delivery })).toThrow(
-        'cron channel delivery config is only supported for sessionTarget="isolated"',
-      );
-    },
-  );
+    expect(() => applyJobPatch(job, { delivery })).toThrow(
+      'cron channel delivery config is only supported for sessionTarget="isolated"',
+    );
+  });
 
-  it.each([{ bestEffort: false }] satisfies Array<CronJobPatch["delivery"]>)(
-    "clears inherited announce delivery when retargeting to main with %j",
-    (delivery) => {
-      const job = makeJob();
-
-      applyJobPatch(job, {
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "tick" },
-        delivery,
-      });
-
-      expect(job.sessionTarget).toBe("main");
-      expect(job.delivery).toBeUndefined();
-    },
-  );
-
-  it("preserves inherited main-session webhook mode in a partial delivery update", () => {
-    const job = makeJob({
+  it("clears inherited announce delivery when retargeting to main with bestEffort", () => {
+    const job = makeJob();
+    applyJobPatch(job, {
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "tick" },
-      delivery: { mode: "webhook", to: "https://example.com/old", bestEffort: true },
+      delivery: { bestEffort: false },
     });
+    expect(job.sessionTarget).toBe("main");
+    expect(job.delivery).toBeUndefined();
+  });
+
+  it("preserves inherited main-session webhook mode in a partial delivery update", () => {
+    const job = makeMainJob({ mode: "webhook", to: "https://example.com/old", bestEffort: true });
 
     applyJobPatch(job, {
       delivery: { to: "https://example.com/new", bestEffort: false },
@@ -228,57 +204,24 @@ describe("applyJobPatch delivery merge", () => {
         mode: "announce",
         channel: "telegram",
         to: "-1001234567890",
-        failureDestination: {
-          mode: "announce",
-          channel: "slack",
-          to: "C123",
-          accountId: "bot-b",
-        },
+        failureDestination: { mode: "announce", ...failureDefaults },
       },
     });
-    const patch = {
-      delivery: {
-        failureDestination: {
-          channel: null,
-          to: null,
-          accountId: null,
-          mode: null,
-        },
-      },
-    } as Parameters<typeof applyJobPatch>[1];
-
-    applyJobPatch(job, patch);
+    applyJobPatch(job, { delivery: { failureDestination: clearFailureDestination } });
 
     const failureDestination = job.delivery?.failureDestination;
-    expect(failureDestination).toEqual({
-      channel: undefined,
-      to: undefined,
-      accountId: undefined,
-      mode: undefined,
-    });
+    expect(failureDestination).toEqual(clearedFailureDestination);
     expect(Object.hasOwn(failureDestination as object, "channel")).toBe(true);
     expect(Object.hasOwn(failureDestination as object, "to")).toBe(true);
     expect(Object.hasOwn(failureDestination as object, "accountId")).toBe(true);
     expect(Object.hasOwn(failureDestination as object, "mode")).toBe(true);
-    expect(
-      resolveFailureDestination(job, {
-        channel: "slack",
-        to: "C123",
-        accountId: "bot-b",
-      }),
-    ).toBeNull();
+    expect(resolveFailureDestination(job, failureDefaults)).toBeNull();
   });
 
   it("keeps unspecified failure destination fields inheriting global defaults", () => {
     const job = makeJob();
 
-    applyJobPatch(job, {
-      delivery: {
-        failureDestination: {
-          to: "C123",
-        },
-      },
-    });
+    applyJobPatch(job, { delivery: { failureDestination: { to: "C123" } } });
 
     const failureDestination = job.delivery?.failureDestination;
     expect(failureDestination).toEqual({ to: "C123" });
@@ -292,38 +235,13 @@ describe("applyJobPatch delivery merge", () => {
   });
 
   it("preserves main-job clear-only failure destinations as global opt-outs", () => {
-    const job = makeJob({
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "tick" },
-      delivery: undefined,
-    });
-
-    applyJobPatch(job, {
-      delivery: {
-        failureDestination: {
-          channel: null,
-          to: null,
-          accountId: null,
-          mode: null,
-        },
-      },
-    });
+    const job = makeMainJob();
+    applyJobPatch(job, { delivery: { failureDestination: clearFailureDestination } });
 
     const failureDestination = job.delivery?.failureDestination;
     expect(job.delivery?.mode).toBe("none");
-    expect(failureDestination).toEqual({
-      channel: undefined,
-      to: undefined,
-      accountId: undefined,
-      mode: undefined,
-    });
-    expect(
-      resolveFailureDestination(job, {
-        channel: "slack",
-        to: "C123",
-        accountId: "bot-a",
-      }),
-    ).toBeNull();
+    expect(failureDestination).toEqual(clearedFailureDestination);
+    expect(resolveFailureDestination(job, { ...failureDefaults, accountId: "bot-a" })).toBeNull();
   });
 });
 
