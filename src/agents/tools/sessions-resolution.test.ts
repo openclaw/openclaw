@@ -34,13 +34,46 @@ function expectResolvedSessionReference(
   result: Awaited<ReturnType<typeof resolveSessionReference>>,
   expected: { key: string; displayKey: string; resolvedViaSessionId: boolean },
 ) {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error("Expected resolved session reference");
+  expect(result).toMatchObject({ ok: true, ...expected });
+}
+
+function resolveReference(
+  params: Pick<Parameters<typeof resolveSessionReference>[0], "sessionKey"> &
+    Partial<Parameters<typeof resolveSessionReference>[0]>,
+) {
+  return resolveSessionReference({
+    action: "history",
+    alias: "main",
+    mainKey: "main",
+    requesterInternalKey: "agent:main:main",
+    restrictToSpawned: false,
+    ...params,
+  });
+}
+
+async function resolveVisible(
+  sessionKey: string,
+  action: "send" | "history" = "send",
+  requesterSessionKey = "agent:main:main",
+  allowMissingKey = false,
+) {
+  const resolvedSession = await resolveReference({
+    action,
+    sessionKey,
+    requesterInternalKey: requesterSessionKey,
+  });
+  if (!resolvedSession.ok) {
+    throw new Error("Expected session reference");
   }
-  expect(result.key).toBe(expected.key);
-  expect(result.displayKey).toBe(expected.displayKey);
-  expect(result.resolvedViaSessionId).toBe(expected.resolvedViaSessionId);
+  return resolveVisibleSessionReference({
+    action,
+    resolvedSession,
+    requesterSessionKey,
+    requesterAgentId: "main",
+    restrictToSpawned: false,
+    visibilitySessionKey: sessionKey,
+    allowMissingKey,
+  });
 }
 
 describe("resolveMainSessionAlias", () => {
@@ -121,15 +154,10 @@ describe("resolveSessionReference", () => {
       },
     );
 
-    const result = await resolveSessionReference({
-      action: "history",
+    const result = await resolveReference({
       sessionKey: "Agent:ops:main",
       keyAgentId: "main",
       agentId: "main",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:main",
-      restrictToSpawned: false,
     });
 
     expectResolvedSessionReference(result, {
@@ -140,14 +168,11 @@ describe("resolveSessionReference", () => {
   });
 
   it("resolves current to the requester before any ownership lookup", async () => {
-    const result = await resolveSessionReference({
+    const result = await resolveReference({
       action: "status",
       sessionKey: "current",
       keyAgentId: "ops",
-      alias: "main",
-      mainKey: "main",
       requesterInternalKey: "agent:research:subagent:child",
-      restrictToSpawned: false,
     });
     expect(result).toEqual({
       ok: true,
@@ -170,12 +195,9 @@ describe("resolveSessionReference", () => {
     );
 
     await expect(
-      resolveSessionReference({
+      resolveReference({
         action: "send",
         sessionKey: "custom-selector",
-        alias: "main",
-        mainKey: "main",
-        requesterInternalKey: "agent:main:main",
         restrictToSpawned: true,
       }),
     ).resolves.toEqual({
@@ -188,14 +210,7 @@ describe("resolveSessionReference", () => {
   });
 
   it("treats the TUI client label as the requester session", async () => {
-    const result = await resolveSessionReference({
-      action: "history",
-      sessionKey: "openclaw-tui",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:main",
-      restrictToSpawned: false,
-    });
+    const result = await resolveReference({ sessionKey: "openclaw-tui" });
     expectResolvedSessionReference(result, {
       key: "agent:main:main",
       displayKey: "agent:main:main",
@@ -205,13 +220,9 @@ describe("resolveSessionReference", () => {
   });
 
   it("preserves the main alias without probing configured-main bootstrap", async () => {
-    const result = await resolveSessionReference({
-      action: "history",
+    const result = await resolveReference({
       sessionKey: "main",
-      alias: "main",
-      mainKey: "main",
       requesterInternalKey: "agent:main:dashboard:requester",
-      restrictToSpawned: false,
     });
 
     expectResolvedSessionReference(result, {
@@ -225,25 +236,7 @@ describe("resolveSessionReference", () => {
   it("canonicalizes an existing explicit session key", async () => {
     callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
 
-    const resolvedSession = await resolveSessionReference({
-      action: "send",
-      sessionKey: "agent:OPS:main",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:main",
-      restrictToSpawned: false,
-    });
-    if (!resolvedSession.ok) {
-      throw new Error("Expected session reference");
-    }
-    const result = await resolveVisibleSessionReference({
-      action: "send",
-      resolvedSession,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      restrictToSpawned: false,
-      visibilitySessionKey: "agent:OPS:main",
-    });
+    const result = await resolveVisible("agent:OPS:main");
 
     expect(result).toEqual({
       ok: true,
@@ -257,25 +250,7 @@ describe("resolveSessionReference", () => {
   it("rejects an explicit key that canonicalizes to an incognito session", async () => {
     callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:dashboard:incognito-private" });
 
-    const resolvedSession = await resolveSessionReference({
-      action: "history",
-      sessionKey: "agent:OPS:dashboard:private",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:main",
-      restrictToSpawned: false,
-    });
-    if (!resolvedSession.ok) {
-      throw new Error("Expected session reference");
-    }
-    const result = await resolveVisibleSessionReference({
-      action: "history",
-      resolvedSession,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      restrictToSpawned: false,
-      visibilitySessionKey: "agent:OPS:dashboard:private",
-    });
+    const result = await resolveVisible("agent:OPS:dashboard:private", "history");
 
     expect(result).toEqual({
       ok: false,
@@ -288,25 +263,7 @@ describe("resolveSessionReference", () => {
   it("propagates explicit-key gateway failures", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
 
-    const resolvedSession = await resolveSessionReference({
-      action: "send",
-      sessionKey: "agent:main:worker",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:main",
-      restrictToSpawned: false,
-    });
-    if (!resolvedSession.ok) {
-      throw new Error("Expected session reference");
-    }
-    const result = await resolveVisibleSessionReference({
-      action: "send",
-      resolvedSession,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      restrictToSpawned: false,
-      visibilitySessionKey: "agent:main:worker",
-    });
+    const result = await resolveVisible("agent:main:worker");
 
     expect(result).toEqual({
       ok: false,
@@ -319,26 +276,12 @@ describe("resolveSessionReference", () => {
   it("reports an allowed missing explicit key for deliberate bootstrap", async () => {
     callGatewayMock.mockResolvedValueOnce({});
 
-    const resolvedSession = await resolveSessionReference({
-      action: "send",
-      sessionKey: "agent:main:main",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:dashboard:requester",
-      restrictToSpawned: false,
-    });
-    if (!resolvedSession.ok) {
-      throw new Error("Expected session reference");
-    }
-    const result = await resolveVisibleSessionReference({
-      action: "send",
-      resolvedSession,
-      requesterSessionKey: "agent:main:dashboard:requester",
-      requesterAgentId: "main",
-      restrictToSpawned: false,
-      visibilitySessionKey: "agent:main:main",
-      allowMissingKey: true,
-    });
+    const result = await resolveVisible(
+      "agent:main:main",
+      "send",
+      "agent:main:dashboard:requester",
+      true,
+    );
 
     expect(result).toEqual({
       ok: true,

@@ -72,6 +72,20 @@ function operation(source = endpoint("source"), target = endpoint("target")) {
   const callGateway = vi.mocked(callAgentToolGatewayRequest);
   return { config: state.config, source, target, message: "exact peer message", callGateway };
 }
+function agentRequest(input: ReturnType<typeof operation>) {
+  return {
+    method: "agent" as const,
+    params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
+  };
+}
+function threadConfig(allowThreadTargets: boolean | undefined): OpenClawConfig {
+  return { tools: { sessions: { allowThreadTargets } } };
+}
+const selfOnly: OpenClawConfig = { tools: { sessions: { visibility: "self" } } };
+function expectNoApprovalOrDelivery(input: ReturnType<typeof operation>) {
+  expect(input.callGateway).not.toHaveBeenCalled();
+  expect(state.approve).not.toHaveBeenCalled();
+}
 beforeEach(() => {
   state.config = {};
   state.rows.clear();
@@ -127,37 +141,31 @@ describe("sessions_send communication boundary", () => {
   ] as const)(
     "thread admission requires captured=%s and current=%s permission",
     async (captured, current, allowed) => {
-      state.config = { tools: { sessions: { allowThreadTargets: captured } } };
+      state.config = threadConfig(captured);
       const input = operation(undefined, endpoint("discord:channel:123:thread:456"));
-      state.config = { tools: { sessions: { allowThreadTargets: current } } };
+      state.config = threadConfig(current);
       const pending = prepareSessionsSendCommunication(input);
       if (allowed) {
         (await pending).close();
       } else {
         await expect(pending).rejects.toThrow("cannot target a thread session");
       }
-      expect(state.approve).not.toHaveBeenCalled();
-      expect(input.callGateway).not.toHaveBeenCalled();
+      expectNoApprovalOrDelivery(input);
     },
   );
 
   it("revocation at the final thread admission has no target effect", async () => {
-    state.config = { tools: { sessions: { allowThreadTargets: true } } };
+    state.config = threadConfig(true);
     const input = operation(undefined, endpoint("discord:channel:123:thread:456"));
     const effect = vi.fn();
     input.callGateway.mockImplementation(async (request) => {
-      state.config = { tools: { sessions: { allowThreadTargets: false } } };
+      state.config = threadConfig(false);
       request.sessionMutationCommitGuard?.();
       effect();
     });
     const gate = await prepareSessionsSendCommunication(input);
     try {
-      await expect(
-        gate.callGateway({
-          method: "agent",
-          params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
-        }),
-      ).rejects.toThrow("policy changed");
+      await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("policy changed");
       expect(effect).not.toHaveBeenCalled();
     } finally {
       gate.close();
@@ -172,8 +180,7 @@ describe("sessions_send communication boundary", () => {
         endpoint("target", direction === "receive" ? { communication: { receive: "never" } } : {}),
       );
       await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
-      expect(state.approve).not.toHaveBeenCalled();
-      expect(input.callGateway).not.toHaveBeenCalled();
+      expectNoApprovalOrDelivery(input);
     },
   );
   it("asks sender then recipient for exact content and waits for both human decisions", async () => {
@@ -311,8 +318,7 @@ describe("sessions_send communication boundary", () => {
     await expect(
       prepareSessionsSendCommunication({ ...input, allowApproval: false }),
     ).rejects.toThrow("fresh human communication approval");
-    expect(state.approve).not.toHaveBeenCalled();
-    expect(input.callGateway).not.toHaveBeenCalled();
+    expectNoApprovalOrDelivery(input);
   });
 
   it("refuses a replacement without current communication facts", async () => {
@@ -376,12 +382,7 @@ describe("sessions_send communication boundary", () => {
       return undefined;
     });
     const gate = await prepareSessionsSendCommunication(input);
-    await expect(
-      gate.callGateway({
-        method: "agent",
-        params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
-      }),
-    ).rejects.toThrow("input changed");
+    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("input changed");
     gate.close();
   });
   it("provenance strings cannot turn an optional peer send into task-owned work", async () => {
@@ -420,20 +421,19 @@ describe("sessions_send communication boundary", () => {
         state.rows.set(input.target.sessionKey, input.target);
       }
       await expect(prepareSessionsSendCommunication(input)).rejects.toThrow();
-      expect(state.approve).not.toHaveBeenCalled();
-      expect(input.callGateway).not.toHaveBeenCalled();
+      expectNoApprovalOrDelivery(input);
     },
   );
 
   it("refuses a config replacement between the initial access check and peer preparation", async () => {
     const input = operation();
-    state.config = { tools: { sessions: { visibility: "self" } } };
+    state.config = selfOnly;
     await expect(prepareSessionsSendCommunication(input)).rejects.toThrow();
     expect(input.callGateway).not.toHaveBeenCalled();
   });
 
   it("does not widen a denied operation by adopting a newer permissive config", async () => {
-    state.config = { tools: { sessions: { visibility: "self" } } };
+    state.config = selfOnly;
     const input = operation();
     state.config = {};
     await expect(prepareSessionsSendCommunication(input)).rejects.toThrow();
@@ -443,20 +443,15 @@ describe("sessions_send communication boundary", () => {
   it("rechecks config after human approval and at final dispatch", async () => {
     const input = operation(endpoint("source", { communication: { send: "ask" } }));
     state.approve.mockImplementation(async () => {
-      state.config = { tools: { sessions: { visibility: "self" } } };
+      state.config = selfOnly;
     });
     await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("policy changed");
     expect(input.callGateway).not.toHaveBeenCalled();
     state.config = {};
     const next = operation();
     const gate = await prepareSessionsSendCommunication(next);
-    state.config = { tools: { sessions: { visibility: "self" } } };
-    await expect(
-      gate.callGateway({
-        method: "agent",
-        params: { agentId: "main", sessionKey: next.target.sessionKey, message: next.message },
-      }),
-    ).rejects.toThrow("policy changed");
+    state.config = selfOnly;
+    await expect(gate.callGateway(agentRequest(next))).rejects.toThrow("policy changed");
     expect(next.callGateway).not.toHaveBeenCalled();
     gate.close();
   });
@@ -467,9 +462,7 @@ describe("sessions_send communication boundary", () => {
       const input = operation();
       const gate = await prepareSessionsSendCommunication(input);
       const params = {
-        agentId: "main",
-        sessionKey: input.target.sessionKey,
-        message: input.message,
+        ...agentRequest(input).params,
         ...(field === "message"
           ? { message: "unseen" }
           : field === "agentId"
@@ -508,12 +501,7 @@ describe("sessions_send communication boundary", () => {
     const input = operation();
     const gate = await prepareSessionsSendCommunication(input);
     input.message = "changed after approval";
-    await expect(
-      gate.callGateway({
-        method: "agent",
-        params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
-      }),
-    ).rejects.toThrow("redirected");
+    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("redirected");
     expect(input.callGateway).not.toHaveBeenCalled();
     gate.close();
   });

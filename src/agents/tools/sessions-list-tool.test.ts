@@ -1,5 +1,3 @@
-// sessions_list tool tests cover session metadata projection, visibility
-// helpers, and numeric argument validation.
 // Register closed mocks before runtime imports; keep the shared row fixtures real.
 import "./sessions-list.mocks.test-support.js";
 import { Value } from "typebox/value";
@@ -12,6 +10,28 @@ import { createSessionsListTool } from "./sessions-list-tool.js";
 const { mocks } = await import("./sessions-list.mocks.test-support.js");
 
 import { VALID_CONFIG, getSessionsListDetails, sessionRow } from "./sessions-list.test-support.js";
+
+function mockRows(sessions: unknown[], path = "/tmp/sessions.json") {
+  mocks.gatewayCall.mockImplementation(async (opts: unknown) =>
+    (opts as { method?: string }).method === "sessions.list" ? { path, sessions } : {},
+  );
+}
+function groupRow(key: string, classification: string, sessionId: string, peerKind?: string) {
+  return { key, kind: "group", classification, sessionId, ...(peerKind ? { peerKind } : {}) };
+}
+function projectedRow(key: string, classification: string, extra: Record<string, unknown> = {}) {
+  return { key, kind: "direct", classification, ...extra };
+}
+function globalConfig(): OpenClawConfig {
+  return {
+    session: { scope: "global" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+  };
+}
 describe("sessions-list-tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -54,31 +74,23 @@ describe("sessions-list-tool", () => {
     }
 
     expect({
-      projected: sessions.map(({ key, kind, classification }) => ({
-        key,
-        wireKind: kind,
-        classification,
-      })),
-      modelVisible: unfiltered.map(({ key, kind }) => ({ key, kind })),
+      projected: sessions.map(({ key, kind, classification }) => [key, kind, classification]),
+      modelVisible: unfiltered.map(({ key, kind }) => [key, kind]),
       filteredKeys,
     }).toEqual({
       projected: [
-        { key: "agent:main:main", wireKind: "direct", classification: "main" },
-        {
-          key: "agent:main:slack:channel:C123",
-          wireKind: "group",
-          classification: "channel",
-        },
-        { key: "agent:main:cron:nightly", wireKind: "direct", classification: "cron" },
-        { key: "agent:main:hook:deploy", wireKind: "direct", classification: "hook" },
-        { key: "agent:main:node-device", wireKind: "direct", classification: "node" },
+        ["agent:main:main", "direct", "main"],
+        ["agent:main:slack:channel:C123", "group", "channel"],
+        ["agent:main:cron:nightly", "direct", "cron"],
+        ["agent:main:hook:deploy", "direct", "hook"],
+        ["agent:main:node-device", "direct", "node"],
       ],
       modelVisible: [
-        { key: "agent:main:main", kind: "main" },
-        { key: "agent:main:slack:channel:C123", kind: "group" },
-        { key: "agent:main:cron:nightly", kind: "cron" },
-        { key: "agent:main:hook:deploy", kind: "hook" },
-        { key: "agent:main:node-device", kind: "node" },
+        ["agent:main:main", "main"],
+        ["agent:main:slack:channel:C123", "group"],
+        ["agent:main:cron:nightly", "cron"],
+        ["agent:main:hook:deploy", "hook"],
+        ["agent:main:node-device", "node"],
       ],
       filteredKeys: {
         main: ["agent:main:main"],
@@ -148,10 +160,7 @@ describe("sessions-list-tool", () => {
     mocks.gatewayCall.mockResolvedValue({
       path: "(multiple)",
       sessions: [
-        {
-          key: "agent:main:dashboard:visible",
-          kind: "direct",
-          classification: "dashboard",
+        projectedRow("agent:main:dashboard:visible", "dashboard", {
           category: "Projects",
           parentSessionKey: "agent:other:dashboard:hidden-parent",
           childSessions: [
@@ -159,14 +168,11 @@ describe("sessions-list-tool", () => {
             "agent:main:dashboard:incognito-private",
             "agent:other:subagent:hidden-child",
           ],
-        },
-        {
-          key: "agent:main:dashboard:incognito-private",
-          kind: "direct",
-          classification: "dashboard",
+        }),
+        projectedRow("agent:main:dashboard:incognito-private", "dashboard", {
           incognito: true,
           category: "Secret",
-        },
+        }),
       ],
     });
 
@@ -181,41 +187,26 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps channel discovery but omits delivery routing metadata", async () => {
-    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [
-            {
-              key: "agent:main:dashboard:child",
-              kind: "direct",
-              classification: "dashboard",
-              sessionId: "sess-dashboard-child",
-              deliveryContext: {
-                channel: "discord",
-                to: "discord:child",
-                accountId: "acct-1",
-                threadId: "thread-1",
-              },
-            },
-            {
-              key: "agent:main:telegram:topic",
-              kind: "direct",
-              classification: "custom",
-              sessionId: "sess-telegram-topic",
-              deliveryContext: {
-                channel: "telegram",
-                to: "telegram:topic",
-                accountId: "acct-2",
-                threadId: 271,
-              },
-            },
-          ],
-        };
-      }
-      return {};
-    });
+    mockRows([
+      projectedRow("agent:main:dashboard:child", "dashboard", {
+        sessionId: "sess-dashboard-child",
+        deliveryContext: {
+          channel: "discord",
+          to: "discord:child",
+          accountId: "acct-1",
+          threadId: "thread-1",
+        },
+      }),
+      projectedRow("agent:main:telegram:topic", "custom", {
+        sessionId: "sess-telegram-topic",
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:topic",
+          accountId: "acct-2",
+          threadId: 271,
+        },
+      }),
+    ]);
     const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-1", {});
@@ -231,13 +222,10 @@ describe("sessions-list-tool", () => {
     mocks.gatewayCall.mockResolvedValue({
       path: "/tmp/sessions.json",
       sessions: [
-        {
-          key: "agent:main:subagent:child",
-          kind: "direct",
-          classification: "subagent",
+        projectedRow("agent:main:subagent:child", "subagent", {
           parentSessionKey: "agent:main:subagent:parent",
           spawnedBy: "agent:main:main",
-        },
+        }),
       ],
     });
 
@@ -249,53 +237,23 @@ describe("sessions-list-tool", () => {
   });
 
   it("omits malformed agent keys and derives channels only from valid group keys", async () => {
-    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [
-            {
-              key: "agent:main:slack:channel:C123:thread:1710000000.000100",
-              kind: "group",
-              classification: "thread",
-              peerKind: "channel",
-              sessionId: "sess-slack-thread",
-            },
-            {
-              key: "discord:group:ops",
-              kind: "group",
-              classification: "group",
-              sessionId: "sess-discord-group",
-            },
-            {
-              key: "agent:main:matrix:channel:!room:[2001:db8::1]",
-              kind: "group",
-              classification: "channel",
-              sessionId: "sess-matrix-room",
-            },
-            {
-              key: "agent:main:agent:plugin:slack:channel:C123",
-              kind: "group",
-              classification: "custom",
-              sessionId: "sess-nested-agent",
-            },
-            {
-              key: "agent::slack:channel:C123",
-              kind: "group",
-              classification: "channel",
-              sessionId: "sess-malformed-agent",
-            },
-            {
-              key: "Agent::discord:channel:C456",
-              kind: "group",
-              sessionId: "sess-malformed-agent-mixed-case",
-            },
-          ],
-        };
-      }
-      return {};
-    });
+    mockRows([
+      groupRow(
+        "agent:main:slack:channel:C123:thread:1710000000.000100",
+        "thread",
+        "sess-slack-thread",
+        "channel",
+      ),
+      groupRow("discord:group:ops", "group", "sess-discord-group"),
+      groupRow("agent:main:matrix:channel:!room:[2001:db8::1]", "channel", "sess-matrix-room"),
+      groupRow("agent:main:agent:plugin:slack:channel:C123", "custom", "sess-nested-agent"),
+      groupRow("agent::slack:channel:C123", "channel", "sess-malformed-agent"),
+      {
+        key: "Agent::discord:channel:C456",
+        kind: "group",
+        sessionId: "sess-malformed-agent-mixed-case",
+      },
+    ]);
     const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-agent-scoped-channel", {});
@@ -360,12 +318,8 @@ describe("sessions-list-tool", () => {
       })
       .mockResolvedValueOnce({ messages: [] });
     const config: OpenClawConfig = {
+      ...globalConfig(),
       session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
     };
 
     const result = await createSessionsListTool({
@@ -384,35 +338,23 @@ describe("sessions-list-tool", () => {
   it("preserves active sentinel rows and state versions from different agent stores", async () => {
     mocks.gatewayCall.mockResolvedValue({
       sessions: [
-        {
-          key: "global",
-          agentId: "ops",
-          classification: "global",
-          kind: "global",
-          sessionId: "ops-session",
-          status: "running",
-        },
-        {
-          key: "global",
-          agentId: "research",
-          classification: "global",
-          kind: "global",
-          sessionId: "research-session",
-          status: "queued",
-        },
-      ],
+        ["ops", "ops-session", "running"],
+        ["research", "research-session", "queued"],
+      ].map(([agentId, sessionId, status]) => ({
+        key: "global",
+        agentId,
+        classification: "global",
+        kind: "global",
+        sessionId,
+        status,
+      })),
     });
     mocks.getSessionStateVersions.mockReturnValue({ ops: { global: 7 }, research: { global: 9 } });
     const result = await createSessionsListTool({
       agentSessionKey: "global",
       requesterAgentIdOverride: "ops",
       config: {
-        session: { scope: "global" },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
+        ...globalConfig(),
         tools: {
           sessions: { visibility: "all" },
           agentToAgent: { enabled: true, allow: ["ops", "research"] },

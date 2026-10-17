@@ -73,17 +73,10 @@ function createTool(params: {
             )
             .map((row) => {
               const entry: Record<string, unknown> = { key: row.sessionKey };
-              if (typeof row.agentId === "string") {
-                entry.agentId = row.agentId;
-              }
-              if (typeof row.ownerSessionKey === "string") {
-                entry.ownerSessionKey = row.ownerSessionKey;
-              }
-              if (typeof row.parentSessionKey === "string") {
-                entry.parentSessionKey = row.parentSessionKey;
-              }
-              if (typeof row.spawnedBy === "string") {
-                entry.spawnedBy = row.spawnedBy;
+              for (const key of ["agentId", "ownerSessionKey", "parentSessionKey", "spawnedBy"]) {
+                if (typeof row[key] === "string") {
+                  entry[key] = row[key];
+                }
               }
               return entry;
             }),
@@ -105,6 +98,31 @@ function createTool(params: {
   });
 }
 
+function searchTool(callGateway: typeof gatewayCall) {
+  return createSessionsSearchTool({
+    config: { tools: { sessions: { visibility: "self" } } },
+    agentSessionKey: "agent:main:main",
+    callGateway: async <T>(request: CallGatewayRequest): Promise<T> =>
+      request.method === "sessions.list"
+        ? ({ sessions: [], hasMore: false } as T)
+        : callGateway<T>(request),
+  });
+}
+
+function expectSearch(
+  requests: CallGatewayRequest[],
+  agentId: string,
+  sessionKeys: string[],
+  query = "text",
+) {
+  expect(requests).toContainEqual(
+    expect.objectContaining({
+      method: "sessions.search",
+      params: { agentId, query, limit: 25, sessionKeys },
+    }),
+  );
+}
+
 describe("sessions_search tool", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -114,21 +132,14 @@ describe("sessions_search tool", () => {
       vi.useFakeTimers();
       const entered = createDeferred();
       const response = createDeferred<{ results: Array<Record<string, unknown>> }>();
-      const tool = createSessionsSearchTool({
-        config: { tools: { sessions: { visibility: "self" } } },
-        agentSessionKey: "agent:main:main",
-        callGateway: async <T>(request: CallGatewayRequest): Promise<T> => {
-          if (request.method === "sessions.list") {
-            return { sessions: [], hasMore: false } as T;
-          }
-          const pending = waitForGatewayDispatch(
-            request.method,
-            response.promise,
-            request.timeoutMs ?? 10_000,
-          );
-          entered.resolve();
-          return (await pending) as T;
-        },
+      const tool = searchTool(async <T>(request: CallGatewayRequest): Promise<T> => {
+        const pending = waitForGatewayDispatch(
+          request.method,
+          response.promise,
+          request.timeoutMs ?? 10_000,
+        );
+        entered.resolve();
+        return (await pending) as T;
       });
       let settled = false;
       const pending = tool.execute("slow-search", { query: "needle" }).finally(() => {
@@ -186,15 +197,8 @@ describe("sessions_search tool", () => {
           message: "fixture",
         },
       });
-      const tool = createSessionsSearchTool({
-        config: { tools: { sessions: { visibility: "self" } } },
-        agentSessionKey: "agent:main:main",
-        callGateway: async <T>(request: CallGatewayRequest): Promise<T> => {
-          if (request.method === "sessions.list") {
-            return { sessions: [], hasMore: false } as T;
-          }
-          throw failure;
-        },
+      const tool = searchTool(async () => {
+        throw failure;
       });
       const pending = tool.execute("transport-search", { query: "needle" });
       if (guidance) {
@@ -210,15 +214,8 @@ describe("sessions_search tool", () => {
 
   it("preserves a search authority rejection instead of treating it as a timeout", async () => {
     const failure = new Error("Session search scope changed while reading; retry the request");
-    const tool = createSessionsSearchTool({
-      config: { tools: { sessions: { visibility: "self" } } },
-      agentSessionKey: "agent:main:main",
-      callGateway: async <T>(request: CallGatewayRequest): Promise<T> => {
-        if (request.method === "sessions.list") {
-          return { sessions: [], hasMore: false } as T;
-        }
-        throw failure;
-      },
+    const tool = searchTool(async () => {
+      throw failure;
     });
     await expect(tool.execute("rejected-search", { query: "needle" })).rejects.toBe(failure);
   });
@@ -281,20 +278,10 @@ describe("sessions_search tool", () => {
     }).execute("indexing-warning", { query: "text" });
 
     expect(result.details).toMatchObject({
-      ...(state.indexing ? { indexing: true } : {}),
-      ...(state.archivedTranscriptsExcluded ? { archivedTranscriptsExcluded: 2 } : {}),
-      warning: [
-        ...(state.indexing
-          ? [
-              "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
-            ]
-          : []),
-        ...(state.archivedTranscriptsExcluded
-          ? [
-              "Search excludes 2 archived transcripts. Restore a transcript to include it in search.",
-            ]
-          : []),
-      ].join(" "),
+      indexing: true,
+      archivedTranscriptsExcluded: 2,
+      warning:
+        "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly. Search excludes 2 archived transcripts. Restore a transcript to include it in search.",
     });
     expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
   });
@@ -404,17 +391,7 @@ describe("sessions_search tool", () => {
         expect.objectContaining({ sessionKey: "agent:work:other" }),
       ]),
     });
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "sessions.search",
-        params: {
-          agentId: "work",
-          query: "text",
-          limit: 25,
-          sessionKeys: ["agent:work:other", "global"],
-        },
-      }),
-    );
+    expectSearch(requests, "work", ["agent:work:other", "global"]);
   });
 
   it("uses the target agent for an explicit cross-agent session", async () => {
@@ -432,17 +409,7 @@ describe("sessions_search tool", () => {
 
     await tool.execute("call-1", { query: "text", sessionKey: "agent:work:other" });
 
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "sessions.search",
-        params: {
-          agentId: "work",
-          query: "text",
-          limit: 25,
-          sessionKeys: ["agent:work:other"],
-        },
-      }),
-    );
+    expectSearch(requests, "work", ["agent:work:other"]);
   });
 
   it("accepts the gateway's canonical key for the current-session alias", async () => {
@@ -542,12 +509,7 @@ describe("sessions_search tool", () => {
 
     await tool.execute("call-1", { query: " text ", sessionKey: "main", limit: 3 });
 
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "sessions.search",
-        params: { agentId: "main", query: "text", sessionKeys: ["main"], limit: 25 },
-      }),
-    );
+    expectSearch(requests, "main", ["main"]);
   });
 
   it("rejects a scoped grant when the target incarnation changes before search", async () => {
