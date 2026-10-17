@@ -133,6 +133,14 @@ the same subpath. It reuses the current Node executable and resolves a real Node
 binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
 Node runtime returns `undefined`; the caller reports the missing requirement.
 
+For standalone JavaScript launchers that can use an upgraded runtime, use
+`resolveLaunchableNodePath` from the same subpath. It keeps the current executable
+while it exists, then tries the same Homebrew prefix and formula's stable alias
+if an upgrade removed the original keg. It never searches `PATH`; without an
+available replacement, it returns the original path so normal launch errors
+remain visible. Do not use it for workers that require the exact parent runtime
+for native modules or V8 messages.
+
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation. On macOS and Linux, Bun uses its
 native PTY without Node only on builds providing `Bun.Terminal.pause()` and

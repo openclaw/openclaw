@@ -5,6 +5,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -35,11 +36,12 @@ export function resolveCodexAppServerSpawnInvocation(
   if (options.commandSource === "managed") {
     throw new Error("Managed Codex app-server start options must be resolved before spawn.");
   }
+  const execPath = resolveLaunchableNodePath();
   const program = resolveWindowsSpawnProgram({
     command: options.command,
     platform: process.platform,
     env,
-    execPath: process.execPath,
+    execPath,
     packageName: "@openai/codex",
   });
   const args = normalizeCodexAppServerArgs(options.args);
@@ -50,10 +52,11 @@ export function resolveCodexAppServerSpawnInvocation(
     [".cjs", ".js", ".mjs"].includes(path.extname(resolved.command).toLowerCase())
   ) {
     // Keep upstream's package/architecture selection and environment markers, but
-    // never let its env shebang choose another Node architecture from PATH.
+    // never let its env shebang choose another Node architecture from PATH. Only
+    // use a stable Homebrew alias after the running interpreter's keg is removed.
     return {
       ...resolved,
-      command: process.execPath,
+      command: execPath,
       argv: [resolved.command, ...resolved.argv],
       resolution: "node-entrypoint",
     };
