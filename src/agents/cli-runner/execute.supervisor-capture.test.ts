@@ -1639,7 +1639,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
             sessionKey: context.params.sessionKey ?? "",
             sourceReplyDeliveryMode: "automatic",
           }),
-        ).toEqual(suppress ? [] : [{ text }]);
+        ).toEqual(suppress ? [] : [{ text, replyToTag: false }]);
       }
     },
   );
