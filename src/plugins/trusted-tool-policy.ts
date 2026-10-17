@@ -1,4 +1,4 @@
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
 import type {
@@ -222,7 +222,11 @@ export async function runTrustedToolPolicies(
   const resolveSessionConfig = (): OpenClawConfig | undefined => {
     if (!didResolveSessionConfig) {
       didResolveSessionConfig = true;
-      resolvedSessionConfig = getRuntimeConfigSnapshot() ?? undefined;
+      try {
+        resolvedSessionConfig = getRuntimeConfig();
+      } catch {
+        resolvedSessionConfig = undefined;
+      }
     }
     return resolvedSessionConfig;
   };

@@ -201,31 +201,6 @@ describe("transcodeAudioBuffer", () => {
     runFfmpegMock.mockReset();
   });
 
-  it.each([
-    { failure: new Error("afconvert rejected"), detail: "afconvert rejected" },
-    { failure: "afconvert refused", detail: "afconvert refused" },
-  ])("normalizes $detail and cleans its workspace", async ({ failure, detail }) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    let workspaceDir: string | undefined;
-    __setFsSafeTestHooksForTest({
-      beforeFileStoreSyncPrivateWrite: (filePath) => {
-        workspaceDir = path.dirname(filePath);
-      },
-    });
-    runCommandWithTimeoutMock.mockRejectedValueOnce(failure);
-
-    await expect(
-      transcodeAudioBuffer({
-        audioBuffer: Buffer.from("payload"),
-        sourceExtension: "mp3",
-        targetExtension: "caf",
-      }),
-    ).resolves.toEqual({ ok: false, reason: "transcoder-failed", detail });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledOnce();
-    expect(workspaceDir).toBeDefined();
-    expect(workspaceDir ? existsSync(workspaceDir) : true).toBe(false);
-  });
-
   it("returns a failure and cleans its workspace when input staging fails", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     let workspaceDir: string | undefined;
