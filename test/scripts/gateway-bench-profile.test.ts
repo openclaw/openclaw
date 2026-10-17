@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import type { Profiler } from "node:inspector";
 import os from "node:os";
@@ -17,6 +17,11 @@ import {
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const nodeExecutable = requireNodeTool("node");
+const preloadUrl = new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url)
+  .href;
+const fixturePath = (name: string) =>
+  fileURLToPath(new URL(`./fixtures/${name}.mjs`, import.meta.url));
+const readJson = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, "utf8"));
 
 function spawnFixture(args: string[], directory?: string, ipc = true) {
   const child = spawn(nodeExecutable, args, {
@@ -70,9 +75,7 @@ type WorkerProfileManifest = {
 };
 
 it("measures fixed CPU work including a retired Worker without starting the inspector", async () => {
-  const { child, stderr } = spawnFixture([
-    fileURLToPath(new URL("./fixtures/gateway-bench-cpu-usage.mjs", import.meta.url)),
-  ]);
+  const { child, stderr } = spawnFixture([fixturePath("gateway-bench-cpu-usage")]);
   await waitMessage(child, "ready");
   const initialResources = await readGatewayResources(child, { initial: true });
   const resources = await readGatewayResources(child);
@@ -135,11 +138,7 @@ it.each([false, true])(
   async (unknownIdentity) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-startup-"));
     const { closed, stderr } = spawnFixture(
-      [
-        fileURLToPath(new URL("./fixtures/gateway-bench-profile-startup.mjs", import.meta.url)),
-        directory,
-        String(unknownIdentity),
-      ],
+      [fixturePath("gateway-bench-profile-startup"), directory, String(unknownIdentity)],
       directory,
       false,
     );
@@ -213,27 +212,12 @@ process.on('message', (message) => {
 `;
 
 async function waitMessage(child: ChildProcess, field: string) {
-  await new Promise<void>((resolve, reject) => {
-    const finish = (error?: Error) => {
-      child.off("message", onMessage);
-      child.off("exit", onExit);
-      child.off("error", finish);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onMessage = (message: Record<string, unknown>) => {
-      if (message[field]) {
-        finish();
-      }
-    };
-    const onExit = () => finish(new Error(`Profile fixture exited before ${field}`));
-    child.on("message", onMessage);
-    child.once("exit", onExit);
-    child.once("error", finish);
-  });
+  for await (const [message] of on(child, "message", { close: ["exit"] })) {
+    if (message[field]) {
+      return;
+    }
+  }
+  throw new Error(`Profile fixture exited before ${field}`);
 }
 
 it.each([
@@ -244,14 +228,7 @@ it.each([
   async (kind, preexisting) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-"));
     const profilePath = path.join(directory, kind);
-    const { child } = spawnFixture(
-      [
-        "-e",
-        workload,
-        new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url).href,
-      ],
-      directory,
-    );
+    const { child } = spawnFixture(["-e", workload, preloadUrl], directory);
     await waitMessage(child, "ready");
     if (preexisting) {
       const prepared = waitMessage(child, "prepared");
@@ -262,19 +239,15 @@ it.each([
     const completed = await sendMessage(child, { run: true });
     expect(completed.complete).toBe(true);
     await controlGatewayProfile(child, kind, "stop", profilePath, { includeWorkers: true });
-    const manifest: WorkerProfileManifest = JSON.parse(
-      await readFile(`${profilePath}.workers.json`, "utf8"),
-    );
+    const manifest = await readJson<WorkerProfileManifest>(`${profilePath}.workers.json`);
     expect(manifest).toMatchObject({
       kind,
       sampleClock: "performance.now",
       cpuCounters: "cumulative-microseconds",
     });
     expect(manifest.workers).toHaveLength(preexisting ? 2 : 1);
-    const threadIds = manifest.workers.map((recording) => recording.threadId);
-    const inspectorWorkerIds = manifest.workers.map((recording) => recording.inspectorWorkerId);
-    const profilePaths = manifest.workers.map((recording) => recording.profilePath);
-    for (const values of [threadIds, inspectorWorkerIds, profilePaths]) {
+    for (const key of ["threadId", "inspectorWorkerId", "profilePath"] as const) {
+      const values = manifest.workers.map((recording) => recording[key]);
       expect(new Set<string | number>(values).size).toBe(manifest.workers.length);
     }
     const profiledThreadIds: number[] = [];
@@ -286,7 +259,7 @@ it.each([
       });
       expect(recording.error).toBeUndefined();
       if (kind === "cpu") {
-        const profile: Profiler.Profile = JSON.parse(await readFile(recording.profilePath, "utf8"));
+        const profile = await readJson<Profiler.Profile>(recording.profilePath);
         if (profile.nodes.some((node) => node.callFrame.functionName === "allocateForProfile")) {
           expect(profile.samples?.length ?? 0).toBeGreaterThan(0);
           expect(profile.endTime).toBeGreaterThan(profile.startTime);
@@ -326,9 +299,7 @@ it.each([
     child.send({ retire: true });
     await retired;
     await controlGatewayProfile(child, kind, "stop", retiredPath, { includeWorkers: true });
-    const incomplete: WorkerProfileManifest = JSON.parse(
-      await readFile(`${retiredPath}.workers.json`, "utf8"),
-    );
+    const incomplete = await readJson<WorkerProfileManifest>(`${retiredPath}.workers.json`);
     expect(workerIdentities(incomplete)).toEqual(workerIdentities(manifest));
     for (const recording of incomplete.workers) {
       expect(recording.completed).not.toBe(true);
@@ -346,7 +317,7 @@ it("measures discarded allocation churn and GC per completed operation, and clea
       "--input-type=module",
       "-e",
       `
-    await import(${JSON.stringify(new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url).href)});
+    await import(${JSON.stringify(preloadUrl)});
     process.channel.ref();
     function discardedAllocation() {
       let checksum = 0;
