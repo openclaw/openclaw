@@ -87,6 +87,49 @@ function producerApi(messages: WAMessage[]) {
   };
 }
 
+function producerPlatform(kind: "audio" | "video", messages: WAMessage[]) {
+  const { sendMessage, sendApi } = producerApi(messages);
+  const reply = vi.fn<AdmittedWebInboundMessage["platform"]["reply"]>();
+  if (kind === "audio") {
+    reply.mockImplementation((text) => sendApi.sendMessage("+1000", text));
+  }
+  const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(async (payload) => {
+    const buffer =
+      kind === "audio" && "audio" in payload
+        ? payload.audio
+        : kind === "video" && "video" in payload
+          ? payload.video
+          : undefined;
+    if (!Buffer.isBuffer(buffer)) {
+      throw new Error(`Expected a real WhatsApp ${kind} payload`);
+    }
+    const caption =
+      kind === "video" && "caption" in payload && typeof payload.caption === "string"
+        ? payload.caption
+        : "";
+    const mimetype =
+      "mimetype" in payload && typeof payload.mimetype === "string"
+        ? payload.mimetype
+        : kind === "audio"
+          ? "audio/ogg"
+          : "video/mp4";
+    return sendApi.sendMessage("+1000", caption, buffer, mimetype);
+  });
+  return { sendMessage, sendMedia, reply };
+}
+
+function expectPartialReceipt(failure: unknown, messageIds: string[]) {
+  expect(isChannelPartialDeliveryError(failure)).toBe(true);
+  if (!isChannelPartialDeliveryError(failure)) {
+    throw new Error("Expected a partial WhatsApp delivery");
+  }
+  expect(failure.deliveryResult).toMatchObject({
+    messageIds,
+    receipt: { platformMessageIds: messageIds },
+  });
+  return failure;
+}
+
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/channel-activity-runtime")
@@ -300,19 +343,13 @@ describe("WhatsApp canonical message_sent delivery", () => {
     const { plan } = createPlan(deliverWebReply, { reply, sendMedia });
     const delivery = plan.delivery as ChannelInboundTurnPlan["delivery"];
 
-    const failure = await delivery
-      .deliver({ text: "caption", mediaUrls: ["/tmp/accepted-voice.ogg"] }, { kind: "final" })
-      .catch((caught: unknown) => caught);
-
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("inbound dispatch discarded the accepted native voice receipt");
-    }
-    expect(failure.deliveryResult).toMatchObject({
-      messageIds: ["dispatch-voice-accepted"],
-      receipt: { platformMessageIds: ["dispatch-voice-accepted"] },
-      visibleReplySent: true,
-    });
+    const failure = expectPartialReceipt(
+      await delivery
+        .deliver({ text: "caption", mediaUrls: ["/tmp/accepted-voice.ogg"] }, { kind: "final" })
+        .catch((caught: unknown) => caught),
+      ["dispatch-voice-accepted"],
+    );
+    expect(failure.deliveryResult.visibleReplySent).toBe(true);
     expect(failure).toHaveProperty("cause", expect.any(PlatformMessageNotDispatchedError));
     expect(sendMedia).toHaveBeenCalledOnce();
     expect(reply).toHaveBeenCalledExactlyOnceWith("caption", undefined);
@@ -322,7 +359,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
   it("records activity once for producer-backed media without duplicate bookkeeping", async () => {
     guardActivity("outer owner duplicated producer activity bookkeeping");
     const messageId = "dispatch-producer-media-guarded";
-    const { sendMessage, sendApi } = producerApi([
+    const { sendMessage, sendMedia, reply } = producerPlatform("video", [
       {
         key: {
           id: messageId,
@@ -333,18 +370,6 @@ describe("WhatsApp canonical message_sent delivery", () => {
       },
     ]);
     mockMedia("video");
-    const reply = vi.fn<AdmittedWebInboundMessage["platform"]["reply"]>();
-    const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(async (payload) => {
-      if (!("video" in payload) || !Buffer.isBuffer(payload.video)) {
-        throw new Error("expected a real WhatsApp video payload");
-      }
-      return sendApi.sendMessage(
-        "+1000",
-        typeof payload.caption === "string" ? payload.caption : "",
-        payload.video,
-        typeof payload.mimetype === "string" ? payload.mimetype : "video/mp4",
-      );
-    });
 
     const { deliveryResult, failure, internalHook, pluginHook, replyLogger } =
       await dispatchObservedPlatformReply({
@@ -365,29 +390,29 @@ describe("WhatsApp canonical message_sent delivery", () => {
         primaryPlatformMessageId: messageId,
         platformMessageIds: [messageId],
         raw: [
-          expect.objectContaining({
+          {
             channel: "whatsapp",
             messageId,
             toJid: "1000@s.whatsapp.net",
-            meta: expect.objectContaining({
+            meta: {
               fromMe: true,
               participant: "observer@s.whatsapp.net",
               providerAccepted: true,
-            }),
-          }),
+            },
+          },
         ],
         parts: [
-          expect.objectContaining({
+          {
             platformMessageId: messageId,
             index: 0,
-            raw: expect.objectContaining({
+            raw: {
               toJid: "1000@s.whatsapp.net",
-              meta: expect.objectContaining({
+              meta: {
                 fromMe: true,
                 participant: "observer@s.whatsapp.net",
-              }),
-            }),
-          }),
+              },
+            },
+          },
         ],
       },
     });
@@ -403,24 +428,11 @@ describe("WhatsApp canonical message_sent delivery", () => {
     guardActivity("caption producer incorrectly repeated logical activity bookkeeping");
     mockMedia("audio");
     const messageIds = ["dispatch-scoped-voice", "dispatch-scoped-caption"];
-    const { sendMessage, sendApi } = producerApi(
+    const { sendMessage, sendMedia, reply } = producerPlatform(
+      "audio",
       messageIds.map((id) => ({
         key: { id, remoteJid: "1000@s.whatsapp.net", fromMe: true },
       })),
-    );
-    const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(async (payload) => {
-      if (!("audio" in payload) || !Buffer.isBuffer(payload.audio)) {
-        throw new Error("expected a real WhatsApp voice payload");
-      }
-      return sendApi.sendMessage(
-        "+1000",
-        "",
-        payload.audio,
-        typeof payload.mimetype === "string" ? payload.mimetype : "audio/ogg",
-      );
-    });
-    const reply = vi.fn<AdmittedWebInboundMessage["platform"]["reply"]>(async (text) =>
-      sendApi.sendMessage("+1000", text),
     );
 
     const { deliveryResult, failure, internalHook, pluginHook, replyLogger } =
@@ -438,15 +450,11 @@ describe("WhatsApp canonical message_sent delivery", () => {
       receipt: {
         primaryPlatformMessageId: "dispatch-scoped-voice",
         platformMessageIds: messageIds,
-        parts: ["media", "text"].map((kind, index) =>
-          expect.objectContaining({
-            platformMessageId: messageIds[index],
-            raw: expect.objectContaining({ meta: expect.objectContaining({ kind }) }),
-          }),
-        ),
-        raw: messageIds.map((messageId) =>
-          expect.objectContaining({ messageId, toJid: "1000@s.whatsapp.net" }),
-        ),
+        parts: ["media", "text"].map((kind, index) => ({
+          platformMessageId: messageIds[index],
+          raw: { meta: { kind } },
+        })),
+        raw: messageIds.map((messageId) => ({ messageId, toJid: "1000@s.whatsapp.net" })),
       },
     });
     await expectObserved({ pluginHook, internalHook }, "dispatch-scoped-voice", true);
@@ -486,20 +494,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
       platform: { reply, sendMedia },
     });
 
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error(
-        "canonical dispatch dropped accepted WhatsApp chunks after nested bookkeeping",
-      );
-    }
-    expect(failure.deliveryResult.messageIds).toEqual([
-      "dispatch-first-chunk",
-      "dispatch-second-chunk",
-    ]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([
-      "dispatch-first-chunk",
-      "dispatch-second-chunk",
-    ]);
+    expectPartialReceipt(failure, ["dispatch-first-chunk", "dispatch-second-chunk"]);
     expect(failure).toHaveProperty("cause", bookkeepingError);
     await expectObserved({ pluginHook, internalHook }, "dispatch-first-chunk", false);
     expect(sendMedia).toHaveBeenCalledOnce();
@@ -525,12 +520,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
       platform: { reply, sendMedia },
     });
 
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("canonical dispatch treated accepted WhatsApp media as an upload failure");
-    }
-    expect(failure.deliveryResult.messageIds).toEqual(["dispatch-nested-media"]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["dispatch-nested-media"]);
+    expectPartialReceipt(failure, ["dispatch-nested-media"]);
     expect(failure).toHaveProperty("cause", bookkeepingError);
     await expectObserved({ pluginHook, internalHook }, "dispatch-nested-media", false);
     expect(sendMedia).toHaveBeenCalledOnce();

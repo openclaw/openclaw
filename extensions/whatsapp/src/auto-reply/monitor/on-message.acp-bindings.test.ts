@@ -1,4 +1,3 @@
-// Whatsapp tests cover inbound configured ACP binding route materialization.
 import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -73,6 +72,7 @@ vi.mock("./status-reaction.js", () => ({
 }));
 
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
+import { createMonitorContext } from "./monitor.test-support.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
 const baseRoute = {
@@ -182,84 +182,58 @@ function createGroupCfg(): Record<string, unknown> {
   };
 }
 
-function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg()) {
-  const groupHistories = new Map();
+function createHandler(group = false) {
+  if (group) {
+    resolveConfiguredBindingRouteMock.mockImplementationOnce(
+      resolvedConfiguredRoute(configuredGroupBindingResolution),
+    );
+  }
+  const cfg = group ? createGroupCfg() : createCfg();
+  const context = createMonitorContext();
   return {
-    warn,
-    groupHistories,
+    groupHistories: context.groupHistories,
     handler: createWebOnMessageHandler({
+      ...context,
       cfg: cfg as never,
-      verbose: false,
-      connectionId: "conn-1",
-      maxMediaBytes: 1024 * 1024,
       groupHistoryLimit: 20,
-      groupHistories,
-      groupMemberNames: new Map(),
-      backgroundTasks: new Set(),
-      replyResolver: vi.fn() as never,
-      replyLogger: {
-        info: () => {},
-        warn,
-        debug: () => {},
-        error: () => {},
-      } as never,
     }),
   };
 }
 
-type TestMessageOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
-
-function createMessage(overrides: TestMessageOverrides = {}) {
+function createMessage({
+  group = false,
+  audio = false,
+  body,
+  id,
+  conversationId = group ? groupConversationId : "15551234567@s.whatsapp.net",
+}: {
+  group?: boolean;
+  audio?: boolean;
+  body?: string;
+  id?: string;
+  conversationId?: string;
+} = {}) {
   return createTestWebInboundMessage({
-    ...overrides,
+    ...(id ? { event: { id } } : {}),
+    ...(audio
+      ? {
+          payload: {
+            body: "",
+            media: { type: "audio/ogg; codecs=opus", path: "/tmp/voice.ogg", kind: "audio" },
+          },
+        }
+      : body === undefined
+        ? {}
+        : { payload: { body } }),
     admission: {
       accountId: "work",
-      conversation: { kind: "direct", id: "15551234567@s.whatsapp.net" },
-      sender: { id: "15551234567@s.whatsapp.net" },
-      ...overrides.admission,
+      conversation: { kind: group ? "group" : "direct", id: conversationId },
+      sender: { id: conversationId },
+      ...(group ? { senderAccess: { reasonCode: "group_policy_allowed" } } : {}),
     },
     platform: {
-      chatJid: "15551234567@s.whatsapp.net",
+      chatJid: conversationId,
       recipientJid: "15559876543@s.whatsapp.net",
-      ...overrides.platform,
-    },
-  });
-}
-
-function createGroupMessage(overrides: TestMessageOverrides = {}) {
-  const { admission, platform, ...message } = overrides;
-  return createMessage({
-    ...message,
-    admission: {
-      ...admission,
-      accountId: "work",
-      sender: { id: groupConversationId, ...admission?.sender },
-      conversation: {
-        kind: "group",
-        id: groupConversationId,
-        ...admission?.conversation,
-      },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-        ...admission?.senderAccess,
-      },
-    },
-    platform: {
-      chatJid: groupConversationId,
-      ...platform,
-    },
-  });
-}
-
-function createGroupAudioMessage() {
-  return createGroupMessage({
-    payload: {
-      body: "",
-      media: {
-        type: "audio/ogg; codecs=opus",
-        path: "/tmp/voice.ogg",
-        kind: "audio",
-      },
     },
   });
 }
@@ -283,18 +257,10 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
       bindingResolution: null,
       route,
     }));
-    const { handler } = createHandler(vi.fn(), createCfg());
+    const { handler } = createHandler();
 
     const messageForId = (id: string) =>
-      createMessage({
-        admission: {
-          conversation: { kind: "direct", id: sentConversation },
-          sender: { id: sentConversation },
-        },
-        event: { id },
-        payload: { body: "Done." },
-        platform: { chatJid: sentConversation },
-      });
+      createMessage({ conversationId: sentConversation, id, body: "Done." });
 
     await handler(messageForId("in-2"));
     await handler(messageForId("in-3"));
@@ -322,13 +288,10 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
   });
 
   it("waits for group admission before ensuring a configured ACP binding target", async () => {
-    resolveConfiguredBindingRouteMock.mockImplementationOnce(
-      resolvedConfiguredRoute(configuredGroupBindingResolution),
-    );
     resolveGroupActivationForMock.mockResolvedValueOnce("mention");
-    const { handler, groupHistories } = createHandler(vi.fn(), createGroupCfg());
+    const { handler, groupHistories } = createHandler(true);
 
-    await handler(createGroupMessage({ payload: { body: "ambient group message" } }));
+    await handler(createMessage({ group: true, body: "ambient group message" }));
 
     expect(resolveGroupActivationForMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -350,18 +313,15 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
       ackReactionValue: "👀",
       remove: vi.fn(async () => undefined),
     };
-    resolveConfiguredBindingRouteMock.mockImplementationOnce(
-      resolvedConfiguredRoute(configuredGroupBindingResolution),
-    );
     resolveGroupActivationForMock.mockResolvedValue("mention");
     maybeSendAckReactionMock.mockResolvedValueOnce(ackReaction);
     ensureConfiguredBindingRouteReadyMock.mockResolvedValueOnce({
       ok: false,
       error: "acpx backend unavailable",
     });
-    const { handler } = createHandler(vi.fn(), createGroupCfg());
+    const { handler } = createHandler(true);
 
-    await handler(createGroupAudioMessage());
+    await handler(createMessage({ group: true, audio: true }));
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
@@ -370,12 +330,9 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
   });
 
   it("records configured ACP group routes after admission and readiness", async () => {
-    resolveConfiguredBindingRouteMock.mockImplementationOnce(
-      resolvedConfiguredRoute(configuredGroupBindingResolution),
-    );
-    const { handler } = createHandler(vi.fn(), createGroupCfg());
+    const { handler } = createHandler(true);
 
-    await handler(createGroupMessage());
+    await handler(createMessage({ group: true }));
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledWith(

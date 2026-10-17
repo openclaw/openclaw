@@ -126,16 +126,13 @@ function statusReactionFixture() {
     initialEmoji: "👀",
     timing: { doneHoldMs: 0, errorHoldMs: 0 },
   });
-  let restored!: () => void;
-  const nextRestoration = () =>
-    new Promise<void>((resolve) => {
-      restored = resolve;
-    });
-  const restoration = nextRestoration();
+  let restored = Promise.withResolvers<void>();
+  const restoration = restored.promise;
+  const nextRestoration = () => (restored = Promise.withResolvers<void>()).promise;
   const restoreInitial = controller.restoreInitial;
   vi.spyOn(controller, "restoreInitial").mockImplementation(async () => {
     await restoreInitial();
-    restored();
+    restored.resolve();
   });
   return { controller, reactions, restoration, nextRestoration };
 }
@@ -181,6 +178,7 @@ beforeEach(() => {
 
 describe("prepared WhatsApp inbound boundary", () => {
   it("projects portable group facts and self identity without transport callbacks", async () => {
+    const command = { kind: "text-slash", body: "/status", authorized: false } as const;
     const msg = message({
       platform: { fromMe: true },
       event: { id: "current-1", timestamp: 1_710_000_000 },
@@ -200,11 +198,7 @@ describe("prepared WhatsApp inbound boundary", () => {
       msg,
       bodyForAgent: "agent body",
       combinedBody: "formatted agent body",
-      command: {
-        kind: "text-slash",
-        body: "/status",
-        authorized: false,
-      },
+      command: { ...command },
       route: route({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       sender: { id: "+15550001111", name: "Alice", e164: "+15550001111" },
       transcript: "prepared transcript",
@@ -226,11 +220,7 @@ describe("prepared WhatsApp inbound boundary", () => {
       sender: { id: "+15550001111", isSelf: true },
       conversation: { kind: "group", id: "123@g.us", label: "123@g.us" },
       reply: { replyToId: "quoted-1" },
-      command: {
-        kind: "text-slash",
-        body: "/status",
-        authorized: false,
-      },
+      command,
       media: [
         { path: "/tmp/photo.jpg", contentType: "image/jpeg", kind: "image", transcribed: true },
       ],
@@ -267,10 +257,10 @@ describe("prepared WhatsApp inbound boundary", () => {
       chatJid: "+1000",
       recipientJid: "+2000",
       correlationId: "current-1",
+      reply: msg.platform.reply,
+      sendMedia: msg.platform.sendMedia,
+      sendComposing: msg.platform.sendComposing,
     });
-    expect(transport.reply).toBe(msg.platform.reply);
-    expect(transport.sendMedia).toBe(msg.platform.sendMedia);
-    expect(transport.sendComposing).toBe(msg.platform.sendComposing);
     expect(transport).not.toHaveProperty("wasMentioned");
   });
 
@@ -499,22 +489,20 @@ describe("WhatsApp reply delivery", () => {
     expect(deliverReply).toHaveBeenCalledOnce();
   });
 
-  it("suppresses reasoning and compaction payloads", async () => {
+  it.each<[string, Payload, Kind]>([
+    ["reasoning", { text: "hidden", isReasoning: true }, "block"],
+    ["compaction", { text: "🧹 Compacting context...", isCompactionNotice: true }, "block"],
+    [
+      "empty normalized content",
+      {
+        text: '<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>',
+      },
+      "final",
+    ],
+    ["block error noise", { text: "tool call failed", isError: true }, "block"],
+  ])("suppresses %s", async (_name, payload, kind) => {
     const { deliver, deliverReply } = await fixture();
-    await deliver({ text: "hidden", isReasoning: true }, "block");
-    await deliver({ text: "🧹 Compacting context...", isCompactionNotice: true }, "block");
-    expect(deliverReply).not.toHaveBeenCalled();
-  });
-  it("suppresses text that normalizes to no visible content", async () => {
-    const { deliver, deliverReply } = await fixture();
-    await deliver({
-      text: '<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>',
-    });
-    expect(deliverReply).not.toHaveBeenCalled();
-  });
-  it("suppresses block error noise", async () => {
-    const { deliver, deliverReply } = await fixture();
-    await deliver({ text: "tool call failed", isError: true }, "block");
+    await deliver(payload, kind);
     expect(deliverReply).not.toHaveBeenCalled();
   });
 
