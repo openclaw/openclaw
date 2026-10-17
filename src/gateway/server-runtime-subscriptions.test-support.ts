@@ -136,16 +136,21 @@ export function registerAuditSubscriptionTests(params: {
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }) {
   const { start, runtimeConfigState, auditTestState, warn } = params;
+  const setAudit = (
+    audit: NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>,
+    unsubs?: ReturnType<typeof start>,
+  ) => {
+    runtimeConfigState.value = { logging: { audit } };
+    unsubs?.reconcileAuditPolicy(runtimeConfigState.value);
+  };
+  const emitAudit = (runId: string, startedAt = 1_000) =>
+    emitAgentAuditEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt } });
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
-    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
+    setAudit({ executionIdentity: true });
     const unsubs = start();
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "enabled-audit",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitAudit("enabled-audit");
     expect(auditTestState.recorded).toBe(1);
     expect(hasExecutionIdentityAdmissionSink()).toBe(true);
     expect(
@@ -168,25 +173,23 @@ export function registerAuditSubscriptionTests(params: {
   it("owns channel evidence collection without retiring host routing on audit changes", async () => {
     const unsubs = start();
     const participant = { channelId: "test", participantId: "person-1" };
-    const context = {};
-    expect(
+    const createEvidence = (audit = unsubs.channelAdmissionAudit) =>
+      createChannelParticipantAdmissionEvidence({ audit, ...participant });
+    const bindEvidence = (context: object) =>
       bindTestChannelParticipantAdmissionEvidence({
         audit: unsubs.channelAdmissionAudit,
         context,
         ...participant,
-      }),
-    ).toBeUndefined();
+      });
+    const context = {};
+    expect(bindEvidence(context)).toBeUndefined();
     const resolveGateway = readChannelContextGatewayContextResolver(context);
     expect(resolveGateway).toBeTypeOf("function");
     const gateway = resolveGateway?.();
     expect(gateway?.channelAdmissionAudit).toBe(unsubs.channelAdmissionAudit);
 
-    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
-    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
-    const evidence = createChannelParticipantAdmissionEvidence({
-      audit: unsubs.channelAdmissionAudit,
-      ...participant,
-    });
+    setAudit({ executionIdentity: true }, unsubs);
+    const evidence = createEvidence();
     expect(evidence).toBeDefined();
     unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "present" });
@@ -201,39 +204,25 @@ export function registerAuditSubscriptionTests(params: {
     expect(recordChannelAdmissionDecision(evidence, decision)).toBe(true);
     expect(auditTestState.decisionRecorded).toBe(1);
 
-    const retired = createChannelParticipantAdmissionEvidence({
-      audit: unsubs.channelAdmissionAudit,
-      ...participant,
-    });
+    const retired = createEvidence();
     expect(retired).toBeDefined();
-    runtimeConfigState.value = { logging: { audit: { enabled: false, executionIdentity: true } } };
-    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
+    setAudit({ enabled: false, executionIdentity: true }, unsubs);
     const disabledContext = {};
-    expect(
-      bindTestChannelParticipantAdmissionEvidence({
-        audit: unsubs.channelAdmissionAudit,
-        context: disabledContext,
-        ...participant,
-      }),
-    ).toBeUndefined();
+    expect(bindEvidence(disabledContext)).toBeUndefined();
     expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
     expect(resolveGateway?.()).toBe(gateway);
     expect(
       readChannelContextGatewayContextResolver(disabledContext)?.()?.channelAdmissionAudit,
     ).toBe(unsubs.channelAdmissionAudit);
 
-    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
-    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
+    setAudit({ executionIdentity: true }, unsubs);
     expect(consumeChannelAdmissionEvidence(retired)).toMatchObject({ ingressState: "unknown" });
     expect(recordChannelAdmissionDecision(evidence, decision)).toBe(false);
     expect(auditTestState.decisionRecorded).toBe(1);
     expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
     expect(resolveGateway?.()).toBe(gateway);
 
-    const beforeShutdown = createChannelParticipantAdmissionEvidence({
-      audit: unsubs.channelAdmissionAudit,
-      ...participant,
-    });
+    const beforeShutdown = createEvidence();
     expect(beforeShutdown).toBeDefined();
     await unsubs.agentUnsub();
     unsubs.reconcileAuditPolicy({ logging: { audit: { enabled: false } } });
@@ -241,24 +230,14 @@ export function registerAuditSubscriptionTests(params: {
     expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
       ingressState: "unknown",
     });
-    expect(
-      createChannelParticipantAdmissionEvidence({
-        audit: unsubs.channelAdmissionAudit,
-        ...participant,
-      }),
-    ).toBeUndefined();
+    expect(createEvidence()).toBeUndefined();
 
     unsubs.heartbeatUnsub();
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
     const restarted = start();
     expect(
-      consumeChannelAdmissionEvidence(
-        createChannelParticipantAdmissionEvidence({
-          audit: restarted.channelAdmissionAudit,
-          ...participant,
-        }),
-      ),
+      consumeChannelAdmissionEvidence(createEvidence(restarted.channelAdmissionAudit)),
     ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
     expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
       ingressState: "unknown",
@@ -266,44 +245,39 @@ export function registerAuditSubscriptionTests(params: {
   });
 
   it("applies audit policy changes through the existing event subscriptions", async () => {
-    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
+    setAudit({ enabled: false });
     const unsubs = start();
     const steps: Array<{
       audit: NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>;
-      events: number;
+      recorded: number;
       messages: number;
-      identities: number;
+      identityRecorded: number;
     }> = [
       {
         audit: { enabled: false, messages: "all", executionIdentity: true },
-        events: 0,
+        recorded: 0,
         messages: 0,
-        identities: 0,
+        identityRecorded: 0,
       },
-      { audit: {}, events: 1, messages: 0, identities: 0 },
+      { audit: {}, recorded: 1, messages: 0, identityRecorded: 0 },
       {
         audit: { messages: "direct", executionIdentity: true },
-        events: 2,
+        recorded: 2,
         messages: 1,
-        identities: 1,
+        identityRecorded: 1,
       },
-      { audit: { messages: "all" }, events: 3, messages: 3, identities: 1 },
+      { audit: { messages: "all" }, recorded: 3, messages: 3, identityRecorded: 1 },
       {
         audit: { enabled: false, messages: "all", executionIdentity: true },
-        events: 3,
+        recorded: 3,
         messages: 3,
-        identities: 1,
+        identityRecorded: 1,
       },
     ];
-    for (const [index, step] of steps.entries()) {
-      runtimeConfigState.value = { logging: { audit: step.audit } };
-      unsubs.reconcileAuditPolicy(runtimeConfigState.value);
+    for (const [index, { audit, ...counts }] of steps.entries()) {
+      setAudit(audit, unsubs);
       const runId = `live-audit-${index}`;
-      emitAgentAuditEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 1_000 },
-      });
+      emitAudit(runId);
       for (const conversationKind of ["direct", "group"] as const) {
         emitTrustedMessageAuditEvent({
           occurredAt: 1_000,
@@ -327,28 +301,18 @@ export function registerAuditSubscriptionTests(params: {
         },
         { enabled: true },
       );
-      expect(auditTestState).toMatchObject({
-        created: 1,
-        stopped: 0,
-        recorded: step.events,
-        messages: step.messages,
-        identityRecorded: step.identities,
-      });
+      expect(auditTestState).toMatchObject({ created: 1, stopped: 0, ...counts });
     }
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
   });
 
   it("keeps retention maintenance and applies audit enablement to subsequent events", async () => {
-    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
+    setAudit({ enabled: false });
     const unsubs = start();
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "disabled-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitAudit("disabled-private");
     emitAgentEvent({
       runId: "disabled-public",
       stream: "lifecycle",
@@ -356,18 +320,10 @@ export function registerAuditSubscriptionTests(params: {
     });
     expect(auditTestState.recorded).toBe(0);
     runtimeConfigState.value = {};
-    emitAgentAuditEvent({
-      runId: "resumed-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 2_000 },
-    });
+    emitAudit("resumed-private", 2_000);
     expect(auditTestState.recorded).toBe(1);
-    runtimeConfigState.value = { logging: { audit: { enabled: false } } };
-    emitAgentAuditEvent({
-      runId: "disabled-again",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 3_000 },
-    });
+    setAudit({ enabled: false });
+    emitAudit("disabled-again", 3_000);
     expect(auditTestState.recorded).toBe(1);
     await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce(), { interval: 1 });
     warn.mockClear();
