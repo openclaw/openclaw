@@ -19,14 +19,8 @@ import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
-const readJson = async (
-  file: string,
-): Promise<{
-  kind?: string;
-  entries?: unknown[];
-  evidence?: unknown;
-  run?: { channelCapabilityMatrixPath?: string; channelDriverSmokePath?: string };
-}> => JSON.parse(await fs.readFile(file, "utf8"));
+const readJson = async (file: string): Promise<Record<string, unknown>> =>
+  JSON.parse(await fs.readFile(file, "utf8"));
 const expectMissing = (file: string) =>
   expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -60,56 +54,55 @@ function writeArtifacts(
 }
 
 describe("suite artifacts", () => {
-  it("writes the same recorded evidence in standalone and suite summary artifacts", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-");
-    const artifacts = await writeArtifacts(outputDir);
-
+  it.each([
+    { name: "default", writeEvidenceFile: undefined, status: undefined },
+    { name: "memory only", writeEvidenceFile: false, status: undefined },
+    { name: "running", writeEvidenceFile: undefined, status: "running" as const },
+  ])("publishes $name artifacts", async ({ writeEvidenceFile, status }) => {
+    const outputDir = await tempDirs.makeTempDir("qa-artifacts-");
+    if (writeEvidenceFile === false) {
+      await fs.writeFile(path.join(outputDir, QA_EVIDENCE_FILENAME), "stale evidence\n", "utf8");
+    }
+    const artifacts = await writeArtifacts(outputDir, { writeEvidenceFile, status });
     expect(artifacts.evidencePath).toBe(path.join(outputDir, QA_EVIDENCE_FILENAME));
-    const evidence = await readJson(artifacts.evidencePath);
-    expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
-    expect(evidence.entries).toHaveLength(1);
-    const summary = await readJson(artifacts.summaryPath);
-    expect(summary.evidence).toEqual(evidence);
-    expect(artifacts.evidence).toEqual(evidence);
-    if (process.platform !== "win32") {
-      for (const artifactPath of [
-        artifacts.reportPath,
-        artifacts.evidencePath,
-        artifacts.summaryPath,
-      ]) {
-        expect((await fs.stat(artifactPath)).mode & 0o777).toBe(0o600);
+    expect(artifacts.evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
+    await fs.access(artifacts.reportPath);
+    expect((await readJson(artifacts.summaryPath)).evidence).toEqual(artifacts.evidence);
+    if (writeEvidenceFile === false || status === "running") {
+      await expectMissing(artifacts.evidencePath);
+    } else {
+      const evidence = await readJson(artifacts.evidencePath);
+      expect(evidence.entries).toHaveLength(1);
+      expect(evidence).toEqual(artifacts.evidence);
+      if (process.platform !== "win32") {
+        for (const file of [artifacts.reportPath, artifacts.evidencePath, artifacts.summaryPath]) {
+          expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+        }
       }
     }
-  });
-
-  it("can return evidence without writing duplicate child evidence files", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
-    await fs.writeFile(path.join(outputDir, QA_EVIDENCE_FILENAME), "stale evidence\n", "utf8");
-    const artifacts = await writeArtifacts(outputDir, { writeEvidenceFile: false });
-
-    expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
-    await expectMissing(artifacts.evidencePath);
-    await fs.access(artifacts.reportPath);
-    await fs.access(artifacts.summaryPath);
-  });
-
-  it("distinguishes partial Markdown from the terminal report shape", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-report-lifecycle-");
-    const partial = await writeArtifacts(outputDir, { status: "running" });
-    expect(partial.report).toContain("# OpenClaw QA Scenario Suite (In Progress)");
-    expect(partial.report).toContain("- Status: running");
-    expect(partial.report).toContain("- Updated: 2026-04-11T00:01:00.000Z");
-    expect(partial.report).not.toContain("- Finished:");
-    await expectMissing(partial.evidencePath);
-    await expect(fs.readFile(partial.summaryPath, "utf8")).resolves.toContain(
-      '"status": "running"',
-    );
-
-    const terminal = await writeArtifacts(outputDir);
-    expect(terminal.report).toContain("# OpenClaw QA Scenario Suite\n");
-    expect(terminal.report).toContain("- Finished: 2026-04-11T00:01:00.000Z");
-    expect(terminal.report).not.toContain("In Progress");
-    expect(terminal.report).not.toContain("- Status: running");
+    if (status === "running") {
+      for (const text of [
+        "# OpenClaw QA Scenario Suite (In Progress)",
+        "- Status: running",
+        "- Updated: 2026-04-11T00:01:00.000Z",
+      ]) {
+        expect(artifacts.report).toContain(text);
+      }
+      expect(artifacts.report).not.toContain("- Finished:");
+      await expect(fs.readFile(artifacts.summaryPath, "utf8")).resolves.toContain(
+        '"status": "running"',
+      );
+      const terminal = await writeArtifacts(outputDir);
+      for (const text of [
+        "# OpenClaw QA Scenario Suite\n",
+        "- Finished: 2026-04-11T00:01:00.000Z",
+      ]) {
+        expect(terminal.report).toContain(text);
+      }
+      for (const text of ["In Progress", "- Status: running"]) {
+        expect(terminal.report).not.toContain(text);
+      }
+    }
   });
 
   it("writes the selected Crabline driver without rewriting recorded evidence", async () => {

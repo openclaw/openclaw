@@ -11,7 +11,7 @@ import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { writeGatewayRestartIntentSync } from "openclaw/plugin-sdk/qa-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { closeQaHttpServer } from "./bus-server.js";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.js";
 import { QA_SUBAGENT_TERMINAL_MARKERS } from "./providers/mock-openai/mock-openai-contracts.js";
@@ -31,6 +31,8 @@ const privateMarker = /QA-PARENT-PRIVATE-CHILD[12]|qa-private-result\.png/u;
 const ordinaryMarker = QA_SUBAGENT_TERMINAL_MARKERS.silent;
 const png =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
+const readJson = async (file: string) => record(JSON.parse(await readFile(file, "utf8")));
+const sha256 = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 async function holdProviderRequests(baseUrl: string) {
   let armed = false;
@@ -134,62 +136,55 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 async function observeChat(gateway: QaGatewayChild, events: unknown[]) {
-  let client!: GatewayClient;
+  const ready = createDeferred<void>();
+  const timer = setTimeout(
+    () => ready.reject(new Error("package observer connection timed out")),
+    30_000,
+  );
+  let client: GatewayClient | undefined;
   try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("package observer connection timed out")),
-        30_000,
-      );
-      client = new GatewayClient({
-        url: gateway.wsUrl,
-        token: gateway.token,
-        deviceIdentity: null,
-        clientName: "gateway-client",
-        mode: "backend",
-        scopes: ["operator.admin"],
-        onHelloOk: () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        onConnectError: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-        onEvent: (event) => {
-          if (event.event === "chat") {
-            events.push(structuredClone(event.payload));
-          }
-        },
-      });
-      client.start();
+    client = new GatewayClient({
+      url: gateway.wsUrl,
+      token: gateway.token,
+      deviceIdentity: null,
+      clientName: "gateway-client",
+      mode: "backend",
+      scopes: ["operator.admin"],
+      onHelloOk: () => ready.resolve(),
+      onConnectError: (error) => ready.reject(error),
+      onEvent: (event) => {
+        if (event.event === "chat") {
+          events.push(structuredClone(event.payload));
+        }
+      },
     });
+    client.start();
+    await ready.promise;
+    return client;
   } catch (error) {
     await client?.stopAndWait();
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return client;
 }
 
 // Package acceptance supplies one attested candidate; ordinary test runs do not download releases.
-describe.skipIf(!candidateTarball)("private completion installed-package compatibility", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("preserves ordinary state through Doctor upgrade and backup rollback without publishing private replies", async () => {
+it.skipIf(!candidateTarball)(
+  "preserves ordinary state through Doctor upgrade and backup rollback without publishing private replies",
+  async () => {
     const prefix = tempDirs.make("openclaw-private-package-");
     const installedRoot = path.join(prefix, "lib", "node_modules", "openclaw");
     const cli = path.join(installedRoot, "openclaw.mjs");
     const evidenceDir = path.join(repoRoot, ".crabbox", "captures", "issue-27445-package");
     await mkdir(evidenceDir, { recursive: true });
-    const candidateSha256 = createHash("sha256")
-      .update(await readFile(candidateTarball!))
-      .digest("hex");
+    const candidateSha256 = sha256(await readFile(candidateTarball!));
     const sourceTree = (
       await exec("git", ["rev-parse", "HEAD^{tree}"], { cwd: repoRoot })
     ).stdout.trim();
-    const candidateManifest = record(
-      JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")),
-    );
+    const candidateManifest = await readJson(path.join(repoRoot, "package.json"));
     const candidateVersion = candidateManifest.version;
     const candidateSchemaVersions = record(record(candidateManifest.openclaw).schemaVersions);
     const candidateAgentSchemaVersion = candidateSchemaVersions.agent;
@@ -212,6 +207,9 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
     expect(published.version).toBe(releasedVersion);
     expect(published.dist.integrity).toMatch(/^sha512-/u);
     const phases: Record<string, unknown>[] = [];
+    let packageIdentity: { packageVersion: unknown; cliVersion: string };
+    const phase = (name: string, evidence: Record<string, unknown> = {}) =>
+      phases.push({ phase: name, ...packageIdentity, ...evidence });
     const events: unknown[] = [];
     const mock = await startQaMockOpenAiServer();
     const heldProvider = await holdProviderRequests(mock.baseUrl);
@@ -223,6 +221,22 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
     let passed = false;
 
     const agentRows = (sql: string, ...args: SQLInputValue[]) => rows(agentDb, sql, ...args);
+    const stateRows = (sql: string, ...args: SQLInputValue[]) => rows(stateDb, sql, ...args);
+    function mutateRegistry(sql: string, ...args: SQLInputValue[]) {
+      const db = new DatabaseSync(stateDb);
+      try {
+        db.prepare(sql).run(...args);
+      } finally {
+        db.close();
+      }
+    }
+    const runCompletions = (runId: SQLInputValue, columns = "*", suffix = "") =>
+      agentRows(
+        `SELECT ${columns} FROM session_input_completions WHERE run_id = ?${suffix}`,
+        runId,
+      );
+    const debug = async (endpoint: string) =>
+      await (await fetch(`${mock.baseUrl}/debug/${endpoint}`)).json();
     const registryRows = (runId: SQLInputValue) =>
       rows(stateDb, "SELECT * FROM subagent_runs WHERE run_id = ?", runId);
     const pendingInputs = (sessionKey: string) =>
@@ -232,11 +246,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         "SELECT * FROM session_input_completions WHERE session_key = ? ORDER BY run_id",
         sessionKey,
       );
-    const sessionRow = (sessionKey: string) =>
-      agentRows(
-        "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-        sessionKey,
-      )[0];
+    const sessionRow = (key: string) =>
+      agentRows("SELECT current_session_id FROM session_nodes WHERE session_key = ?", key)[0];
     const transcript = (sessionId: string) =>
       agentRows(
         "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
@@ -270,19 +281,17 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         timeout: 300_000,
         maxBuffer: 8 * 1024 * 1024,
       });
-      const manifest = JSON.parse(
-        await readFile(path.join(installedRoot, "package.json"), "utf8"),
-      ) as {
-        version: string;
-      };
+      const manifest = await readJson(path.join(installedRoot, "package.json"));
+      expect(manifest.version).toBeTypeOf("string");
       expect(manifest.version).toBe(
         spec === `openclaw@${releasedVersion}` ? releasedVersion : candidateVersion,
       );
       const version = (
         await exec(process.execPath, [cli, "--version"], { cwd: prefix })
       ).stdout.trim();
-      expect(version).toContain(manifest.version);
-      return { packageVersion: manifest.version, cliVersion: version };
+      expect(version).toContain(String(manifest.version));
+      packageIdentity = { packageVersion: manifest.version, cliVersion: version };
+      return packageIdentity;
     }
 
     async function start() {
@@ -335,9 +344,21 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       };
     }
 
-    function nativeRuns(sessionKey: string) {
-      return readPrivateCompletionNativeRuns(stateDb, sessionKey);
-    }
+    const nativeRuns = (key: string) => readPrivateCompletionNativeRuns(stateDb, key);
+    const delivered = (task: ReturnType<typeof nativeRuns>[number]) =>
+      task.status === "completed" && task.deliveryStatus === "delivered";
+    const waitForChildren = (key: string, settle = false) =>
+      waitForQaTransportCondition(
+        async () => {
+          if (settle) {
+            await mock.terminalRequesters.settle(gateway);
+          }
+          const children = nativeRuns(key);
+          return children.length === 2 && children.every(delivered) ? children : undefined;
+        },
+        120_000,
+        100,
+      );
 
     async function send(sessionKey: string, message: string) {
       await gateway.call("sessions.create", { key: sessionKey });
@@ -426,26 +447,12 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         sessionKey,
         "Subagent terminal reply QA check: private. Review the first child internally, use its result to start a second child, and remain silent after each completion.",
       );
-      const children = await waitForQaTransportCondition(
-        async () => {
-          await mock.terminalRequesters.settle(gateway);
-          const currentChildren = nativeRuns(sessionKey);
-          return currentChildren.length === 2 &&
-            currentChildren.every(
-              (task) => task.status === "completed" && task.deliveryStatus === "delivered",
-            )
-            ? currentChildren
-            : undefined;
-        },
-        120_000,
-        100,
-      );
+      const children = await waitForChildren(sessionKey, true);
       const receipts = completionRows(sessionKey);
       const successfulReceipts = receipts.filter((receipt) => receipt.succeeded === 1);
       expect(successfulReceipts.length).toBeGreaterThanOrEqual(2);
       expect(pendingInputs(sessionKey)).toEqual([]);
-      const stored = rows(
-        stateDb,
+      const stored = stateRows(
         "SELECT payload_json FROM subagent_runs WHERE requester_session_key = ? ORDER BY run_id",
         sessionKey,
       );
@@ -460,8 +467,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         "Worker started.",
       );
       for (const child of children) {
-        expect(child.childSessionKey).toBeTypeOf("string");
-        expect(child.runId).toBeTypeOf("string");
+        expect([typeof child.childSessionKey, typeof child.runId]).toEqual(["string", "string"]);
         await waitForReply(
           eventCursor,
           { sessionKey: child.childSessionKey, runId: child.runId, state: "final" },
@@ -484,9 +490,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           const currentChild = nativeRuns(sessionKey).find(
             (task) => task.title === "qa-terminal-silent",
           );
-          return currentChild?.status === "completed" && currentChild.deliveryStatus === "delivered"
-            ? currentChild
-            : undefined;
+          return currentChild && delivered(currentChild) ? currentChild : undefined;
         },
         120_000,
         100,
@@ -543,19 +547,12 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       await gateway.restartAfterStateMutation(async (context) => {
         expect(context.stateDir).toBe(originalState);
         if (interruptedInput) {
-          const stopped = rows(
-            agentDb,
+          const stopped = agentRows(
             "SELECT * FROM session_pending_inputs WHERE input_id = ?",
             interruptedInput.input_id,
           )[0];
           expect(stopped).toMatchObject({ ...interruptedInput, state: "interrupted" });
-          expect(
-            rows(
-              agentDb,
-              "SELECT * FROM session_input_completions WHERE run_id = ? AND succeeded = 1",
-              interruptedInput.run_id,
-            ),
-          ).toEqual([]);
+          expect(runCompletions(interruptedInput.run_id, "*", " AND succeeded = 1")).toEqual([]);
           expect(gateway.logs()).toMatch(/restart shutdown|external-restart/u);
           heldProvider.release();
         }
@@ -566,12 +563,10 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
     }
 
     try {
-      const freshIdentity = await install(candidateTarball!);
+      await install(candidateTarball!);
       ({ gateway, agentDb, stateDb } = await start());
       const fresh = await privateChain("agent:qa:package-fresh-private");
-      phases.push({
-        phase: "fresh-candidate",
-        ...freshIdentity,
+      phase("fresh-candidate", {
         privateChildren: fresh.children.length,
         processingReceipts: fresh.receipts.length,
       });
@@ -582,7 +577,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       ).toEqual([]);
       owner = undefined;
 
-      const releasedIdentity = await install(`openclaw@${releasedVersion}`);
+      await install(`openclaw@${releasedVersion}`);
       ({ gateway, agentDb, stateDb } = await start());
       const ordinarySession = "agent:qa:package-released-ordinary";
       const ordinary = await ordinaryChild(ordinarySession);
@@ -602,16 +597,13 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           ),
         ).toBe(true);
       }
-      phases.push({
-        phase: "released-created-state",
-        ...releasedIdentity,
+      phase("released-created-state", {
         ordinaryTaskId: ordinary.childSessionKey,
         sessionId: originalSessionId,
       });
 
       assertSchema(19, 17);
       const backupPath = path.join(prefix, "pre-upgrade.tar.gz");
-      let upgradedIdentity: Awaited<ReturnType<typeof install>> | undefined;
       await restartState(async () => {
         // QA's source mount is outside the backup assets and is unused by this
         // installed-package proof. Remove only that exact fixture-owned link.
@@ -630,14 +622,11 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         expect(backup.verified).toBe(true);
         const verified = await installedJson(["backup", "verify", backupPath, "--json"]);
         expect(verified.ok).toBe(true);
-        phases.push({
-          phase: "released-verified-backup",
-          archiveSha256: createHash("sha256")
-            .update(await readFile(backupPath))
-            .digest("hex"),
+        phase("released-verified-backup", {
+          archiveSha256: sha256(await readFile(backupPath)),
           schemaVersion: 19,
         });
-        upgradedIdentity = await install(candidateTarball!);
+        await install(candidateTarball!);
         // The target Doctor owns its declared schema upgrade; a released
         // schema-19 build cannot reopen that upgraded database.
         await runInstalled(["doctor", "--fix", "--non-interactive"]);
@@ -645,10 +634,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       });
       assertOriginalOrdinaryState();
       const privateState = await privateChain("agent:qa:package-upgraded-private");
-      phases.push({
-        phase: "candidate-doctor-upgrade",
-        ...upgradedIdentity,
-        doctorExitCode: 0,
+      phase("candidate-doctor-upgrade", {
         privateChildren: privateState.children.length,
         processingReceipts: privateState.receipts.length,
       });
@@ -679,8 +665,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       const pendingInput = await waitForQaTransportCondition(
         async () => {
           await mock.terminalRequesters.settle(gateway);
-          const pendingRow = rows(
-            agentDb,
+          const pendingRow = agentRows(
             "SELECT * FROM session_pending_inputs WHERE session_key = ? AND state = 'queued'",
             pendingSession,
           ).find((row) =>
@@ -707,37 +692,19 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         pendingInput.message_json,
       )?.[0];
       expect(pendingNonce).toBeTruthy();
-      expect(
-        JSON.stringify(
-          rows(
-            agentDb,
-            "SELECT event_json FROM transcript_events WHERE session_id = ?",
-            pendingInput.session_id,
-          ),
-        ),
-      ).not.toContain(pendingNonce);
-      expect(
-        rows(
-          agentDb,
-          "SELECT * FROM session_input_completions WHERE run_id = ?",
-          pendingInput.run_id,
-        ),
-      ).toEqual([]);
-      phases.push({
-        phase: "candidate-queued-private-input",
+      expect(JSON.stringify(transcript(pendingInput.session_id))).not.toContain(pendingNonce);
+      expect(runCompletions(pendingInput.run_id)).toEqual([]);
+      phase("candidate-queued-private-input", {
         sessionId: pendingInput.session_id,
         runId: pendingInput.run_id,
         state: pendingInput.state,
-        display: false,
-        consumed: false,
       });
 
       const pendingChildKey = nativeRuns(pendingSession)[0]?.childSessionKey;
       if (typeof pendingChildKey !== "string") {
         throw new Error("queued private task has no child session key");
       }
-      const captured = rows(
-        stateDb,
+      const captured = stateRows(
         "SELECT * FROM subagent_runs WHERE child_session_key = ?",
         pendingChildKey,
       )[0];
@@ -767,55 +734,27 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         ),
       )?.[0];
       expect(settledNonce).toBeTruthy();
-      const restartCursor = record(
-        await (await fetch(`${mock.baseUrl}/debug/request-cursor`)).json(),
-      ).cursor;
+      const restartCursor = record(await debug("request-cursor")).cursor;
       await restartState(async () => {}, pendingInput);
-      const resumedChildren = await waitForQaTransportCondition(
-        () => {
-          const children = nativeRuns(pendingSession);
-          return children.length === 2 &&
-            children.every(
-              (child) => child.status === "completed" && child.deliveryStatus === "delivered",
-            )
-            ? children
-            : undefined;
-        },
-        120_000,
-        100,
-      );
+      const resumedChildren = await waitForChildren(pendingSession);
       expect(pendingInputs(pendingSession)).toEqual([]);
-      expect(
-        rows(
-          agentDb,
-          "SELECT succeeded FROM session_input_completions WHERE run_id = ?",
-          pendingInput.run_id,
-        ),
-      ).toEqual([{ succeeded: 1 }]);
+      expect(runCompletions(pendingInput.run_id, "succeeded")).toEqual([{ succeeded: 1 }]);
       expect(completionRows(privateState.sessionKey)).toEqual(privateState.receipts);
       expect(nativeRuns(privateState.sessionKey).map((task) => task.childSessionKey)).toEqual(
         privateState.children.map((task) => task.childSessionKey),
       );
-      const restartRequests = await (
-        await fetch(`${mock.baseUrl}/debug/requests?after=${String(restartCursor)}`)
-      ).json();
+      const restartRequests = await debug(`requests?after=${String(restartCursor)}`);
       expect(JSON.stringify(restartRequests)).not.toContain(settledNonce);
       await assertPrivateHistory(privateState.sessionKey);
       await assertPrivateHistory(pendingSession);
       assertPrivateReplies(capturedReplies(privateState.sessionKey));
       assertPrivateReplies(capturedReplies(pendingSession));
-      phases.push({
-        phase: "candidate-restart-durability",
-        interruptedInputRetried: true,
-        frozenInputPreserved: true,
+      phase("candidate-restart-durability", {
         resumedChildren: resumedChildren.length,
-        completedReceiptsPreserved: true,
-        completedPrivateReplayCount: 0,
       });
 
-      let rollbackIdentity: Awaited<ReturnType<typeof install>> | undefined;
       await restartState(async ({ stateDir, configPath }) => {
-        rollbackIdentity = await install(`openclaw@${releasedVersion}`);
+        await install(`openclaw@${releasedVersion}`);
         const target = path.join(prefix, "restored-backup");
         const restored = await installedJson([
           "backup",
@@ -825,13 +764,8 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           target,
           "--json",
         ]);
-        const manifest = record(
-          JSON.parse(
-            await readFile(
-              path.join(target, String(restored.archiveRoot), "manifest.json"),
-              "utf8",
-            ),
-          ),
+        const manifest = await readJson(
+          path.join(target, String(restored.archiveRoot), "manifest.json"),
         );
         expect(Array.isArray(manifest.assets)).toBe(true);
         const assets = (manifest.assets as unknown[]).map(record);
@@ -852,15 +786,9 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       const rollbackChild = await ordinaryChild(rollbackSession);
       assertOriginalOrdinaryState();
       expect(
-        rows(agentDb, "SELECT * FROM session_nodes WHERE session_key = ?", privateState.sessionKey),
+        agentRows("SELECT * FROM session_nodes WHERE session_key = ?", privateState.sessionKey),
       ).toEqual([]);
-      phases.push({
-        phase: "released-backup-rollback",
-        ...rollbackIdentity,
-        ordinaryStatePreserved: true,
-        postBackupPrivateWorkRestored: false,
-        observedOrdinaryReply: true,
-      });
+      phase("released-backup-rollback");
 
       // Isolate the feature's registry wire format from the unrelated schema-20
       // boundary. Only this captured envelope is copied into release-owned data.
@@ -882,27 +810,19 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         { sessionKey: probeChild, runId: capturedRow.run_id, state: "final" },
         privateMarker,
       );
-      const probeCursor = record(
-        await (await fetch(`${mock.baseUrl}/debug/request-cursor`)).json(),
-      ).cursor;
+      const probeCursor = record(await debug("request-cursor")).cursor;
       const probeEventCursor = events.length;
       await restartState(async () => {
         assertSchema(19, 17);
-        const db = new DatabaseSync(stateDb);
-        try {
-          db.prepare(
-            "INSERT INTO subagent_runs (run_id, child_session_key, controller_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
-          ).run(
-            capturedRow.run_id,
-            capturedRow.child_session_key,
-            capturedRow.controller_session_key,
-            capturedRow.requester_session_key,
-            capturedRow.created_at,
-            capturedRow.payload_json,
-          );
-        } finally {
-          db.close();
-        }
+        mutateRegistry(
+          "INSERT INTO subagent_runs (run_id, child_session_key, controller_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
+          capturedRow.run_id,
+          capturedRow.child_session_key,
+          capturedRow.controller_session_key,
+          capturedRow.requester_session_key,
+          capturedRow.created_at,
+          capturedRow.payload_json,
+        );
         expect(registryRows(capturedRow.run_id)).toEqual([capturedRow]);
       });
       const atProjection = registryRows(capturedRow.run_id);
@@ -919,53 +839,34 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       await ordinaryChild("agent:qa:package-reader-ordinary");
       await assertPrivateHistory(probeParent);
       assertPrivateReplies(capturedReplies(probeParent, probeEventCursor));
-      expect(
-        JSON.stringify(
-          await (await fetch(`${mock.baseUrl}/debug/requests?after=${String(probeCursor)}`)).json(),
-        ),
-      ).not.toMatch(privateMarker);
+      expect(JSON.stringify(await debug(`requests?after=${String(probeCursor)}`))).not.toMatch(
+        privateMarker,
+      );
       const remainingRows = registryRows(capturedRow.run_id);
       if (remainingRows.length > 0) {
         expect(remainingRows).toEqual([capturedRow]);
       }
-      phases.push({
-        phase: "released-registry-reader-probe",
-        ...rollbackIdentity,
+      phase("released-registry-reader-probe", {
         syntheticRegistryFixture: true,
-        capturedEnvelopeSha256: createHash("sha256").update(capturedRow.payload_json).digest("hex"),
+        capturedEnvelopeSha256: sha256(capturedRow.payload_json),
         before: capturedRow,
         atProjection,
         after: remainingRows,
         lightweightProjectionSawEnvelope: atProjection.length === 1,
-        ordinaryTopologyObserved: true,
-        privateTopologyCount: 0,
-        privateReplayCount: 0,
         agentSchemaVersion: 19,
         sharedSchemaVersion: 17,
       });
 
-      let reopenedIdentity: Awaited<ReturnType<typeof install>> | undefined;
       await restartState(async () => {
         // Remove only the synthetic probe if the old writer left it intact.
-        const db = new DatabaseSync(stateDb);
-        try {
-          db.prepare("DELETE FROM subagent_runs WHERE run_id = ?").run(capturedRow.run_id);
-        } finally {
-          db.close();
-        }
-        reopenedIdentity = await install(candidateTarball!);
+        mutateRegistry("DELETE FROM subagent_runs WHERE run_id = ?", capturedRow.run_id);
+        await install(candidateTarball!);
         await runInstalled(["doctor", "--fix", "--non-interactive"]);
         assertSchema(candidateAgentSchemaVersion, candidateSharedSchemaVersion);
       });
       await ordinaryChild("agent:qa:package-reopened-ordinary");
       assertOriginalOrdinaryState();
-      phases.push({
-        phase: "candidate-reupgrade-after-rollback",
-        ...reopenedIdentity,
-        doctorExitCode: 0,
-        ordinaryStatePreserved: true,
-        observedOrdinaryReply: true,
-      });
+      phase("candidate-reupgrade-after-rollback");
       expect(phases).toHaveLength(9);
       passed = true;
     } finally {
@@ -992,5 +893,6 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         `${JSON.stringify({ passed, sourceTree, candidateSha256, released: published, phases, chatEvents, proof: "Only entries in phases represent completed assertions. Real installed executables and ordinary WebChat/native-subagent controls qualify each recorded phase.", limitation: "Released schema-19 builds cannot reopen the upgraded candidate database. Rollback restores a verified pre-upgrade backup and loses post-backup work. The released registry-reader probe is synthetic envelope insertion into genuine released data, not a full database downgrade. Same-candidate restart owns receipt/pending-input durability; abrupt crash windows are covered separately by Gateway/SQLite tests. Chat observers cover connected post-startup intervals, supplemented by durable history/provider records. Child-session events and parent-session tool arguments remain operator-visible." }, null, 2)}\n`,
       );
     }
-  }, 1_500_000);
-});
+  },
+  1_500_000,
+);
