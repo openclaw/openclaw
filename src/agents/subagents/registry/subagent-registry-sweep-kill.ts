@@ -11,6 +11,7 @@ import {
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import {
   prepareSubagentKillSession,
   type SubagentKillSession,
@@ -90,7 +91,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
   }
   const ownsCurrentGeneration = () =>
     isSameSubagentRunOwner(params.runs.get(params.runId), params.entry) &&
-    JSON.stringify(params.runs.get(params.runId)?.killIntent) === JSON.stringify(killIntent) &&
+    matchesSubagentKillIntent(params.runs.get(params.runId)?.killIntent, killIntent) &&
     killIntent.lifecycleGeneration !== undefined &&
     isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration) &&
     isSameSubagentRunOwner(getLatestSubagentRunForChild(childRuns(), params.entry), params.entry);

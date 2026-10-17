@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 
@@ -50,7 +50,7 @@ describe("guided onboarding inference composition", () => {
         await fs.rm(root, { recursive: true, force: true });
       });
 
-      for (const key of listKnownProviderEnvApiKeyNames()) {
+      for (const key of listKnownProviderAuthEnvVarNamesCore()) {
         deleteTestEnvValue(key);
       }
       setTestEnvValue("HOME", root);

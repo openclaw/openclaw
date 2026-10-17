@@ -55,7 +55,6 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
-  requestUpdate?: () => void;
 };
 
 const modelSelectionOwners = new WeakMap<object, AbortController>();
@@ -68,7 +67,7 @@ export function cancelChatModelRecovery(host: object): void {
 export function retireChatModelSelectionOwnership(
   host: Pick<
     ChatModelSettingsHost,
-    "agentsList" | "chatModelSwitchPromises" | "hello" | "requestUpdate" | "sessionKey" | "sessions"
+    "agentsList" | "chatModelSwitchPromises" | "hello" | "sessionKey" | "sessions"
   >,
 ): void {
   cancelChatModelRecovery(host);
@@ -87,7 +86,6 @@ export function retireChatModelSelectionOwnership(
   for (const key of ownedKeys) {
     host.sessions.retireModelOverride(key);
   }
-  host.requestUpdate?.();
 }
 
 function buildChatSessionListOptions(state: ChatSessionListHost): SessionListOptions {
@@ -564,7 +562,6 @@ export async function switchChatModel(
         delete nextSwitches[targetSessionKey];
         host.chatModelSwitchPromises = nextSwitches;
       }
-      host.requestUpdate?.();
     }
   })();
   switchPromiseRef.current = switchPromise;
@@ -572,6 +569,5 @@ export async function switchChatModel(
     ...host.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
   };
-  host.requestUpdate?.();
   return switchPromise;
 }

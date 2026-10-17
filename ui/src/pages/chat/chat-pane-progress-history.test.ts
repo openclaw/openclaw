@@ -79,7 +79,6 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
     lastActiveSessionKey: "notes",
     chatShowTaskProgress: true,
   };
-  state.requestUpdate = () => pane.invalidate();
   connectPaneTestView(pane);
   flush();
   onTestFinished(() => {
@@ -117,7 +116,6 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     });
     const { pane, state, progress, emit } = createHistoryProgressPane(request);
     state.chatMessage = "Retained draft";
-    pane.invalidate();
     await pane.updateComplete;
     expect(request).not.toHaveBeenCalled();
 
@@ -167,8 +165,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       method === "chat.history" ? history : { card },
     );
     const { pane, state, emit } = createHistoryProgressPane(request);
-    state.settings.chatShowTaskProgress = false;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: false };
     await pane.updateComplete;
     expect(pane.chatProps?.progressCardInitialLoading).toBe(false);
     await loadChatHistory(state, { deferBranches: true });
@@ -176,12 +173,10 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
     expect(pane.chatProps?.progressCard).toBeNull();
 
-    state.settings.chatShowTaskProgress = true;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: true };
     await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
 
-    state.settings.chatShowTaskProgress = false;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: false };
     await pane.updateComplete;
     expect(pane.chatProps?.progressCard).toBeNull();
     expect(pane.chatProps?.progressCardInitialLoading).toBe(false);
@@ -192,8 +187,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       "progressCard.get",
     ]);
 
-    state.settings.chatShowTaskProgress = true;
-    pane.invalidate();
+    state.settings = { ...state.settings, chatShowTaskProgress: true };
     await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "chat.history",
@@ -326,7 +320,6 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     } else {
       resetChatHistoryProjection(state);
     }
-    pane.invalidate();
     await pane.updateComplete;
     expect(pane.readProgressCardScope().target).toBeUndefined();
     expect(pane.chatProps?.progressCard).toEqual(
@@ -343,7 +336,6 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     state.sessionKey = "scratch";
     old.resolve(history);
     expect(await load).toBeUndefined();
-    pane.invalidate();
     await pane.updateComplete;
     expect(pane.chatProps?.progressCard).toBeNull();
     expect(request).toHaveBeenCalledOnce();

@@ -20,7 +20,7 @@ it.each([
   ["hermetic", ""],
   ["hermetic", "0"],
 ] as const)(
-  "keeps source compiler cache ownership (%s, Bun cache %s)",
+  "runs source children without TSX disk writes (%s, Bun cache %s)",
   async (homeMode, bunCache) => {
     const root = fs.realpathSync(tempDirs.make("oc-vt-source-cache-"));
     const sourcePath = path.join(root, "source.mts");
@@ -69,7 +69,8 @@ console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process
     });
     const observed = JSON.parse(output);
     expect(observed.output).toBe("42\n");
-    expect(observed.cached, JSON.stringify(observed)).toBe(homeMode !== "tooling");
+    expect(observed.disabled).toBe("1");
+    expect(observed.cached, JSON.stringify(observed)).toBe(false);
     expect(observed.bunCache).toBe(
       bunCache ??
         (homeMode === "tooling"

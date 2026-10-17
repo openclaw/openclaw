@@ -1,5 +1,8 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import type { GatewayWsSessionEventAttribution } from "../../infra/diagnostic-rpc-types.js";
+import type {
+  GatewayWsPresenceMode,
+  GatewayWsSessionEventAttribution,
+} from "../../infra/diagnostic-rpc-types.js";
 import type { GatewayRole } from "../role-policy.types.js";
 
 export type GatewayConnectionFrame = Buffer | ArrayBuffer | Buffer[];
@@ -16,6 +19,7 @@ export type GatewayConnectionTransport = {
     event: string,
     bytes: number,
     sessionEvent?: GatewayWsSessionEventAttribution,
+    presenceMode?: GatewayWsPresenceMode,
   ): void;
   /** Combine writes until the next tick without changing frame order or callbacks. */
   batchWrites?(): void;

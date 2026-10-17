@@ -1,7 +1,6 @@
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
-import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -25,10 +24,6 @@ import {
   withScopedOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyBehavior,
 } from "./openclaw-agent-db-readonly-scope.js";
-import {
-  assertCanonicalAgentPersistenceVersion,
-  assertSupportedAgentSchemaVersion,
-} from "./openclaw-agent-db-schema-read.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -124,10 +119,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     return readOpenClawAgentDatabaseSnapshot(processOpened, operation);
   }
   // The migration owner publishes changes to the handle's shared schema admission.
-  return runSqliteReadOperationSync(processOpened.db, () => {
-    const userVersion = assertSupportedAgentSchemaVersion(processOpened.db, pathname);
-    assertCanonicalAgentPersistenceVersion(processOpened.db, pathname, userVersion);
-    assertCanonicalSessionValidationSchema(processOpened.db);
-    return readOpenClawAgentDatabase(processOpened, operation);
-  });
+  return runSqliteReadOperationSync(processOpened.db, () =>
+    readOpenClawAgentDatabase(processOpened, operation),
+  );
 }

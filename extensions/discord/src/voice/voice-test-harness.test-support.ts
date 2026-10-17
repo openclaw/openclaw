@@ -3,7 +3,8 @@ import { VoiceOpcodes } from "discord-api-types/voice/v8";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TranscriptStartRequest } from "openclaw/plugin-sdk/transcripts";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import {
   createDefaultVoiceStates,
@@ -37,6 +38,12 @@ type DiscordConfig = ManagerParams["discordConfig"];
 type VoiceConfig = NonNullable<DiscordConfig["voice"]>;
 type AgentProxyConfigOverrides = Omit<Partial<DiscordConfig>, "voice"> & {
   voice?: Partial<VoiceConfig>;
+};
+
+export type DiscordVoiceRecordingFixture = {
+  manager: Manager;
+  onUtterance: Mock<TranscriptStartRequest["onUtterance"]>;
+  entry: VoiceSessionEntry;
 };
 
 const { configureVoiceStateGateway, createClient, createClientWithMember } =
@@ -369,9 +376,11 @@ function buildVoiceTestHarness() {
   };
 
   return {
-    createRecordingFixture: async (config?: AgentProxyConfigOverrides) => {
+    createRecordingFixture: async (
+      config?: AgentProxyConfigOverrides,
+    ): Promise<DiscordVoiceRecordingFixture> => {
       const manager = createAgentProxyManager(undefined, config);
-      const onUtterance = vi.fn();
+      const onUtterance = vi.fn<TranscriptStartRequest["onUtterance"]>();
       expect(await startTranscripts(manager, onUtterance)).toMatchObject({ ok: true });
       return { manager, onUtterance, entry: getSessionEntry(manager) };
     },

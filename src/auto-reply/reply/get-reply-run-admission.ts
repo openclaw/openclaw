@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -391,15 +390,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       clearCommandLane(sessionLaneKey);
     }
   }
-  const agentHarnessPolicy = useFastReplyRuntime
-    ? undefined
-    : resolveAgentHarnessPolicy({
-        provider,
-        modelId: model,
-        config: cfg,
-        agentId,
-        sessionKey: context.runtimePolicySessionKey,
-      });
   const resolveRuntimeAuthProfile = async () => {
     if (useFastReplyRuntime && !params.configuredProfileId && !modelState.operatorModelOverride) {
       return {
@@ -433,7 +423,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       modelId: model,
       agentId,
       configuredProfileId: params.configuredProfileId,
-      ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       reader:
         providedReplyOperation?.key === authSessionKey

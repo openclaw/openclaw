@@ -53,6 +53,8 @@ import {
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
@@ -75,6 +77,51 @@ vi.mock("../infra/owned-directory-observation.js", () => ({
 }));
 
 describe("canonical proof on physical database validation", () => {
+  it.each(["ordinary close", "fixture retirement"] as const)(
+    "handles a removed fixture's queued observation after %s",
+    async (cleanup) => {
+      await withReceiptFixture(false, async (database) => {
+        const captured = captureOpenClawAgentDatabaseReadValidation(database)!;
+        const successor = independentWorkerReceipt(database);
+        const root = path.dirname(database.path);
+        const observer = observedValidationDirectories.findLast(
+          (candidate) => candidate.active && candidate.directory === root,
+        );
+        expect(observer).toBeDefined();
+        expect(successor.receiptId).not.toBe(captured.validation.receiptId);
+        expect(successor.valid).not.toBe(captured.validation.valid);
+        expect(successor.canonicalReady).not.toBe(captured.validation.canonicalReady);
+
+        await closeOpenClawAgentDatabasesAsync(root);
+        expect(observer!.active).toBe(true);
+        expect(Atomics.load(new Int32Array(captured.validation.valid), 0)).toBe(1);
+        if (cleanup === "fixture retirement") {
+          closeOpenClawAgentDatabasesForTest(root);
+          expect(observer!.active).toBe(false);
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+        }
+        fs.rmSync(root, { recursive: true, force: true });
+
+        // Model a worker publishing a new receipt after dev:ino/birthtime reuse,
+        // without depending on the host filesystem's inode allocation policy.
+        const target = {
+          agentId: database.agentId,
+          path: path.join(path.dirname(root), "successor", path.basename(database.path)),
+        };
+        const publish = captureOpenClawAgentDatabaseValidationTransfer(target);
+        expect(publish(successor.identity, successor)).toBe(true);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(target)?.valid).toBe(successor.valid);
+        expect(Atomics.load(new Int32Array(successor.valid), 0)).toBe(1);
+
+        // Deliver even after close: a queued callback must not find retired path trust.
+        observer!.notify(path.basename(database.path));
+        expect(Atomics.load(new Int32Array(successor.valid), 0)).toBe(
+          cleanup === "fixture retirement" ? 1 : 0,
+        );
+      });
+    },
+  );
+
   it.each(["observation", "reader admission"] as const)(
     "retains read validation across native close and detects replacement through %s",
     async (invalidation) => {

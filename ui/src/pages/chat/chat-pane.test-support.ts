@@ -45,7 +45,6 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid as mountSolidRoot } from "../../test-helpers/mount-solid.ts";
-import { createChatErrorState } from "./chat-error-state.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
@@ -55,7 +54,7 @@ import {
 } from "./chat-pane-runtime.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
-import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -228,7 +227,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   syncHistoryObserver: () => void;
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
-  loadOlderMessages: () => Promise<void>;
+  loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
   resetOlderMessagesViewport: () => void;
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
@@ -477,7 +476,12 @@ export function createSessionContext(
     },
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },
-    placementStartup: { get: vi.fn(() => null), hasPendingTurn: () => false, pause: vi.fn() },
+    placementStartup: {
+      get: vi.fn(() => null),
+      hasPendingTurn: () => false,
+      pause: vi.fn(),
+      subscribe: () => () => {},
+    },
     sessions,
   } as unknown as Omit<ApplicationContext, FixtureContextServices> & {
     sessions?: SessionCapability;
@@ -505,6 +509,17 @@ export function createTestChatPane(params: {
   client: GatewayBrowserClient;
   sessions?: SessionCapability;
 }) {
+  if (params.sessions) {
+    // Panes sharing a synthetic capability must keep the same owner and live getters.
+    const defaults = Object.getOwnPropertyDescriptors(
+      createSessionCapabilityFixture(params.sessions),
+    );
+    for (const [key, descriptor] of Object.entries(defaults)) {
+      if (!(key in params.sessions)) {
+        Object.defineProperty(params.sessions, key, descriptor);
+      }
+    }
+  }
   const context = createSessionContext(params.client, params.sessions);
   // SAFETY: TestChatPane declares the protected controller surface forwarded by the test host.
   const pane = createPaneTestHost(
@@ -515,47 +530,35 @@ export function createTestChatPane(params: {
     configurable: true,
     value: true,
   });
-  const requestUpdate = vi.fn();
+  pane.context = context;
+  const renderLifecycle = pane.chatState.createRenderLifecycle();
+  const requestUpdate = vi.spyOn(renderLifecycle, "invalidate");
   const chatMessagesBySession: ChatMessageCache = new Map();
-  const state = Object.assign(createChatErrorState(), {
-    agentsList: null,
-    assistantAgentId: null,
-    chatAttachments: [],
-    chatComposerFallbackByScope: {},
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessages: [],
-    chatMessagesBySession,
-    chatToolMessages: [],
-    chatModelCatalog: [],
-    chatModelCatalogError: null,
-    chatModelsLoading: false,
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    client: params.client,
-    connected: true,
-    connectionEpoch: 4,
-    hello: sessionMutationGatewayHello(),
-    modelAuthStatusRequestVersion: 0,
-    requestUpdate,
-    sessionKey: "agent:main:current",
-    sessions: context.sessions,
-    sessionsError: null,
-    sessionsLoading: false,
-    settings: loadSettings(),
-    sidebarContent: null,
-    sidebarFocusPanelId: "",
-    sidebarFocusVersion: 0,
-    sidebarLayout: { columns: [] },
-    ...createInitialChatRealtimeState(),
-    // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
-    handleChatScroll: vi.fn(),
-    resetToolStream: vi.fn(),
-    renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
-  }) as unknown as ChatPageHost;
-  attachChatRealtimeActions(state);
+  const state: ChatPageHost = Object.assign(
+    createPageState(
+      context,
+      renderLifecycle,
+      {
+        sessionKey: "agent:main:current",
+        dispatchEvent: (event) => pane.element.dispatchEvent(event),
+        querySelector: (selector) => pane.element.querySelector(selector),
+      },
+      chatMessagesBySession,
+    ),
+    {
+      agentsList: null,
+      assistantAgentId: null,
+      client: params.client,
+      connected: true,
+      connectionEpoch: 4,
+      hello: sessionMutationGatewayHello(),
+      sidebarFocusPanelId: "",
+      sidebarLayout: { columns: [] },
+      // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
+      handleChatScroll: vi.fn(),
+      resetToolStream: vi.fn(),
+    },
+  );
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;
   };
@@ -563,8 +566,8 @@ export function createTestChatPane(params: {
     state.sidebarFocusPanelId = panelId;
     state.sidebarFocusVersion += 1;
   };
-  pane.context = context;
   pane.state = state;
+  pane.chatState.attach(state);
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
   const applyGatewaySnapshot = pane.applyGatewaySnapshot.bind(pane);

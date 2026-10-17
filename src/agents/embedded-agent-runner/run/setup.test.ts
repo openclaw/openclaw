@@ -162,12 +162,12 @@ describe("resolveHookModelSelection", () => {
     expect(hookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
   });
 
-  it("passes attachment metadata to before_model_resolve hooks", async () => {
+  it("passes attachment metadata and normalizes the provider returned by routing hooks", async () => {
     const attachments = [{ kind: "image" as const, mimeType: "image/png" }];
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_model_resolve"),
       runBeforeModelResolve: vi.fn(async () => ({
-        providerOverride: "vision-provider",
+        providerOverride: "  VISION-PROVIDER  ",
         modelOverride: "vision-model",
       })),
     };

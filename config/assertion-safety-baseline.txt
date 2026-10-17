@@ -47,7 +47,7 @@ extensions/browser/src/browser/chrome.executables.ts	1
 extensions/browser/src/browser/chrome.ts	4
 extensions/browser/src/browser/client-fetch.ts	2
 extensions/browser/src/browser/errors.ts	4
-extensions/browser/src/browser/extension-install-layout.ts	4
+extensions/browser/src/browser/extension-install-layout.ts	3
 extensions/browser/src/browser/extension-relay/auth-v2.ts	4
 extensions/browser/src/browser/extension-relay/relay-bridge.ts	7
 extensions/browser/src/browser/extension-relay/relay-protocol.ts	1

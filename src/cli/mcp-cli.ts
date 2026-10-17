@@ -1,4 +1,3 @@
-import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -28,7 +27,7 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { canAccess, safeStat } from "../infra/path-existence.js";
+import { executableFileExists, safeStat } from "../infra/path-existence.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
@@ -342,16 +341,6 @@ function resolveConfiguredPath(filePath: string, cwd: unknown): string {
   return path.resolve(base, filePath);
 }
 
-async function isExecutable(filePath: string): Promise<boolean> {
-  // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
-  return (
-    (await canAccess(
-      filePath,
-      process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK,
-    )) && (await safeStat(filePath))?.isFile() === true
-  );
-}
-
 function executableCandidates(command: string): string[] {
   if (process.platform !== "win32") {
     return [command];
@@ -374,7 +363,7 @@ async function commandExists(
   const hasPathSeparator =
     path.isAbsolute(command) || command.includes("/") || command.includes("\\");
   if (hasPathSeparator) {
-    return isExecutable(resolveConfiguredPath(command, cwd));
+    return executableFileExists(resolveConfiguredPath(command, cwd));
   }
   const configuredPath =
     process.platform === "win32" ? resolveEnvironmentValue(env, "PATH") : env?.PATH;
@@ -386,7 +375,7 @@ async function commandExists(
       ? pathEntry
       : resolveConfiguredPath(pathEntry, cwd);
     for (const candidate of executableCandidates(command)) {
-      if (await isExecutable(path.join(resolvedPathEntry, candidate))) {
+      if (await executableFileExists(path.join(resolvedPathEntry, candidate))) {
         return true;
       }
     }

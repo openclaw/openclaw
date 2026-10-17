@@ -168,11 +168,13 @@ export function reconcileMemoryChunkFtsRows(
   ftsTable: string,
   force = false,
 ): void {
+  // Admitted body FTS DDL keeps the default columnsize=1, so FTS5 stores one %_docsize row per
+  // document; counting it returns COUNT(*) of the FTS table without a full scan of %_content.
   const rowCounts = db
     .prepare(
       `SELECT
          (SELECT COUNT(*) FROM ${MEMORY_INDEX_CHUNKS_TABLE}) AS canonical_count,
-         (SELECT COUNT(*) FROM ${ftsTable}) AS derived_count`,
+         (SELECT COUNT(*) FROM ${ftsTable}_docsize) AS derived_count`,
     )
     // SAFETY: both scalar aggregate subqueries always return their named numeric columns.
     .get() as { canonical_count: number; derived_count: number };

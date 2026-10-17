@@ -6,7 +6,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildGatewayInstallPlan } from "../commands/daemon-install-helpers.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import type { ExecResult } from "./exec-file.js";
+import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput as serializeSystemdUnitProperties,
@@ -703,6 +705,66 @@ describe("readSystemdServiceRuntime", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   });
 
+  it.each(["availability", "command", "recorded-command"] as const)(
+    "preserves unsettled native cleanup from runtime %s inspection",
+    async (source) => {
+      const error = new CommandProcessCleanupError();
+      if (source === "command") {
+        mockMissingBase();
+      }
+      execFileMock.mockImplementation((_command, args, _options, callback) => {
+        if (source === "availability" || !args.includes("status")) {
+          throw error;
+        }
+        callback(null, "", "");
+      });
+
+      await expect(
+        readSystemdServiceRuntime(
+          { HOME: TEST_MANAGED_HOME },
+          source === "availability"
+            ? {
+                systemdReadTarget: {
+                  scope: "user",
+                  unitName: GATEWAY_SERVICE,
+                  unitPath: "/unused/openclaw-gateway.service",
+                },
+              }
+            : source === "recorded-command"
+              ? { commandInspection: { kind: "unavailable", error } }
+              : undefined,
+        ),
+      ).rejects.toBe(error);
+    },
+  );
+
+  it("does not hide a native ownership refusal as unknown runtime status", async () => {
+    const error = new ServiceOwnershipRefusalError("systemd-manager-changed");
+    versionFixture.useScenarioResponse = true;
+    existsSyncMock.mockImplementation((file) =>
+      pathLikeToString(file).endsWith("/systemd/private"),
+    );
+    execFileMock.mockImplementation((_command, _args, _options, callback) => {
+      callback(createExecFileError("manager unavailable"), "", "");
+    });
+    vi.spyOn(await import("./systemd-peer-native.js"), "openSystemdUserManager").mockRejectedValue(
+      error,
+    );
+
+    await expect(
+      readSystemdServiceRuntime(
+        { HOME: TEST_MANAGED_HOME },
+        {
+          systemdReadTarget: {
+            scope: "user",
+            unitName: GATEWAY_SERVICE,
+            unitPath: "/unused/openclaw-gateway.service",
+          },
+        },
+      ),
+    ).rejects.toBe(error);
+  });
+
   async function readRuntimeFromShowOutput(output: string) {
     execFileMock.mockReset();
     execFileMock
@@ -819,6 +881,16 @@ describe("readSystemdServiceRuntime", () => {
 });
 
 describe("readSystemdServiceExecStart", () => {
+  it("preserves unsettled cleanup instead of returning a managed command fallback", async () => {
+    mockReadGatewayServiceFile(gatewayUnit());
+    const error = new CommandProcessCleanupError();
+    execFileMock.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    await expect(readCommand()).rejects.toBe(error);
+  });
+
   it.each(["uid", "revoked-before", "revoked-load", "manager-change"] as const)(
     "reads a collected definition only with current recovery ownership (%s)",
     async (fault) => {
@@ -1730,6 +1802,54 @@ describe("systemd service install and uninstall", () => {
       } else {
         expect(warn).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each(["ordinary", "cleanup"] as const)(
+    "keeps post-install inspection failures distinct: %s",
+    async (kind) => {
+      const { env, unitPath } = await createSystemdFixture("node");
+      await writeUnitFixture(unitPath, "[Service]\nExecStart=/usr/bin/openclaw node run\n");
+      mockSystemdManagerSnapshot({
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: ["OPENCLAW_SYSTEMD_UNIT=openclaw-node"],
+        fragmentPath: unitPath,
+      });
+      const failure =
+        kind === "cleanup"
+          ? new CommandProcessCleanupError()
+          : new Error("fixture optional inspection failure");
+      let activated = false;
+      let failed = false;
+      const managerQuery = expectDefined(execFileMock.getMockImplementation(), "manager fixture");
+      execFileMock.mockImplementation((command, args, options, callback) => {
+        if (command === "systemctl") {
+          activated ||= args.includes("restart");
+          callback(null, args.includes("is-enabled") ? "enabled\n" : "", "");
+          return;
+        }
+        if (activated) {
+          failed = true;
+          throw failure;
+        }
+        managerQuery(command, args, options, callback);
+      });
+      const { write, stdout } = createWritableStreamMock();
+      const operation = installSystemdService({
+        ...systemdServiceFixture(env, "node", { warn: vi.fn() }),
+        stdout,
+      });
+
+      if (kind === "ordinary") {
+        await expect(operation).resolves.toEqual({ unitPath });
+        expect(write).toHaveBeenCalled();
+      } else {
+        await expect(operation).rejects.toBe(failure);
+        expect(write).not.toHaveBeenCalled();
+      }
+      expect(activated).toBe(true);
+      expect(failed).toBe(true);
     },
   );
 

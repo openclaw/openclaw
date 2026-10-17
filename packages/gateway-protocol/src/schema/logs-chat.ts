@@ -44,6 +44,7 @@ export const ChatHistoryParamsSchema = closedObject({
     closedObject({
       pendingInputs: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
       sessionInfo: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      commands: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
     }),
   ),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),

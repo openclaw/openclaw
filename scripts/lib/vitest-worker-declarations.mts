@@ -187,6 +187,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
+  "gateway/dashboard-session-title-runtime.test-support":
+    "src/gateway/dashboard-session-title-runtime.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
   "worker/worker-runtime-background-exec-entrypoints.test-support":
     "src/worker/worker-runtime-background-exec-entrypoints.test-support.ts",

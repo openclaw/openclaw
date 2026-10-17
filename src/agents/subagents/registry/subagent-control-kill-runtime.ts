@@ -608,12 +608,6 @@ export async function mutateSubagentRunForKill(
         return await settleTargetCancellation();
       }
       try {
-        if (!ownsSessionIncarnation()) {
-          return releaseChangedSessionKill(claimedKill);
-        }
-        if (!killOwnerCurrent()) {
-          return { killed: false, superseded: true };
-        }
         if (readFailure || declined || acceptance.callerFailure) {
           // Missing caller facts or revocation fence new effects, but the accepted
           // interruption's exact claim still owns settlement.

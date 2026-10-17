@@ -95,7 +95,7 @@ export async function loadChatHistory(
       deferBranches: opts.deferBranches === true,
       promise: Promise.resolve<ObservedChatHistoryResult | undefined>(undefined),
     };
-    refresh.promise = inFlight.promise.then(() => {
+    refresh.promise = inFlight.request.then(() => {
       if (
         requests.historyVersion !== version ||
         !connectionIsCurrent() ||
@@ -121,7 +121,7 @@ export async function loadChatHistory(
     requestKeyPrefix,
   ).then((result) => {
     const current = requests.historyLoad;
-    if (current.phase === "in-flight" && current.promise === promise) {
+    if (current.phase === "in-flight" && current.request === promise) {
       if (result) {
         // Appends can invalidate branch tips while this coalesced history read is pending.
         // Check freshness on settlement so that invalidation is not lost to its early return.
@@ -165,18 +165,23 @@ export async function loadChatHistory(
     }
     return result;
   });
-  setChatHistoryLoad(state, {
+  const load: Extract<ReturnType<typeof getChatHistoryLoadState>, { phase: "in-flight" }> = {
     phase: "in-flight",
     sessions,
     client,
     connectionEpoch,
     key: requestKey,
+    request: promise,
     promise,
     sessionKey,
     requestAgentId,
     startup,
-  });
-  return promise;
+  };
+  // Consumers await the current snapshot, including replacements admitted while
+  // this read is pending. Refresh scheduling waits only for the raw request.
+  load.promise = promise.then((result) => load.refresh?.promise ?? result);
+  setChatHistoryLoad(state, load);
+  return load.promise;
 }
 
 export function resumePendingChatHistoryLoad(

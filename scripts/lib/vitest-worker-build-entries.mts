@@ -48,6 +48,7 @@ import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config
 import { sessionNativeProcessEntrypoints } from "../../src/config/sessions/native-process-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-env-runtime.test-support.ts";
+import { dashboardTitleRuntimeEntrypoints } from "../../src/gateway/dashboard-session-title-runtime.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
@@ -376,6 +377,7 @@ export const vitestWorkerBuildEntries = {
       : []),
     ...Object.values(tuiPtyRuntimeEntrypoints),
     ...Object.values(sessionTitleRetentionEntrypoints),
+    ...Object.values(dashboardTitleRuntimeEntrypoints),
     sessionChildCacheRetentionEntrypoint,
     nodeHostConfigRuntimeEntrypoint,
     ...Object.values(workerBackgroundExecEntrypoints),

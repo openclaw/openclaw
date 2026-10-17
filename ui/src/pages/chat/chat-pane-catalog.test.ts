@@ -30,7 +30,7 @@ import {
 function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = {} as SessionCapability;
-  const { pane, requestUpdate, state } = createTestChatPane({ client, sessions });
+  const { pane, state } = createTestChatPane({ client, sessions });
   const key = {
     catalogId: "codex",
     hostId: "gateway:local",
@@ -52,7 +52,7 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
     canArchive: true,
   };
   pane.onPaneSessionChange = vi.fn();
-  return { client, key, pane, requestUpdate, sessions, sourceSessionKey, state };
+  return { client, key, pane, sessions, sourceSessionKey, state };
 }
 
 describe("catalog transcript cache", () => {
