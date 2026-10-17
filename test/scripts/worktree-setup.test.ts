@@ -55,11 +55,7 @@ function makePreparationFixture() {
     delete env[key];
   }
   const git = (...args: string[]) =>
-    execFileSync("git", args, {
-      cwd: rootDir,
-      env,
-      encoding: "utf8",
-    });
+    execFileSync("git", args, { cwd: rootDir, env, encoding: "utf8" });
   for (const input of COLD_SCRIPT_INPUTS) {
     write(input, fs.readFileSync(path.join(repoRoot, input), "utf8"));
   }
@@ -141,12 +137,7 @@ function makePreparationFixture() {
   );
   Object.assign(env, {
     npm_execpath: pnpmPath,
-    PATH:
-      controls +
-      path.delimiter +
-      path.dirname(process.execPath) +
-      path.delimiter +
-      (env.PATH ?? ""),
+    PATH: [controls, path.dirname(process.execPath), env.PATH ?? ""].join(path.delimiter),
     SETUP_TEST_CALLS: callsPath,
     SETUP_TEST_VERSION: pin.slice("pnpm@".length).split("+")[0],
     SETUP_TEST_STORE: path.join(controls, "store", "not-created"),

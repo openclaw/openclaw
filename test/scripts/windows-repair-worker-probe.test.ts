@@ -17,6 +17,36 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const nodeExecPath = requireNodeTool("node");
 
+async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, contents);
+  }
+}
+
+function runOwnerScript(packageRoot: string, tarball: string, script: string, args: string[] = []) {
+  return spawnSync(
+    nodeExecPath,
+    [
+      "--input-type=module",
+      "--eval",
+      script,
+      pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
+      packageRoot,
+      tarball,
+      ...args,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+function expectUnverified(result: ReturnType<typeof runOwnerScript>, message: string) {
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(message);
+  expect(result.stdout).not.toContain("UNVERIFIED_MODULE_EVALUATED");
+}
+
 async function fixture(
   files: Record<string, string>,
   bundled: Record<string, string> = {},
@@ -31,16 +61,8 @@ async function fixture(
   const packageRoot = path.join(root, "package");
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
   await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify(manifest));
-  for (const [name, contents] of Object.entries(files)) {
-    const file = path.join(packageRoot, "dist", name);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, contents);
-  }
-  for (const [name, contents] of Object.entries(bundled)) {
-    const file = path.join(packageRoot, "node_modules", name);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, contents);
-  }
+  await writeFiles(path.join(packageRoot, "dist"), files);
+  await writeFiles(path.join(packageRoot, "node_modules"), bundled);
   const lifecycleMarker = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
   await fs.writeFile(lifecycleMarker, "pending\n");
   const tarball = path.join(root, "candidate.tgz");
@@ -63,13 +85,10 @@ async function inspectPackagedOwner(
   evidence: PackagedOwnerEvidence[];
 }> {
   // Package integrity hooks belong to the Node-hosted repair tooling.
-  return JSON.parse(
-    execFileSync(
-      nodeExecPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `const { createPackagedOwnerLoader } = await import(process.argv[1]);
+  const result = runOwnerScript(
+    packageRoot,
+    tarball,
+    `const { createPackagedOwnerLoader } = await import(process.argv[1]);
          const loadOwner = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
          const evidence = [];
          const values = {};
@@ -81,15 +100,15 @@ async function inspectPackagedOwner(
            }
            process.stdout.write(JSON.stringify({ loaderType: typeof loadOwner, values, evidence }));
          } finally { loadOwner[Symbol.dispose](); }`,
-        pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
-        packageRoot,
-        tarball,
-        stem,
-        JSON.stringify(names),
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ),
+    [stem, JSON.stringify(names)],
   );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout);
+  }
+  return JSON.parse(result.stdout);
 }
 
 it("verifies a package member without system tar and rejects changed installed bytes", async () => {
@@ -233,12 +252,10 @@ it.each(["owner", "static", "computed", "lazy", "bundled"])(
         : kind === "bundled"
           ? 'module.exports = "changed";'
           : 'export const value = "changed";');
-    const result = spawnSync(
-      nodeExecPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import { writeFile } from "node:fs/promises";
+    const result = runOwnerScript(
+      packageRoot,
+      tarball,
+      `import { writeFile } from "node:fs/promises";
          const { createPackagedOwnerLoader } = await import(process.argv[1]);
          const replace = () => writeFile(process.argv[4], process.argv[5]);
          const loadOwner = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
@@ -248,17 +265,9 @@ it.each(["owner", "static", "computed", "lazy", "bundled"])(
            if (${JSON.stringify(kind)} === "lazy") await replace();
            await owner.admit();
          } finally { loadOwner[Symbol.dispose]?.(); }`,
-        pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
-        packageRoot,
-        tarball,
-        target,
-        changed,
-      ],
-      { encoding: "utf8" },
+      [target, changed],
     );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Installed module differs from the bound package");
-    expect(result.stdout).not.toContain("UNVERIFIED_MODULE_EVALUATED");
+    expectUnverified(result, "Installed module differs from the bound package");
   },
 );
 
@@ -290,12 +299,10 @@ it.each(["alias", "self", "absolute"])(
       path.join(external, "index.cjs"),
       'console.log("UNVERIFIED_MODULE_EVALUATED"); module.exports = "changed";',
     );
-    const result = spawnSync(
-      nodeExecPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import { rm, symlink } from "node:fs/promises";
+    const result = runOwnerScript(
+      packageRoot,
+      tarball,
+      `import { rm, symlink } from "node:fs/promises";
        const { createPackagedOwnerLoader } = await import(process.argv[1]);
        const load = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
        try {
@@ -303,17 +310,9 @@ it.each(["alias", "self", "absolute"])(
          await symlink(process.argv[5], process.argv[4], "junction");
          await load("executor", ["admit"], []);
        } finally { load[Symbol.dispose]?.(); }`,
-        pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
-        packageRoot,
-        tarball,
-        path.join(packageRoot, "dist", "target"),
-        external,
-      ],
-      { encoding: "utf8" },
+      [path.join(packageRoot, "dist", "target"), external],
     );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unbound installed package member");
-    expect(result.stdout).not.toContain("UNVERIFIED_MODULE_EVALUATED");
+    expectUnverified(result, "Unbound installed package member");
   },
 );
 
@@ -332,12 +331,10 @@ it("scopes import hooks to their loader lifetime while preserving external depen
   await fs.mkdir(external, { recursive: true });
   await fs.writeFile(path.join(external, "package.json"), '{"name":"external","main":"index.cjs"}');
   await fs.writeFile(path.join(external, "index.cjs"), 'module.exports = "-external";');
-  const result = spawnSync(
-    nodeExecPath,
-    [
-      "--input-type=module",
-      "-e",
-      `import assert from "node:assert/strict";
+  const result = runOwnerScript(
+    packageRoot,
+    tarball,
+    `import assert from "node:assert/strict";
      const { createPackagedOwnerLoader } = await import(process.argv[1]);
      const first = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
      const second = await createPackagedOwnerLoader(process.argv[2], process.argv[3]);
@@ -347,11 +344,6 @@ it("scopes import hooks to their loader lifetime while preserving external depen
        const owner = await second("executor", ["admit"], []);
        assert.equal(await owner.admit(), "original-external");
      } finally { first[Symbol.dispose](); second[Symbol.dispose](); }`,
-      pathToFileURL(path.resolve("scripts/lib/windows-repair-package.mts")).href,
-      packageRoot,
-      tarball,
-    ],
-    { encoding: "utf8" },
   );
   expect(result.status, result.stderr || result.stdout).toBe(0);
 });
@@ -432,11 +424,7 @@ it("authenticates a bundled package after npm pack and offline installation", as
     "node_modules/bundled/package.json": '{"name":"bundled","version":"1.0.0"}',
     "node_modules/bundled/index.js": "module.exports = 1;",
   };
-  for (const [name, contents] of Object.entries(files)) {
-    const file = path.join(source, name);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, contents);
-  }
+  await writeFiles(source, files);
   await fs.mkdir(consumer);
   await fs.writeFile(path.join(consumer, "package.json"), '{"private":true}');
   const tarball = path.join(root, "proof-fixture-1.0.0.tgz");

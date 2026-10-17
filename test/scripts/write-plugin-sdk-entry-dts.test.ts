@@ -26,6 +26,13 @@ const WRITER_TEST_TIMEOUT_MS = process.platform === "win32" ? 360_000 : 120_000;
 
 const it = createDeclarationTest();
 
+function expectCompiled(result: { status: number | null; stdout: string; stderr: string }) {
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(
+    (result.stdout + result.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
+  ).toHaveLength(1);
+}
+
 describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () => {
   // POSIX uses the nested-writer retention case in dist-artifact-ownership.test.ts.
   it.skipIf(process.platform !== "win32").concurrent(
@@ -81,10 +88,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         "tsdown.config.ts",
         ...Object.keys(declarations).flatMap((name) => ["--filter", name]),
       ]);
-      expect(direct.status, direct.stdout + direct.stderr).toBe(0);
-      expect(
-        (direct.stdout + direct.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
-      ).toHaveLength(1);
+      expectCompiled(direct);
       expect(treeHashes(path.join(root, "compiler-inputs"))).toEqual(before);
       expectOutputs(root, production, Object.keys(treeHashes(path.join(root, "dist"))));
       expectStagingClean(root);
@@ -170,10 +174,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       }
 
       const initial = await runWriter(command, root);
-      expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-      expect(
-        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
-      ).toHaveLength(1);
+      expectCompiled(initial);
       const before = treeHashes(path.join(root, "dist"));
       expectOutputs(root, production, Object.keys(before));
       expectStagingClean(root);
@@ -197,10 +198,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
 
       // Identical sources with a different QA selection must emit the extra canonical entries.
       const privateQa = await runWriter(command, root, true);
-      expect(privateQa.status, privateQa.stdout + privateQa.stderr).toBe(0);
-      expect(
-        (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
-      ).toHaveLength(1);
+      expectCompiled(privateQa);
       const priorOutputs = treeHashes(path.join(root, "dist"));
       expectOutputs(root, qa, Object.keys(priorOutputs));
       expectStagingClean(root);
@@ -209,10 +207,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       fs.rmSync(path.join(root, "contracts/before.ts"));
       write("dist/plugin-sdk/obsolete.d.ts", "obsolete flat declaration");
       const changed = await runWriter(command, root, true);
-      expect(changed.status, changed.stdout + changed.stderr).toBe(0);
-      expect(
-        (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
-      ).toHaveLength(1);
+      expectCompiled(changed);
       const first = treeHashes(path.join(root, "dist"));
       const cachedDistFiles = new Set(
         declarationCacheRecords(root).flatMap((record) =>

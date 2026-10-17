@@ -1,4 +1,3 @@
-// Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs, { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -7,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as waitForRuntimeTick } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
@@ -61,6 +59,43 @@ const sourceHelpRenderers = {
   renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
   renderSourceSubcommandHelpTextRecord: sourceSubcommandHelp,
 };
+
+type WrittenMetadata = {
+  channelOptions: string[];
+  generatorSignature: string;
+  rootHelpText: string;
+  browserHelpText: string;
+  secretsHelpText: string;
+  nodesHelpText: string;
+  subcommandHelpText: ReturnType<typeof sourceSubcommandHelp>;
+};
+const readMetadata = (file: string): WrittenMetadata => JSON.parse(readFileSync(file, "utf8"));
+
+function spawnHelp(
+  args: string[],
+  overrides: Partial<Parameters<typeof testing.spawnText>[1]> = {},
+) {
+  return testing.spawnText(args, {
+    cwd: process.cwd(),
+    env: process.env,
+    failureMessage: "render failed",
+    killGraceMs: 25,
+    maxOutputBytes: 1024,
+    timeoutMs: 5_000,
+    ...overrides,
+  });
+}
+
+function descendantScript(markerPath: string, terminal: string) {
+  const grandchild = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+  return [
+    "const { spawn } = await import('node:child_process');",
+    "const { writeFileSync } = await import('node:fs');",
+    `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(grandchild)}], { stdio: "ignore" });`,
+    `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
+    terminal,
+  ].join("\n");
+}
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
   const filePath = path.join(rootDir, relativePath);
@@ -141,13 +176,16 @@ afterAll(async () => {
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
-  function metadataFixture(prefix: string) {
+  function metadataFixture(prefix: string, bundled = true) {
     const tempRoot = createTempDir(prefix);
     const distDir = path.join(tempRoot, "dist");
     const extensionsDir = path.join(tempRoot, "extensions");
     const outputPath = path.join(distDir, "cli-startup-metadata.json");
     writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+    mkdirSync(distDir, { recursive: true });
+    if (bundled) {
+      writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+    }
     return { sourceRootDir: tempRoot, distDir, extensionsDir, outputPath };
   }
 
@@ -253,14 +291,8 @@ describe("write-cli-startup-metadata", () => {
     const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
     const streamError = new Error(`${streamName} pipe failed`);
 
-    const render = testing.spawnText(["--help"], {
-      cwd: process.cwd(),
-      env: process.env,
-      failureMessage: "render failed",
-      killGraceMs: 25,
-      maxOutputBytes: 1024,
+    const render = spawnHelp(["--help"], {
       spawnProcess: spawnProcess as typeof spawn,
-      timeoutMs: 5_000,
     });
     child[streamName].emit("error", streamError);
     child.emit("close", null, "SIGTERM");
@@ -277,14 +309,9 @@ describe("write-cli-startup-metadata", () => {
   it("preserves an output-limit failure when shutdown also errors a stream", async () => {
     const child = createSpawnTextChild();
     const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
-    const render = testing.spawnText(["--help"], {
-      cwd: process.cwd(),
-      env: process.env,
-      failureMessage: "render failed",
-      killGraceMs: 25,
+    const render = spawnHelp(["--help"], {
       maxOutputBytes: 5,
       spawnProcess: spawnProcess as typeof spawn,
-      timeoutMs: 5_000,
     });
 
     child.stdout.emit("data", "123456");
@@ -442,104 +469,6 @@ describe("write-cli-startup-metadata", () => {
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const repoRoot = fs.realpathSync(process.cwd());
       const workerArgs = resolveRuntimeWorkerArgv(metadataUrl).slice(0, -1);
-      const observerUrl = pathToFileURL(
-        path.join(repoRoot, "scripts/lib/managed-child-process.mts"),
-      ).href;
-      const importScript = `
-import assert from "node:assert/strict";
-import crypto from "node:crypto";
-import fs from "node:fs";
-const metadataUrl = ${JSON.stringify(metadataUrl.href)};
-const observerUrl = ${JSON.stringify(observerUrl)};
-const { testing } = await import(metadataUrl);
-const observer = await import(observerUrl);
-const exports = {
-  spawnText: typeof testing?.spawnText,
-  writeCliStartupMetadata: typeof testing?.writeCliStartupMetadata,
-  inspectManagedProcessGroup: typeof observer.inspectManagedProcessGroup,
-  waitForManagedProcessGroupExit: typeof observer.waitForManagedProcessGroupExit,
-};
-for (const type of Object.values(exports)) assert.equal(type, "function");
-const hash = (url) => crypto.createHash("sha256").update(fs.readFileSync(new URL(url))).digest("hex");
-console.log("SUPERVISED_IMPORT_PREFLIGHT " + JSON.stringify({
-  node: process.version, cwd: fs.realpathSync("."), metadataUrl, observerUrl,
-  metadataSha256: hash(metadataUrl), observerSha256: hash(observerUrl),
-  loaderPrefix: ${JSON.stringify(workerArgs)}, exports,
-}));
-`;
-      const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-help-import-"));
-      mkdirSync(path.join(importRoot, "home"));
-      const preflight = actualSpawn(
-        process.execPath,
-        [...workerArgs, "--input-type=module", "--eval", importScript],
-        {
-          cwd: repoRoot,
-          env: {
-            PATH: process.env.PATH,
-            HOME: path.join(importRoot, "home"),
-            TMPDIR: importRoot,
-            OPENCLAW_STATE_DIR: path.join(importRoot, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(importRoot, "state", "openclaw.json"),
-            LANG: "C.UTF-8",
-            CI: "1",
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      let importOutput = "";
-      let importError = "";
-      let importFailure: string | undefined;
-      let importJoined = false;
-      let importKill: ReturnType<typeof setTimeout> | undefined;
-      const stopImport = (reason: string) => {
-        if (importFailure) {
-          return;
-        }
-        importFailure = reason;
-        preflight.kill("SIGTERM");
-        importKill = setTimeout(() => preflight.kill("SIGKILL"), 2000);
-      };
-      const importDeadline = setTimeout(() => stopImport("import-only deadline exceeded"), 10_000);
-      preflight.stdout.on("data", (chunk: Buffer) => {
-        if (Buffer.byteLength(importOutput) + chunk.length <= 4096) {
-          importOutput += chunk.toString();
-        } else {
-          stopImport("import-only stdout bound exceeded");
-        }
-      });
-      preflight.stderr.on("data", (chunk: Buffer) => {
-        if (Buffer.byteLength(importError) + chunk.length <= 4096) {
-          importError += chunk.toString();
-        } else {
-          stopImport("import-only stderr bound exceeded");
-        }
-      });
-      try {
-        const result = await new Promise<{ code: number | null; signal: string | null }>(
-          (resolve) => {
-            preflight.once("error", (error) => {
-              importFailure = error.message;
-            });
-            preflight.once("close", (code, signal) => {
-              importJoined = true;
-              resolve({ code, signal });
-            });
-          },
-        );
-        expect(
-          importFailure,
-          "import-only gate precedes every process-tree fixture",
-        ).toBeUndefined();
-        expect(result, importError).toEqual({ code: 0, signal: null });
-        expect(importOutput).toContain("SUPERVISED_IMPORT_PREFLIGHT ");
-        console.log(importOutput.trim());
-      } finally {
-        clearTimeout(importDeadline);
-        clearTimeout(importKill);
-        if (importJoined) {
-          fs.rmSync(importRoot, { recursive: true, force: true });
-        }
-      }
       const actor = String.raw`
 import fs from "node:fs";
 import path from "node:path";
@@ -1009,27 +938,21 @@ finally:
             stdio: ["ignore", "pipe", "pipe"],
           },
         );
-        let stdout = "";
-        let stderr = "";
         let overflow = false;
         const term = setTimeout(() => child.kill("SIGTERM"), 45_000);
         const kill = setTimeout(() => child.kill("SIGKILL"), 60_000);
-        child.stdout.on("data", (chunk: Buffer) => {
-          if (Buffer.byteLength(stdout) + chunk.length <= 16_384) {
-            stdout += chunk.toString();
-          } else {
-            overflow = true;
-            child.kill("SIGTERM");
-          }
-        });
-        child.stderr.on("data", (chunk: Buffer) => {
-          if (Buffer.byteLength(stderr) + chunk.length <= 4096) {
-            stderr += chunk.toString();
-          } else {
-            overflow = true;
-            child.kill("SIGTERM");
-          }
-        });
+        const output = { stdout: "", stderr: "" };
+        for (const stream of ["stdout", "stderr"] as const) {
+          child[stream].on("data", (chunk: Buffer) => {
+            const limit = stream === "stdout" ? 16_384 : 4096;
+            if (Buffer.byteLength(output[stream]) + chunk.length <= limit) {
+              output[stream] += chunk.toString();
+            } else {
+              overflow = true;
+              child.kill("SIGTERM");
+            }
+          });
+        }
         try {
           const closed = await new Promise<{ code: number | null; signal: string | null }>(
             (resolve, reject) => {
@@ -1038,10 +961,10 @@ finally:
             },
           );
           expect(overflow, "fixture output exceeded its bound").toBe(false);
-          expect(closed, stderr).toEqual({ code: 0, signal: null });
-          const evidence = JSON.parse(stdout) as Probe;
+          expect(closed, output.stderr).toEqual({ code: 0, signal: null });
+          const evidence = JSON.parse(output.stdout) as Probe;
           settled = evidence.cleanup.joined;
-          console.log(`SUPERVISED_EXITED_DESCENDANT ${stdout.trim()}`);
+          console.log(`SUPERVISED_EXITED_DESCENDANT ${output.stdout.trim()}`);
           expect(
             evidence.fixtureError,
             "fixture setup/runtime is not the intended RED",
@@ -1198,26 +1121,14 @@ finally:
     async ({ signal }) => {
       const tempRoot = createTempDir("openclaw-startup-metadata-timeout-");
       const markerPath = path.join(tempRoot, "grandchild.pid");
-      const grandchildScript = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const parentScript = [
-        "const { spawn } = await import('node:child_process');",
-        "const { writeFileSync } = await import('node:fs');",
-        `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
-        `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+      const parentScript = descendantScript(
+        markerPath,
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      );
 
       await expect(
-        testing.spawnText(["--input-type=module", "--eval", parentScript], {
+        spawnHelp(["--input-type=module", "--eval", parentScript], {
           cwd: tempRoot,
-          env: process.env,
-          failureMessage: "render failed",
-          killGraceMs: 25,
-          maxOutputBytes: 1024,
           timeoutMs: 500,
         }),
       ).rejects.toThrow("render failed: timed out after 500ms");
@@ -1234,27 +1145,13 @@ finally:
     async ({ signal }) => {
       const tempRoot = createTempDir("openclaw-startup-metadata-nonzero-tree-");
       const markerPath = path.join(tempRoot, "grandchild.pid");
-      const grandchildScript = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const parentScript = [
-        "const { spawn } = await import('node:child_process');",
-        "const { writeFileSync } = await import('node:fs');",
-        `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
-        `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
+      const parentScript = descendantScript(
+        markerPath,
         "process.stderr.write('leader failed\\n', () => process.exit(7));",
-      ].join("\n");
+      );
 
       await expect(
-        testing.spawnText(["--input-type=module", "--eval", parentScript], {
-          cwd: tempRoot,
-          env: process.env,
-          failureMessage: "render failed",
-          killGraceMs: 25,
-          maxOutputBytes: 1024,
-          timeoutMs: 5_000,
-        }),
+        spawnHelp(["--input-type=module", "--eval", parentScript], { cwd: tempRoot }),
       ).rejects.toThrow(/render failed: leader failed.*elapsed \d+ms/u);
 
       const grandchildPid = Number(readFileSync(markerPath, "utf8"));
@@ -1449,38 +1346,15 @@ finally:
       ...sourceHelpRenderers,
     });
 
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      browserHelpText: string;
-      channelOptions: string[];
-      generatorSignature: string;
-      nodesHelpText: string;
-      rootHelpText: string;
-      secretsHelpText: string;
-      subcommandHelpText: {
-        config: string;
-        doctor: string;
-        gateway: string;
-        models: string;
-        plugins: string;
-        sessions: string;
-      };
-    };
-    expect(written.channelOptions).toContain("matrix");
-    expect(written.generatorSignature).toMatch(/^[a-f0-9]{40}$/u);
-    expect(written.browserHelpText).toContain("Usage:");
-    expect(written.browserHelpText).toContain("openclaw browser");
-    expect(written.secretsHelpText).toContain("Usage:");
-    expect(written.secretsHelpText).toContain("openclaw secrets");
-    expect(written.nodesHelpText).toContain("Usage:");
-    expect(written.nodesHelpText).toContain("openclaw nodes");
-    expect(written.rootHelpText).toContain("Usage:");
-    expect(written.rootHelpText).toContain("openclaw");
-    expect(written.subcommandHelpText.config).toContain("openclaw config");
-    expect(written.subcommandHelpText.doctor).toContain("openclaw doctor");
-    expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
-    expect(written.subcommandHelpText.models).toContain("openclaw models");
-    expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
-    expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
+    expect(readMetadata(outputPath)).toMatchObject({
+      channelOptions: expect.arrayContaining(["matrix"]),
+      generatorSignature: expect.stringMatching(/^[a-f0-9]{40}$/u),
+      browserHelpText: "Usage: openclaw browser\n",
+      secretsHelpText: "Usage: openclaw secrets\n",
+      nodesHelpText: "Usage: openclaw nodes\n",
+      rootHelpText: "Usage: openclaw\n",
+      subcommandHelpText: sourceSubcommandHelp(),
+    });
     expect(fs.readdirSync(distDir)).toEqual(["cli-startup-metadata.json"]);
     if (process.platform !== "win32") {
       expect(fs.statSync(distDir).mode & 0o777).toBe(0o750);
@@ -1491,29 +1365,13 @@ finally:
   it.each(["partial write", "rename"] as const)(
     "preserves the prior startup metadata after a failed %s",
     async (failurePhase) => {
-      const tempRoot = createTempDir("openclaw-startup-metadata-publication-");
-      const distDir = path.join(tempRoot, "dist");
-      const outputPath = path.join(distDir, "cli-startup-metadata.json");
-      writeStartupMetadataSourceSignatureFixture(tempRoot);
-      mkdirSync(distDir);
+      const metadata = metadataFixture("openclaw-startup-metadata-publication-", false);
+      const { distDir, outputPath } = metadata;
       let revision = "before";
       const options = {
-        distDir,
-        outputPath,
-        extensionsDir: path.join(tempRoot, "extensions"),
-        sourceRootDir: tempRoot,
+        ...metadata,
         renderSourceRootHelpText: () => `Usage: openclaw ${revision}\n`,
-        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-        renderSourceSubcommandHelpTextRecord: () => ({
-          config: "Usage: openclaw config\n",
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-        }),
+        ...sourceHelpRenderers,
       };
       await testing.writeCliStartupMetadata(options);
       const previous = readFileSync(outputPath, "utf8");
@@ -1584,8 +1442,6 @@ finally:
   });
 
   it("selects the .mjs root-help renderer beside a .js helper", async () => {
-    const rendererExtension = "mjs";
-    const helperExtension = "js";
     const tempRoot = createTempDir("openclaw-startup-metadata-bundle-selection-");
     const distDir = path.join(tempRoot, "dist");
     const extensionsDir = path.join(tempRoot, "extensions");
@@ -1596,13 +1452,13 @@ finally:
     writeFixtureFile(tempRoot, "package.json", '{"type":"module"}\n');
     writeFixtureFile(
       distDir,
-      `root-help-live-config-fixture.${helperExtension}`,
+      "root-help-live-config-fixture.js",
       "async function loadRootHelpRenderOptionsForConfigSensitivePlugins() { return null; }\nexport { loadRootHelpRenderOptionsForConfigSensitivePlugins };\n",
     );
     writeFixtureFile(
       distDir,
-      `root-help-renderer-fixture.${rendererExtension}`,
-      `import "./root-help-live-config-fixture.${helperExtension}";\nasync function outputRootHelp() { process.stdout.write('Usage: bundled renderer\\n'); }\nexport { outputRootHelp };\n`,
+      "root-help-renderer-fixture.mjs",
+      "import \"./root-help-live-config-fixture.js\";\nasync function outputRootHelp() { process.stdout.write('Usage: bundled renderer\\n'); }\nexport { outputRootHelp };\n",
     );
 
     await testing.writeCliStartupMetadata({
@@ -1614,10 +1470,7 @@ finally:
       ...sourceHelpRenderers,
     });
 
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      rootHelpText: string;
-    };
-    expect(written.rootHelpText).toBe("Usage: bundled renderer\n");
+    expect(readMetadata(outputPath).rootHelpText).toBe("Usage: bundled renderer\n");
     expect(renderSourceRootHelpText).not.toHaveBeenCalled();
   });
 
@@ -1674,14 +1527,11 @@ finally:
     }
     await writePromise;
 
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      browserHelpText: string;
-      nodesHelpText: string;
-      secretsHelpText: string;
-    };
-    expect(written.browserHelpText).toContain("openclaw browser");
-    expect(written.secretsHelpText).toContain("openclaw secrets");
-    expect(written.nodesHelpText).toContain("openclaw nodes");
+    expect(readMetadata(outputPath)).toMatchObject({
+      browserHelpText: expect.stringContaining("openclaw browser"),
+      secretsHelpText: expect.stringContaining("openclaw secrets"),
+      nodesHelpText: expect.stringContaining("openclaw nodes"),
+    });
   });
 
   it("does not let shared-state cleanup mask the primary render failure", async () => {
@@ -1744,10 +1594,7 @@ finally:
     await writeMetadata();
     expect(nodesRenderCount).toBe(1);
 
-    const staleGeneratorMetadata = JSON.parse(readFileSync(outputPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const staleGeneratorMetadata = readMetadata(outputPath);
     staleGeneratorMetadata.generatorSignature = "stale-generator";
     writeFileSync(outputPath, `${JSON.stringify(staleGeneratorMetadata, null, 2)}\n`, "utf8");
 
@@ -1762,11 +1609,8 @@ finally:
 
     await writeMetadata();
 
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      nodesHelpText: string;
-    };
     expect(nodesRenderCount).toBe(3);
-    expect(written.nodesHelpText).toContain("openclaw nodes 3");
+    expect(readMetadata(outputPath).nodesHelpText).toContain("openclaw nodes 3");
   });
 
   it("regenerates help when build version or commit changes", async () => {
@@ -1844,9 +1688,8 @@ finally:
     await writeMetadata();
     expect(renderCount).toBe(3);
     expect(commandRenderCount).toBe(12);
-    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
-      subcommandHelpText: { models: string };
-    };
-    expect(written.subcommandHelpText.models).toContain("OpenClaw 2026.7.3 (bbbbbbb)");
+    expect(readMetadata(outputPath).subcommandHelpText.models).toContain(
+      "OpenClaw 2026.7.3 (bbbbbbb)",
+    );
   });
 });
