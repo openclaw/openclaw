@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
 import * as tmpDirs from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { NodeBootstrapArtifactWorkerTasks } from "./node-bootstrap-artifact-contract.js";
 import {
   buildId,
   longEntryPath,
@@ -23,7 +24,12 @@ import {
 // Keep byte/race fault injection beside the real builder. The worker suite covers transport.
 vi.mock("./node-bootstrap-artifact-worker.js", async () => {
   const { prepareNodeBootstrapArtifact } = await import("./node-bootstrap-artifact-build.js");
-  return { prepareNodeBootstrapArtifactInWorker: prepareNodeBootstrapArtifact };
+  return {
+    prepareNodeArtifactInWorker: (
+      _kind: "bootstrap",
+      { options, temporaryRoot }: NodeBootstrapArtifactWorkerTasks["bootstrap"]["input"],
+    ) => prepareNodeBootstrapArtifact(options, temporaryRoot),
+  };
 });
 
 const { fixture, createProvider, tempDirs } = useNodeBootstrapArtifactFixtures();

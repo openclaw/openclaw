@@ -1,3 +1,5 @@
+import type { WorkerBundleArtifact, WorkerBundleBuildOptions } from "./bundle.js";
+
 export type NodeBootstrapArtifact = Readonly<{
   tarballPath: string;
   tarballSha256: string;
@@ -13,7 +15,20 @@ export type NodeBootstrapArtifactOptions = {
   plugins: readonly { id: string; root: string }[];
 };
 
-export type NodeBootstrapArtifactWorkerInput = {
-  options: NodeBootstrapArtifactOptions;
-  temporaryRoot: string;
+export type NodeBootstrapArtifactWorkerTasks = {
+  bootstrap: {
+    input: { options: NodeBootstrapArtifactOptions; temporaryRoot: string };
+    output: NodeBootstrapArtifact;
+  };
+  bundle: {
+    input: WorkerBundleBuildOptions;
+    output: WorkerBundleArtifact;
+  };
 };
+
+export type NodeBootstrapArtifactWorkerInput = {
+  [Kind in keyof NodeBootstrapArtifactWorkerTasks]: {
+    kind: Kind;
+    input: NodeBootstrapArtifactWorkerTasks[Kind]["input"];
+  };
+}[keyof NodeBootstrapArtifactWorkerTasks];

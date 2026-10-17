@@ -18,6 +18,7 @@ import * as bundleStaging from "./bundle-staging.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
+  type WorkerBundleBuildOptions,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
@@ -26,6 +27,14 @@ import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+
+// Keep staging fault injection beside the builder; the artifact worker suite covers isolation.
+vi.mock("./node-bootstrap-artifact-worker.js", () => ({
+  prepareNodeArtifactInWorker: async (_kind: "bundle", options: WorkerBundleBuildOptions) => {
+    const { prepareWorkerBundle } = await import("./bundle.js");
+    return await prepareWorkerBundle(options);
+  },
+}));
 
 async function writeFixture(
   packageRoot: string,
