@@ -45,7 +45,6 @@ import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 const mocks = vi.hoisted(() => ({
-  profileCurrent: true,
   prepare: vi.fn(),
   prepareIdentity:
     vi.fn<typeof import("../state/user-profile-list.js").prepareUserProfileIdentity>(),
@@ -248,7 +247,6 @@ function dispatchSession(
 }
 
 beforeEach(() => {
-  mocks.profileCurrent = true;
   mocks.toolAllowed = true;
   mocks.sandboxRequired = false;
   mocks.sandboxed = false;
@@ -280,7 +278,7 @@ beforeEach(() => {
     profileId: "alice",
     role: null,
     aliases: ["alice", "former-alice"],
-    isCurrent: () => mocks.profileCurrent,
+    isCurrent: () => true,
   }));
 });
 afterEach(() => {
@@ -293,26 +291,36 @@ afterEach(() => {
 });
 
 describe("session resource admission", () => {
-  it.each(["grant", "profile", "scope"] as const)(
-    "refuses a replaced original %s during canonical profile preparation before route effects",
-    async (change) => {
+  it.each([
+    ["canonical", "grant"],
+    ["canonical", "profile"],
+    ["canonical", "scope"],
+    ["aliases", "grant"],
+  ] as const)(
+    "refuses a replaced %s preparation %s before route effects",
+    async (stage, change) => {
       const test = fixture();
       const entered = createDeferredCore();
       const resume = createDeferredCore();
-      const prepare = expectDefined(
-        mocks.prepareIdentity.getMockImplementation(),
-        "prepared profile fixture",
-      );
-      mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
-        const profile = await prepare(...args);
+      const pause = async <T>(profile: T) => {
         entered.resolve();
         await resume.promise;
         return profile;
-      });
-      const effect = vi.fn();
+      };
+      if (stage === "canonical") {
+        const prepare = expectDefined(
+          mocks.prepareIdentity.getMockImplementation(),
+          "profile fixture",
+        );
+        mocks.prepareIdentity.mockImplementationOnce(async (...args) =>
+          pause(await prepare(...args)),
+        );
+      } else {
+        const prepare = expectDefined(mocks.prepare.getMockImplementation(), "alias fixture");
+        mocks.prepare.mockImplementationOnce(async (...args) => pause(await prepare(...args)));
+      }
       const handler = vi.fn<GatewayRequestHandler>(({ sessionAccessAuthority, respond }) => {
         expectDefined(sessionAccessAuthority, "registered session authority").assertCurrent();
-        effect();
         respond(true, {});
       });
       const respond = vi.fn();
@@ -337,10 +345,11 @@ describe("session resource admission", () => {
         resume.resolve();
         const thrown = await failure;
         expect(handler).not.toHaveBeenCalled();
-        expect(effect).not.toHaveBeenCalled();
         expect(
           thrown instanceof Error ? thrown.message : respond.mock.calls[0]?.[2]?.message,
-        ).toMatch(/authority|Session access changed/);
+        ).toMatch(
+          stage === "aliases" ? "Session access changed" : /authority|Session access changed/,
+        );
         expect(mocks.profileLeases.size).toBe(0);
       } finally {
         resume.resolve();
@@ -690,26 +699,6 @@ describe("session resource admission", () => {
     }
     expect(() => viewer.assertCurrent()).toThrow();
     expect(() => resource.assertCurrent()).not.toThrow();
-  });
-
-  it("rejects a renewed ingress grant that changes while profile preparation awaits", async () => {
-    const test = fixture();
-    const entered = createDeferredCore();
-    const prepared = createDeferredCore<{
-      profileId: string;
-      role: null;
-      aliases: string[];
-      isCurrent: () => boolean;
-    }>();
-    mocks.prepare.mockImplementationOnce(() => {
-      entered.resolve();
-      return prepared.promise;
-    });
-    const pending = test.prepare();
-    await Promise.race([entered.promise, pending]);
-    renewGrant(test);
-    prepared.resolve({ profileId: "alice", role: null, aliases: ["alice"], isCurrent: () => true });
-    await expect(pending).rejects.toThrow("Session access changed");
   });
 
   it("rejects a mismatched ambient model cap even when the explicit tool caller matches", async () => {

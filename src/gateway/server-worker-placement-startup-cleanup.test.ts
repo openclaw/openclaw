@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -32,10 +32,13 @@ import { getRuntimeConfig } from "../config/config.js";
 import { formatGatewayPendingCloseSteps } from "./restart-trace.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
-  createPlacementDiskSpaceFixture,
   preservedSessionKeys,
   startPlacementRuntime as startRuntime,
 } from "./server-worker-placement-startup.test-support.js";
+import {
+  createIdleDiskSpace,
+  createRuntimeFactory,
+} from "./server-worker-placement.test-support.js";
 import { createPlacementFailureActions } from "./worker-environments/placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./worker-environments/placement-dispatch-recovery.js";
 import {
@@ -53,6 +56,8 @@ import {
 } from "./worker-environments/service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
+
+const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 
 const createPlacements = (fixtureClock = false) =>
   createWorkerSessionPlacementStore({
@@ -79,30 +84,6 @@ function failPlacement(
   });
 }
 
-function createRuntime(
-  placements: ReturnType<typeof createWorkerSessionPlacementStore>,
-  environments: ReturnType<typeof createService>,
-  scheduler = createTestGatewayScheduler(),
-  initialPlacements: Parameters<
-    typeof createGatewayWorkerPlacementRuntime
-  >[0]["initialPlacements"] = [],
-  evidence: "current" | "absent" = "current",
-) {
-  runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => evidence);
-  runtimeFactoryMocks.createDiskSpace.mockReturnValue(createPlacementDiskSpaceFixture());
-  return createGatewayWorkerPlacementRuntime({
-    initialPlacements,
-    scheduler,
-    placements,
-    environments,
-    getCommittedRuntimeConfig: getRuntimeConfig,
-    cancelSessionWork: vi.fn(async () => {}),
-    gatewayNamespace: "gateway-test",
-    revokeSessionAuthority: vi.fn(),
-    warn: vi.fn(),
-  });
-}
-
 async function requestProvisioningTeardown(environmentId: string, provisionOperationId: string) {
   const store = testState.store;
   const intent = await store.createIntent({
@@ -118,6 +99,10 @@ async function requestProvisioningTeardown(environmentId: string, provisionOpera
 
 describe("worker placement startup cleanup ownership", () => {
   setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => {
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
+    runtimeFactoryMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
+  });
 
   it("settles an accepted retirement and stops before the next reconciliation candidate", async ({
     signal,
@@ -126,9 +111,8 @@ describe("worker placement startup cleanup ownership", () => {
     const scheduler = createTestGatewayScheduler(time.clock);
     const environments = createEnvironments({}, { scheduler });
     const placements = createPlacements();
-    const sidecar = await startRuntime(
-      createRuntime(placements, environments, scheduler, [], "absent"),
-    );
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "absent");
+    const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
     await time.advanceBy(60_000);
     for (const sessionId of ["shutdown-first", "shutdown-next"]) {
       await placements.startDispatch({
@@ -155,13 +139,11 @@ describe("worker placement startup cleanup ownership", () => {
     try {
       sweeping = time.advanceBy(60_000);
       await withinTest(entered.promise, signal);
-      let stopped = false;
-      stopping = sidecar.stop().then(() => {
-        stopped = true;
-      });
+      const stopped = vi.fn();
+      stopping = sidecar.stop().then(stopped);
       const pending = formatGatewayPendingCloseSteps();
       await Promise.resolve();
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       expect(acceptedSignal?.aborted).toBe(false);
       release.resolve();
       await withinTest(Promise.all([stopping, sweeping]), signal);
@@ -199,26 +181,24 @@ describe("worker placement startup cleanup ownership", () => {
       { scheduler },
     );
     const placements = createPlacements();
-    const sidecar = await startRuntime(createRuntime(placements, environments, scheduler));
+    const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
     let stopping: Promise<void> | undefined;
-    let stopped = false;
+    const stopped = vi.fn();
     try {
       holdInspection = true;
       void time.advanceBy(60_000);
       await inspectionStarted.promise;
-      stopping = sidecar.stop().then(() => {
-        stopped = true;
-      });
+      stopping = sidecar.stop().then(stopped);
       expect(inspectionSignal?.aborted).toBe(true);
       await Promise.resolve();
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       expect(testState.store.get("worker-close-inspection")).toMatchObject({
         state: "ready",
         leaseId: "lease:worker-close-inspection",
       });
       producerSettled.resolve();
       await stopping;
-      expect(stopped).toBe(true);
+      expect(stopped).toHaveBeenCalledOnce();
     } finally {
       producerSettled.resolve();
       await (stopping ?? sidecar?.stop());
@@ -357,7 +337,11 @@ describe("worker placement startup cleanup ownership", () => {
         throw new Error("failed placement fixture is missing its session key");
       }
       const sidecar = await startRuntime(
-        createRuntime(placements, environments, undefined, await placements.listAsync()),
+        createRuntime({
+          placements,
+          environments,
+          initialPlacements: await placements.listAsync(),
+        }),
       );
       try {
         expect(sidecar).not.toBeNull();
@@ -407,12 +391,11 @@ describe("worker placement startup cleanup ownership", () => {
       turnClaim: null,
       activeOwnerEpoch: null,
     });
-    const runtime = createRuntime(
+    const runtime = createRuntime({
       placements,
       environments,
-      undefined,
-      await placements.listAsync(),
-    );
+      initialPlacements: await placements.listAsync(),
+    });
     let registeredSidecar: { stop: () => Promise<void> } | undefined;
     const starting = startRuntime(runtime, {
       registerSidecar: (sidecar) => {
@@ -435,12 +418,10 @@ describe("worker placement startup cleanup ownership", () => {
         destroyRequestedAtMs: expect.any(Number),
       });
 
-      let stopped = false;
-      const stopping = sidecar.stop().then(() => {
-        stopped = true;
-      });
+      const stopped = vi.fn();
+      const stopping = sidecar.stop().then(stopped);
       await Promise.resolve();
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       expect(destroy).not.toHaveBeenCalled();
 
       releaseResolution.resolve();
