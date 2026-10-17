@@ -42,6 +42,10 @@ type VerificationOptions = Partial<
   >
 >;
 
+function authCandidate(config: OpenClawConfig) {
+  return { config, authProfiles: [], persistAuthProfiles: vi.fn(async () => {}) };
+}
+
 function verificationFixture(config: OpenClawConfig, options: VerificationOptions = {}) {
   const prompter = createPrompter();
   const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
@@ -233,9 +237,9 @@ describe("offerLiveModelVerification", () => {
       mocks.verify.mockImplementation((params: Parameters<typeof verifySetupInferenceConfig>[0]) =>
         verifySetupInferenceConfig(params),
       );
-      const persistAuthProfiles = vi.fn(async () => {});
+      const initialCandidate = authCandidate(config);
       const { run, writeConfig } = verificationFixture(config, {
-        initialCandidate: { config, authProfiles: [], persistAuthProfiles },
+        initialCandidate,
         opts: { nonInteractive: true },
         agentDir,
         stateDir: root,
@@ -253,7 +257,7 @@ describe("offerLiveModelVerification", () => {
         expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       } else {
         await expect(verification).rejects.toThrow("No agents configured");
-        expectNotCalled(writeConfig, persistAuthProfiles, runEmbeddedAgent);
+        expectNotCalled(writeConfig, initialCandidate.persistAuthProfiles, runEmbeddedAgent);
       }
       expect(config).toEqual(before);
     },
@@ -287,15 +291,10 @@ describe("offerLiveModelVerification", () => {
         },
       },
     };
-    const persistAuthProfiles = vi.fn(async () => {});
     mocks.verify
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "credential expired" })
       .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.6", latencyMs: 10 });
-    mocks.repair.mockResolvedValue({
-      config: repairedConfig,
-      authProfiles: [],
-      persistAuthProfiles,
-    });
+    mocks.repair.mockResolvedValue(authCandidate(repairedConfig));
     const { run, prompter, writeConfig } = verificationFixture({
       agents: { entries: { main: {} } },
     });
@@ -314,9 +313,8 @@ describe("offerLiveModelVerification", () => {
 
   it("requires managed local model verification and keeps a failed candidate uncommitted", async () => {
     const config = structuredClone(managedConfig);
-    const persistAuthProfiles = vi.fn(async () => {});
     const { run, writeConfig, prompter } = verificationFixture(config, {
-      initialCandidate: { config, authProfiles: [], persistAuthProfiles },
+      initialCandidate: authCandidate(config),
     });
     mocks.verify.mockResolvedValue({
       ok: false,
