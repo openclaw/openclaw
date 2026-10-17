@@ -1419,6 +1419,32 @@ describe("buildCachedChatItems", () => {
       count: 1,
       steer: true,
     },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+      includeOriginal: false,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+      savedReply: false,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      search: true,
+    },
     { savedReceipt: true, finalRun: "other-run", finalView: "cv_final", live: true, count: 2 },
     {
       savedReceipt: true,
@@ -1446,6 +1472,9 @@ describe("buildCachedChatItems", () => {
       shortcode = false,
       otherShortcode = false,
       steer = false,
+      includeOriginal = true,
+      savedReply = true,
+      search = false,
     }) => {
       const runId = "final-widget-run";
       const parentToolCallId = "call_widget|fc_widget";
@@ -1494,10 +1523,10 @@ describe("buildCachedChatItems", () => {
       );
       const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
       const messages = [
-        nativeUser(runId, "Show a counter", 1_000, { runId }),
+        ...(includeOriginal ? [nativeUser(runId, "Show a counter", 1_000, { runId })] : []),
         ...(tailFirst ? [terminal] : []),
         ...(savedReceipt ? [nested] : []),
-        saved,
+        ...(savedReply ? [saved] : []),
         ...(steer
           ? [
               nativeUser("steer-input", "Keep going", 1_004, {
@@ -1515,15 +1544,23 @@ describe("buildCachedChatItems", () => {
         messages,
         toolMessages: savedReceipt ? [] : [nested],
         showToolCalls: true,
+        searchOpen: search,
+        searchQuery: search ? "Final tail." : "",
       });
       expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(count);
-      expect(cardsIn(groups).some((card) => card.callId === "nested-widget")).toBe(true);
+      if (!search) {
+        expect(cardsIn(groups).some((card) => card.callId === "nested-widget")).toBe(true);
+      }
       expect(
         groups
           .flatMap(normalizedBlocks)
           .flatMap((block) => (block.type === "text" ? [block.text?.trim()] : [])),
       ).toContain("Final tail.");
-      expect(groups.flatMap(normalizedBlocks)).toContainEqual(textBlock("Your counter is ready."));
+      if (savedReply && !search) {
+        expect(groups.flatMap(normalizedBlocks)).toContainEqual(
+          textBlock("Your counter is ready."),
+        );
+      }
       expect(messages).toEqual(original);
       expect(readLiveTerminalRevision()).toBe(terminalRevision);
     },

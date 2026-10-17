@@ -92,9 +92,6 @@ suite.define(() => {
       await expect.poll(() => inner.locator("output").textContent()).toBe("1");
       const retainedFrame = await outer.elementHandle();
       expect(retainedFrame).not.toBeNull();
-      const originalRow = await widgets.evaluate((element) =>
-        element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
-      );
       expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
       const finalText = "The interactive preview is ready.";
@@ -169,11 +166,6 @@ suite.define(() => {
       await page.locator(".chat-work-group").waitFor();
       await expect.poll(() => widgets.count()).toBe(1);
       await expect.poll(() => finalReply.locator("openclaw-canvas-widget-view").count()).toBe(1);
-      expect(
-        await widgets.evaluate((element) =>
-          element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
-        ),
-      ).not.toBe(originalRow);
       expect(await outer.evaluate((frame, original) => frame === original, retainedFrame)).toBe(
         true,
       );
