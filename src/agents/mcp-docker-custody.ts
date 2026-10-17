@@ -7,6 +7,7 @@ import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js
 import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { z } from "zod";
 import { resolveStateDir } from "../config/state-dir.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import {
   GatewayProcessNamespaceSchema,
@@ -157,6 +158,11 @@ async function inspect(engine: Engine, id: string): Promise<Container | undefine
   }
 }
 
+async function confirmAbsent(engine: Engine, id: string): Promise<boolean> {
+  await assertDaemon(engine);
+  return (await inspect(engine, id)) === undefined;
+}
+
 async function remove(
   engine: Engine,
   id: string,
@@ -182,6 +188,9 @@ async function remove(
         return;
       }
       if (!forceSignal?.aborted) {
+        if (await confirmAbsent(engine, id)) {
+          return;
+        }
         throw error;
       }
     }
@@ -191,7 +200,9 @@ async function remove(
     await command(engine, ["rm", "--force", id]);
   } catch (error) {
     // --rm may win between stopping and explicit removal.
-    if (!isMissingContainer(error)) {
+    // Docker's automatic --rm may be in progress when this command arrives.
+    // A failed command is success only when the same daemon proves absence.
+    if (!isMissingContainer(error) && !(await confirmAbsent(engine, id))) {
       throw error;
     }
   }
@@ -368,12 +379,14 @@ export async function prepareMcpDockerLaunch(
 
           let ended = false;
           if (exited) {
-            void exited
-              .finally(() => {
+            void exited.then(
+              () => {
                 ended = true;
                 changed();
-              })
-              .catch(() => {});
+              },
+              // Lost exit identity is unknown; keep watching for a late CID.
+              changed,
+            );
           }
           try {
             watcher = watch(directory, changed);
@@ -421,6 +434,11 @@ export async function prepareMcpDockerLaunch(
               await remove(engine, containerId, labels, force.signal);
             }
             confirmed = true;
+          } catch (error) {
+            log.warn(
+              `Docker MCP launch ${launch} cleanup is unconfirmed; exclusive state ownership is retained: ${formatErrorMessage(error)}. Inspect Docker and restart this OpenClaw process before retrying.`,
+            );
+            throw error;
           } finally {
             watcher?.close();
             if (confirmed) {
@@ -429,10 +447,6 @@ export async function prepareMcpDockerLaunch(
               } finally {
                 retained.release();
               }
-            } else {
-              log.warn(
-                `Docker MCP launch ${launch} cleanup is unconfirmed; exclusive state ownership is retained. Inspect Docker and restart this OpenClaw process before retrying.`,
-              );
             }
           }
         })());
