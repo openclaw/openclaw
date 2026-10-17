@@ -92,6 +92,35 @@ export function createVisibleMessageCursor(params: {
   };
 }
 
+/** The latest active-path reset row a reset-window cursor compares against. */
+export type VisibleResetBoundary = { seq: number; event_id?: string } | null;
+
+/** Records the latest reset on a fresh reset-window cursor; -1 when none exists. */
+export function withVisibleResetBoundary(
+  cursor: VisibleMessageCursor,
+  latest: VisibleResetBoundary,
+): VisibleMessageCursor {
+  return {
+    ...cursor,
+    resetBoundarySeq: latest?.seq ?? -1,
+    ...(latest?.event_id !== undefined ? { resetBoundaryId: latest.event_id } : {}),
+  };
+}
+
+/**
+ * Compares a reset-window cursor's reset row with the latest one. Raw seqs are
+ * comparable only within one generation; across generations only entry ids are.
+ */
+export function hasVisibleResetBoundaryChanged(
+  cursor: VisibleMessageCursor,
+  latest: VisibleResetBoundary,
+  sameGeneration: boolean,
+): boolean {
+  return sameGeneration
+    ? (latest?.seq ?? -1) !== cursor.resetBoundarySeq
+    : latest?.event_id !== cursor.resetBoundaryId;
+}
+
 export function parseVisibleMessageCursor(value: string): VisibleMessageCursor | undefined {
   // Accept only exact encoder output so aliases and unknown fields cannot resume or be re-emitted.
   // The caller still revalidates this continuation hint against the current scope and projection.

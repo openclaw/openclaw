@@ -42,8 +42,10 @@ import { readActivePathEntryRelationFromProjection } from "./session-accessor.sq
 import {
   createVisibleMessageCursor,
   encodeVisibleMessageCursor,
+  hasVisibleResetBoundaryChanged,
   normalizeVisibleDeltaLimits,
   parseVisibleMessageCursor,
+  withVisibleResetBoundary,
   type VisibleMessageCursor,
 } from "./session-accessor.sqlite-visible-cursor.js";
 import {
@@ -243,15 +245,9 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
           generation,
           sessionId: projection.resolved.sessionId,
         });
-        if (start !== "reset-window" && cursor?.resetBoundarySeq === undefined) {
-          return initial;
-        }
-        const latest = readLatestReset();
-        return {
-          ...initial,
-          resetBoundarySeq: latest?.seq ?? -1,
-          ...(latest?.event_id !== undefined ? { resetBoundaryId: latest.event_id } : {}),
-        };
+        return start !== "reset-window" && cursor?.resetBoundarySeq === undefined
+          ? initial
+          : withVisibleResetBoundary(initial, readLatestReset());
       };
       const reset = (reason: VisibleDeltaResetReason) => ({
         kind: "reset" as const,
@@ -273,7 +269,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
       const sameGeneration = current.generation === generation;
       const resetChanged =
         current.resetBoundarySeq !== undefined &&
-        hasResetBoundaryChanged(current, readLatestReset(), sameGeneration);
+        hasVisibleResetBoundaryChanged(current, readLatestReset(), sameGeneration);
       if (!sameGeneration) {
         return reset(resetChanged ? "session_reset" : "generation_mismatch");
       }
@@ -307,20 +303,6 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
     },
     options,
   );
-}
-
-/**
- * Compares a reset-window cursor's reset row with the latest one. Raw seqs are
- * comparable only within one generation; across generations only entry ids are.
- */
-function hasResetBoundaryChanged(
-  cursor: VisibleMessageCursor,
-  latest: LatestResetBoundary | null,
-  sameGeneration: boolean,
-): boolean {
-  return sameGeneration
-    ? (latest?.seq ?? -1) !== cursor.resetBoundarySeq
-    : latest?.event_id !== cursor.resetBoundaryId;
 }
 
 /**
