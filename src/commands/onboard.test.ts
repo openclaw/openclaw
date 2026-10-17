@@ -405,7 +405,7 @@ describe("setupWizardCommand", () => {
     await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      "Cannot determine the source database from an unreadable config. Repair the config before resetting state, or use --reset-scope config to remove only the config file.",
+      "Cannot determine the source database from an unreadable config. Repair the config before using onboard --reset. For a file-only reset without onboarding, use openclaw reset --scope config.",
     );
     expect(mocks.handleReset).not.toHaveBeenCalled();
   });

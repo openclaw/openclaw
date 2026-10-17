@@ -267,9 +267,11 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
-Stateful reset requires readable configuration so it can identify the source
-database. Repair an unreadable config first, or use `--reset-scope config` to
-remove only the config file without accessing the old database or credentials.
+Onboarding reset requires readable configuration and SQLite storage. With
+PostgreSQL configured, rerun onboarding without `--reset`, or use
+`openclaw database port --to sqlite` before resetting. Reset keeps database
+state, so discarding PostgreSQL routing would leave that state inaccessible.
+For a file-only reset without starting onboarding, use `openclaw reset --scope config`.
 
 Session reset permanently removes stored history from the configured database and its owned archive
 files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves

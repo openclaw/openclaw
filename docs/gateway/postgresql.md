@@ -156,6 +156,10 @@ If existing config cannot be parsed, interactive setup offers Doctor's file-only
 repair before selecting a database. Declining repair or leaving the config
 unparseable stops setup without creating application state.
 
+`onboard --reset` refuses PostgreSQL before changing configuration or data:
+onboarding reset retains database state and cannot discard its PostgreSQL routing.
+Rerun without `--reset`, or explicitly port supported stores to SQLite first.
+
 If the connection SecretRef is unavailable, `config set`, `config patch`, and
 `config unset` can still repair paths under `database` while the Gateway is
 stopped. These repairs leave database files untouched. A batch that also changes

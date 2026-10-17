@@ -587,106 +587,93 @@ export async function setupWizardCommand(
 
   const runSetupAfterOptionalReset = async () => {
     if (normalizedOpts.reset) {
-      const [
-        { readConfigSnapshotBeforeEngineSelection },
-        { resolveDatabaseEngineSelection },
-        { withDatabaseEngineSelection },
-      ] = await Promise.all([
-        import("./config-preflight-snapshot.js"),
-        import("../infra/database-engine/config.js"),
-        import("../infra/database-engine/context.js"),
-      ]);
+      const [{ readConfigSnapshotBeforeEngineSelection }, { resolveDatabaseFamilyEngines }] =
+        await Promise.all([
+          import("./config-preflight-snapshot.js"),
+          import("../infra/database-engine/registry.js"),
+        ]);
       const snapshot = await readConfigSnapshotBeforeEngineSelection(process.env, {
         isolateEnv: false,
       });
       const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
       if (
-        resetScope !== "config" &&
-        (isConfigReadFailure(snapshot) ||
-          snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID"))
+        isConfigReadFailure(snapshot) ||
+        snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
       ) {
         reject(
-          "Cannot determine the source database from an unreadable config. Repair the config before resetting state, or use --reset-scope config to remove only the config file.",
+          "Cannot determine the source database from an unreadable config. Repair the config before using onboard --reset. For a file-only reset without onboarding, use openclaw reset --scope config.",
         );
         return;
       }
-      const reset = async () => {
-        const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
-        // Every reset scope removes the config file. Validate setup against the
-        // empty config and requested/default workspace that dispatch will see.
-        const setupBaseConfig: OpenClawConfig = {};
-        const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
-        const configuredWorkspace: unknown =
-          normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
-        if (
-          resetScope === "full" &&
-          configuredWorkspace !== undefined &&
-          (typeof configuredWorkspace !== "string" || !configuredWorkspace.trim())
-        ) {
-          reject(
-            "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
-          );
-          return false;
-        }
-        // Non-full scopes never touch the workspace, so the fallback is only an
-        // inert handleReset argument when an invalid config contains bad data.
-        const workspaceDir = resolveUserPath(
-          typeof configuredWorkspace === "string" && configuredWorkspace.trim()
-            ? configuredWorkspace
-            : DEFAULT_WORKSPACE,
+      if (Object.values(resolveDatabaseFamilyEngines(snapshot.config)).includes("postgres")) {
+        reject(
+          "Onboarding reset retains database state and cannot discard its PostgreSQL routing. Rerun without --reset, or use openclaw database port --to sqlite before resetting.",
         );
-        if (
-          !(await validateResetAuthChoice({
-            opts: normalizedOpts,
-            runtime,
-            baseConfig: setupBaseConfig,
-            discoveryConfig: baseConfig,
-            workspaceDir: setupWorkspaceDir,
-            resetScope,
-          }))
-        ) {
-          return false;
-        }
-        if (
-          normalizedOpts.nonInteractive &&
-          (normalizedOpts.mode ?? "local") !== "remote" &&
-          !(await applyNonInteractiveGatewayConfig({
-            nextConfig: setupBaseConfig,
-            opts: normalizedOpts,
-            runtime,
-            defaultPort: resolveGatewayPort(setupBaseConfig),
-          }))
-        ) {
-          return false;
-        }
-        if (
-          normalizedOpts.importFrom ||
-          normalizedOpts.importSource ||
-          normalizedOpts.importSecrets ||
-          normalizedOpts.flow === "import"
-        ) {
-          reject(
-            "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
-          );
-          return false;
-        }
-        // Reset is deliberately the final pre-dispatch step: no rejectable option
-        // checks may run after user state has moved to Trash.
-        await handleReset(resetScope, workspaceDir, runtime);
-        return true;
-      };
-      // Config-only recovery must work even when the old database credential is unavailable.
-      const resetComplete =
-        resetScope === "config"
-          ? await reset()
-          : await withDatabaseEngineSelection(
-              await resolveDatabaseEngineSelection(snapshot.config, process.env),
-              reset,
-            );
-      if (!resetComplete) {
         return;
       }
-      // Cleanup's scoped source is gone; install only the post-reset process target.
+      const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
+      // Every reset scope removes the config file. Validate setup against the
+      // empty config and requested/default workspace that dispatch will see.
+      const setupBaseConfig: OpenClawConfig = {};
+      const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
+      const configuredWorkspace: unknown =
+        normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
+      if (
+        resetScope === "full" &&
+        configuredWorkspace !== undefined &&
+        (typeof configuredWorkspace !== "string" || !configuredWorkspace.trim())
+      ) {
+        reject(
+          "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+        );
+        return;
+      }
+      // Non-full scopes never touch the workspace, so the fallback is only an
+      // inert handleReset argument when an invalid config contains bad data.
+      const workspaceDir = resolveUserPath(
+        typeof configuredWorkspace === "string" && configuredWorkspace.trim()
+          ? configuredWorkspace
+          : DEFAULT_WORKSPACE,
+      );
+      if (
+        !(await validateResetAuthChoice({
+          opts: normalizedOpts,
+          runtime,
+          baseConfig: setupBaseConfig,
+          discoveryConfig: baseConfig,
+          workspaceDir: setupWorkspaceDir,
+          resetScope,
+        }))
+      ) {
+        return;
+      }
+      if (
+        normalizedOpts.nonInteractive &&
+        (normalizedOpts.mode ?? "local") !== "remote" &&
+        !(await applyNonInteractiveGatewayConfig({
+          nextConfig: setupBaseConfig,
+          opts: normalizedOpts,
+          runtime,
+          defaultPort: resolveGatewayPort(setupBaseConfig),
+        }))
+      ) {
+        return;
+      }
+      if (
+        normalizedOpts.importFrom ||
+        normalizedOpts.importSource ||
+        normalizedOpts.importSecrets ||
+        normalizedOpts.flow === "import"
+      ) {
+        reject(
+          "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
+        );
+        return;
+      }
+      // Reset is deliberately the final pre-dispatch step: no rejectable option
+      // checks may run after user state has moved to Trash.
+      await handleReset(resetScope, workspaceDir, runtime);
+      // Reset retains SQLite state; select it from the fresh config before setup resumes.
       const { prepareCliDatabaseEngine } = await import("../cli/database-engine-selection.js");
       await prepareCliDatabaseEngine(["node", "openclaw", "onboard"]);
     }
