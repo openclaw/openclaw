@@ -10,6 +10,7 @@ import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
@@ -146,4 +147,19 @@ describe("host-owned update notices", () => {
       expect(getUpdateRun(run.runId)?.phase).toBe("requested");
     },
   );
+  it("settles a targetless verifying notice without retrying the same milestone", async () => {
+    const initial = createUpdateRun({ trigger: "cli" });
+    const run = recordUpdateRunPhase(initial.runId, "verifying");
+    const notify = await createUpdateRunNotifier(run, () => ({}), {});
+
+    expect(await notify(run, "verifying")).toEqual({ delivered: false, owned: false });
+    const settled = getUpdateRun(run.runId);
+    expect(settled?.steps).toContainEqual(
+      expect.objectContaining({ step: "notice:verifying", status: "skipped" }),
+    );
+    expect(settled?.verification.noticeDelivered).toBe(false);
+
+    expect(await notify(settled!, "verifying")).toEqual({ delivered: false, owned: false });
+    expect(getUpdateRun(run.runId)?.updatedAtMs).toBe(settled?.updatedAtMs);
+  });
 });

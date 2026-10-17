@@ -50,12 +50,17 @@ export async function createUpdateRunNotifier(
     runWithoutOwnedSessionTranscriptWrites(async () => {
       // Pre-park and later activation share one durable notice, never a fifth milestone.
       const milestone = kind === "parking" ? "activating" : kind;
+      const noticeStep =
+        kind === "finished"
+          ? undefined
+          : run.steps.find((step) => step.step === `notice:${milestone}`);
+      if (noticeStep?.status === "skipped") {
+        return { delivered: false, owned: false };
+      }
       const recorded =
         kind === "finished"
           ? run.verification.noticeDelivered === true
-          : run.steps.some(
-              (step) => step.step === `notice:${milestone}` && step.status === "completed",
-            );
+          : noticeStep?.status === "completed";
       if (recorded) {
         return { delivered: false, owned: recorded };
       }
@@ -67,6 +72,18 @@ export async function createUpdateRunNotifier(
       const currentTarget = authorizeUpdateRunNoticeTarget(cfg, noticeTarget);
       if (currentTarget.kind === "none") {
         await recordUpdateRunNoticeSkipped(run.runId, currentTarget.reason, env);
+        if (kind !== "finished") {
+          await recordUpdateRunStep(
+            run.runId,
+            {
+              step: `notice:${milestone}`,
+              status: "skipped",
+              endedAtMs: Date.now(),
+              detail: currentTarget.reason,
+            },
+            { env },
+          );
+        }
         return { delivered: false, owned: false };
       }
       // Admission, the watcher, and successor startup share permanent delivery
