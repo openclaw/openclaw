@@ -144,9 +144,7 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts.close();
-});
+afterAll(() => receipts.close());
 
 function writeInstallReceipt(binDir: string): string {
   const receiptPath = join(binDir, "install-receipt.mjs");

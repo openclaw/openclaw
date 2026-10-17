@@ -100,12 +100,8 @@ function writeTarOctal(header: Buffer, offset: number, length: number, value: nu
 
 function checksumTarHeader(header: Buffer) {
   header.fill(0x20, 148, 156);
-  writeTarOctal(
-    header,
-    148,
-    8,
-    header.reduce((sum, byte) => sum + byte, 0),
-  );
+  const sum = header.reduce((total, byte) => total + byte, 0);
+  writeTarOctal(header, 148, 8, sum);
 }
 
 type TarEntry = {
@@ -123,26 +119,23 @@ function tarEntry(entry: TarEntry): Buffer {
     ? entry.content
     : Buffer.from(entry.content ?? "", "utf8");
   const header = Buffer.alloc(512);
-  writeTarString(header, 0, 100, entry.path);
+  for (const [offset, length, value] of [
+    [0, 100, entry.path],
+    [157, 100, entry.linkPath ?? ""],
+    [257, 6, entry.format === "v7" ? "" : "ustar\0"],
+    [263, 2, entry.format === "v7" ? "" : "00"],
+    [345, 155, entry.prefix ?? ""],
+  ] as const) {
+    writeTarString(header, offset, length, value);
+  }
   writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
   writeTarOctal(header, 108, 8, 0);
   writeTarOctal(header, 116, 8, 0);
   writeTarOctal(header, 124, 12, content.length);
   writeTarOctal(header, 136, 12, 0);
-  header.fill(0x20, 148, 156);
   header[156] = type.charCodeAt(0);
-  if (entry.linkPath) {
-    writeTarString(header, 157, 100, entry.linkPath);
-  }
-  if (entry.format !== "v7") {
-    writeTarString(header, 257, 6, "ustar\0");
-    writeTarString(header, 263, 2, "00");
-  }
   writeTarOctal(header, 329, 8, 0);
   writeTarOctal(header, 337, 8, 0);
-  if (entry.prefix) {
-    writeTarString(header, 345, 155, entry.prefix);
-  }
   checksumTarHeader(header);
   const padding = Buffer.alloc((512 - (content.length % 512)) % 512);
   return Buffer.concat([header, content, padding]);
@@ -163,7 +156,7 @@ function mutateTarEntryHeader(
 }
 
 function createTarball(entries: TarEntry[]): Buffer {
-  return gzipSync(Buffer.concat([...entries.map((entry) => tarEntry(entry)), Buffer.alloc(1024)]));
+  return createTarballFromParts(entries.map(tarEntry));
 }
 
 function createTarballFromParts(parts: Buffer[]): Buffer {
@@ -171,10 +164,15 @@ function createTarballFromParts(parts: Buffer[]): Buffer {
 }
 
 function packageEntries(markerPath: string, overrides: Record<string, unknown> = {}): TarEntry[] {
-  return [
-    { path: "package/", type: "5" },
-    { content: metaPackageJson(markerPath, overrides), path: "package/package.json" },
-  ];
+  return [{ path: "package/", type: "5" }, manifestEntry(markerPath, {}, overrides)];
+}
+
+function manifestEntry(
+  marker: string,
+  fields: Partial<TarEntry> = {},
+  overrides: Record<string, unknown> = {},
+): TarEntry {
+  return { path: "package/package.json", content: metaPackageJson(marker, overrides), ...fields };
 }
 
 function stageTarball(build: (markerPath: string) => Buffer) {
@@ -329,26 +327,18 @@ function lifecycleScript(markerPath: string, content: string) {
 }
 
 function metaPackageJson(markerPath: string, overrides: Record<string, unknown> = {}): string {
-  return `${JSON.stringify(
-    {
-      name: PACKAGE_NAME,
-      version: PACKAGE_VERSION,
-      type: "module",
-      scripts: {
-        preinstall: lifecycleScript(markerPath, "bad"),
-        postinstall: lifecycleScript(markerPath, "bad"),
-      },
-      openclaw: {
-        release: {
-          publishToClawHub: true,
-          publishToNpm: true,
-        },
-      },
-      ...overrides,
+  const manifest = {
+    name: PACKAGE_NAME,
+    version: PACKAGE_VERSION,
+    type: "module",
+    scripts: {
+      preinstall: lifecycleScript(markerPath, "bad"),
+      postinstall: lifecycleScript(markerPath, "bad"),
     },
-    null,
-    2,
-  )}\n`;
+    openclaw: { release: { publishToClawHub: true, publishToNpm: true } },
+    ...overrides,
+  };
+  return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
 function publicationParams(artifactDir: string, overrides: Record<string, unknown> = {}) {
@@ -457,19 +447,8 @@ function workflowJobsMetadata(
   attempt = RUN_ATTEMPT,
   conclusion = "success",
 ) {
-  return {
-    total_count: 1,
-    jobs: [
-      {
-        name,
-        run_id: RUN_ID,
-        run_attempt: attempt,
-        head_sha: WORKFLOW_SHA,
-        status: "completed",
-        conclusion,
-      },
-    ],
-  };
+  const identity = { run_id: RUN_ID, head_sha: WORKFLOW_SHA, status: "completed" };
+  return { total_count: 1, jobs: [{ ...identity, name, run_attempt: attempt, conclusion }] };
 }
 
 function writeJson(file: string, value: unknown) {
@@ -760,87 +739,75 @@ describe("plugin publication artifact", () => {
     },
   );
 
-  it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {
-    const fixture = createDownloadFixture(RUN_ATTEMPT, { contentLength: true });
-    const { zip } = fixture;
-    const callCounts = { archive: 0, artifact: 0, run: 0 };
-    const urls: string[] = [];
-    const fetchImpl = async (input: string | URL | Request) => {
-      const url = String(input);
-      urls.push(url);
-      const endpoint = url.endsWith("/zip")
-        ? "archive"
-        : url.includes("/attempts/")
-          ? "run"
-          : "artifact";
-      callCounts[endpoint] += 1;
-      if (callCounts[endpoint] === 1) {
-        return endpoint === "run"
-          ? new Response("{", { status: 200 })
-          : new Response("retry", { status: endpoint === "artifact" ? 503 : 502 });
+  it.each([false, true])(
+    "retries exact artifact transfer (extended deadline: %s)",
+    async (extended) => {
+      const fixture = createDownloadFixture(RUN_ATTEMPT, { contentLength: true });
+      const callCounts = { archive: 0, artifact: 0, run: 0 };
+      const urls: string[] = [];
+      if (extended) {
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       }
-      return fixture.fetchImpl(input);
-    };
-
-    const result = await downloadFixture(fixture, {
-      fetchImpl,
-      maxArchiveBytes: 1024 * 1024,
-      retryAttempts: 3,
-    });
-
-    expect(result.archiveBytes).toEqual(zip);
-    expect(callCounts).toEqual({ archive: 2, artifact: 2, run: 2 });
-    expect(urls).toContain(
-      `https://api.github.com/repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`,
-    );
-  });
-
-  it("honors an explicit artifact transfer deadline beyond the default", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    try {
-      const fixture = createDownloadFixture();
-      const callCounts = { archive: 0, artifact: 0 };
-      const fetchImpl = (async (input: string | URL | Request) => {
+      const fetchImpl = async (input: string | URL | Request) => {
         const url = String(input);
-        if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) {
-          callCounts.artifact += 1;
-          return callCounts.artifact === 1
-            ? new Response("rate limited", {
-                status: 429,
-                headers: { "retry-after": "300" },
-              })
-            : Response.json(fixture.artifactMetadata);
+        urls.push(url);
+        const endpoint = url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)
+          ? "archive"
+          : url.endsWith(`/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`)
+            ? "run"
+            : url.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)
+              ? "artifact"
+              : undefined;
+        if (!endpoint || (extended && endpoint === "run")) {
+          return new Response("unexpected", { status: 404 });
         }
-        if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
-          callCounts.archive += 1;
-          return new Response(fixture.zip as unknown as BodyInit, {
-            status: 200,
-            headers: { "content-length": String(fixture.zip.length) },
-          });
+        callCounts[endpoint] += 1;
+        if (extended && endpoint === "artifact" && callCounts.artifact === 1) {
+          return new Response("rate limited", { status: 429, headers: { "retry-after": "300" } });
         }
-        return new Response("unexpected", { status: 404 });
-      }) as typeof fetch;
-
-      const result = downloadExactActionsArtifactArchive({
-        deadlineMs: Date.now() + 480_000,
-        expected: fixture.expected,
-        fetchImpl,
-        retryAttempts: 2,
-        retryDelayMs: 1,
-        token: "test-token",
-      });
-      const assertion = expect(result).resolves.toMatchObject({
-        archiveBytes: fixture.zip,
-      });
-
-      await vi.advanceTimersByTimeAsync(300_000);
-      await assertion;
-      expect(callCounts).toEqual({ archive: 1, artifact: 2 });
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
+        if (!extended && callCounts[endpoint] === 1) {
+          return endpoint === "run"
+            ? new Response("{", { status: 200 })
+            : new Response("retry", { status: endpoint === "artifact" ? 503 : 502 });
+        }
+        return fixture.fetchImpl(input);
+      };
+      try {
+        const result = extended
+          ? downloadExactActionsArtifactArchive({
+              deadlineMs: Date.now() + 480_000,
+              expected: fixture.expected,
+              fetchImpl,
+              retryAttempts: 2,
+              retryDelayMs: 1,
+              token: "test-token",
+            })
+          : downloadFixture(fixture, { fetchImpl, maxArchiveBytes: 1024 * 1024, retryAttempts: 3 });
+        const assertion = result.then((value) => {
+          expect(value.archiveBytes).toEqual(fixture.zip);
+        });
+        if (extended) {
+          await vi.advanceTimersByTimeAsync(300_000);
+        }
+        await assertion;
+        expect(callCounts).toEqual({
+          archive: extended ? 1 : 2,
+          artifact: 2,
+          run: extended ? 0 : 2,
+        });
+        if (!extended) {
+          expect(urls).toContain(
+            `https://api.github.com/repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}`,
+          );
+        }
+      } finally {
+        if (extended) {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      }
+    },
+  );
 
   it.each([403])("does not retry permanent HTTP %i artifact failures", async (status) => {
     const fixture = createDownloadFixture();
@@ -1200,72 +1167,52 @@ describe("plugin publication artifact", () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 
-  it("rejects directory tar entries with nonzero declared size", () => {
-    const { artifactDir } = stageTarball((markerPath) =>
-      createTarball([
-        { content: "x", path: "package/", type: "5" },
-        { content: metaPackageJson(markerPath), path: "package/package.json" },
-      ]),
-    );
-    expectTarballError(artifactDir, /Directory tar entry "package\/" must have size zero/u);
-  });
-
-  it("rejects regular-file paths that the consumer coerces into directories", () => {
-    const { artifactDir, tarballPath } = stageTarball((markerPath) =>
-      createTarball([
-        { path: "package/", type: "5" },
-        {
-          content: metaPackageJson(markerPath),
-          path: "package/package.json/",
-        },
-      ]),
-    );
-    expect(consumerTarEntries(tarballPath).at(-1)).toMatchObject({
-      path: "package/package.json/",
-      size: 0,
-      type: "Directory",
-    });
-    expectTarballError(artifactDir, /Non-directory tar entry must not end with a slash/u);
-  });
-
-  it("rejects whitespace-bearing USTAR prefix fields before manifest selection", () => {
-    const { artifactDir, markerPath } = stageTarball((marker) =>
-      createTarball([
-        { path: "package/", type: "5" },
-        {
-          content: metaPackageJson(marker, {
-            scripts: { postinstall: lifecycleScript(marker, "smuggled") },
-          }),
-          path: "package.json",
-          prefix: " package",
-        },
-        { content: metaPackageJson(marker), path: "package/package.json" },
-      ]),
-    );
-
-    expectTarballError(
-      artifactDir,
+  it.each([
+    ["nonzero directory size", {}, "x", /Directory tar entry "package\/" must have size zero/u],
+    [
+      "trailing slash",
+      { path: "package/package.json/" },
+      undefined,
+      /Non-directory tar entry must not end with a slash/u,
+    ],
+    [
+      "whitespace prefix",
+      { path: "package.json", prefix: " package" },
+      undefined,
       /tar entry prefix changes under the pinned ClawHub path normalization/u,
-    );
+    ],
+    [
+      "V7 prefix",
+      { path: "package.json", prefix: "package", format: "v7" },
+      undefined,
+      /canonical POSIX USTAR headers/u,
+    ],
+  ] as const)("rejects tar manifest ambiguity: %s", (kind, fields, content, message) => {
+    const { artifactDir, markerPath, tarballPath } = stageTarball((marker) => {
+      const smuggled = kind === "whitespace prefix";
+      return createTarball([
+        { path: "package/", type: "5", content },
+        manifestEntry(
+          marker,
+          fields,
+          smuggled ? { scripts: { postinstall: lifecycleScript(marker, "smuggled") } } : {},
+        ),
+        ...(smuggled ? [manifestEntry(marker)] : []),
+      ]);
+    });
+    if (kind === "trailing slash") {
+      expect(consumerTarEntries(tarballPath).at(-1)).toMatchObject({
+        path: "package/package.json/",
+        size: 0,
+        type: "Directory",
+      });
+    } else if (kind === "V7 prefix") {
+      const paths = consumerTarEntries(tarballPath).map((entry) => entry.path);
+      expect(paths).toContain("package.json");
+      expect(paths).not.toContain("package/package.json");
+    }
+    expectTarballError(artifactDir, message);
     expect(existsSync(markerPath)).toBe(false);
-  });
-
-  it("rejects V7 headers whose prefix bytes disagree with node-tar path semantics", () => {
-    const { artifactDir, tarballPath } = stageTarball((markerPath) =>
-      createTarball([
-        { path: "package/", type: "5" },
-        {
-          content: metaPackageJson(markerPath),
-          format: "v7",
-          path: "package.json",
-          prefix: "package",
-        },
-      ]),
-    );
-    const consumerPaths = consumerTarEntries(tarballPath).map((entry) => entry.path);
-    expect(consumerPaths).toContain("package.json");
-    expect(consumerPaths).not.toContain("package/package.json");
-    expectTarballError(artifactDir, /canonical POSIX USTAR headers/u);
   });
 
   it.each([

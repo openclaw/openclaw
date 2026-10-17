@@ -237,23 +237,19 @@ posixIt.for(["clawhub-trust", "npm-trust"] as const)(
   "%s accepts a release branch only after successful enumeration",
   { timeout: 55_000 },
   async (mode, { signal }) => {
+    const ref = "refs/remotes/origin/release/2026.8.1";
     const report = await pluginRun(signal, mode, {
       commandResults: {
-        "merge-base --is-ancestor HEAD origin/main": { code: 1 },
+        ...mainMiss,
         "for-each-ref --format=%(refname) refs/remotes/origin/release": {
           code: 0,
-          output: "refs/remotes/origin/release/2026.8.1\n",
+          output: `${ref}\n`,
         },
-        "merge-base --is-ancestor HEAD refs/remotes/origin/release/2026.8.1": { code: 0 },
+        [`merge-base --is-ancestor HEAD ${ref}`]: { code: 0 },
       },
     });
     expect(report.code, report.output).toBe(0);
-    expect(gitCommands(report).at(-1)).toEqual([
-      "merge-base",
-      "--is-ancestor",
-      "HEAD",
-      "refs/remotes/origin/release/2026.8.1",
-    ]);
+    expect(gitCommands(report).at(-1)).toEqual(["merge-base", "--is-ancestor", "HEAD", ref]);
   },
 );
 
