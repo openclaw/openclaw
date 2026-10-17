@@ -1,4 +1,3 @@
-/** Tests request-scoped secret ref resolution for runtime operations. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,13 +20,15 @@ function envRef(id: string) {
 
 function prepareSnapshot(
   config: unknown,
-  options: Omit<Parameters<typeof prepareSecretsRuntimeSnapshot>[0], "config"> = {},
+  env?: NodeJS.ProcessEnv,
+  options: Omit<Parameters<typeof prepareSecretsRuntimeSnapshot>[0], "config" | "env"> = {},
 ) {
   return prepareSecretsRuntimeSnapshot({
     agentDirs: ["/tmp/openclaw-agent-main"],
     loadAuthStore: () => ({ version: 1, profiles: {} }),
     ...options,
     config: asConfig(config),
+    env,
   });
 }
 
@@ -39,6 +40,15 @@ function proxy(ca: ReturnType<typeof envRef>) {
   return { mode: "explicit-proxy", url: "http://proxy.example:8080", tls: { ca } } as const;
 }
 
+function headerAuth(headerName: string, id: string) {
+  return { mode: "header", headerName, value: envRef(id) } as const;
+}
+
+function providerRequest(request: unknown) {
+  const openai = { baseUrl: "https://api.openai.com/v1", request, models: [] };
+  return { models: { providers: { openai } } };
+}
+
 describe("secrets runtime snapshot request secret refs", () => {
   it("refreshes the current roster without retaining removed agents or losing explicit stores", async () => {
     const stateDir = tempDirs.make("openclaw-refresh-roster-");
@@ -47,11 +57,14 @@ describe("secrets runtime snapshot request secret refs", () => {
     const config = asConfig({ agents: { entries: { main: {}, departing: {} } } });
     const loadAuthStore = vi.fn(() => loadAuthStoreWithProfiles({}));
     activateSecretsRuntimeSnapshot(
-      await prepareSnapshot(config, {
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        agentDirs: [explicitDir],
-        loadAuthStore,
-      }),
+      await prepareSnapshot(
+        config,
+        { OPENCLAW_STATE_DIR: stateDir },
+        {
+          agentDirs: [explicitDir],
+          loadAuthStore,
+        },
+      ),
     );
     const refresh = getRuntimeConfigSnapshotRefreshHandler()!;
     await expect(refresh.refresh({ sourceConfig: config })).resolves.toBe(true);
@@ -71,27 +84,19 @@ describe("secrets runtime snapshot request secret refs", () => {
     delete process.env[missingEnvVar];
 
     let useMissingProfileRef = false;
-    let loadAuthStoreCalls = 0;
-    const loadAuthStore = () => {
-      loadAuthStoreCalls += 1;
+    const loadAuthStore = vi.fn(() => {
+      const tokenRef = envRef(useMissingProfileRef ? missingEnvVar : initialEnvVar);
       return loadAuthStoreWithProfiles({
-        "custom:token": {
-          type: "token",
-          provider: "custom",
-          tokenRef: envRef(useMissingProfileRef ? missingEnvVar : initialEnvVar),
-        },
+        "custom:token": { type: "token", provider: "custom", tokenRef },
       });
-    };
+    });
 
-    const snapshot = await prepareSnapshot(
-      {},
-      {
-        env: { [initialEnvVar]: "sk-initial" },
-        loadAuthStore,
-      },
-    );
+    const env = { [initialEnvVar]: "sk-initial" };
+    const snapshot = await prepareSnapshot({}, env, {
+      loadAuthStore,
+    });
     activateSecretsRuntimeSnapshot(snapshot);
-    expect(loadAuthStoreCalls).toBe(1);
+    expect(loadAuthStore).toHaveBeenCalledTimes(1);
     setRuntimeAuthProfileStoreSnapshot(
       loadAuthStoreWithProfiles({
         "custom:token": { type: "token", provider: "custom", token: "sk-live" },
@@ -100,21 +105,17 @@ describe("secrets runtime snapshot request secret refs", () => {
     );
 
     useMissingProfileRef = true;
-    const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
-    if (!refreshHandler) {
-      throw new Error("Expected active runtime refresh handler");
-    }
+    const refreshHandler = getRuntimeConfigSnapshotRefreshHandler()!;
     await expect(
       refreshHandler.refresh({
         sourceConfig: asConfig({ gateway: { port: 19001 } }),
         includeAuthStoreRefs: false,
       }),
     ).resolves.toBe(true);
-    expect(loadAuthStoreCalls).toBe(1);
-    const profile = getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[
-      "custom:token"
-    ] as { token?: string } | undefined;
-    expect(profile?.token).toBe("sk-live");
+    expect(loadAuthStore).toHaveBeenCalledTimes(1);
+    expect(
+      getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles["custom:token"],
+    ).toMatchObject({ token: "sk-live" });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -154,17 +155,14 @@ describe("secrets runtime snapshot request secret refs", () => {
           },
         },
       });
-      const snapshot = await prepareSnapshot(config, {
+      const snapshot = await prepareSnapshot(config, undefined, {
         agentDirs: [path.join(root, "agent")],
       });
       activateSecretsRuntimeSnapshot(snapshot);
       await fs.writeFile(execLogPath, "", "utf8");
 
-      const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
-      if (!refreshHandler?.preflight) {
-        throw new Error("Expected active runtime refresh preflight handler");
-      }
-      const preflightResult = await refreshHandler.preflight({ sourceConfig: config });
+      const refreshHandler = getRuntimeConfigSnapshotRefreshHandler()!;
+      const preflightResult = await refreshHandler.preflight!({ sourceConfig: config });
       await expect(refreshHandler.refresh({ sourceConfig: config, preflightResult })).resolves.toBe(
         true,
       );
@@ -178,34 +176,22 @@ describe("secrets runtime snapshot request secret refs", () => {
   );
 
   it("resolves model provider request secret refs for headers, auth, and tls material", async () => {
-    const config = asConfig({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            request: {
-              headers: { "X-Tenant": envRef("OPENAI_PROVIDER_TENANT") },
-              auth: bearer(envRef("OPENAI_PROVIDER_TOKEN")),
-              proxy: proxy(envRef("OPENAI_PROVIDER_PROXY_CA")),
-              tls: {
-                cert: envRef("OPENAI_PROVIDER_CERT"),
-                key: envRef("OPENAI_PROVIDER_KEY"),
-              },
-            },
-            models: [],
-          },
-        },
+    const config = providerRequest({
+      headers: { "X-Tenant": envRef("OPENAI_PROVIDER_TENANT") },
+      auth: bearer(envRef("OPENAI_PROVIDER_TOKEN")),
+      proxy: proxy(envRef("OPENAI_PROVIDER_PROXY_CA")),
+      tls: {
+        cert: envRef("OPENAI_PROVIDER_CERT"),
+        key: envRef("OPENAI_PROVIDER_KEY"),
       },
     });
 
     const snapshot = await prepareSnapshot(config, {
-      env: {
-        OPENAI_PROVIDER_TENANT: "tenant-acme",
-        OPENAI_PROVIDER_TOKEN: "sk-provider-runtime", // pragma: allowlist secret
-        OPENAI_PROVIDER_PROXY_CA: "proxy-ca",
-        OPENAI_PROVIDER_CERT: "client-cert",
-        OPENAI_PROVIDER_KEY: "client-key",
-      },
+      OPENAI_PROVIDER_TENANT: "tenant-acme",
+      OPENAI_PROVIDER_TOKEN: "sk-provider-runtime", // pragma: allowlist secret
+      OPENAI_PROVIDER_PROXY_CA: "proxy-ca",
+      OPENAI_PROVIDER_CERT: "client-cert",
+      OPENAI_PROVIDER_KEY: "client-key",
     });
 
     expect(snapshot.config.models?.providers?.openai?.request).toEqual({
@@ -232,22 +218,14 @@ describe("secrets runtime snapshot request secret refs", () => {
                 capabilities: ["audio"],
                 request: {
                   headers: { "X-Shared-Tenant": envRef("MEDIA_SHARED_TENANT") },
-                  auth: {
-                    mode: "header",
-                    headerName: "x-shared-key",
-                    value: envRef("MEDIA_SHARED_MODEL_KEY"),
-                  },
+                  auth: headerAuth("x-shared-key", "MEDIA_SHARED_MODEL_KEY"),
                 },
               },
               {
                 provider: "deepgram",
                 capabilities: ["audio"],
                 request: {
-                  auth: {
-                    mode: "header",
-                    headerName: "x-api-key",
-                    value: envRef("MEDIA_AUDIO_MODEL_KEY"),
-                  },
+                  auth: headerAuth("x-api-key", "MEDIA_AUDIO_MODEL_KEY"),
                   proxy: proxy(envRef("MEDIA_AUDIO_PROXY_CA")),
                 },
               },
@@ -264,24 +242,21 @@ describe("secrets runtime snapshot request secret refs", () => {
         },
       },
       {
-        env: {
-          MEDIA_SHARED_TENANT: "tenant-shared",
-          MEDIA_SHARED_MODEL_KEY: "shared-model-key", // pragma: allowlist secret
-          MEDIA_AUDIO_TENANT: "tenant-acme",
-          MEDIA_AUDIO_TOKEN: "audio-token", // pragma: allowlist secret
-          MEDIA_AUDIO_CERT: "client-cert",
-          MEDIA_AUDIO_MODEL_KEY: "model-key", // pragma: allowlist secret
-          MEDIA_AUDIO_PROXY_CA: "proxy-ca",
-        },
+        MEDIA_SHARED_TENANT: "tenant-shared",
+        MEDIA_SHARED_MODEL_KEY: "shared-model-key", // pragma: allowlist secret
+        MEDIA_AUDIO_TENANT: "tenant-acme",
+        MEDIA_AUDIO_TOKEN: "audio-token", // pragma: allowlist secret
+        MEDIA_AUDIO_CERT: "client-cert",
+        MEDIA_AUDIO_MODEL_KEY: "model-key", // pragma: allowlist secret
+        MEDIA_AUDIO_PROXY_CA: "proxy-ca",
       },
     );
 
-    expect(snapshot.config.tools?.media?.audio?.request?.headers?.["X-Tenant"]).toBe("tenant-acme");
-    expect(snapshot.config.tools?.media?.audio?.request?.auth).toEqual({
-      mode: "authorization-bearer",
-      token: "audio-token",
+    expect(snapshot.config.tools?.media?.audio?.request).toMatchObject({
+      headers: { "X-Tenant": "tenant-acme" },
+      auth: { mode: "authorization-bearer", token: "audio-token" },
+      tls: { cert: "client-cert" },
     });
-    expect(snapshot.config.tools?.media?.audio?.request?.tls).toEqual({ cert: "client-cert" });
     expect(snapshot.config.tools?.media?.models?.[0]?.request).toEqual({
       headers: { "X-Shared-Tenant": "tenant-shared" },
       auth: { mode: "header", headerName: "x-shared-key", value: "shared-model-key" },

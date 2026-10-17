@@ -1,4 +1,3 @@
-/** Tests shadowing precedence in secrets runtime matrix scenarios. */
 import { describe, expect, it } from "vitest";
 import "./runtime-matrix.test-support.ts";
 import {
@@ -27,23 +26,13 @@ function prepareMatrix(
   });
 }
 
-function requireMatrixConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
-  const config = snapshot.config.channels?.matrix;
-  if (!config) {
-    throw new Error("expected Matrix runtime config");
-  }
-  return config;
-}
-
 function expectInactiveSurfaceWarning(
   snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
   path: string,
 ): void {
-  const warning = snapshot.warnings.find(
-    (entry) => entry.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" && entry.path === path,
+  expect(snapshot.warnings).toContainEqual(
+    expect.objectContaining({ code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE", path }),
   );
-  expect(warning?.code).toBe("SECRETS_REF_IGNORED_INACTIVE_SURFACE");
-  expect(warning?.path).toBe(path);
 }
 
 describe("secrets runtime snapshot matrix shadowing", () => {
@@ -89,7 +78,7 @@ describe("secrets runtime snapshot matrix shadowing", () => {
   ])("ignores top-level Matrix password refs shadowed by $name", async ({ config, env }) => {
     const snapshot = await prepareMatrix(config, env);
 
-    expect(requireMatrixConfig(snapshot).password).toEqual(envRef("MATRIX_PASSWORD"));
+    expect(snapshot.config.channels?.matrix?.password).toEqual(envRef("MATRIX_PASSWORD"));
     expectInactiveSurfaceWarning(snapshot, "channels.matrix.password");
   });
 
@@ -103,7 +92,7 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       true,
     );
 
-    expect(requireMatrixConfig(snapshot).accessToken).toEqual(
+    expect(snapshot.config.channels?.matrix?.accessToken).toEqual(
       envRef("MISSING_MATRIX_ROOT_ACCESS_TOKEN"),
     );
     expect(snapshot.degradedOwners).toStrictEqual([]);

@@ -1,9 +1,7 @@
-/** Tests provider-scoped SecretRef failure fan-out across runtime owners. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.js";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
@@ -35,13 +33,14 @@ function prepareFailure(
   });
 }
 
-function modelConfig(apiKey: unknown, headers?: Record<string, unknown>, provider = "example") {
-  return { models: { providers: { [provider]: { apiKey, headers, models: [] } } } };
+function modelConfig(
+  apiKey: unknown,
+  headers?: Record<string, unknown>,
+  provider = "example",
+  baseUrl?: string,
+) {
+  return { models: { providers: { [provider]: { apiKey, headers, models: [], baseUrl } } } };
 }
-
-afterEach(() => {
-  clearSecretsRuntimeSnapshotState();
-});
 
 describe("provider-scoped SecretRef failure fan-out", () => {
   it("preserves provider provenance for an unavailable web-search owner", async () => {
@@ -85,29 +84,19 @@ describe("provider-scoped SecretRef failure fan-out", () => {
       "provider",
       `printf 'call\\n' >> ${JSON.stringify(callLogPath)}\nexit 1\n`,
     );
-    const input = {
-      modelRef: { source: "exec" as const, provider: "shared", id: "models/openai" },
-      ttsRef: { source: "exec" as const, provider: "shared", id: "tts/elevenlabs" },
-    };
+    const modelRef = { source: "exec" as const, provider: "shared", id: "models/openai" };
+    const ttsRef = { source: "exec" as const, provider: "shared", id: "tts/elevenlabs" };
 
     const snapshot = await prepareFailure(
       { shared },
       {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: input.modelRef,
-              models: [],
-            },
-          },
-        },
-        tts: { providers: { elevenlabs: { apiKey: input.ttsRef } } },
+        ...modelConfig(modelRef, undefined, "openai", "https://api.openai.com/v1"),
+        tts: { providers: { elevenlabs: { apiKey: ttsRef } } },
       },
     );
 
-    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(input.modelRef);
-    expect(snapshot.config.tts?.providers?.elevenlabs?.apiKey).toEqual(input.ttsRef);
+    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(modelRef);
+    expect(snapshot.config.tts?.providers?.elevenlabs?.apiKey).toEqual(ttsRef);
     expect(snapshot.degradedOwners).toMatchObject([
       {
         ownerKind: "provider",
