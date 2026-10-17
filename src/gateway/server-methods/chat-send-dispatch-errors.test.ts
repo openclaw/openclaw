@@ -35,8 +35,6 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
-import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
@@ -49,6 +47,14 @@ import {
 
 const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
+
+function expectNoError(broadcast: ReturnType<typeof vi.fn>, runId: string) {
+  expect(broadcast).not.toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ runId, state: "error" }),
+    expect.anything(),
+  );
+}
 
 async function captureTerminalTarget(scope: {
   agentId?: string;
@@ -103,6 +109,26 @@ function createContext() {
   };
 }
 
+function registerRun(runId: string) {
+  const sessionKey = "agent:main:main";
+  const chatAbortControllers = new Map();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionId: "sess-main",
+    sessionKey,
+    timeoutMs: 60_000,
+  });
+  if (!registration.registered) {
+    throw new Error("expected the chat abort controller to be registered");
+  }
+  return { sessionKey, chatAbortControllers, registration, context: createContext() };
+}
+
+function createSessionBinding(sessionId = "sess-main", lifecycleGeneration = "test-generation") {
+  return { sessionId, sessionKey: "agent:main:main", agentId: "main", lifecycleGeneration };
+}
+
 it.each([
   new GatewayDrainingError(),
   new SessionTranscriptProjectionUnavailableError("sess-main"),
@@ -127,12 +153,7 @@ it.each([
 
   await handleChatSendSetupError({
     admission: {
-      sessionBinding: {
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        lifecycleGeneration: "test-generation",
-      },
+      sessionBinding: createSessionBinding(),
       cleanupAdmittedRun,
       lifecycleGeneration: "test-generation",
       restartSafeAdmission: restart ? { requestFingerprint: "restart" } : undefined,
@@ -185,12 +206,7 @@ function createLifecycle({
 }) {
   return createChatSendDispatchErrorLifecycle({
     admission: {
-      sessionBinding: {
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        lifecycleGeneration: "test-generation",
-      },
+      sessionBinding: createSessionBinding(),
       activeRunAbort: createAbort(),
       cleanupAdmittedRun: vi.fn(),
       lifecycleGeneration: "test-generation",
@@ -217,265 +233,222 @@ function createLifecycle({
   });
 }
 
-it.each([
-  { settlement: "fallback" },
-  { settlement: "fallback", stateContention: true },
-  { settlement: "fallback", restartFailure: true },
-  { settlement: "restart-safe", restartFailure: true },
-  { settlement: "restart-safe", stateContention: true },
-  { settlement: "restart-safe" },
-  { settlement: "fallback", missingProfile: true },
-  { settlement: "restart-safe", missingProfile: true },
-  { settlement: "fallback", policyFailure: true },
-  { settlement: "restart-safe", policyFailure: true },
-  { settlement: "fallback", sessionChanged: true },
-  { settlement: "restart-safe", sessionChanged: true },
-])(
-  "records $settlement rejection: profile=$missingProfile policy=$policyFailure changed=$sessionChanged",
-  async ({
-    settlement,
-    missingProfile,
-    policyFailure,
-    sessionChanged,
-    stateContention,
-    restartFailure,
-  }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const target = {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "dispatch-failure-session",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      const runId = "dispatch-failure-run";
-      const lifecycleGeneration = restartFailure
-        ? getAgentEventLifecycleGeneration()
-        : "test-generation";
-      const restartSafe = settlement === "restart-safe";
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1_000,
-        startedAt: 1_000,
-        lifecycleRunId: runId,
-        ...(restartSafe
-          ? { restartRecoveryDeliveryRunId: runId, restartRecoveryDeliverySourceRunId: runId }
-          : {}),
+it.each(
+  (["fallback", "restart-safe"] as const).flatMap((settlement) =>
+    (["worker", "busy", "restart", "profile", "policy", "changed"] as const).map((failureKind) => ({
+      settlement,
+      failureKind,
+    })),
+  ),
+)("records $settlement rejection: $failureKind", async ({ settlement, failureKind }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "dispatch-failure-session",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const runId = "dispatch-failure-run";
+    const lifecycleGeneration =
+      failureKind === "restart" ? getAgentEventLifecycleGeneration() : "test-generation";
+    const restartSafe = settlement === "restart-safe";
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1_000,
+      startedAt: 1_000,
+      lifecycleRunId: runId,
+      ...(restartSafe
+        ? { restartRecoveryDeliveryRunId: runId, restartRecoveryDeliverySourceRunId: runId }
+        : {}),
+    });
+    let userPersisted = false;
+    const persistUserTurnTranscript = async () => {
+      await appendTranscriptMessage(target, {
+        message: { role: "user", content: "Please continue." },
       });
-      let userPersisted = false;
-      const persistUserTurnTranscript = async () => {
-        await appendTranscriptMessage(target, {
-          message: { role: "user", content: "Please continue." },
-        });
-        userPersisted = true;
-      };
-      if (restartSafe) {
-        await persistUserTurnTranscript();
-      }
-      const terminalTarget = await captureTerminalTarget(target);
-      const context = {
-        ...createContext(),
-        broadcastToConnIds: vi.fn(),
-        chatAbortControllers: new Map(),
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-      };
-      const { broadcast, chatRunState } = context;
-      const warn = context.logGateway.warn;
-      broadcastChatDelta({
-        context,
-        runId,
-        sessionKey: target.sessionKey,
-        text: "Command instructions",
-        isCurrent: () => true,
-      });
-      const previewGroup = chatRunState.runs.get(runId)?.liveTextGroup;
-      const lifecycle = createLifecycle({
-        admission: {
-          sessionBinding: {
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            agentId: target.agentId,
-            lifecycleGeneration,
-          },
-          lifecycleGeneration,
-          restartSafeAdmission: restartSafe
-            ? { requestFingerprint: "test-fingerprint" }
-            : undefined,
-        },
-        context,
-        persistUserTurnTranscript,
-        session: {
-          agentId: target.agentId,
-          backingSessionId: target.sessionId,
-          cfg: {},
+      userPersisted = true;
+    };
+    if (restartSafe) {
+      await persistUserTurnTranscript();
+    }
+    const terminalTarget = await captureTerminalTarget(target);
+    const context = {
+      ...createContext(),
+      broadcastToConnIds: vi.fn(),
+      chatAbortControllers: new Map(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    };
+    const { broadcast, chatRunState } = context;
+    const warn = context.logGateway.warn;
+    broadcastChatDelta({
+      context,
+      runId,
+      sessionKey: target.sessionKey,
+      text: "Command instructions",
+      isCurrent: () => true,
+    });
+    const previewGroup = chatRunState.runs.get(runId)?.liveTextGroup;
+    const lifecycle = createLifecycle({
+      admission: {
+        sessionBinding: createSessionBinding(target.sessionId, lifecycleGeneration),
+        lifecycleGeneration,
+        restartSafeAdmission: restartSafe ? { requestFingerprint: "test-fingerprint" } : undefined,
+      },
+      context,
+      persistUserTurnTranscript,
+      session: { backingSessionId: target.sessionId, clientRunId: runId, now: 1_000 },
+      terminalizeRestartSafeAdmission: (terminal) =>
+        terminalizeRestartSafeChatAdmission({
+          ...terminal,
+          ...terminalTarget,
+          admittedSessionId: target.sessionId,
           clientRunId: runId,
-          now: 1_000,
-          rawSessionKey: target.sessionKey,
-          sessionKey: target.sessionKey,
-        },
-        terminalizeRestartSafeAdmission: (terminal) =>
-          terminalizeRestartSafeChatAdmission({
-            ...terminal,
-            ...terminalTarget,
-            admittedSessionId: target.sessionId,
-            clientRunId: runId,
-            startedAt: 1_000,
-          }),
-        userTurnRecorder: { hasPersisted: () => userPersisted, isBlocked: () => false },
-      });
+          startedAt: 1_000,
+        }),
+      userTurnRecorder: { hasPersisted: () => userPersisted, isBlocked: () => false },
+    });
 
-      const failure = restartFailure
+    const failure =
+      failureKind === "restart"
         ? new GatewayDrainingError()
-        : stateContention
+        : failureKind === "busy"
           ? Object.assign(new Error("database is locked"), {
               code: "ERR_SQLITE_ERROR",
               errcode: 5,
             })
-          : sessionChanged
+          : failureKind === "changed"
             ? new DispatchSessionRefreshRequiredError(
                 new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
               )
-            : missingProfile
+            : failureKind === "profile"
               ? createSelectedAuthProfileUnavailableError({
                   profileId: "openai:removed",
                   provider: "openai",
                   modelId: "fixture-model",
                 })
-              : policyFailure
+              : failureKind === "policy"
                 ? new AgentHarnessPreflightError("private-policy-diagnostic", {
                     userMessage: policyMessage,
                   })
                 : new Error("Cloud worker unavailable");
-      if (restartFailure) {
-        markGatewayRestartDraining();
+    if (failureKind === "restart") {
+      markGatewayRestartDraining();
+    }
+    try {
+      await lifecycle.handleError(failure);
+      expect(previewGroup?.signal.aborted).toBe(false);
+      await lifecycle.finalize();
+    } finally {
+      if (failureKind === "restart") {
+        resetGatewayWorkAdmission();
       }
-      try {
-        await lifecycle.handleError(failure);
-        expect(previewGroup?.signal.aborted).toBe(false);
-        await lifecycle.finalize();
-      } finally {
-        if (restartFailure) {
-          resetGatewayWorkAdmission();
-        }
-      }
-      expect(broadcast).toHaveBeenLastCalledWith(
-        "chat",
-        expect.objectContaining(
-          restartFailure ? { state: "aborted", stopReason: "restart" } : { state: "error" },
-        ),
-        {
-          liveText: { group: previewGroup?.signal, settle: restartFailure ? undefined : true },
-          sessionKeys: [target.sessionKey],
+    }
+    expect(broadcast).toHaveBeenLastCalledWith(
+      "chat",
+      expect.objectContaining(
+        failureKind === "restart"
+          ? { state: "aborted", stopReason: "restart" }
+          : { state: "error" },
+      ),
+      {
+        liveText: {
+          group: previewGroup?.signal,
+          settle: failureKind === "restart" ? undefined : true,
         },
-      );
-      expect(chatRunState.runs.has(runId)).toBe(false);
-      expect(previewGroup?.signal.aborted).toBe(true);
+        sessionKeys: [target.sessionKey],
+      },
+    );
+    expect(chatRunState.runs.has(runId)).toBe(false);
+    expect(previewGroup?.signal.aborted).toBe(true);
 
-      expect(warn).not.toHaveBeenCalled();
-      const stored = loadSessionEntry(target);
-      expect(stored).toMatchObject({
-        status: restartFailure ? "interrupted" : "failed",
-        lastRunId: runId,
-      });
-      const messages = (await loadTranscriptEvents(target)).filter(
-        (entry) => isRecord(entry) && (entry.type === "message" || entry.type === "custom_message"),
-      );
-      if (restartFailure) {
-        expect(messages).toEqual([
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({ role: "user", content: "Please continue." }),
-          }),
-        ]);
-        expect(stored).toMatchObject({ abortedLastRun: true });
-        if (restartSafe) {
-          expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
-        }
-        return;
-      }
-      expect(messages).toMatchObject([
-        { type: "message", message: { role: "user", content: "Please continue." } },
-        {
-          type: "custom_message",
-          customType: "run-failed-before-reply",
-          display: true,
-          details: { runId },
-        },
-      ]);
-      if (stateContention) {
-        const summary =
-          "Your request was interrupted while the server was busy. Check its status before trying again.";
-        const terminal = broadcast.mock.calls.at(-1)?.[1];
-        expect(terminal).toMatchObject({
-          errorKind: "state_contention",
-          errorMessage: expect.stringMatching(new RegExp(`^${summary.replaceAll(".", "\\.")}`)),
-        });
-        expect(stored?.lastRunError).toBe(summary);
-        expect(messages[1]).toMatchObject({
-          content: summary,
-          details: { errorKind: "state_contention" },
-        });
-        const notice = messages[1];
-        if (!isRecord(notice)) {
-          throw new Error("Expected a recorded failure notice");
-        }
-        const restored = projectChatDisplayMessages([{ role: "custom", ...notice }]);
-        expect(restored[0]).toMatchObject({
-          content: summary,
-          details: {
-            errorKind: "state_contention",
-            diagnostic: terminal.errorMessage.split("\n\n")[1],
-          },
-        });
-        expect(restored[0]).not.toHaveProperty("details.error");
-        expect(restored[0]).not.toHaveProperty("details.runId");
-      }
-      if (missingProfile) {
-        const recovery = renderFailoverCodeUserCopy("selected_auth_profile_unavailable")!;
-        const storedError = stored?.lastRunError;
-        expect(storedError).toMatch(/^This saved login isn't available\./u);
-        expect(storedError).toContain("run `openclaw configure`.");
-        expect(storedError?.length).toBeLessThanOrEqual(160);
-        expect(JSON.stringify(messages)).toContain(recovery);
-        expect(JSON.stringify(messages)).not.toContain("openai:removed");
-        expectLastError(broadcast, recovery);
-      }
-      if (sessionChanged) {
-        const recovery =
-          "Your message didn't run because the conversation changed. Refresh the conversation, then send it again.";
-        expectLastError(broadcast, `${recovery}\n\n${String(failure)}`);
-        expect(stored?.lastRunError).toMatch(/^Your message didn't run/);
-        expect(JSON.stringify(messages)).toContain(recovery);
-      }
-      if (policyFailure) {
-        expect(stored?.lastRunError).toBe(policyMessage);
-        expect(JSON.stringify(messages)).toContain(policyMessage);
-        expect(JSON.stringify(messages)).not.toContain("private-policy-diagnostic");
-        expectLastError(broadcast, policyMessage);
-      }
-      if (restartSafe) {
-        expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe(runId);
-        const terminal = {
-          ...terminalTarget,
-          admittedSessionId: target.sessionId,
-          clientRunId: runId,
-          startedAt: 1_000,
-          error: "Late duplicate rejection",
-          status: "failed" as const,
-          retryable: false,
-        };
-        expect(await terminalizeRestartSafeChatAdmission(terminal)).toBe(true);
-        expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBeUndefined();
-        expect(await terminalizeRestartSafeChatAdmission(terminal)).toBe(false);
-        expect(
-          (await loadTranscriptEvents(target)).filter(
-            (entry) => isRecord(entry) && entry.type === "custom_message",
-          ),
-        ).toHaveLength(1);
-      }
+    expect(warn).not.toHaveBeenCalled();
+    const stored = loadSessionEntry(target);
+    expect(stored).toMatchObject({
+      status: failureKind === "restart" ? "interrupted" : "failed",
+      lastRunId: runId,
     });
-  },
-);
+    const messages = (await loadTranscriptEvents(target)).filter(
+      (entry) => isRecord(entry) && (entry.type === "message" || entry.type === "custom_message"),
+    );
+    if (failureKind === "restart") {
+      expect(messages).toEqual([
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ role: "user", content: "Please continue." }),
+        }),
+      ]);
+      expect(stored).toMatchObject({ abortedLastRun: true });
+      if (restartSafe) {
+        expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
+      }
+      return;
+    }
+    expect(messages).toMatchObject([
+      { type: "message", message: { role: "user", content: "Please continue." } },
+      {
+        type: "custom_message",
+        customType: "run-failed-before-reply",
+        display: true,
+        details: { runId },
+      },
+    ]);
+    if (failureKind === "busy") {
+      const summary =
+        "Your request was interrupted while the server was busy. Check its status before trying again.";
+      const terminal = broadcast.mock.calls.at(-1)?.[1];
+      expect(terminal).toMatchObject({
+        errorKind: "state_contention",
+        errorMessage: expect.stringMatching(new RegExp(`^${summary.replaceAll(".", "\\.")}`)),
+      });
+      expect(stored?.lastRunError).toBe(summary);
+      expect(messages[1]).toMatchObject({
+        content: summary,
+        details: { errorKind: "state_contention" },
+      });
+    }
+    if (failureKind === "profile") {
+      const recovery = renderFailoverCodeUserCopy("selected_auth_profile_unavailable")!;
+      expect(stored?.lastRunError).toBe(recovery);
+      expect(JSON.stringify(messages)).toContain(recovery);
+      expect(JSON.stringify(messages)).not.toContain("openai:removed");
+      expectLastError(broadcast, recovery);
+    }
+    if (failureKind === "changed") {
+      const recovery =
+        "Your message didn't run because the conversation changed. Refresh the conversation, then send it again.";
+      expectLastError(broadcast, `${recovery}\n\n${String(failure)}`);
+      expect(stored?.lastRunError).toMatch(/^Your message didn't run/);
+      expect(JSON.stringify(messages)).toContain(recovery);
+    }
+    if (failureKind === "policy") {
+      expect(stored?.lastRunError).toBe(policyMessage);
+      expect(JSON.stringify(messages)).toContain(policyMessage);
+      expect(JSON.stringify(messages)).not.toContain("private-policy-diagnostic");
+      expectLastError(broadcast, policyMessage);
+    }
+    if (restartSafe) {
+      expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe(runId);
+      const terminal = {
+        ...terminalTarget,
+        admittedSessionId: target.sessionId,
+        clientRunId: runId,
+        startedAt: 1_000,
+        error: "Late duplicate rejection",
+        status: "failed" as const,
+        retryable: false,
+      };
+      expect(await terminalizeRestartSafeChatAdmission(terminal)).toBe(true);
+      expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(await terminalizeRestartSafeChatAdmission(terminal)).toBe(false);
+      expect(
+        (await loadTranscriptEvents(target)).filter(
+          (entry) => isRecord(entry) && entry.type === "custom_message",
+        ),
+      ).toHaveLength(1);
+    }
+  });
+});
 
 it("settles restart-safe rejection even when its notice write fails", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -512,66 +485,42 @@ it("settles restart-safe rejection even when its notice write fails", async () =
   });
 });
 
-it.each([false, true])(
-  "preserves queued refresh after dispatch failure (completed=%s)",
-  async (completed) => {
-    const context = createContext();
-    const { broadcast, dedupe, removeChatRun } = context;
-    const warn = context.logGateway.warn;
-    const cleanupAdmittedRun = vi.fn();
-    const cached = {
-      ts: 1,
-      ok: true,
-      payload: { runId: "run-1", status: completed ? "completed" : "accepted" },
-    };
-    dedupe.set("chat:run-1", cached);
-    const lifecycle = createLifecycle({
-      admission: {
-        sessionBinding: {
-          sessionId: "run-1",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          lifecycleGeneration: "test-generation",
-        },
-        cleanupAdmittedRun,
-      },
-      context,
-      isQueuedFollowupEnqueued: () => true,
-      session: { backingSessionId: undefined, clientRunId: "run-1" },
-      userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
-    });
+it("preserves queued refresh after dispatch failure", async () => {
+  const context = createContext();
+  const { broadcast, dedupe, removeChatRun } = context;
+  const warn = context.logGateway.warn;
+  const cleanupAdmittedRun = vi.fn();
+  const cached = { ts: 1, ok: true, payload: { runId: "run-1", status: "completed" } };
+  dedupe.set("chat:run-1", cached);
+  const lifecycle = createLifecycle({
+    admission: {
+      sessionBinding: createSessionBinding("run-1"),
+      cleanupAdmittedRun,
+    },
+    context,
+    isQueuedFollowupEnqueued: () => true,
+    session: { backingSessionId: undefined, clientRunId: "run-1" },
+    userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
+  });
 
-    await lifecycle.handleError(new Error("late failure"));
-    await lifecycle.finalize();
+  await lifecycle.handleError(new Error("late failure"));
+  await lifecycle.finalize();
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("dispatch failed after followup queue admission"),
-    );
-    expect(dedupe.get("chat:run-1")).toBe(cached);
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
-    expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
-  },
-);
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("dispatch failed after followup queue admission"),
+  );
+  expect(dedupe.get("chat:run-1")).toBe(cached);
+  expect(broadcast).not.toHaveBeenCalled();
+  expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
+  expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
+});
 
 it.each(["resolves", "rejects"])(
   "preserves an explicitly aborted terminal when its dispatch later %s",
   async (settlement) => {
     const runId = `explicit-abort-before-dispatch-${settlement}`;
-    const sessionKey = "agent:main:main";
-    const chatAbortControllers = new Map();
-    const context = createContext();
+    const { sessionKey, chatAbortControllers, context, registration } = registerRun(runId);
     const { broadcast, chatRunState, dedupe, removeChatRun } = context;
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId,
-      sessionId: "sess-main",
-      sessionKey,
-      timeoutMs: 60_000,
-    });
-    if (!registration.registered) {
-      throw new Error("expected the chat abort controller to be registered");
-    }
     const entry = registration.entry;
     const terminalizeRestartSafeAdmission = vi.fn();
     const unsubscribe = onAgentRuntimeEvent((event) => {
@@ -607,7 +556,7 @@ it.each(["resolves", "rejects"])(
           restartSafeAdmission: {} as never,
         },
         context,
-        session: { clientRunId: runId, rawSessionKey: sessionKey, sessionKey },
+        session: { clientRunId: runId },
         terminalizeRestartSafeAdmission,
       });
 
@@ -620,11 +569,7 @@ it.each(["resolves", "rejects"])(
         ok: true,
         payload: { runId, status: "timeout", summary: "aborted" },
       });
-      expect(broadcast).not.toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ runId, state: "error" }),
-        expect.anything(),
-      );
+      expectNoError(broadcast, runId);
       expect(chatAbortControllers.get(runId)).toBe(entry);
       expect(entry).toMatchObject({
         projectSessionTerminalPending: true,
@@ -648,9 +593,7 @@ it.each([false, true])(
     const context = createContext();
     const { broadcast, dedupe } = context;
     const lifecycle = createLifecycle({
-      admission: {
-        activeRunAbort: createAbort(controller),
-      },
+      admission: { activeRunAbort: createAbort(controller) },
       context,
       session: { clientRunId: "signal-only-rejection" },
     });
@@ -673,62 +616,36 @@ it.each([false, true])(
   },
 );
 
-it.each([true, false])(
-  "does not overwrite a lifecycle terminal after persistence success=%s",
-  async (persisted) => {
-    const runId = "agent-owned-terminal";
-    const sessionKey = "agent:main:main";
-    const chatAbortControllers = new Map();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId,
-      sessionId: "sess-main",
-      sessionKey,
-      timeoutMs: 60_000,
-    });
-    if (!registration.entry) {
-      throw new Error("expected the chat abort controller to be registered");
-    }
-    markChatAbortTerminalOutcome(registration.entry);
-    registration.entry.projectSessionTerminalPersisted = persisted;
-    const terminalEntry = {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId, status: "ok" as const },
-    };
-    const context = createContext();
-    const { broadcast, chatRunState, dedupe } = context;
-    dedupe.set(`chat:${runId}`, terminalEntry);
-    chatRunState.getOrCreate(runId).buffer = "Native-owned output";
-    const lifecycle = createLifecycle({
-      admission: { activeRunAbort: registration, cleanupAdmittedRun: registration.cleanup },
-      context,
-      isAgentRunStarted: () => true,
-      session: { clientRunId: runId, rawSessionKey: sessionKey, sessionKey },
-    });
+it("preserves the native terminal even when its projection failed", async () => {
+  const runId = "agent-owned-terminal";
+  const { context, registration } = registerRun(runId);
+  markChatAbortTerminalOutcome(registration.entry);
+  registration.entry.projectSessionTerminalPersisted = false;
+  const terminalEntry = {
+    ts: Date.now(),
+    ok: true,
+    payload: { runId, status: "ok" as const },
+  };
+  const { broadcast, chatRunState, dedupe } = context;
+  dedupe.set(`chat:${runId}`, terminalEntry);
+  chatRunState.getOrCreate(runId).buffer = "Native-owned output";
+  const lifecycle = createLifecycle({
+    admission: { activeRunAbort: registration, cleanupAdmittedRun: registration.cleanup },
+    context,
+    isAgentRunStarted: () => true,
+    session: { clientRunId: runId },
+  });
 
-    await lifecycle.handleError(new Error("dispatch rejected after agent terminal"));
-    await lifecycle.finalize();
+  await lifecycle.handleError(new Error("dispatch rejected after agent terminal"));
+  await lifecycle.finalize();
 
-    expect(dedupe.get(`chat:${runId}`)).toBe(terminalEntry);
-    expect(chatRunState.runs.get(runId)?.buffer).toBe("Native-owned output");
-    expect(broadcast).not.toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId, state: "error" }),
-      expect.anything(),
-    );
-  },
-);
+  expect(dedupe.get(`chat:${runId}`)).toBe(terminalEntry);
+  expect(chatRunState.runs.get(runId)?.buffer).toBe("Native-owned output");
+  expectNoError(broadcast, runId);
+});
 
 it("retains non-default global admission through failure persistence", async () => {
-  const cfg = retainLegacyDefaultAgentId(
-    {
-      agents: {
-        entries: { main: {}, ops: {} },
-      },
-    },
-    "main",
-  );
+  const cfg = retainLegacyDefaultAgentId({ agents: { entries: { main: {}, ops: {} } } }, "main");
   const persistenceEntered = createDeferred();
   const releasePersistence = createDeferred();
   const persistLifecycleEvent = vi
@@ -737,10 +654,7 @@ it("retains non-default global admission through failure persistence", async () 
       persistenceEntered.resolve();
       await releasePersistence.promise;
     });
-  const sessionBinding: Pick<
-    ChatAbortControllerEntry,
-    "sessionId" | "sessionKey" | "agentId" | "lifecycleGeneration" | "terminalOutcomeObserved"
-  > = {
+  const sessionBinding: LifecycleParams["admission"]["sessionBinding"] = {
     sessionId: "sess-ops",
     sessionKey: "agent:ops:main",
     agentId: "ops",

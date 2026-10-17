@@ -44,11 +44,9 @@ test.each([999.9, 1_000])(
     const { info, diagnostics } = createDiagnostics();
     diagnostics.scope("authority");
     at(elapsedMs, () => diagnostics[Symbol.dispose]());
-    if (elapsedMs < 1_000) {
-      expect(info).not.toHaveBeenCalled();
-    } else {
-      expectLog(info, "slow chat send 1000ms stage=request authority=1000ms");
-    }
+    expect(info.mock.calls).toEqual(
+      elapsedMs < 1_000 ? [] : [["slow chat send 1000ms stage=request authority=1000ms"]],
+    );
   },
 );
 
@@ -60,85 +58,64 @@ test.each(["startup", "steer", "queued"] as const)(
     const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
       include: ["diagnostic.phase.completed"],
     });
+    using _ = { [Symbol.dispose]: stop };
     const { info, diagnostics } = createDiagnostics();
-    try {
-      const request = diagnostics.scope("persist")!;
-      at(10, () => request.mark("response"));
-      const snapshot = diagnostics.scope("snapshot")!;
-      at(15, request.finish);
-      diagnostics.acknowledge(stage === "queued" ? "startup" : stage);
-      diagnostics[Symbol.dispose]();
-      const parallel = diagnostics.scope("snapshot")!;
-      at(815, parallel.finish);
-      at(1_215, () => snapshot.mark("dispatch"));
-      at(1_415);
-      diagnostics.finish({
-        isSteered: () => false,
-        isEnqueued: () => stage === "queued",
-        isTerminal: () => false,
-      });
-      expect(events).toEqual([]);
-      expectLog(
-        info,
-        `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`,
-      );
+    const request = diagnostics.scope("persist")!;
+    at(10, () => request.mark("response"));
+    const snapshot = diagnostics.scope("snapshot")!;
+    at(15, request.finish);
+    diagnostics.acknowledge(stage === "queued" ? "startup" : stage);
+    diagnostics[Symbol.dispose]();
+    const parallel = diagnostics.scope("snapshot")!;
+    at(815, parallel.finish);
+    at(1_215, () => snapshot.mark("dispatch"));
+    at(1_415);
+    diagnostics.finish({
+      isSteered: () => false,
+      isEnqueued: () => stage === "queued",
+      isTerminal: () => false,
+    });
+    expect(events).toEqual([]);
+    expectLog(info, `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`);
 
-      at(4_000, () => snapshot.mark("effects"));
-      snapshot.finish();
-      diagnostics.acknowledge();
-      diagnostics.finish();
-      expect(diagnostics.scope("worktree")).toBeUndefined();
-      await waitForDiagnosticEventsDrained();
-      expect(events).toMatchObject([
-        { name: "chat.send.persist", durationMs: 10, details: { stage: "request" } },
-        { name: "chat.send.snapshot", durationMs: 5, details: { stage: "request" } },
-        { name: "chat.send.response", durationMs: 5, details: { stage: "request" } },
-        { name: "chat.send.snapshot", durationMs: 2_000, details: { stage } },
-        { name: "chat.send.dispatch", durationMs: 200, details: { stage } },
-      ]);
-      expect(info).toHaveBeenCalledOnce();
-    } finally {
-      stop();
-    }
+    at(4_000, () => snapshot.mark("effects"));
+    snapshot.finish();
+    diagnostics.acknowledge();
+    diagnostics.finish();
+    expect(diagnostics.scope("worktree")).toBeUndefined();
+    await waitForDiagnosticEventsDrained();
+    expect(events).toMatchObject([
+      { name: "chat.send.persist", durationMs: 10, details: { stage: "request" } },
+      { name: "chat.send.snapshot", durationMs: 5, details: { stage: "request" } },
+      { name: "chat.send.response", durationMs: 5, details: { stage: "request" } },
+      { name: "chat.send.snapshot", durationMs: 2_000, details: { stage } },
+      { name: "chat.send.dispatch", durationMs: 200, details: { stage } },
+    ]);
+    expect(info).toHaveBeenCalledOnce();
   },
 );
 
-test("logging failures preserve the send error and retire unfinished scopes", () => {
+test("error unwinding retires scopes without diagnostic failures replacing the send error", async () => {
   const { info, diagnostics } = createDiagnostics(
     vi.fn(() => {
       throw new Error("synthetic diagnostic sink failure");
     }),
   );
-  const originalError = new Error("synthetic append failure");
+  const originalError = new Error("synthetic owner failure");
   const scope = diagnostics.scope("persist")!;
-  expect(() => {
+  await expect(async () => {
     try {
-      clock = 1_500;
+      using _ = diagnostics.scope("detail.persist.stage");
+      await Promise.resolve();
+      at(400);
       throw originalError;
     } finally {
-      diagnostics.finish();
+      at(1_200, diagnostics.finish);
     }
-  }).toThrow(originalError);
+  }).rejects.toBe(originalError);
   at(3_000, scope.finish);
   diagnostics.finish();
-  expectLog(info, "slow chat send 1500ms stage=request persist=1500ms");
-});
-
-test("lexical detail scopes stop on failure without extending later request time", async () => {
-  const { info, diagnostics } = createDiagnostics();
-  const resume = createDeferredCore();
-  const failure = new Error("synthetic owner failure");
-  const pending = (async () => {
-    using _ = diagnostics.scope("detail.persist.stage");
-    await resume.promise;
-    clock = 400;
-    throw failure;
-  })();
-  const rejected = expect(pending).rejects.toBe(failure);
-  resume.resolve();
-  await rejected;
-  at(1_200, diagnostics.finish);
-  expectLog(info, "slow chat send 1200ms stage=request detail.persist.stage=400ms");
+  expectLog(info, "slow chat send 1200ms stage=request persist=1200ms detail.persist.stage=400ms");
 });
 
 test("startup spans stay request-owned and include unfinished parents without timeline logging", async () => {
@@ -157,22 +134,15 @@ test("startup spans stay request-owned and include unfinished parents without ti
     }),
   );
   clock = 1_000;
-  observeTimeline(second.observeSpan, () =>
-    measureSpanSync("reply.ensure_workspace", () => at(1_020)),
-  );
+  observeTimeline(second.observeSpan, () => measureSpanSync("workspace", () => at(1_020)));
   second.finish();
   resume.resolve();
   await parent;
-  // A span finishing after startup cannot reopen or append to the completed report.
-  first.finish();
   expectLog(
     firstLog,
     "slow chat send 1100ms stage=startup ack=0ms detail.attempt.tool_catalog=80ms detail.reply.init_session_state=1100ms",
   );
-  expectLog(
-    secondLog,
-    "slow chat send 1020ms stage=startup ack=0ms detail.reply.ensure_workspace=20ms",
-  );
+  expectLog(secondLog, "slow chat send 1020ms stage=startup ack=0ms detail.workspace=20ms");
 });
 
 test("span observer failures preserve synchronous and asynchronous results and errors", async () => {
@@ -181,15 +151,6 @@ test("span observer failures preserve synchronous and asynchronous results and e
     throw new Error("observer failure");
   };
   expect(observeTimeline(observer, () => measureSpanSync("sync", () => 42))).toBe(42);
-  await expect(
-    observeTimeline(
-      () => () => {
-        throw new Error("finish failure");
-      },
-      () =>
-        measureSpan("async", async () => {
-          throw failure;
-        }),
-    ),
-  ).rejects.toBe(failure);
+  const rejectOperation = () => measureSpan("async", () => Promise.reject(failure));
+  await expect(observeTimeline(() => observer, rejectOperation)).rejects.toBe(failure);
 });

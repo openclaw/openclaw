@@ -127,6 +127,10 @@ it.for([
     const abortController = new AbortController();
     const imageResponse = createDeferred();
     const gcDuringPreparation = scenario.startsWith("gc-");
+    const revoked = scenario === "revoked";
+    const aborted = scenario === "aborted";
+    const targetRewrite = scenario === "target-rewrite";
+    const wait = <T>(promise: Promise<T>) => racePromiseWithAbortSignal(promise, test.signal);
     const upstream = http.createServer((_request, response) => {
       requestCount += 1;
       if (requestCount === mediaUrls.length) {
@@ -138,12 +142,9 @@ it.for([
         });
         response.end(scenario === "document" ? Buffer.from("%PDF-1.7\nfixture\n%%EOF") : PNG_BYTES);
       };
-      if (
-        (scenario === "revoked" || scenario === "aborted" || gcDuringPreparation) &&
-        requestCount === 1
-      ) {
+      if ((revoked || aborted || gcDuringPreparation) && requestCount === 1) {
         send();
-      } else if (scenario === "aborted") {
+      } else if (aborted) {
         response.writeHead(200, { "content-type": "image/png" });
         response.write(PNG_BYTES.subarray(0, 16));
         response.on("close", () => {
@@ -172,7 +173,7 @@ it.for([
     }
     const mediaUrls = localMedia
       ? [absoluteImage, relativeImage, siblingImage]
-      : scenario === "revoked" || scenario === "aborted" || gcDuringPreparation
+      : revoked || aborted || gcDuringPreparation
         ? [mediaUrl, `${mediaUrl}/second`]
         : [mediaUrl];
     const mixed = scenario === "mixed-text" || scenario === "mixed-media";
@@ -234,18 +235,13 @@ it.for([
       sessionId: scope.sessionId,
     });
     const transcriptContext = {
-      sessionTarget: {
-        ...scope,
-        storePath: (await loadSessionEntryAsync(scope.sessionKey, { agentId: scope.agentId }))
-          .storePath,
-      },
+      sessionTarget: scope,
       assertCommitAllowed: () => {
         if (!admittedActive) {
           throw new SessionTranscriptWriterClaimReboundError();
         }
       },
-      withTranscriptWrite: <T>(operation: () => Promise<T> | T) =>
-        transcriptLifecycle.withTranscriptWrite(operation),
+      withTranscriptWrite: transcriptLifecycle.withTranscriptWrite,
     };
     const dispatch = createReplyDispatch(runId, {
       requesterContext: { SenderId: "cli" },
@@ -254,7 +250,6 @@ it.for([
       logGateway: { warn } as never,
       session: {
         ...scope,
-        storePath: transcriptContext.sessionTarget.storePath,
         backingSessionId: scope.sessionId,
         cfg,
         clientRunId: runId,
@@ -301,11 +296,13 @@ it.for([
             ]).runner,
           )
         : undefined;
+    const readMessages = () =>
+      loadTranscriptEventsSync(scope)
+        .map(asOptionalRecord)
+        .filter((entry) => entry?.type === "message");
     const readEvent = (messageId = "progress-row") => {
       return expectDefined(
-        loadTranscriptEventsSync(scope)
-          .map(asOptionalRecord)
-          .find((entry) => entry?.type === "message" && entry.id === messageId),
+        readMessages().find((entry) => entry?.id === messageId),
         "persisted commentary row",
       );
     };
@@ -334,6 +331,10 @@ it.for([
     });
     let run: Promise<void> | undefined;
     let expectedContent: unknown;
+    const expectMaterialized = () => {
+      expect(readMessage()).toHaveProperty("openclawDisplayContent");
+      expect(readMessage()).toMatchObject({ content: expectedContent, stopReason: "toolUse" });
+    };
     const rewrite = messageRewrite.rewritePreparedTranscriptMessageAtAnchor;
     const rewriteSpy =
       scenario === "gc-with-revocation-after-commit" || scenario === "gc-with-unknown-commit"
@@ -393,10 +394,7 @@ it.for([
           return;
         }
         if (!localMedia) {
-          await racePromiseWithAbortSignal(
-            Promise.race([requestsStarted.promise, commentarySettled.promise]),
-            test.signal,
-          );
+          await wait(Promise.race([requestsStarted.promise, commentarySettled.promise]));
         }
         expect(warn).not.toHaveBeenCalled();
         expect(requestCount).toBe(localMedia ? 0 : mediaUrls.length);
@@ -413,15 +411,15 @@ it.for([
             retainedCount: 1,
           });
         }
-        if (scenario === "aborted") {
+        if (aborted) {
           current = false;
           abortController.abort();
           return;
         }
-        if (scenario === "revoked") {
+        if (revoked) {
           current = false;
         }
-        if (scenario === "unrelated-rewrite" || scenario === "target-rewrite") {
+        if (scenario === "unrelated-rewrite" || targetRewrite) {
           const messageId = scenario === "unrelated-rewrite" ? "unrelated-row" : "progress-row";
           const anchor = expectDefined(
             readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId }),
@@ -438,13 +436,11 @@ it.for([
           expect(rewritten?.generation).not.toBe(anchor.generation);
         }
         imageResponse.resolve();
-        if (scenario === "revoked" || scenario === "target-rewrite" || rewriteSpy) {
+        if (revoked || targetRewrite || rewriteSpy) {
           return;
         }
-        await racePromiseWithAbortSignal(commentarySettled.promise, test.signal);
-        expect(readMessage()).toHaveProperty("openclawDisplayContent");
-        const persisted = readMessage();
-        expect(persisted).toMatchObject({ content: expectedContent, stopReason: "toolUse" });
+        await wait(commentarySettled.promise);
+        expectMaterialized();
         if (!publicationSpy) {
           expect(rewriteUpdate).toMatchObject({
             messageId: "progress-row",
@@ -486,7 +482,7 @@ it.for([
           );
           const text = blocks.filter((block) => block?.type === "text").map((block) => block?.text);
           expect(text).toEqual(["Before", "After"]);
-          expect(persisted.phase).toBe("commentary");
+          expect(readMessage().phase).toBe("commentary");
         }
         if (scenario === "image") {
           expect(displayed).toContainEqual(
@@ -532,11 +528,7 @@ it.for([
         } else {
           expect(dispatch.deliveredReplies).toEqual([]);
         }
-        expect(
-          loadTranscriptEventsSync(scope).filter(
-            (event) => asOptionalRecord(event)?.type === "message",
-          ),
-        ).toHaveLength(scenario === "unrelated-rewrite" ? 2 : 1);
+        expect(readMessages()).toHaveLength(scenario === "unrelated-rewrite" ? 2 : 1);
       } finally {
         if (scenario !== "completion") {
           imageResponse.resolve();
@@ -556,7 +548,7 @@ it.for([
       );
       void run.catch(() => {});
       if (scenario === "completion") {
-        await racePromiseWithAbortSignal(Promise.race([cleanupStarted.promise, run]), test.signal);
+        await wait(Promise.race([cleanupStarted.promise, run]));
         await nextTurn();
         expect(cleanupSettled).toBe(false);
         imageResponse.resolve();
@@ -577,19 +569,13 @@ it.for([
           expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(PNG_BYTES);
         }
       }
-      if (scenario === "aborted") {
-        expect(await racePromiseWithAbortSignal(abortedResponseClosed.promise, test.signal)).toBe(
-          true,
-        );
+      if (aborted) {
+        expect(await wait(abortedResponseClosed.promise)).toBe(true);
         expect(cleanupSettled).toBe(true);
       }
       if (mixed) {
         expect(readMessage()).toMatchObject({ content: expectedContent });
-        expect(
-          loadTranscriptEventsSync(scope).filter(
-            (event) => asOptionalRecord(event)?.type === "message",
-          ),
-        ).toHaveLength(1);
+        expect(readMessages()).toHaveLength(1);
         const finalContent = displayBlocks(readDisplayed());
         expect(finalContent.filter((block) => block?.type === "image")).toHaveLength(
           finalMediaUrl ? 2 : 1,
@@ -601,8 +587,7 @@ it.for([
       }
       if (scenario === "completion" || scenario === "cache-miss") {
         expect(cleanupSettled).toBe(true);
-        expect(readMessage()).toHaveProperty("openclawDisplayContent");
-        expect(readMessage()).toMatchObject({ content: expectedContent, stopReason: "toolUse" });
+        expectMaterialized();
         expect(requestCount).toBe(1);
         expect(readDisplayed().flatMap((row) => row.content ?? [])).toContainEqual(
           expect.objectContaining({ type: "image" }),
@@ -613,11 +598,11 @@ it.for([
           content: [textBlock("Rewritten while loading")],
         });
       }
-      if (scenario === "revoked" || scenario === "aborted" || scenario === "target-rewrite") {
+      if (revoked || aborted || targetRewrite) {
         expect(readMessage()).not.toHaveProperty("openclawDisplayContent");
         expect(await fs.readdir(state.statePath("media", "outgoing", "originals"))).toEqual([]);
         expect(await readManaged()).toEqual([]);
-        if (scenario === "target-rewrite") {
+        if (targetRewrite) {
           expect(readMessage().content).toEqual([textBlock("Rewritten while loading")]);
         }
       }
@@ -635,7 +620,7 @@ it.for([
       }
     } finally {
       imageResponse.resolve();
-      if (scenario === "aborted" || test.signal.aborted) {
+      if (aborted || test.signal.aborted) {
         upstream.closeAllConnections();
       }
       await run?.catch(() => {});

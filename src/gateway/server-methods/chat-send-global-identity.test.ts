@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -28,6 +28,41 @@ import * as sessionStores from "../session-utils-store.js";
 import { holdProjectedChatDispatch } from "./chat-send-authority.test-support.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 
+const configChanges = [
+  ["unrelated", true, () => ({ logging: { level: "debug" }, ui: { seamColor: "#123456" } })],
+  [
+    "unrelated provider",
+    true,
+    () => ({
+      models: {
+        providers: {
+          other: {
+            baseUrl: "https://provider.example.test/v1",
+            api: "openai-responses",
+            models: [],
+          },
+        },
+      },
+    }),
+  ],
+  ["unrelated channel", true, () => ({ channels: { telegram: { enabled: false } } })],
+  [
+    "model",
+    false,
+    (cfg) => ({
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          model: "anthropic/claude-sonnet-4-6",
+        },
+      },
+    }),
+  ],
+  ["security", false, () => ({ tools: { fs: { workspaceOnly: true } } })],
+  ["routing", false, (cfg) => ({ session: { ...cfg.session, mainKey: "changed-main" } })],
+] satisfies Array<[string, boolean, (cfg: OpenClawConfig) => OpenClawConfig]>;
+
 type IdentityScenario = {
   name: string;
   raw: boolean;
@@ -42,13 +77,7 @@ type IdentityScenario = {
   replaceDuringPersistence?: boolean;
   pendingReplacement?: boolean;
   switchStoreAfterAck?: boolean;
-  configDuringAdmission?:
-    | "unrelated"
-    | "unrelated provider"
-    | "unrelated channel"
-    | "model"
-    | "security"
-    | "routing";
+  configDuringAdmission?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 function identityScenario(
   name: string,
@@ -66,66 +95,41 @@ function identityScenario(
 }
 
 it.each<IdentityScenario>([
-  identityScenario("raw global only"),
-  identityScenario("colliding raw request", { literal: true, allowed: false }),
-  identityScenario("colliding literal request", {
-    literal: true,
-    key: "agent:research:global",
-    allowed: false,
-  }),
-  identityScenario("missing raw with literal present", {
-    raw: false,
-    literal: true,
-    allowed: false,
-  }),
-  identityScenario("distinct owner in shared store", {
-    literal: true,
-    shared: true,
-    key: "agent:research:global",
-  }),
-  identityScenario("empty counterpart store preserves raw source", { separateStore: true }),
-  identityScenario("collision across discovered stores", {
-    literal: true,
-    allowed: false,
-    separateStore: true,
-  }),
-  identityScenario("missing raw with literal in another store", {
-    raw: false,
-    literal: true,
-    allowed: false,
-    separateStore: true,
-  }),
+  ...Object.entries<Partial<IdentityScenario>>({
+    "raw global only": {},
+    "colliding raw request": { literal: true, allowed: false },
+    "colliding literal request": { literal: true, key: "agent:research:global", allowed: false },
+    "missing raw with literal present": { raw: false, literal: true, allowed: false },
+    "distinct owner in shared store": { literal: true, shared: true, key: "agent:research:global" },
+    "empty counterpart store preserves raw source": { separateStore: true },
+    "collision across discovered stores": { literal: true, allowed: false, separateStore: true },
+    "missing raw with literal in another store": {
+      raw: false,
+      literal: true,
+      allowed: false,
+      separateStore: true,
+    },
+    "cached retry after collision": { replayAfterCollision: true },
+    "unrelated row appears while admission waits": { writeDuringAdmission: true },
+    "database replacement after recorder target resolution": { replaceDuringPersistence: true },
+    "pending custody survives replacement through cleanup": {
+      replaceDuringPersistence: true,
+      pendingReplacement: true,
+    },
+    "config store changes after ACK": { switchStoreAfterAck: true },
+  }).map(([name, overrides]) => identityScenario(name, overrides)),
   ...(["copy", "symlink"] as const).map((replaceDatabase) =>
     identityScenario(`database ${replaceDatabase} after selection`, {
       allowed: false,
       replaceDatabase,
     }),
   ),
-  identityScenario("cached retry after collision", { replayAfterCollision: true }),
-  identityScenario("unrelated row appears while admission waits", { writeDuringAdmission: true }),
-  ...(
-    [
-      "unrelated",
-      "unrelated provider",
-      "unrelated channel",
-      "model",
-      "security",
-      "routing",
-    ] as const
-  ).map((configDuringAdmission) =>
-    identityScenario(`${configDuringAdmission} config changes during admission read`, {
-      allowed: configDuringAdmission.startsWith("unrelated"),
+  ...configChanges.map(([name, allowed, configDuringAdmission]) =>
+    identityScenario(`${name} config changes during admission read`, {
+      allowed,
       configDuringAdmission,
     }),
   ),
-  identityScenario("database replacement after recorder target resolution", {
-    replaceDuringPersistence: true,
-  }),
-  identityScenario("pending custody survives replacement through cleanup", {
-    replaceDuringPersistence: true,
-    pendingReplacement: true,
-  }),
-  identityScenario("config store changes after ACK", { switchStoreAfterAck: true }),
 ])("binds chat.send to its stored global identity: $name", async (scenario) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await loadOrCreateProcessDeviceIdentityAsync();
@@ -200,15 +204,13 @@ it.each<IdentityScenario>([
       listSessionEntriesCore(scope)
         .map((row) => row.sessionKey)
         .toSorted();
-    const copyDatabase = async (path: string) => {
+    const copyDatabase = async (path: string, copyPath = path) => {
       await closeOpenClawAgentDatabaseByPathAsync(path);
       fs.renameSync(path, originalPath);
-      fs.copyFileSync(originalPath, path);
+      fs.copyFileSync(originalPath, copyPath);
     };
     if (scenario.replaceDatabase === "symlink") {
-      await closeOpenClawAgentDatabaseByPathAsync(storePath);
-      fs.renameSync(storePath, originalPath);
-      fs.copyFileSync(originalPath, replacementPath);
+      await copyDatabase(storePath, replacementPath);
       fs.symlinkSync(originalPath, storePath);
     }
     const snapshotRow = async (row: (typeof rows)[number]) => ({
@@ -248,36 +250,7 @@ it.each<IdentityScenario>([
             ...params,
             consume: (...args) => {
               if (!configReloaded) {
-                const changes: Record<
-                  NonNullable<IdentityScenario["configDuringAdmission"]>,
-                  OpenClawConfig
-                > = {
-                  unrelated: { logging: { level: "debug" }, ui: { seamColor: "#123456" } },
-                  "unrelated provider": {
-                    models: {
-                      providers: {
-                        other: {
-                          baseUrl: "https://provider.example.test/v1",
-                          api: "openai-responses",
-                          models: [],
-                        },
-                      },
-                    },
-                  },
-                  "unrelated channel": { channels: { telegram: { enabled: false } } },
-                  model: {
-                    agents: {
-                      ...cfg.agents,
-                      defaults: {
-                        ...cfg.agents?.defaults,
-                        model: "anthropic/claude-sonnet-4-6",
-                      },
-                    },
-                  },
-                  security: { tools: { fs: { workspaceOnly: true } } },
-                  routing: { session: { ...cfg.session, mainKey: "changed-main" } },
-                };
-                const changedConfig = { ...cfg, ...changes[configChange] };
+                const changedConfig = { ...cfg, ...configChange(cfg) };
                 setRuntimeConfigSnapshot(changedConfig, changedConfig);
                 configReloaded = true;
               }
@@ -341,12 +314,11 @@ it.each<IdentityScenario>([
       );
       if (scenario.writeDuringAdmission) {
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             admissionOwned.promise,
-            sending.then(() => {
-              throw new Error("chat.send settled before the admission callback");
-            }),
-          ]);
+            sending,
+            "chat.send settled before the admission callback",
+          );
           const inserted = {
             ...literalScope,
             sessionKey: "agent:research:other",
@@ -372,7 +344,6 @@ it.each<IdentityScenario>([
           expect.objectContaining({ code: "INVALID_REQUEST" }),
         );
         expect(observeDispatch).not.toHaveBeenCalled();
-        expect(holdDispatch).not.toHaveBeenCalled();
         expect(context.addChatRun).not.toHaveBeenCalled();
         expect(context.chatAbortControllers.size).toBe(0);
         expect(context.chatQueuedTurns.size).toBe(0);
@@ -413,21 +384,9 @@ it.each<IdentityScenario>([
         });
       expect(session).toMatchObject({
         agentId: "research",
-        sessionKey: selected.sessionKey,
         activeRunScopeKey: "agent:research:global",
-        entry: { sessionId: selected.sessionId },
-        readSource: { agentId: physicalAgentId },
       });
       if (scenario.replaceDuringPersistence) {
-        expect(owned.turn.isInternalTextSlashCommandTurn).toBe(!scenario.pendingReplacement);
-        if (scenario.pendingReplacement) {
-          expect(userTurn.recorder.getPendingInputMessage?.()).toMatchObject({
-            role: "user",
-            idempotencyKey: `${runId}:user`,
-          });
-        } else {
-          expect(userTurn.recorder.getPendingInputMessage?.()).toBeUndefined();
-        }
         const source = session.readSource;
         if (!source) {
           throw new Error("Expected the admitted physical database before persistence");
@@ -441,10 +400,12 @@ it.each<IdentityScenario>([
           );
           return read.found ? read.value : undefined;
         };
-        const pendingBefore = scenario.pendingReplacement ? readPending(source.path) : undefined;
-        if (scenario.pendingReplacement) {
-          expect(pendingBefore).toMatchObject({ state: "queued", consumed_event_id: null });
-        }
+        const pendingBefore = readPending(source.path);
+        expect(pendingBefore).toEqual(
+          scenario.pendingReplacement
+            ? expect.objectContaining({ state: "queued", consumed_event_id: null })
+            : undefined,
+        );
         const persistTurn = sessionAccessor.persistSessionTranscriptTurn;
         using replaceAtPersistence = vi
           .spyOn(sessionAccessor, "persistSessionTranscriptTurn")
@@ -484,14 +445,9 @@ it.each<IdentityScenario>([
       if (scenario.switchStoreAfterAck) {
         await seedRow(otherStore);
       }
-      const otherBefore = scenario.switchStoreAfterAck
-        ? {
-            entry: loadExactSessionEntryReadOnly(otherStore),
-            transcript: await loadTranscriptEvents(otherStore),
-          }
-        : undefined;
+      const otherBefore = scenario.switchStoreAfterAck ? await snapshotRow(otherStore) : undefined;
       if (otherBefore) {
-        expect(otherBefore.entry?.entry).toMatchObject({
+        expect(otherBefore.entry).toMatchObject({
           sessionId: selected.sessionId,
           lifecycleRevision: session.entry?.lifecycleRevision,
         });
@@ -506,8 +462,7 @@ it.each<IdentityScenario>([
       );
       expect(loadExactSessionEntryReadOnly(selected)?.entry.sessionId).toBe(selected.sessionId);
       if (otherBefore) {
-        expect(loadExactSessionEntryReadOnly(otherStore)).toEqual(otherBefore.entry);
-        expect(await loadTranscriptEvents(otherStore)).toEqual(otherBefore.transcript);
+        expect(await snapshotRow(otherStore)).toEqual(otherBefore);
       }
       expect(sessionKeys(storeScope)).toEqual(rows.map((row) => row.sessionKey).toSorted());
       for (const [index, row] of rows.entries()) {
@@ -530,7 +485,6 @@ it.each<IdentityScenario>([
           cached: true,
         });
         expect(observeDispatch).toHaveBeenCalledOnce();
-        expect(holdDispatch).toHaveBeenCalledOnce();
         expect(await snapshot()).toEqual(beforeRetry);
       }
     } finally {

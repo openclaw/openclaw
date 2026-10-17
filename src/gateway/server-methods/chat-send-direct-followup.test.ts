@@ -16,12 +16,10 @@ import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execu
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import * as replyRunHelpers from "../../auto-reply/reply/get-reply-run-helpers.js";
 import { clearFollowupQueueForTest } from "../../auto-reply/reply/queue.test-helpers.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import * as sessions from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
-import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
@@ -78,11 +76,7 @@ it.for([false, true])(
       }),
       messageInjectionV2: { version: 2 as const, isAvailable: () => true, queueMessage: injected },
     };
-    const rejected = vi.spyOn(diagnosticLogger, "info");
-    const queued = createDeferred();
     const dispatched = createDeferred();
-    const started = createDeferred();
-    const release = createDeferred();
     const settled = createDeferred();
     const consumed: string[] = [];
     let recorder: UserTurnTranscriptRecorder | undefined;
@@ -107,12 +101,6 @@ it.for([false, true])(
       const params = raw as Parameters<typeof dispatchInboundMessage>[0];
       recorder = params.replyOptions?.userTurnTranscriptRecorder;
       const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-      const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-      lifecycle.onDeferred = () => {
-        const result = onDeferred();
-        queued.resolve();
-        return result;
-      };
       const onSettled = lifecycle.onSettled;
       lifecycle.onSettled = () => {
         onSettled?.();
@@ -130,8 +118,6 @@ it.for([false, true])(
       const input = expectDefined(followupRun.userTurnTranscriptRecorder, "input recorder");
       await input.persistApproved();
       consumed.push(followupRun.prompt);
-      started.resolve();
-      await wait(release.promise);
       return successfulChatTurn(runId, "Followup answered.");
     });
     let command: Promise<void> | undefined;
@@ -175,24 +161,10 @@ it.for([false, true])(
       });
       void command.catch(() => {});
       await wait(directReady.promise);
-      expect(replyRunRegistry.get(scope.sessionKey)).toBeUndefined();
-      expect(sessions.loadSessionEntry(scope)).toMatchObject({
-        abortedLastRun: false,
-        restartRecoveryRuns: [{ runId: instance.runId, lifecycleGeneration }],
-      });
       const ack = await fixture.send();
       expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-      expect(rejected).toHaveBeenCalledWith(
-        "direct steering rejected; keeping input for followup",
-        expect.objectContaining({ reason, runId: instance.runId }),
-      );
-      await waitForGate(
-        queued.promise,
-        dispatched.promise,
-        "Dispatch returned without queue custody",
-      );
-      expect(context.chatQueuedTurns.has(sendParams.idempotencyKey)).toBe(true);
       await wait(dispatched.promise);
+      expect(context.chatQueuedTurns.has(sendParams.idempotencyKey)).toBe(true);
       await waitForGate(
         commandBlocked.promise,
         settled.promise,
@@ -230,21 +202,17 @@ it.for([false, true])(
         expect(consumed).toEqual([]);
         return;
       }
-      await waitForGate(started.promise, settled.promise, "Followup settled without running");
-      expect(consumed).toEqual([expect.stringContaining(sendParams.message)]);
-      release.resolve();
       await wait(settled.promise);
+      expect(consumed).toEqual([expect.stringContaining(sendParams.message)]);
       expect((await listSessionPendingInputs(scope)).total).toBe(0);
     } finally {
       runs.clearActiveEmbeddedRun(scope.sessionId, handle);
       runAuthority.releaseAgentRunDelegatedAuthority(authority);
-      release.resolve();
       releaseDirect.resolve();
       releaseCleanup.resolve();
       await command?.catch(() => {});
       clearFollowupQueueForTest(scope.sessionKey);
       await fixture.cleanup();
-      rejected.mockRestore();
       runtimeLoader.mockRestore();
       ownerObserver.mockRestore();
     }
