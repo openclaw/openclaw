@@ -206,7 +206,7 @@ export async function startOrResumeThread(
             authProfileId: undefined,
             agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
             preserveNativeModel: true,
-            ...buildCodexThreadBindingPolicy(params, preflight),
+            ...buildCodexThreadBindingPolicy(params, preflight, pendingBinding),
             webSearchThreadConfigFingerprint,
             mcpServersFingerprint:
               params.mcpServersFingerprintEvaluated === true

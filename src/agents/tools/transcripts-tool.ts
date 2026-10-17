@@ -1,6 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { Type } from "typebox";
 import { resolveStateDir } from "../../config/paths.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -41,6 +40,7 @@ import { TranscriptsSummaryChangedError } from "../../transcripts/store-errors.j
 import { transcriptSessionSelector, type TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
+import { TRANSCRIPTS_TOOL_DECLARATION } from "./transcripts-tool-contract.js";
 import { listPastTranscripts, showPastTranscript } from "./transcripts-tool-read.js";
 import {
   toolText,
@@ -55,38 +55,6 @@ import {
 const STATUS_SELECTOR_LIMIT = 3;
 const STATUS_ACTIVE_MAX_ENTRIES = 5;
 const STATUS_ACTIVE_MAX_CHARS = 2_000;
-
-const TranscriptsSchema = Type.Object(
-  {
-    action: Type.String({
-      description: "start, stop, status, import, summarize, list, or show.",
-    }),
-    sessionId: Type.Optional(
-      Type.String({
-        minLength: 1,
-        description:
-          "Raw ID for start/import. Legacy stop/summarize/show handle; prefer selector for an exact capture. Cannot be combined with selector.",
-      }),
-    ),
-    selector: Type.Optional(
-      Type.String({
-        minLength: 1,
-        description:
-          "Exact dated capture selector returned by start/import/status. Only for stop/summarize/show; supply this or sessionId, never both. No raw-ID fallback.",
-      }),
-    ),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
-    title: Type.Optional(Type.String({ minLength: 1 })),
-    providerId: Type.Optional(Type.String({ minLength: 1 })),
-    accountId: Type.Optional(Type.String({ minLength: 1 })),
-    guildId: Type.Optional(Type.String({ minLength: 1 })),
-    channelId: Type.Optional(Type.String({ minLength: 1 })),
-    meetingUrl: Type.Optional(Type.String({ minLength: 1 })),
-    transcript: Type.Optional(Type.String({ minLength: 1 })),
-    speakerLabel: Type.Optional(Type.String({ minLength: 1 })),
-  },
-  { additionalProperties: false },
-);
 
 async function importTranscripts(params: {
   ctx: TranscriptsRuntimeContext;
@@ -352,11 +320,8 @@ export function createTranscriptsTool(options?: {
     ...(options?.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
   };
   return {
-    name: "transcripts",
+    ...TRANSCRIPTS_TOOL_DECLARATION,
     label: "Transcripts",
-    description:
-      "Start, stop, import, summarize, or inspect meeting transcript captures; list past meetings and read their notes.",
-    parameters: TranscriptsSchema,
     async execute(_toolCallId, rawParams, signal) {
       const ctx = { ...context, config: getConfig?.() };
       const config = resolveTranscriptsConfig(ctx.config?.transcripts);

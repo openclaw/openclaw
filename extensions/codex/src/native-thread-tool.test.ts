@@ -95,10 +95,16 @@ describe("native Codex thread tool", () => {
     });
   }
 
-  it("materializes only for owner turns with user-home or supervision access", () =>
+  it("registers with user-home or supervision access and rejects private execution", () =>
     withFixture(async () => {
       expect(await createTool()).not.toBeNull();
-      expect(await createTool({ owner: false })).toBeNull();
+      const request = vi.fn(async () => ({ data: [] }));
+      const privateTool = await createTool({ owner: false, request });
+      expect(privateTool).not.toBeNull();
+      await expect(privateTool!.execute("private-list", { action: "list" })).rejects.toThrow(
+        "require an owner-authorized sender",
+      );
+      expect(request).not.toHaveBeenCalled();
       expect(await createTool({ homeScope: "agent" })).toBeNull();
       expect(await createTool({ omitHomeScope: true, supervision: true })).not.toBeNull();
     }));

@@ -1,3 +1,4 @@
+import { bindCoreToolDeclaration } from "./agent-tool-metadata.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import {
@@ -24,16 +25,20 @@ export function createHostedGatewayTools(
   }
   return [
     createPresenceTool({ runId: options?.runId }),
-    createGatewayTool({
-      allowConfigReads: options?.gatewayConfigReadAllowed === true,
-      senderIsOwner: options?.senderIsOwner,
-      requesterSenderId: options?.requesterSenderId,
-    }),
-    createPluginsTool({
-      sessionId: options?.sessionId,
-      runId: options?.runId,
-      onYield: options?.onYield,
-    }),
+    bindCoreToolDeclaration(
+      createGatewayTool({
+        allowConfigReads: options?.gatewayConfigReadAllowed === true,
+        senderIsOwner: options?.senderIsOwner,
+        requesterSenderId: options?.requesterSenderId,
+      }),
+    ),
+    bindCoreToolDeclaration(
+      createPluginsTool({
+        sessionId: options?.sessionId,
+        runId: options?.runId,
+        onYield: options?.onYield,
+      }),
+    ),
     ...(preparedDelegateTools ?? createOpenClawDelegateToolsForRun({ ...options, sessionAgentId })),
     ...(personalInstructionsEnabled ? [createPersonalInstructionsTool(sessionAgentId)] : []),
   ];
@@ -48,10 +53,12 @@ export function createHostedConversationTools(
     createConversationsSendTool,
     createConversationsTurnTool,
   ].map((createTool) =>
-    createTool({
-      ...options,
-      agentId: sessionAgentId,
-      agentSessionId: options?.sessionId,
-    }),
+    bindCoreToolDeclaration(
+      createTool({
+        ...options,
+        agentId: sessionAgentId,
+        agentSessionId: options?.sessionId,
+      }),
+    ),
   );
 }

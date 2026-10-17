@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TranscriptToolCaller } from "../transcripts/provider-types.js";
+import { bindCoreToolDeclaration, type CoreToolDeclaration } from "./agent-tool-metadata.js";
 import { bindActiveOperatorTurnAuthority } from "./cron-creator-authority-context.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { TRANSCRIPTS_TOOL_DECLARATION } from "./tools/transcripts-tool-contract.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 
 function resolveTranscriptCaller(options: {
@@ -58,18 +60,23 @@ export function resolveTranscriptsTool(
   config: OpenClawConfig | undefined,
   agentId: string,
   options: Parameters<typeof resolveTranscriptCaller>[0] | undefined,
+  onDeclaration?: (declaration: CoreToolDeclaration) => void,
 ): AnyAgentTool | undefined {
   if (config?.transcripts?.enabled === false) {
     return undefined;
   }
+  // Caller provenance selects an executor, not the persistent tool declaration.
+  onDeclaration?.(bindCoreToolDeclaration({ ...TRANSCRIPTS_TOOL_DECLARATION }));
   const caller = resolveTranscriptCaller(options ?? {});
   if (!caller) {
     return undefined;
   }
-  return createTranscriptsTool({
-    agentId,
-    caller: caller.caller,
-    ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
-    config,
-  });
+  return bindCoreToolDeclaration(
+    createTranscriptsTool({
+      agentId,
+      caller: caller.caller,
+      ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
+      config,
+    }),
+  );
 }

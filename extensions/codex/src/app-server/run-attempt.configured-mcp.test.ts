@@ -7,6 +7,8 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as attemptContext from "./attempt-context.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import { createCronAuthorityCapabilityFixture } from "./codex-app-server.test-fixtures.js";
 import * as dynamicTools from "./dynamic-tools.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
@@ -17,6 +19,7 @@ import {
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   tempDir,
+  threadStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
 import {
@@ -662,4 +665,77 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
 
     await finish();
   });
+});
+
+it("defers newly discovered requester MCP declarations until protected work ends", async () => {
+  const params = createMcpParams();
+  params.timeoutMs = 60_000;
+  // Ordinary interactive work retains its native owner; one-shot cleanup intentionally does not.
+  params.cleanupBundleMcpOnRunEnd = false;
+  let threadId = "";
+  let starts = 0;
+  const harness = createStartedThreadHarness(
+    async (method) => {
+      if (method === "thread/start") {
+        threadId = `synthetic-mcp-thread-${++starts}`;
+        return threadStartResult(threadId);
+      }
+      return undefined;
+    },
+    { persistedThreads: [] },
+  );
+  const options = { pluginConfig: { dynamicTools: { loading: "direct" as const } } };
+  const finish = async (run: ReturnType<typeof runCodexAppServerAttempt>) => {
+    await harness.completeTurn({ threadId, turnId: "turn-1" });
+    expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+  };
+  let calls = 0;
+  const callNewTool = () =>
+    harness.handleServerRequest({
+      id: `synthetic-mcp-request-${++calls}`,
+      method: "item/tool/call",
+      params: {
+        threadId,
+        turnId: "turn-1",
+        callId: `synthetic-mcp-call-${calls}`,
+        namespace: null,
+        // Configured MCP stays native here, so the requester tool has no dynamic-name collision.
+        tool: "fake__show",
+        arguments: {},
+      },
+    });
+  let release = () => {};
+  try {
+    const first = runCodexAppServerAttempt(params, options);
+    await first.waitForTurnAccepted();
+    const accepted = await readCodexAppServerBinding(params.sessionFile);
+    release = protectCodexAppServerLiveThread(harness.client, threadId);
+    await finish(first);
+    mcpMocks.requesterCollisionTool = true;
+    const held = runCodexAppServerAttempt({ ...params, runId: "synthetic-mcp-held" }, options);
+    await held.waitForTurnAccepted();
+    expect(accepted?.managedToolCatalog).toMatchObject({ version: 3 });
+    expect(await callNewTool()).toMatchObject({ success: false });
+    await finish(held);
+    expect(starts).toBe(1);
+    expect((await readCodexAppServerBinding(params.sessionFile))?.managedToolCatalog).toEqual(
+      accepted?.managedToolCatalog,
+    );
+    release();
+    release = () => {};
+    const idle = runCodexAppServerAttempt({ ...params, runId: "synthetic-mcp-idle" }, options);
+    await idle.waitForTurnAccepted();
+    const latestStart = harness.requests.findLast((request) => request.method === "thread/start")
+      ?.params as { dynamicTools?: CodexDynamicToolSpec[] } | undefined;
+    expect(
+      flattenCodexDynamicToolFunctions(latestStart?.dynamicTools).map((tool) => tool.name),
+    ).toContain("fake__show");
+    const response = await callNewTool();
+    expect(response, JSON.stringify(response)).toMatchObject({ success: true });
+    await finish(idle);
+    expect(starts).toBe(2);
+  } finally {
+    release();
+    harness.close();
+  }
 });

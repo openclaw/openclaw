@@ -79,9 +79,20 @@ function toolFixture(params?: {
 }
 
 describe("native Codex plugin discovery tool", () => {
-  it("is available only for owner turns even when native plugin policy is disabled", () => {
-    expect(toolFixture().tool?.name).toBe("codex_plugins");
-    expect(toolFixture({ owner: false }).tool).toBeNull();
+  it("keeps its declaration for private turns but rejects before reading discovery state", async () => {
+    const owner = toolFixture();
+    const privateTurn = toolFixture({ owner: false });
+    const descriptor = (tool: NonNullable<typeof owner.tool>) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    });
+    expect(descriptor(privateTurn.tool!)).toEqual(descriptor(owner.tool!));
+    await expect(privateTurn.tool!.execute("private-list", {})).rejects.toThrow(
+      "require an owner-authorized sender",
+    );
+    expect(privateTurn.read).not.toHaveBeenCalled();
+    expect(privateTurn.request).not.toHaveBeenCalled();
   });
 
   it("uses the bound workspace, exposes bounded untrusted metadata, and never installs", async () => {

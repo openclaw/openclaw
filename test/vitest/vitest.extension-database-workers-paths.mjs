@@ -295,6 +295,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.native-hook-relay-retention.test.ts",
   "extensions/codex/src/app-server/run-attempt.plugin-refresh.test.ts",
   "extensions/codex/src/app-server/run-attempt.protocol-validation.test.ts",
+  "extensions/codex/src/app-server/run-attempt.protected-tool-catalog.test.ts",
   "extensions/codex/src/app-server/run-attempt.question-refresh.test.ts",
   "extensions/codex/src/app-server/run-attempt.reasoning-effort.test.ts",
   "extensions/codex/src/app-server/run-attempt.retry-continuation.test.ts",

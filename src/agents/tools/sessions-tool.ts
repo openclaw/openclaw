@@ -22,6 +22,7 @@ import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/sessi
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { bindCoreToolDeclaration } from "../agent-tool-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -197,6 +198,15 @@ async function resolvePatchTarget(
   };
 }
 
+/** Canonical full management metadata, not an executable owner identity. */
+function sessionManagementDeclaration(stopAllowed: boolean) {
+  return {
+    name: "sessions",
+    description: `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
+    parameters: resolveSessionsToolSchema(false, stopAllowed, false),
+  };
+}
+
 export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool {
   // Absence is the existing senderless system surface, not an explicit non-owner.
   const sandboxRenameOnly = opts.sandboxSessionRenameOnly === true;
@@ -210,7 +220,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     method: string,
     params: Record<string, unknown>,
   ) => gatewayRequest<T>({ method, params });
-  return {
+  const managementDeclaration = sessionManagementDeclaration(stopAllowed);
+  const tool: AnyAgentTool = {
     label: "Sessions",
     name: "sessions",
     description: sandboxRenameOnly
@@ -221,14 +232,16 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           ? "Rename a session created by the requesting operator: use patch with label (empty string clears it). Default target: current session; another session requires sessionKey and expectedSessionId from sessions_list. assign_owner assigns responsibility for a visible session to a human or agent. Archive and restore are unavailable in this authority context. No other settings or session controls."
           : controlOnly
             ? `Rename sessions created by the requesting operator with patch and label. Archive or restore sessions created by the requesting operator requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session created by or assigned to the operator; runId optionally selects one active run. " : ""}assign_owner assigns responsibility for a visible session to a human or agent. No deletion, other settings, batch, or global group changes.`
-            : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
+            : managementDeclaration.description,
     parameters: sandboxRenameOnly
       ? SessionRenameToolSchema
       : assignmentOnly
         ? SessionOwnerToolSchema
         : renameOnly
           ? SessionRenameOwnerToolSchema
-          : resolveSessionsToolSchema(controlOnly, stopAllowed, renameAllowed),
+          : controlOnly
+            ? resolveSessionsToolSchema(controlOnly, stopAllowed, renameAllowed)
+            : managementDeclaration.parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, rawArgs, signal) => {
       let params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
@@ -716,4 +729,5 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       );
     }),
   };
+  return bindCoreToolDeclaration(tool, sandboxRenameOnly ? tool : managementDeclaration);
 }

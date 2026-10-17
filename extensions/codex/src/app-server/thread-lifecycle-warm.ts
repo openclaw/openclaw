@@ -54,6 +54,7 @@ import {
   CodexIncognitoPolicyChangeError,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
+import { buildCodexThreadToolCatalogPatch } from "./thread-tool-catalog.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -530,6 +531,7 @@ export async function tryReuseCodexLiveThread(
       ? nativeThread?.modelProvider?.trim() || binding.modelProvider
       : binding.modelProvider;
     const bindingPatch = {
+      ...buildCodexThreadToolCatalogPatch(binding, params.dynamicTools, dynamicToolsFingerprint),
       cwd: params.cwd,
       model,
       modelProvider,

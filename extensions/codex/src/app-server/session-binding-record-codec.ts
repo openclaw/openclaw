@@ -151,6 +151,7 @@ const threadBindingSchema = z
     networkProxyProfileName: optionalStringSchema,
     networkProxyConfigFingerprint: optionalStringSchema,
     dynamicToolsFingerprint: optionalStringSchema,
+    managedToolCatalog: z.unknown().optional(),
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
     nativeSkillIsolationFingerprint: optionalStringSchema,

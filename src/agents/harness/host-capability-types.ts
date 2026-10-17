@@ -159,6 +159,14 @@ export type AgentHarnessHostCapabilities = Readonly<{
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,
   ) => Promise<AnyAgentTool[]>;
+  /**
+   * Literal core metadata from this host's exact freshly constructed surface.
+   * Omits only transient core owner selection, not configured/inherited denies.
+   * No executors or authority; third-party definitions remain on their truthful path.
+   */
+  readCoreToolDeclarations?: (
+    tools: readonly AnyAgentTool[],
+  ) => readonly Pick<AnyAgentTool, "name" | "description" | "parameters" | "catalogMode">[];
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<
     | {

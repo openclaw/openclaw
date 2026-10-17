@@ -9,6 +9,7 @@ import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../../security/dangerous-tools.js";
+import type { CoreToolDeclaration } from "../agent-tool-metadata.js";
 import * as gateway from "./in-process-gateway.js";
 import type {
   AgentToolGatewayRequestCaller,
@@ -64,6 +65,29 @@ function recorder(summary: PortalSummary = portal) {
 }
 
 describe("portal tool", () => {
+  it("declares the canonical global portal without constructing a private executor", () => {
+    const recorded = recorder();
+    const declarations: CoreToolDeclaration[] = [];
+    const tools = createAvailablePortalTools({ senderIsOwner: false }, (declaration) =>
+      declarations.push(declaration),
+    );
+    expect(tools).toEqual([]);
+    expect(declarations).toHaveLength(1);
+    const owner = createAvailablePortalTools({ senderIsOwner: true })[0]!;
+    expect(declarations[0]).toEqual({
+      name: owner.name,
+      description: owner.description,
+      parameters: owner.parameters,
+    });
+    expect(
+      Value.Check(declarations[0]!.parameters, {
+        action: "open",
+        port: 3000,
+        environmentId: "other",
+      }),
+    ).toBe(true);
+    expect(recorded.calls).toEqual([]);
+  });
   it("keeps a restricted tool on its captured worker and refuses host or alternate target selection", async () => {
     const recorded = recorder();
     let current = true;
@@ -77,10 +101,23 @@ describe("portal tool", () => {
         }
       },
     };
-    const tool = createAvailablePortalTools({
-      senderIsOwner: false,
-      sessionPortalTarget: target,
-    })[0]!;
+    const declarations: CoreToolDeclaration[] = [];
+    const tool = createAvailablePortalTools(
+      {
+        senderIsOwner: false,
+        sessionPortalTarget: target,
+      },
+      (declaration) => declarations.push(declaration),
+    )[0]!;
+    expect(declarations).toHaveLength(1);
+    const owner = createAvailablePortalTools({ senderIsOwner: true })[0]!;
+    expect(declarations[0]).toEqual({
+      name: owner.name,
+      description: owner.description,
+      parameters: owner.parameters,
+    });
+    expect(declarations[0]!.parameters).toHaveProperty("properties.environmentId");
+    expect(tool.parameters).not.toHaveProperty("properties.environmentId");
     expect(Value.Check(tool.parameters, { action: "open", port: 3000 })).toBe(true);
     expect(
       Value.Check(tool.parameters, { action: "open", port: 3000, environmentId: "other" }),

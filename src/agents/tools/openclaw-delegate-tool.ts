@@ -8,6 +8,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { bindCoreToolDeclaration } from "../agent-tool-metadata.js";
 import type { ResolvedExecDefaults } from "../exec-defaults.js";
 import { resolveExecDefaultsLegacy } from "../exec-defaults.legacy.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
@@ -161,5 +162,5 @@ export function createOpenClawDelegateToolsForRun(
       });
     },
   };
-  return [tool];
+  return [bindCoreToolDeclaration(tool)];
 }

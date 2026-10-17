@@ -13,7 +13,15 @@ import { resolveSessionAgentId } from "./agent-scope.js";
 import {
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
+  type CoreToolDeclaration,
 } from "./agent-tool-metadata.js";
+import {
+  finishCodingToolAssembly,
+  finishCodingToolAssemblyAsync,
+  projectCoreToolDeclarations,
+  selectConditionalCoreDeclarations,
+  type CodingToolAssembly,
+} from "./agent-tools.assembly.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
@@ -49,25 +57,15 @@ import { buildHarnessHostRequester } from "./harness/host-requester.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
-import {
-  resolveOpenClawPluginToolsForOptions,
-  resolveOpenClawPluginToolsForOptionsAsync,
-} from "./openclaw-plugin-tools.js";
-import {
-  createOpenClawTools,
-  createOpenClawToolsWithPreparation,
-  filterToolsByClientCaps,
-} from "./openclaw-tools.js";
+import { filterToolsByClientCaps } from "./openclaw-tools.js";
 import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
-import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
-import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import {
   withPreparedToolConstruction,
@@ -101,12 +99,9 @@ function* assembleOpenClawCodingTools(
   skillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
-): Generator<
-  | OpenClawToolsOptions
-  | { pluginTools: Parameters<typeof resolveOpenClawPluginToolsForOptions>[0] },
-  AnyAgentTool[],
-  AnyAgentTool[]
-> {
+  onCoreDeclarations?: (declarations: CoreToolDeclaration[]) => void,
+  conditionalCoreDeclarations: CoreToolDeclaration[] = [],
+): CodingToolAssembly {
   const preparedTools = preparedSurface?.tools;
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
@@ -542,17 +537,24 @@ function* assembleOpenClawCodingTools(
     isMemoryFlushRun && memoryFlushWritePath
       ? "memory-triggered compaction runs expose only read and append-only write"
       : undefined;
+  const messageProvider = options?.toolPolicyMessageProvider ?? options?.messageProvider;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
-    options?.toolPolicyMessageProvider ?? options?.messageProvider,
+    messageProvider,
   );
   options?.recordToolPrepStage?.("message-provider-policy");
-  const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
+  const modelPolicyParams = {
     ...options,
     agentId,
+    messageProvider,
     preparedRequesterPolicy: capabilityProfile.policy,
     localModelLeanPreserveToolNames,
-  });
+  };
+  const toolsForModelProvider = applyModelProviderToolPolicy(
+    toolsForMessageProvider,
+    modelPolicyParams,
+  );
+
   options?.recordToolPrepStage?.("model-provider-policy");
   const declaredToolAllowlist = buildDeclaredToolAllowlistContext({
     config: options?.config,
@@ -578,6 +580,20 @@ function* assembleOpenClawCodingTools(
   const authorizedTools = unavailablePublicationTool
     ? inheritableTools.filter((tool) => tool !== unavailablePublicationTool)
     : inheritableTools;
+  const coreDeclarations =
+    onCoreDeclarations &&
+    projectCoreToolDeclarations(
+      messageInvocationPolicy.coreDeclarationSources(
+        selectConditionalCoreDeclarations(
+          isMemoryFlushRun ? [] : conditionalCoreDeclarations,
+          tools,
+          modelPolicyParams,
+        ),
+      ),
+      authorizedTools,
+      options,
+    );
+  onCoreDeclarations?.(coreDeclarations ?? []);
   if (options?.inheritedPublicationToolRef) {
     options.inheritedPublicationToolRef.current = inheritableTools.find(
       (tool) => tool === unavailablePublicationTool,
@@ -631,6 +647,7 @@ function* assembleOpenClawCodingTools(
   };
   const finalizedTools = finalizeAgentTools({
     ...options,
+    coreDeclarations,
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
     wrapBeforeToolCallHook: preparedTools
       ? (tool) =>
@@ -659,18 +676,7 @@ function* assembleOpenClawCodingTools(
 export function createOpenClawCodingToolsInternal(
   ...args: Parameters<typeof assembleOpenClawCodingTools>
 ): AnyAgentTool[] {
-  return withLegacySessionCapabilityRead(() => {
-    const assembly = assembleOpenClawCodingTools(...args);
-    let step = assembly.next();
-    while (!step.done) {
-      step = assembly.next(
-        "pluginTools" in step.value
-          ? resolveOpenClawPluginToolsForOptions(step.value.pluginTools)
-          : createOpenClawTools(step.value),
-      );
-    }
-    return step.value;
-  });
+  return finishCodingToolAssembly(assembleOpenClawCodingTools(...args));
 }
 
 /** Internal preparation data stays outside the public harness factory options. */
@@ -680,6 +686,7 @@ export async function createOpenClawCodingToolsInternalAsync(
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
   preparation: ToolConstructionPreparationOptions = {},
+  onCoreDeclarations?: Parameters<typeof assembleOpenClawCodingTools>[4],
 ): Promise<AnyAgentTool[]> {
   return withPreparedToolConstruction(
     options?.config,
@@ -700,22 +707,16 @@ export async function createOpenClawCodingToolsInternalAsync(
           sandboxToolPolicy: options?.sandbox?.enabled ? options.sandbox.tools : undefined,
           pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
         }));
+      const conditionalCoreDeclarations: CoreToolDeclaration[] = [];
       const assembly = assembleOpenClawCodingTools(
         { ...options, config: shared.config, conversationCapabilityProfile },
         skillReadResources,
         onPolicyFilter,
         preparedSurface,
+        onCoreDeclarations,
+        conditionalCoreDeclarations,
       );
-      let step = assembly.next();
-      while (!step.done) {
-        const tools =
-          "pluginTools" in step.value
-            ? await resolveOpenClawPluginToolsForOptionsAsync(step.value.pluginTools)
-            : await createOpenClawToolsWithPreparation(step.value, shared);
-        shared.assertCurrent();
-        step = assembly.next(tools);
-      }
-      return step.value;
+      return finishCodingToolAssemblyAsync(assembly, shared, conditionalCoreDeclarations);
     },
   );
 }

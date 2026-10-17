@@ -154,6 +154,15 @@ function wrapReportOnlyTool(tool: AnyAgentTool, allowedActions: ReadonlySet<stri
  * Tool names and safe actions here are explicit built-in/plugin contracts: the
  * gate removes task launchers while retaining status, history, and cleanup.
  */
+export function isToolAllowedByDelegationCapability(
+  name: string,
+  capability: DelegationCapability | undefined,
+): boolean {
+  return (
+    capability !== "report_only" || !NEW_DELEGATION_TOOL_NAMES.has(normalizeToolPolicyName(name))
+  );
+}
+
 export function applyDelegationCapability(
   tools: AnyAgentTool[],
   capability: DelegationCapability | undefined,
@@ -165,7 +174,7 @@ export function applyDelegationCapability(
   const narrowed: string[] = [];
   const gated = tools.flatMap((tool) => {
     const name = normalizeToolPolicyName(tool.name);
-    if (NEW_DELEGATION_TOOL_NAMES.has(name)) {
+    if (!isToolAllowedByDelegationCapability(name, capability)) {
       removed.push(name);
       return [];
     }

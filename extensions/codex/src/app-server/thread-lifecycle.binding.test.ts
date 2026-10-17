@@ -2804,6 +2804,38 @@ describe("Codex app-server thread lifecycle bindings", () => {
     }
   });
 
+  it("keeps unknown resumed catalogs receiptless through later warm reuse", async () => {
+    const { sessionFile, workspaceDir } = createPaths();
+    const threadId = "thread-unknown-catalog";
+    await writeCodexAppServerBinding(sessionFile, { threadId, cwd: workspaceDir });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: createFixedThreadRequest(threadId, ["thread/resume"]),
+      persistedThreads: [threadId],
+    });
+    const input = {
+      client: fixture.client,
+      params: createParams(sessionFile, workspaceDir),
+      dynamicTools: [createNamedDynamicTool("synthetic_lookup")],
+    };
+    const resumed = await startOrResumeThread(input);
+    expect(resumed.threadId).toBe(threadId);
+    const afterResume = await readCodexAppServerBinding(sessionFile);
+    expect(afterResume?.dynamicToolsFingerprint).toBeUndefined();
+    expect(afterResume?.managedToolCatalog).toBeUndefined();
+    await retainThread(fixture.client, resumed);
+    const resumes = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+    const reused = await startOrResumeThread(input);
+    expect(reused.threadId).toBe(threadId);
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
+    ).toHaveLength(resumes.length);
+    const afterReuse = await readCodexAppServerBinding(sessionFile);
+    expect(afterReuse?.dynamicToolsFingerprint).toBeUndefined();
+    expect(afterReuse?.managedToolCatalog).toBeUndefined();
+    expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+  });
+
   it("keeps the bound local provider when stale fingerprints force a fresh thread", async () => {
     const { sessionFile, workspaceDir } = createPaths();
     await writeCodexAppServerBinding(sessionFile, {

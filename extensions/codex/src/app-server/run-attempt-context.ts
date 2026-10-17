@@ -197,7 +197,8 @@ export async function prepareCodexAttemptContext(
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
-      dynamicTools: toolBridge.availableSpecs,
+      // Immutable tool guidance follows the accepted catalog, not per-turn executors.
+      dynamicTools: toolBridge.specs,
       nativeCodeModeOnlyEnabled:
         runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
     }),

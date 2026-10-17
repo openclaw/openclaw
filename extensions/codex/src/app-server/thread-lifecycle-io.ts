@@ -335,7 +335,7 @@ export async function resumeExistingCodexThread(
         authProfileId,
         response.modelProvider ?? requestModelProvider ?? startModelProvider,
       ),
-      ...buildCodexThreadBindingPolicy(params, context),
+      ...buildCodexThreadBindingPolicy(params, context, resumeBinding),
       webSearchThreadConfigFingerprint,
       mcpServersFingerprint:
         params.mcpServersFingerprintEvaluated === true
