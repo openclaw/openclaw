@@ -934,6 +934,10 @@ export async function finalizeSetupWizard(
     );
 
     if (shouldLaunchTui) {
+      if (!gatewayProbe.ok && sessionGateway) {
+        await closeSessionGatewayForOnboarding({ sessionGateway, runtime });
+        sessionGateway = undefined;
+      }
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
         await runTui({
@@ -969,15 +973,6 @@ export async function finalizeSetupWizard(
         });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
-        if (sessionGateway) {
-          // Setup owns this temporary Gateway; settle it before returning or
-          // propagating a TUI failure to the CLI finalizer.
-          await closeSessionGatewayForOnboarding({
-            sessionGateway,
-            runtime,
-          });
-          sessionGateway = undefined;
-        }
       }
       launchedTui = true;
     }

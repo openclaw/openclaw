@@ -16,6 +16,8 @@ import {
   createFinalizeArgs,
   createLaterPrompter,
   createRuntime,
+  sessionGatewayTuiCases,
+  sessionGatewayTuiTarget,
   type FinalizeArgs,
   type FinalizeArgsOverrides,
 } from "./setup.finalize.fixtures.test-support.js";
@@ -1566,14 +1568,9 @@ describe("finalizeSetupWizard", () => {
     expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
   });
 
-  it.each([
-    ["return", false],
-    ["reject", false],
-    ["return", true],
-    ["reject", true],
-  ] as const)(
-    "joins the temporary Gateway after TUI %s in containers (skipHealth=%s)",
-    async (outcome, skipHealth) => {
+  it.each(sessionGatewayTuiCases)(
+    "joins the temporary Gateway around TUI %s (skipHealth=%s, ready=%s)",
+    async (outcome, skipHealth, gatewayReady) => {
       await withPlatform("linux", async () => {
         isSystemdUserServiceAvailable.mockResolvedValue(false);
         isContainerEnvironment.mockReturnValue(true);
@@ -1612,7 +1609,7 @@ describe("finalizeSetupWizard", () => {
           "wizard launched the TUI before waiting for its temporary Gateway",
         );
         expect(runTui).not.toHaveBeenCalled();
-        reachable.resolve({ ok: true });
+        reachable.resolve({ ok: gatewayReady });
 
         let finalized = false;
         const markFinalized = () => {
@@ -1626,6 +1623,9 @@ describe("finalizeSetupWizard", () => {
             "wizard returned before closing its temporary Gateway",
           );
           expect(finalized).toBe(false);
+          if (!gatewayReady) {
+            expect(runTui).not.toHaveBeenCalled();
+          }
         } finally {
           allowClose.resolve();
           await settled;
@@ -1639,10 +1639,7 @@ describe("finalizeSetupWizard", () => {
         expect(startOnboardingGatewayProcess).toHaveBeenCalledOnce();
         expect(runTui).toHaveBeenCalledWith(
           expect.objectContaining({
-            boundGateway: {
-              url: "ws://127.0.0.1:18789",
-              token: "test-token",
-            },
+            ...(gatewayReady ? sessionGatewayTuiTarget : { local: true }),
             deliver: false,
             message: undefined,
             initialMessageTimeoutMs: 300_000,
