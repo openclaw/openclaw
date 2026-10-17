@@ -868,7 +868,9 @@ stale or evicted bases and the rare case where every row changed. Attribution
 uses the request and existing response fields without changing the protocol payload.
 
 `openclaw_sessions_list_baseline_retirements_total{cause}` counts one event per
-nonempty view-cache clear or eviction, not rows or views removed. Its bounded
+view-cache clear or eviction that retires sidebar rows or history, not rows or
+views removed. Selection-only and non-sidebar views do not count; an empty
+sidebar row list is still a baseline. Its bounded
 causes are `projection-revision`, `config`, `identity`, `selection-reset`,
 `view-evicted`, and `history-evicted`. View and history limits are both 32.
 For invalidations observed together on a read, config wins over identity, then

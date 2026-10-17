@@ -29,6 +29,7 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
+  hasSidebarBaseline,
   prepareSessionRowPublicationView,
   retainSidebarRows,
   type PublicationView,
@@ -284,11 +285,14 @@ export function prepareProjectedSessionPresentation(
       view = {};
       // A revision can receive arbitrary paging/search queries; retain bounded recent views.
       if (lists && lists.size >= 32) {
+        const evicted = lists.values().next().value!;
         lists.delete(lists.keys().next().value!);
-        emitTrustedDiagnosticEvent({
-          type: "sessions.list.baseline.retired",
-          cause: "view-evicted",
-        });
+        if (hasSidebarBaseline(evicted)) {
+          emitTrustedDiagnosticEvent({
+            type: "sessions.list.baseline.retired",
+            cause: "view-evicted",
+          });
+        }
       }
       lists?.set(key, view);
     }
@@ -634,6 +638,7 @@ export function prepareProjectedSessionPresentation(
         view.rowHistory = retainSidebarRows(previous, view.rowHistory);
       }
       view.rows = rows;
+      view.sidebar = opts.rowMode === "sidebar";
       return { sessions: rows, rowHistory: view.rowHistory };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {

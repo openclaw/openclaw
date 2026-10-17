@@ -13,22 +13,34 @@ type PublicationRows = WeakMap<
     target: SessionSharingTarget;
   }
 >;
+type PublicationList = {
+  rows?: GatewaySessionRow[];
+  rowHistory?: GatewaySessionRow[][];
+  sidebar?: boolean;
+  selection?: SessionEntrySelection;
+  selectedAt?: number;
+  activityExpiresAt?: number;
+  partitions?: WeakMap<object, SessionListFilteredEntries>;
+};
 type Publication = {
   factsRevision: number;
   rows: PublicationRows;
-  lists: Map<
-    string,
-    {
-      rows?: GatewaySessionRow[];
-      rowHistory?: GatewaySessionRow[][];
-      selection?: SessionEntrySelection;
-      selectedAt?: number;
-      activityExpiresAt?: number;
-      partitions?: WeakMap<object, SessionListFilteredEntries>;
-    }
-  >;
+  lists: Map<string, PublicationList>;
 };
 export type PublicationView = () => Publication;
+
+export function hasSidebarBaseline(view: PublicationList): boolean {
+  return view.sidebar === true && (view.rows !== undefined || Boolean(view.rowHistory?.length));
+}
+
+function hasSidebarBaselines(lists: Publication["lists"]): boolean {
+  for (const view of lists.values()) {
+    if (hasSidebarBaseline(view)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 const SIDEBAR_ROW_HISTORY_LIMIT = 32;
 
@@ -72,7 +84,7 @@ export function prepareSessionRowPublicationView(
       const retained = publication;
       projection.onSelectionChange((change) => {
         if (change.kind === "reset") {
-          if (retained.lists.size > 0) {
+          if (hasSidebarBaselines(retained.lists)) {
             emitTrustedDiagnosticEvent({
               type: "sessions.list.baseline.retired",
               cause: "selection-reset",
@@ -107,7 +119,7 @@ export function prepareSessionRowPublicationView(
         publication.cfg !== cfg ||
         publication.identityRevision !== identityRevision
       ) {
-        if (publication.lists.size > 0) {
+        if (hasSidebarBaselines(publication.lists)) {
           emitTrustedDiagnosticEvent({
             type: "sessions.list.baseline.retired",
             cause:

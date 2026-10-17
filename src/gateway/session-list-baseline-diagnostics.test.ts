@@ -46,17 +46,22 @@ it("counts each retirement event once across invalidations and bounded evictions
       state = { ...state, revision: {} };
       present();
       await expectCauses([]);
+      present().list([], opts);
+      state = { ...state, revision: {} };
+      present();
+      await expectCauses(["projection-revision"]);
       for (const cause of ["projection-revision", "config", "identity"] as const) {
         present().list([row], opts);
         present().list([row], { ...opts, limit: 2 });
         if (cause === "identity") {
           state.rowContext.identityProjection?.invalidate();
         } else {
-          state = {
-            ...state,
-            revision: {},
-            ...(cause === "config" ? { cfg: { ...state.cfg } } : {}),
-          };
+          state = Object.assign(
+            {},
+            state,
+            { revision: {} },
+            cause === "config" ? { cfg: { ...state.cfg } } : {},
+          );
         }
         present();
         present();
@@ -90,6 +95,63 @@ it("counts each retirement event once across invalidations and bounded evictions
       await expectCauses(["selection-reset"]);
       projection.dispose();
       await expectCauses([]);
+    } finally {
+      unsubscribe();
+      projection.dispose();
+    }
+  });
+});
+
+it("does not count selection-only or non-sidebar views as retired baselines", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const causes: string[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "sessions.list.baseline.retired") {
+        causes.push(event.cause);
+      }
+    });
+    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+    let state = projection.state;
+    vi.spyOn(projection, "state", "get").mockImplementation(() => state);
+    const present = () => prepareSessionRowPublication(projection, 1)();
+    const populate = () => {
+      present().select({ rowMode: "sidebar" }, () => ({
+        entries: [],
+        totalCount: 0,
+        ownerFacet: [],
+        ownerCount: 0,
+        offset: 0,
+        nextOffset: null,
+        hasMore: false,
+      }));
+      for (const rowMode of [undefined, "compact", "dashboard"] as const) {
+        present().list([{ key: "agent:main:one", kind: "direct", updatedAt: 1, rowMode }], {
+          rowMode,
+        });
+      }
+    };
+    try {
+      for (const cause of ["projection-revision", "config", "identity"] as const) {
+        populate();
+        if (cause === "identity") {
+          state.rowContext.identityProjection?.invalidate();
+        } else {
+          state = Object.assign(
+            {},
+            state,
+            { revision: {} },
+            cause === "config" ? { cfg: { ...state.cfg } } : {},
+          );
+        }
+        present();
+      }
+      populate();
+      for (let limit = 1; limit <= 33; limit++) {
+        present().list([], { rowMode: "compact", limit });
+      }
+      projection.dispose();
+      await waitForDiagnosticEventsDrained();
+      expect(causes).toEqual([]);
     } finally {
       unsubscribe();
       projection.dispose();

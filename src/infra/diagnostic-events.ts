@@ -15,8 +15,8 @@ import {
   updateInternalDiagnosticEventInterest,
 } from "./diagnostic-event-listener-presence.js";
 import {
-  ASYNC_DIAGNOSTIC_EVENT_TYPES,
-  PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES,
+  ASYNC_DIAGNOSTIC_EVENT_NAMES,
+  PRIORITY_ASYNC_DIAGNOSTIC_EVENT_NAMES,
 } from "./diagnostic-event-queue-policy.js";
 import {
   cloneDiagnosticValueForListener,
@@ -975,6 +975,12 @@ type DiagnosticEventsGlobalState = {
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
+const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>(
+  ASYNC_DIAGNOSTIC_EVENT_NAMES,
+);
+const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>(
+  PRIORITY_ASYNC_DIAGNOSTIC_EVENT_NAMES,
+);
 
 const diagnosticEventsState = resolveGlobalSingleton<DiagnosticEventsGlobalState>(
   DIAGNOSTIC_EVENTS_STATE_KEY,
