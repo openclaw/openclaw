@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -46,7 +47,6 @@ import {
 } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
-import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
 import {
   identifiedClient,
@@ -87,8 +87,26 @@ async function patchEntry(
   await replaceSessionEntry(scope, { ...loadSessionEntry(scope)!, ...patch });
 }
 
-async function listFixture() {
-  return sessionReader(await seedSessions(), "owner@example.com", undefined, true);
+function reader(
+  config: OpenClawConfig,
+  request: SessionsListParams = allRows,
+  context = requestContext(config),
+) {
+  const fixture = sessionReader(config, "owner@example.com", context, true);
+  return {
+    ...fixture,
+    list: (params: SessionsListParams = {}) => fixture.list({ ...request, ...params }),
+  };
+}
+
+async function listFixture(request: SessionsListParams = allRows) {
+  return reader(await seedSessions(), request);
+}
+
+async function stableRows(list: ReturnType<typeof reader>["list"]) {
+  const first = await list();
+  expect((await list()).sessions).toEqual(first.sessions);
+  return first;
 }
 
 beforeEach(() => {
@@ -103,50 +121,42 @@ afterEach(() => {
 
 it("omits unchanged sidebar rows without reusing membership or revoked access", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { context, list } = await listFixture();
     const request = { agentId: "main", rowMode: "sidebar", limit: 50 } as const;
+    const { context, list } = await listFixture(request);
     // Cold admission can publish enriched facts after the first selected page.
-    await list(request);
-    const initial = await list(request);
+    await list();
+    const initial = await list();
     expect(initial.sessions.length).toBeGreaterThan(0);
     expect(initial.rowsRevision).toEqual(expect.any(String));
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_000);
-    const conditional = { ...request, ifRowsRevision: initial.rowsRevision };
-    const unchanged = await list(conditional);
-    expect(unchanged).toMatchObject({
+    const conditional = { ifRowsRevision: initial.rowsRevision };
+    const unchangedRows = {
       sessions: [],
       rowsUnchanged: true,
       rowsRevision: initial.rowsRevision,
       count: initial.count,
       totalCount: initial.totalCount,
-      ts: initial.ts + 1_000,
-    });
+    };
+    const unchanged = await list(conditional);
+    expect(unchanged).toMatchObject({ ...unchangedRows, ts: initial.ts + 1_000 });
     expect(unchanged.sharedFacts).toBeUndefined();
     for (const unrelated of [
       { agentId: "work", sessionKey: "agent:work:active" },
       { agentId: "main", sessionKey: "agent:main:archived" },
     ]) {
       await patchEntry(unrelated, { label: "Changed outside the held window" });
-      const retained = await list(conditional);
-      expect(retained).toMatchObject({
-        sessions: [],
-        rowsUnchanged: true,
-        rowsRevision: initial.rowsRevision,
-        count: initial.count,
-        totalCount: initial.totalCount,
-      });
+      expect(await list(conditional)).toMatchObject(unchangedRows);
     }
     const filtered = await list({ ...conditional, search: "no matching session" });
     expect([filtered.rowsUnchanged, filtered.totalCount]).toEqual([undefined, 0]);
-    const scope = mainScope;
-    await patchEntry(scope, { label: "Renamed sidebar row" });
+    await patchEntry(mainScope, { label: "Renamed sidebar row" });
     const changed = await list(conditional);
     expect(changed.rowsUnchanged).toBeUndefined();
     expect(changed.rowsRevision).not.toBe(initial.rowsRevision);
     expect(mainRow(changed)?.label).toBe("Renamed sidebar row");
     const admitted = { agentId: "main", sessionKey: "agent:main:archived" };
     await patchEntry(admitted, { archivedAt: undefined, updatedAt: Date.now() });
-    const membership = await list({ ...request, ifRowsRevision: changed.rowsRevision });
+    const membership = await list({ ifRowsRevision: changed.rowsRevision });
     expect(membership.rowsUnchanged).toBeUndefined();
     expect(membership.rowsRevision).not.toBe(changed.rowsRevision);
     expect(keys(membership)).toEqual([
@@ -154,43 +164,36 @@ it("omits unchanged sidebar rows without reusing membership or revoked access", 
       "agent:main:active",
       "agent:main:draft",
     ]);
-    await patchEntry(scope, { visibility: "draft" });
+    await patchEntry(mainScope, { visibility: "draft" });
     const revoked = await listSessions({
       client: identifiedClient("other@example.com"),
       context,
       request: { ...request, ifRowsRevision: membership.rowsRevision },
     });
     expect(revoked.rowsUnchanged).toBeUndefined();
-    expect(revoked.sessions.some((row) => row.key === scope.sessionKey)).toBe(false);
+    expect(keys(revoked)).not.toContain(mainKey);
   }));
 
 it("refreshes reply activity including previously rejected candidates", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { context, list } = await listFixture();
-    const request = { agentId: "main", search: "live", limit: 50 };
-    const terminalScope = mainScope;
-    await patchEntry(terminalScope, { status: "done" });
+    const { context, list } = await listFixture({ agentId: "main", search: "live", limit: 50 });
+    await patchEntry(mainScope, { status: "done" });
     context.chatAbortControllers.set("retained-terminal", {
       sessionId: "main-active",
-      sessionKey: terminalScope.sessionKey,
+      sessionKey: mainKey,
       agentId: "main",
       projectSessionActive: false,
     } as never);
-    expect((await list(request)).sessions).toEqual([]);
+    expect((await list()).sessions).toEqual([]);
     const operation = createReplyOperation({
       sessionId: "main-active",
-      sessionKey: "agent:main:active",
+      sessionKey: mainKey,
       resetTriggered: false,
     });
     try {
-      const active = await list(request);
-      expect(mainRow(active)).toMatchObject({
-        hasActiveRun: true,
-        status: "running",
-      });
+      expect(mainRow(await list())).toMatchObject({ hasActiveRun: true, status: "running" });
       operation.complete();
-      const settled = await list(request);
-      expect(settled.sessions).toEqual([]);
+      expect((await list()).sessions).toEqual([]);
     } finally {
       operation.complete();
     }
@@ -200,14 +203,11 @@ it("presents current runner availability from resident bindings", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config = await seedSessions();
     let runnerAvailable = true;
-    const placement = activePlacement("main-active", {
-      sessionKey: "agent:main:active",
-    });
+    const placement = activePlacement("main-active", { sessionKey: mainKey });
     const context = {
       ...requestContext(config),
       workerSessionPlacementService: {
-        getMany: () =>
-          new Map<string, WorkerSessionPlacementRecord>([[placement.sessionId, placement]]),
+        getMany: () => new Map([[placement.sessionId, placement]]),
       },
       workerPlacementRunnerAvailabilityReader: {
         version: () => Number(!runnerAvailable),
@@ -217,20 +217,15 @@ it("presents current runner availability from resident bindings", () =>
         }),
       },
     } as GatewayRequestContext;
-    const { list } = sessionReader(config, "owner@example.com", context, true);
-    const request = { ...allRows, agentId: "main" };
+    const { list } = reader(config, { ...allRows, agentId: "main" }, context);
 
-    const available = await list(request);
-    expect(mainRow(available)?.placement).toMatchObject({
-      runner: { kind: "device", status: "available" },
-    });
-    expect((await list(request)).sessions).toEqual(available.sessions);
-
-    runnerAvailable = false;
-    const offline = await list(request);
-    expect(mainRow(offline)?.placement).toMatchObject({
-      runner: { kind: "device", status: "offline" },
-    });
+    for (const available of [true, false]) {
+      runnerAvailable = available;
+      const result = available ? await stableRows(list) : await list();
+      expect(mainRow(result)?.placement).toMatchObject({
+        runner: { kind: "device", status: available ? "available" : "offline" },
+      });
+    }
   }));
 
 it("reprojects rows after completed model catalog publication", () =>
@@ -248,23 +243,16 @@ it("reprojects rows after completed model catalog publication", () =>
       ...requestContext(config),
       readPreparedGatewayModelCatalog: vi.fn(async () => ({ entries: catalog })),
     };
-    const { list } = sessionReader(config, "owner@example.com", context, true);
-    const request = allRows;
-
-    const first = await list(request);
-    expect(first.sessions.find((row) => row.agentId === "main")?.thinkingOptions).toEqual([
-      "off",
-      "ultra",
-    ]);
-    expect((await list(request)).sessions).toEqual(first.sessions);
-
-    const mainRequest = { ...request, agentId: "main" };
-    const workRequest = { ...request, agentId: "work" };
+    const { list } = reader(config, allRows, context);
+    const first = await stableRows(list);
+    expect(mainRow(first)?.thinkingOptions).toEqual(["off", "ultra"]);
+    const mainRequest = { agentId: "main" };
+    const workRequest = { agentId: "work" };
     const main = await list(mainRequest);
     const work = await list(workRequest);
     expect((await list(mainRequest)).sessions).toEqual(main.sessions);
     expect((await list(workRequest)).sessions).toEqual(work.sessions);
-    expect((await list(request)).sessions).toEqual(first.sessions);
+    expect((await list()).sessions).toEqual(first.sessions);
     catalog = [
       {
         ...startupCatalog[0]!,
@@ -273,8 +261,8 @@ it("reprojects rows after completed model catalog publication", () =>
       },
     ];
     notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-    const refreshed = await list(request);
-    expect(refreshed.sessions.find((row) => row.agentId === "main")?.thinkingOptions).toEqual(
+    const refreshed = await list();
+    expect(mainRow(refreshed)?.thinkingOptions).toEqual(
       expect.arrayContaining(["off", "low", "high", "max", "ultra"]),
     );
   }));
@@ -292,33 +280,26 @@ it("rebuilds configured targets after registry-only register and unregister", ()
       ownedSessionEntry("registry-only", 500),
     );
     await closeOpenClawAgentDatabaseByPathAsync(extraDatabasePath);
-    unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
-
-    const { list } = sessionReader(config, "owner@example.com", undefined, true);
-    const request = { ...allRows, configuredAgentsOnly: true };
-    const first = await list(request);
-    expect(keys(first)).not.toContain(extraSessionKey);
-    expect((await list(request)).sessions).toEqual(first.sessions);
-
-    registerOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
-    const registered = await list(request);
-    expect(keys(registered)).toContain(extraSessionKey);
-    expect((await list(request)).sessions).toEqual(registered.sessions);
-
-    unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
-    const unregistered = await list(request);
-    expect(keys(unregistered)).not.toContain(extraSessionKey);
+    const target = { agentId: "main", env: state.env, path: extraDatabasePath };
+    const { list } = reader(config, { ...allRows, configuredAgentsOnly: true });
+    for (const [index, registered] of [false, true, false].entries()) {
+      if (registered) {
+        registerOpenClawAgentDatabase(target);
+      } else {
+        unregisterOpenClawAgentDatabase(target);
+      }
+      const result = index < 2 ? await stableRows(list) : await list();
+      expect(keys(result).includes(extraSessionKey)).toBe(registered);
+    }
   }));
 
 it("excludes incognito sessions before and after their memory owner closes", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { client, list } = await listFixture();
+    const { client, list } = await listFixture({ ...allRows, configuredAgentsOnly: true });
     client.connect.scopes = [...(client.connect.scopes ?? []), "operator.admin"];
-    const request = { ...allRows, configuredAgentsOnly: true };
     const childKey = "agent:guest:subagent:incognito-residency";
-    const first = await list(request);
+    const first = await stableRows(list);
     expect(keys(first)).not.toContain(childKey);
-    expect((await list(request)).sessions).toEqual(first.sessions);
 
     const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({
       agentId: "guest",
@@ -334,36 +315,31 @@ it("excludes incognito sessions before and after their memory owner closes", () 
           parentSessionKey: "agent:main:active",
         },
       );
-      const opened = await list(request);
-      expect(keys(opened)).not.toContain(childKey);
+      expect(keys(await list())).not.toContain(childKey);
     } finally {
       memorySessionActorOwners.closeDatabase({ agentId: "guest", path: incognitoPath });
     }
-    const closed = await list(request);
-    expect(keys(closed)).not.toContain(childKey);
+    expect(keys(await list())).not.toContain(childKey);
   }));
 
 it("refreshes the resident row after terminal lifecycle persistence", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { list } = await listFixture();
-    const request = allRows;
     const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
 
-    const first = await list(request);
+    const first = await list();
     clock.mockReturnValue(60_401);
-    expect(rowFacts((await list(request)).sessions)).toEqual(rowFacts(first.sessions));
+    expect(rowFacts((await list()).sessions)).toEqual(rowFacts(first.sessions));
 
     await persistGatewaySessionLifecycleEvent({
-      sessionKey: "agent:main:active",
-      agentId: "main",
+      ...mainScope,
       event: {
         ts: 60_500,
         runId: "run-terminal-resident",
         data: { phase: "end", startedAt: 60_000, endedAt: 60_450 },
       },
     });
-    const settled = await list(request);
-    expect(mainRow(settled)).toMatchObject({
+    expect(mainRow(await list())).toMatchObject({
       status: "done",
       endedAt: 60_450,
       runtimeMs: 450,
@@ -373,28 +349,27 @@ it("refreshes the resident row after terminal lifecycle persistence", () =>
 
 it("refreshes row previews after a committed transcript update", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { context, list } = await listFixture();
-    const request = { ...allRows, includeLastMessage: true };
+    const { context, list } = await listFixture({ ...allRows, includeLastMessage: true });
     const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
 
-    const initialBackfill = observeSessionRowBackfill(["agent:main:active"]);
-    const first = await list(request);
+    const initialBackfill = observeSessionRowBackfill([mainKey]);
+    const first = await list();
     await initialBackfill;
     clock.mockReturnValue(60_401);
 
     const committedBackfill = observeSessionRowBackfill(
-      ["agent:main:active"],
+      [mainKey],
       getSessionRowProjection(context),
     );
     await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
+      { ...mainScope, sessionId: "main-active" },
       {
         messages: [{ message: { role: "assistant", content: "Fresh committed preview" } }],
         touchSessionEntry: false,
       },
     );
     await committedBackfill;
-    const refreshed = await list(request);
+    const refreshed = await list();
     expect(mainRow(first)?.lastMessagePreview).toBeUndefined();
     expect(mainRow(refreshed)?.lastMessagePreview).toBe("Fresh committed preview");
   }));
@@ -402,10 +377,9 @@ it("refreshes row previews after a committed transcript update", () =>
 it("refreshes reconciled previews without repairing legacy titles", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config = await seedSessions();
-    const sessionKey = "agent:main:active";
     const sessionId = "main-active";
     await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey },
+      { ...mainScope, sessionId },
       {
         messages: [
           { message: { role: "user", content: "active prompt" } },
@@ -415,25 +389,22 @@ it("refreshes reconciled previews without repairing legacy titles", () =>
       },
     );
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", env: state.env });
-    clearStoredSessionRowTranscriptForTest({ agentId: "main", sessionId, sessionKey });
+    clearStoredSessionRowTranscriptForTest({ ...mainScope, sessionId });
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     database.db
       .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
       .run(sessionId);
-    const storedEntry = loadSessionEntry({ agentId: "main", sessionKey });
+    const storedEntry = loadSessionEntry(mainScope);
     expect(storedEntry?.displayName).toBeUndefined();
-    const { list } = sessionReader(config, "owner@example.com", undefined, true);
-    const request = {
+    const { list } = reader(config, {
       agentId: "main",
-      archived: "all" as const,
+      ...allRows,
       includeDerivedTitles: true,
       includeLastMessage: true,
-      limit: 100,
-    };
+    });
 
-    const backfilled = observeSessionRowBackfill([sessionKey]);
-    const degraded = await list(request);
-    const degradedRow = mainRow(degraded);
+    const backfilled = observeSessionRowBackfill([mainKey]);
+    const degradedRow = mainRow(await list());
     expect([degradedRow?.derivedTitle, degradedRow?.lastMessagePreview]).toEqual([
       undefined,
       undefined,
@@ -451,63 +422,43 @@ it("refreshes reconciled previews without repairing legacy titles", () =>
       reconciledSessions: 1,
     });
     await vi.waitFor(async () =>
-      expect(mainRow(await list(request))?.lastMessagePreview).toBe("active reply"),
+      expect(mainRow(await list())?.lastMessagePreview).toBe("active reply"),
     );
-    const healed = await list(request);
-    const healedRow = mainRow(healed);
+    const healedRow = mainRow(await stableRows(list));
     expect([healedRow?.derivedTitle, healedRow?.lastMessagePreview]).toEqual([
       undefined,
       "active reply",
     ]);
 
-    expect((await list(request)).sessions).toEqual(healed.sessions);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(storedEntry);
+    expect(loadSessionEntry(mainScope)).toEqual(storedEntry);
   }));
 
 it("admits a newly committed session after the roster was loaded", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { list } = await listFixture();
-    const request = allRows;
-
-    const first = await list(request);
-    expect(keys(first)).not.toContain("agent:main:external");
+    expect(keys(await list())).not.toContain("agent:main:external");
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:external" },
       ownedSessionEntry("main-external", 500),
     );
-    const refreshed = await list(request);
-
-    expect(keys(refreshed)).toContain("agent:main:external");
+    expect(keys(await list())).toContain("agent:main:external");
   }));
 
 it.each([
-  {
-    view: "off-page child links",
-    parentFiltered: false,
-    child: "zzz-child",
-    id: "completed-hidden-child",
-    expiredAt: 1_801_400,
-  },
-  {
-    view: "parent-filtered children",
-    parentFiltered: true,
-    child: "child",
-    id: "completed-child",
-    expiredAt: 1_800_401,
-  },
-])(
-  "expires completed children from $view at the retention boundary",
-  ({ parentFiltered, child, id, expiredAt }) =>
+  ["off-page child links", false, "zzz-child", "completed-hidden-child", 1_801_400],
+  ["parent-filtered children", true, "child", "completed-child", 1_800_401],
+] as const)(
+  "expires completed children from %s at the retention boundary",
+  (_view, parentFiltered, child, id, expiredAt) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
-      const parentSessionKey = "agent:main:active";
       const childSessionKey = `agent:main:${child}`;
       const scope = { agentId: "main", sessionKey: childSessionKey };
       const entry = {
         sessionId: id,
         endedAt: 400,
-        parentSessionKey,
-        spawnedBy: parentSessionKey,
+        parentSessionKey: mainKey,
+        spawnedBy: mainKey,
         status: "done" as const,
         updatedAt: 400,
         visibility: "shared" as const,
@@ -517,24 +468,22 @@ it.each([
       } else {
         await replaceSessionEntry(scope, entry);
       }
-      const { list } = sessionReader(config, "owner@example.com", undefined, true);
       const request: SessionsListParams = parentFiltered
-        ? { agentId: "main", limit: 100, spawnedBy: parentSessionKey }
+        ? { agentId: "main", limit: 100, spawnedBy: mainKey }
         : { agentId: "main", archived: "all", limit: 1 };
+      const { list } = reader(config, request);
       clock.mockReturnValue(1_800_400);
-      const retained = await list(request);
-      expect(retained.sessions.map(({ key }) => key)).toEqual([
-        parentFiltered ? childSessionKey : parentSessionKey,
-      ]);
+      const retained = await list();
+      expect(keys(retained)).toEqual([parentFiltered ? childSessionKey : mainKey]);
       if (!parentFiltered) {
         expect(retained.sessions[0]?.childSessions).toEqual([childSessionKey]);
       }
       clock.mockReturnValue(expiredAt);
-      const expired = await list(request);
+      const expired = await list();
       if (parentFiltered) {
         expect(expired.sessions).toEqual([]);
       } else {
-        expect(expired.sessions.map(({ key }) => key)).toEqual([parentSessionKey]);
+        expect(keys(expired)).toEqual([mainKey]);
         expect(expired.sessions[0]?.childSessions).toBeUndefined();
       }
     }),
@@ -559,24 +508,22 @@ it("presents current live subagent runtimes to concurrent readers", () =>
       sessionKey: "agent:main:active",
     });
     try {
-      const { context, list } = sessionReader(config, "owner@example.com", undefined, true);
-      const request = { agentId: "main", archived: "all" as const, limit: 1 };
+      const { context, list } = reader(config, { ...allRows, agentId: "main", limit: 1 });
 
-      const first = await list(request);
-      expect(first.sessions[0]).toMatchObject({
-        key: "agent:main:active",
+      expect((await list()).sessions[0]).toMatchObject({
+        key: mainKey,
         hasActiveSubagentRun: true,
         runtimeMs: 1_000,
       });
 
       const projection = getSessionRowProjection(context)!;
       const select = vi.spyOn(projection, "selectEntries");
-      sessionChanges.emit({ agentId: "main", sessionKey: "agent:main:active", scope: "runtime" });
+      sessionChanges.emit({ ...mainScope, scope: "runtime" });
       clock.mockReturnValue(now + 250);
-      expect((await list(request)).sessions[0]?.runtimeMs).toBe(1_250);
+      expect((await list()).sessions[0]?.runtimeMs).toBe(1_250);
       sessionChanges.emit({ all: true, scope: "agent-runs" });
       clock.mockReturnValue(now + 1_000);
-      const fresh = await Promise.all(Array.from({ length: 8 }, () => list(request)));
+      const fresh = await Promise.all(Array.from({ length: 8 }, () => list()));
       for (const result of fresh) {
         expect(result.sessions).toEqual(fresh[0]?.sessions);
       }
@@ -586,9 +533,11 @@ it("presents current live subagent runtimes to concurrent readers", () =>
       });
       expect(select).not.toHaveBeenCalled();
 
-      const scope = { agentId: "main", sessionKey: "agent:main:active" };
-      replaceSessionEntrySync(scope, { ...loadSessionEntry(scope)!, label: "Updated label" });
-      expect((await list(request)).sessions[0]).toMatchObject({
+      replaceSessionEntrySync(mainScope, {
+        ...loadSessionEntry(mainScope)!,
+        label: "Updated label",
+      });
+      expect((await list()).sessions[0]).toMatchObject({
         label: "Updated label",
         runtimeMs: 2_000,
       });
@@ -601,14 +550,13 @@ it("presents current live subagent runtimes to concurrent readers", () =>
 it("refreshes activity-filtered totals when an older off-page row expires", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { clock, config } = await seedSessionsWithActivityTimes();
-    const { list } = sessionReader(config, "owner@example.com", undefined, true);
-    const request = { ...allRows, activeMinutes: 1, agentId: "main", limit: 1 };
+    const { list } = reader(config, { ...allRows, activeMinutes: 1, agentId: "main", limit: 1 });
     for (const [now, totalCount] of [
       [60_200, 3],
       [60_201, 2],
     ] as const) {
       clock.mockReturnValue(now);
-      const result = await list(request);
+      const result = await list();
       expect(keys(result)).toEqual([mainKey]);
       expect(result.totalCount).toBe(totalCount);
     }
@@ -749,14 +697,11 @@ it.each([{}, { search: "direct" }, { activeOnly: true }])(
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
       const ensure = projection.prepareSelection.bind(projection);
-      let releaseRows!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        releaseRows = resolve;
-      });
+      const gate = createDeferredCore();
       const readiness = vi
         .spyOn(projection, "prepareSelection")
         .mockImplementationOnce(async (...args) => {
-          await gate;
+          await gate.promise;
           await ensure(...args);
         });
 
@@ -773,7 +718,7 @@ it.each([{}, { search: "direct" }, { activeOnly: true }])(
         sessionKey: "agent:main:page-first",
       });
       const listEntries = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
-      releaseRows();
+      gate.resolve();
 
       const repaired = await firstPage;
       expect(keys(repaired)).toEqual(["agent:main:page-second"]);
