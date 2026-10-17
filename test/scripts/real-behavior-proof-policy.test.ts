@@ -1,4 +1,3 @@
-// PR Context And Evidence Policy tests cover GitHub PR-body policy behavior.
 import { readFileSync } from "node:fs";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
@@ -16,34 +15,20 @@ const blankTemplateBody = readFileSync(
   "utf8",
 );
 
-function externalPr(body: string, overrides: Record<string, unknown> = {}) {
-  return {
-    body,
-    author_association: "CONTRIBUTOR",
-    user: {
-      login: "external-contributor",
-      type: "User",
+function evaluate(body: string, overrides: Record<string, unknown> = {}) {
+  return evaluatePullRequestContext({
+    pullRequest: {
+      body,
+      author_association: "CONTRIBUTOR",
+      user: { login: "external-contributor", type: "User" },
+      labels: [],
+      ...overrides,
     },
-    labels: [],
-    ...overrides,
-  };
+  });
 }
 
-function proofBody(evidence: string, overrides: Record<string, string> = {}) {
-  const fields = {
-    problem: "The gateway dropped the configured Discord channel during startup.",
-    evidence,
-    ...overrides,
-  };
-  return [
-    "## What Problem This Solves",
-    "",
-    fields.problem,
-    "",
-    "## Evidence",
-    "",
-    fields.evidence,
-  ].join("\n");
+function proofBody(evidence: string) {
+  return `## What Problem This Solves\n\nThe gateway dropped the configured Discord channel during startup.\n\n## Evidence\n\n${evidence}`;
 }
 
 function stalledResponse() {
@@ -61,23 +46,7 @@ function stalledResponse() {
     }),
     releaseLock: vi.fn(),
   };
-  return {
-    ok: true,
-    status: 200,
-    headers: new Headers(),
-    body: {
-      getReader: () => reader,
-    },
-  };
-}
-
-function contentLengthResponse(contentLength: number) {
-  const cancel = vi.fn(() => Promise.resolve());
-  return {
-    headers: new Headers({ "content-length": String(contentLength) }),
-    body: { cancel },
-    cancel,
-  };
+  return { ok: true, status: 200, headers: new Headers(), body: { getReader: () => reader } };
 }
 
 function chunkedResponse(chunks: Uint8Array[]) {
@@ -89,27 +58,18 @@ function chunkedResponse(chunks: Uint8Array[]) {
   read.mockResolvedValueOnce({ done: true, value: undefined });
   return {
     headers: new Headers(),
-    body: {
-      getReader: () => ({
-        read,
-        cancel,
-        releaseLock: vi.fn(),
-      }),
-    },
+    body: { getReader: () => ({ read, cancel, releaseLock: vi.fn() }) },
   };
 }
 
 describe("real-behavior-proof-policy", () => {
   it("passes CRLF-formatted external PRs with screenshot proof", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
-          /\n/g,
-          "\r\n",
-        ),
+    const evaluation = evaluate(
+      proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
+        /\n/g,
+        "\r\n",
       ),
-    });
-
+    );
     expect(evaluation.status).toBe("passed");
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
@@ -129,12 +89,10 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("does not accept the untouched current template", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(blankTemplateBody),
+    expect(evaluate(blankTemplateBody)).toMatchObject({
+      status: "missing",
+      missingSections: ["What Problem This Solves", "Evidence"],
     });
-
-    expect(evaluation.status).toBe("missing");
-    expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
   });
 
   it("does not accept sections hidden by an unclosed HTML comment", () => {
@@ -157,13 +115,7 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("accepts nested Markdown headings inside Evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        proofBody(["### Focused tests", "", "`pnpm test` passed."].join("\n")),
-      ),
-    });
-
-    expect(evaluation.status).toBe("passed");
+    expect(evaluate(proofBody("### Focused tests\n\n`pnpm test` passed.")).status).toBe("passed");
   });
 
   it("rejects Markdown separators as context and evidence", () => {
@@ -176,39 +128,33 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("does not accept legacy fields hidden by HTML comments", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        [
-          "## Real behavior proof",
-          "",
-          "<!--",
-          "Behavior addressed: The gateway dropped the configured Discord channel during startup.",
-          "Evidence after fix: pnpm test passed.",
-          "-->",
-        ].join("\n"),
-      ),
-    });
-
+    const evaluation = evaluate(
+      [
+        "## Real behavior proof",
+        "",
+        "<!--",
+        "Behavior addressed: The gateway dropped the configured Discord channel during startup.",
+        "Evidence after fix: pnpm test passed.",
+        "-->",
+      ].join("\n"),
+    );
     expect(evaluation.status).toBe("missing");
     expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
   });
 
   it("accepts legacy behavior fields while open PRs still use the old template", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        [
-          "## Real behavior proof",
-          "",
-          "- Behavior addressed: The gateway dropped the configured Discord channel during startup.",
-          "- Real environment tested: macOS 15.4, Node 24, local OpenClaw gateway.",
-          "- Exact steps or command run after this patch: pnpm openclaw gateway restart",
-          "- Evidence after fix: ![after](https://github.com/user-attachments/assets/gateway-ready)",
-          "- Observed result after fix: The gateway stayed connected and Discord reported ready.",
-          "- What was not tested: No known gaps.",
-        ].join("\n"),
-      ),
-    });
-
+    const evaluation = evaluate(
+      [
+        "## Real behavior proof",
+        "",
+        "- Behavior addressed: The gateway dropped the configured Discord channel during startup.",
+        "- Real environment tested: macOS 15.4, Node 24, local OpenClaw gateway.",
+        "- Exact steps or command run after this patch: pnpm openclaw gateway restart",
+        "- Evidence after fix: ![after](https://github.com/user-attachments/assets/gateway-ready)",
+        "- Observed result after fix: The gateway stayed connected and Discord reported ready.",
+        "- What was not tested: No known gaps.",
+      ].join("\n"),
+    );
     expect(evaluation.status).toBe("passed");
   });
 
@@ -232,10 +178,7 @@ describe("real-behavior-proof-policy", () => {
         "```",
       ].join("\n"),
     );
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(body),
-    });
-
+    const evaluation = evaluate(body);
     expect(evaluation.status).toBe("passed");
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
@@ -253,18 +196,12 @@ describe("real-behavior-proof-policy", () => {
     );
     const testEvidence = proofBody("Focused tests passed: 2 files, 36 tests.");
 
-    const laterValid = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        [testEvidence, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
-      ),
-    });
-    const laterInvalid = evaluatePullRequestContext({
-      pullRequest: externalPr(
-        [validProof, "## Evidence", "<!-- Add the most useful validation evidence. -->"].join(
-          "\n\n",
-        ),
-      ),
-    });
+    const laterValid = evaluate(
+      [testEvidence, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
+    );
+    const laterInvalid = evaluate(
+      [validProof, "## Evidence", "<!-- Add the most useful validation evidence. -->"].join("\n\n"),
+    );
 
     expect(laterValid.status).toBe("passed");
     expect(labelsForPullRequestContext(laterValid)).toEqual([]);
@@ -307,45 +244,33 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("fails external PRs that say the changed behavior was not tested", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("not tested")),
-    });
-
+    const evaluation = evaluate(proofBody("not tested"));
     expect(evaluation.status).toBe("missing");
     expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
   });
 
   it("skips maintainer and bot PRs but requires context from external PRs", () => {
-    expect(
-      evaluatePullRequestContext({
-        pullRequest: externalPr("", { author_association: "MEMBER" }),
-      }).status,
-    ).toBe("skipped");
-    expect(
-      evaluatePullRequestContext({
-        pullRequest: externalPr("", {
-          user: {
-            login: "renovate[bot]",
-            type: "Bot",
-          },
-        }),
-      }).status,
-    ).toBe("skipped");
-    expect(
-      evaluatePullRequestContext({
-        pullRequest: externalPr("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }),
-      }).status,
-    ).toBe("missing");
+    expect(evaluate("", { author_association: "MEMBER" }).status).toBe("skipped");
+    expect(evaluate("", { user: { login: "renovate[bot]", type: "Bot" } }).status).toBe("skipped");
+    expect(evaluate("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }).status).toBe("missing");
   });
 });
 
 describe("isMaintainerTeamMember", () => {
-  function jsonResponse(status: number, body: unknown = {}) {
-    return new Response(JSON.stringify(body), { status });
+  function membership(fetch: typeof globalThis.fetch, timeoutMs?: number) {
+    return isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch, timeoutMs });
+  }
+
+  function cancellableResponse(status: number) {
+    const cancel = vi.fn();
+    return {
+      response: new Response(new ReadableStream<Uint8Array>({ cancel }), { status }),
+      cancel,
+    };
   }
 
   it("returns true for active members", async () => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(200, { state: "active" }));
+    const fetch = vi.fn().mockResolvedValue(Response.json({ state: "active" }));
     const result = await isMaintainerTeamMember({
       token: "tok",
       org: "openclaw",
@@ -366,24 +291,14 @@ describe("isMaintainerTeamMember", () => {
   });
 
   it("returns false for non-active membership states", async () => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(200, { state: "pending" }));
-    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
+    const fetch = vi.fn().mockResolvedValue(Response.json({ state: "pending" }));
+    expect(await membership(fetch)).toBe(false);
   });
 
   it("cancels 404 membership response bodies", async () => {
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 404 },
-    );
-    const fetch = vi.fn().mockResolvedValue(response);
-
-    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
-    expect(canceled).toBe(true);
+    const { response, cancel } = cancellableResponse(404);
+    expect(await membership(vi.fn().mockResolvedValue(response))).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("returns false when the token, org, or login is missing", async () => {
@@ -395,21 +310,9 @@ describe("isMaintainerTeamMember", () => {
   });
 
   it("cancels unexpected HTTP error response bodies", async () => {
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 500 },
-    );
-    const fetch = vi.fn().mockResolvedValue(response);
-
-    await expect(
-      isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
-    ).rejects.toThrow(/500/);
-    expect(canceled).toBe(true);
+    const { response, cancel } = cancellableResponse(500);
+    await expect(membership(vi.fn().mockResolvedValue(response))).rejects.toThrow(/500/);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("aborts stalled membership fetches", async () => {
@@ -421,15 +324,7 @@ describe("isMaintainerTeamMember", () => {
       });
     });
 
-    await expect(
-      isMaintainerTeamMember({
-        fetch: fetch as typeof globalThis.fetch,
-        login: "u",
-        org: "o",
-        timeoutMs: 5,
-        token: "t",
-      }),
-    ).rejects.toMatchObject({
+    await expect(membership(fetch as typeof globalThis.fetch, 5)).rejects.toMatchObject({
       code: "ETIMEDOUT",
       message: "maintainer membership lookup for u timed out after 5ms",
     });
@@ -438,21 +333,16 @@ describe("isMaintainerTeamMember", () => {
   it("times out stalled membership response bodies", async () => {
     const fetch = vi.fn().mockResolvedValue(stalledResponse());
 
-    await expect(
-      isMaintainerTeamMember({
-        fetch: fetch as typeof globalThis.fetch,
-        login: "u",
-        org: "o",
-        timeoutMs: 5,
-        token: "t",
-      }),
-    ).rejects.toThrow(/maintainer membership response for u timed out after 5ms/);
+    await expect(membership(fetch, 5)).rejects.toThrow(
+      /maintainer membership response for u timed out after 5ms/,
+    );
   });
 });
 
 describe("readBoundedGitHubApiJson", () => {
   it("rejects oversized JSON bodies by content length", async () => {
-    const response = contentLengthResponse(1025);
+    const cancel = vi.fn(() => Promise.resolve());
+    const response = { headers: new Headers({ "content-length": "1025" }), body: { cancel } };
 
     await expect(
       readBoundedGitHubApiJson(response as unknown as Response, "GitHub API", 1024),
@@ -460,7 +350,7 @@ describe("readBoundedGitHubApiJson", () => {
       code: "ETOOBIG",
       message: "GitHub API response body exceeded 1024 bytes",
     });
-    expect(response.cancel).toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
   });
 
   it("rejects oversized streamed JSON bodies", async () => {

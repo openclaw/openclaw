@@ -33,13 +33,34 @@ function requireJob(workflow: string, jobId: string): WorkflowJob {
   return job;
 }
 
-function requireStep(job: WorkflowJob, index: number): WorkflowStep {
-  const step = job.steps[index];
+function requireStep(job: WorkflowJob, key: number | string): WorkflowStep {
+  const step =
+    typeof key === "number"
+      ? job.steps[key]
+      : job.steps.find((candidate) => candidate.name === key);
   if (!step) {
-    throw new Error(`missing step ${index}`);
+    throw new Error(`missing step ${key}`);
   }
   return step;
 }
+
+function containsAll(script: string | undefined, fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(script).toContain(fragment);
+  }
+}
+
+const core = "openclaw-npm-release";
+const plugin = "plugin-npm-release";
+const clawhub = "plugin-clawhub-release";
+const coreValidation = "validate_publish_request";
+const pluginValidation = "validate_release_publish_approval";
+const parentEnv = {
+  RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
+  RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
+  EXPECTED_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+};
+const receiptOutput = "${{ steps.receipt.outputs.parent_approval }}";
 
 describe("release approval workflow contracts", () => {
   it("attests and uploads the gated parent receipt before dispatching children", () => {
@@ -58,7 +79,7 @@ describe("release approval workflow contracts", () => {
       names.indexOf("Dispatch publish workflows"),
     );
     const write = requireStep(publish, initializeIndex + 1);
-    expect(write.id).toBe("approval_receipt");
+    expect(write).toMatchObject({ id: "approval_receipt" });
     expect(write.run).toContain("release-approval-receipt.mjs create");
     expect(requireStep(publish, initializeIndex + 2).with?.["subject-path"]).toBe(
       "${{ runner.temp }}/openclaw-release-approval/approval.json",
@@ -71,9 +92,9 @@ describe("release approval workflow contracts", () => {
   });
 
   it.each([
-    ["plugin-npm-release", "validate_release_publish_approval"],
-    ["openclaw-npm-release", "validate_publish_request"],
-    ["plugin-clawhub-release", "validate_release_publish_approval"],
+    [plugin, pluginValidation],
+    [core, coreValidation],
+    [clawhub, pluginValidation],
   ])("%s verifies the parent receipt and attestation for bot dispatches", (workflow, jobId) => {
     const job = requireJob(workflow, jobId);
     expect(job.permissions?.attestations).toBe("read");
@@ -83,31 +104,24 @@ describe("release approval workflow contracts", () => {
       id: "receipt",
       env: {
         GH_TOKEN: "${{ github.token }}",
-        RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
-        RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
+        ...parentEnv,
         EXPECTED_WORKFLOW_BRANCH: "${{ inputs.release_publish_branch || github.ref_name }}",
-        EXPECTED_WORKFLOW_SHA: "${{ github.workflow_sha }}",
       },
     });
     // Zizmor bot-conditions rejects `if: github.actor == ...`; the guard lives in bash.
     expect(step?.if).toBeUndefined();
-    expect(step?.run).toContain('if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then');
-    expect(step?.run).toContain("release-approval-receipt.mjs verify");
-    expect(step?.run).toContain(
+    containsAll(step?.run, [
+      'if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then',
+      "release-approval-receipt.mjs verify",
       'gh attestation verify "$RUNNER_TEMP/openclaw-release-approval/approval.json"',
-    );
-    expect(step?.run).toContain(
       '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml"',
-    );
-    expect(step?.run).toContain('--signer-digest "$EXPECTED_WORKFLOW_SHA"');
-    expect(step?.run).toContain('--source-digest "$EXPECTED_WORKFLOW_SHA"');
-    expect(step?.run).toContain('--source-ref "$EXPECTED_WORKFLOW_FULL_REF"');
-    expect(step?.run).toContain("--deny-self-hosted-runners");
-    if (workflow === "openclaw-npm-release") {
-      expect(
-        job.steps.find((candidate) => candidate.name === "Checkout trusted approval verifier")
-          ?.with,
-      ).toMatchObject({
+      '--signer-digest "$EXPECTED_WORKFLOW_SHA"',
+      '--source-digest "$EXPECTED_WORKFLOW_SHA"',
+      '--source-ref "$EXPECTED_WORKFLOW_FULL_REF"',
+      "--deny-self-hosted-runners",
+    ]);
+    if (workflow === core) {
+      expect(requireStep(job, "Checkout trusted approval verifier").with).toMatchObject({
         ref: "${{ github.workflow_sha }}",
         path: "trusted-workflow",
         "sparse-checkout": "scripts",
@@ -121,10 +135,10 @@ describe("release approval workflow contracts", () => {
       });
     } else {
       expect(step?.env?.RELEASE_TARGET_SHA).toBe(
-        `\${{ needs.${workflow === "plugin-npm-release" ? "preview_plugins_npm" : "preview_plugins_clawhub"}.outputs.ref_revision }}`,
+        `\${{ needs.${workflow === plugin ? "preview_plugins_npm" : "preview_plugins_clawhub"}.outputs.ref_revision }}`,
       );
     }
-    if (workflow === "plugin-clawhub-release") {
+    if (workflow === clawhub) {
       expect(step?.env).toMatchObject({
         EXPECTED_WORKFLOW_FULL_REF: "${{ inputs.release_publish_full_ref }}",
         RELEASE_PUBLISH_PARENT_STATE_POLICY: "active-or-success",
@@ -137,16 +151,10 @@ describe("release approval workflow contracts", () => {
   });
 
   it.each([
+    [core, coreValidation, "approve_openclaw_npm_release", "publish_openclaw_npm", "Publish"],
     [
-      "openclaw-npm-release",
-      "validate_publish_request",
-      "approve_openclaw_npm_release",
-      "publish_openclaw_npm",
-      "Publish",
-    ],
-    [
-      "plugin-npm-release",
-      "validate_release_publish_approval",
+      plugin,
+      pluginValidation,
       "approve_plugins_npm_release",
       "publish_plugins_npm",
       "Publish with trusted publisher",
@@ -157,10 +165,8 @@ describe("release approval workflow contracts", () => {
       const validation = requireJob(workflow, validationId);
       const approval = requireJob(workflow, approvalId);
       const publish = requireJob(workflow, publishId);
-      expect(validation.outputs?.parent_approval).toBe(
-        "${{ steps.receipt.outputs.parent_approval }}",
-      );
-      expect(approval.environment).toBe("npm-release");
+      expect(validation.outputs?.parent_approval).toBe(receiptOutput);
+      expect(approval).toMatchObject({ environment: "npm-release" });
       expect(approval.permissions).toEqual({ contents: "read" });
       expect(approval.steps).toHaveLength(1);
       expect(approval.steps[0]?.run).toMatch(/^echo /);
@@ -207,57 +213,47 @@ describe("release approval workflow contracts", () => {
       expect(evaluate(publish.if, "receipt", "skipped", "failure")).toBe(false);
       expect(evaluate(publish.if, "receipt", "skipped", "success", true)).toBe(false);
       expect(evaluate(publish.if, "receipt", "skipped", "success", false, true)).toBe(false);
-      if (workflow === "plugin-npm-release") {
+      if (workflow === plugin) {
         expect(evaluate(approval.if, "", "skipped", "success", false, false, "false")).toBe(false);
         expect(evaluate(publish.if, "receipt", "skipped", "success", false, false, "false")).toBe(
           false,
         );
       }
-      const wait = publish.steps.find(
-        (step) => step.name === "Wait for the release parent's npm authorization",
-      );
+      const wait = requireStep(publish, "Wait for the release parent's npm authorization");
       expect(wait).toMatchObject({
         if: `needs.${validationId}.outputs.parent_approval == 'receipt'`,
         env: {
           GH_TOKEN: "${{ github.token }}",
-          RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
-          RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
-          EXPECTED_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+          ...parentEnv,
         },
       });
       expect(wait?.run).toBe(
-        `node ${workflow === "openclaw-npm-release" ? "trusted-workflow/" : ""}scripts/release-approval-receipt.mjs wait-npm-authorization`,
+        `node ${workflow === core ? "trusted-workflow/" : ""}scripts/release-approval-receipt.mjs wait-npm-authorization`,
       );
       const names = publish.steps.map((step) => step.name);
-      expect(names.indexOf(wait!.name)).toBeLessThan(names.indexOf(mutationName));
-      const checkout = publish.steps.find(
-        (step) =>
-          step.name ===
-          (workflow === "openclaw-npm-release"
-            ? "Checkout trusted validation verifier"
-            : "Checkout trusted publication tooling"),
+      expect(names.indexOf(wait.name)).toBeLessThan(names.indexOf(mutationName));
+      const checkout = requireStep(
+        publish,
+        workflow === core
+          ? "Checkout trusted validation verifier"
+          : "Checkout trusted publication tooling",
       );
-      expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
-      expect(names.indexOf(checkout!.name)).toBeLessThan(names.indexOf(wait!.name));
+      expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+      expect(names.indexOf(checkout.name)).toBeLessThan(names.indexOf(wait.name));
     },
   );
 
   it.each([
+    [core, coreValidation, "Publish", "RELEASE_PUBLISH_PARENT_STATE_POLICY"],
     [
-      "openclaw-npm-release",
-      "validate_publish_request",
-      "Publish",
-      "RELEASE_PUBLISH_PARENT_STATE_POLICY",
-    ],
-    [
-      "plugin-npm-release",
-      "validate_release_publish_approval",
+      plugin,
+      pluginValidation,
       "Publish with trusted publisher",
       "OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY",
     ],
     [
-      "plugin-npm-release",
-      "validate_release_publish_approval",
+      plugin,
+      pluginValidation,
       "Publish approved bootstrap tarball",
       "RELEASE_PUBLISH_PARENT_STATE_POLICY",
     ],
@@ -266,9 +262,9 @@ describe("release approval workflow contracts", () => {
     (workflow, validationId, stepName, policyVariable) => {
       const job = requireJob(
         workflow,
-        workflow === "openclaw-npm-release" ? "publish_openclaw_npm" : "publish_plugins_npm",
+        workflow === core ? "publish_openclaw_npm" : "publish_plugins_npm",
       );
-      const publish = job.steps.find((step) => step.name === stepName);
+      const publish = requireStep(job, stepName);
       const policyExpression = publish?.env?.[policyVariable];
       if (!publish?.run || !policyExpression) {
         throw new Error(`${workflow} ${stepName} has no parent state policy`);
@@ -283,13 +279,13 @@ describe("release approval workflow contracts", () => {
       const receiptPolicy = policyFor("receipt", bot);
       expect(receiptPolicy).toBe("active");
       expect(policyFor("", "release-manager")).toBe("manual-recovery");
-      if (workflow === "plugin-npm-release") {
+      if (workflow === plugin) {
         // Human-approved bot children keep the existing finish-after-failure contract.
         expect(policyFor("", bot)).toBe("active-or-failure");
       }
 
       const script = publish.run;
-      if (workflow === "openclaw-npm-release") {
+      if (workflow === core) {
         const publishes =
           script.match(/bash trusted-workflow\/scripts\/openclaw-npm-publish\.sh --publish/gu) ??
           [];
@@ -312,33 +308,25 @@ describe("release approval workflow contracts", () => {
   );
 
   it("replaces only the ClawHub human gate after parent receipt verification succeeds", () => {
-    const validate = requireJob("plugin-clawhub-release", "validate_release_publish_approval");
-    const approve = requireJob("plugin-clawhub-release", "approve_plugins_clawhub_release");
-    expect(validate.outputs?.parent_approval).toBe("${{ steps.receipt.outputs.parent_approval }}");
+    const validate = requireJob(clawhub, pluginValidation);
+    const approve = requireJob(clawhub, "approve_plugins_clawhub_release");
+    expect(validate.outputs?.parent_approval).toBe(receiptOutput);
     expect(approve.environment).toBe(
       "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
     );
     expect(approve.if).toContain("needs.validate_release_publish_approval.result == 'success'");
     const receiptRoute =
       "needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'";
-    const wait = approve.steps.find(
-      (step) => step.name === "Wait for the release parent's ClawHub authorization",
-    );
+    const wait = requireStep(approve, "Wait for the release parent's ClawHub authorization");
     expect(wait).toMatchObject({
       if: receiptRoute,
-      env: {
-        RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
-        RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
-        EXPECTED_WORKFLOW_SHA: "${{ github.workflow_sha }}",
-      },
+      env: parentEnv,
       run: "node scripts/release-approval-receipt.mjs wait-clawhub-authorization",
     });
     for (const name of ["Checkout trusted release tooling", "Setup Node"]) {
-      expect(approve.steps.find((step) => step.name === name)?.if).toContain(receiptRoute);
+      expect(requireStep(approve, name).if).toContain(receiptRoute);
     }
-    const publish = readWorkflow("plugin-clawhub-release").jobs.publish_plugins_clawhub as
-      | { needs?: string[]; if?: string }
-      | undefined;
+    const publish = requireJob(clawhub, "publish_plugins_clawhub");
     expect(publish?.needs).toContain("approve_plugins_clawhub_release");
     expect(publish?.if).toContain("needs.approve_plugins_clawhub_release.result == 'success'");
   });

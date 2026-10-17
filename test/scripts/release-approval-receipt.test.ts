@@ -19,6 +19,10 @@ const sha = "a".repeat(40);
 const targetSha = "b".repeat(40);
 const repository = "openclaw/openclaw";
 const workflow = ".github/workflows/openclaw-release-publish.yml";
+const artifactName = "openclaw-release-approval-v1-10-2";
+const approvalJob = "Publish plugins, then OpenClaw";
+const receiptStep = "Write release approval receipt";
+const releaseTag = "v2026.9.24-beta.1";
 const env = {
   GITHUB_REPOSITORY: repository,
   GITHUB_RUN_ID: "10",
@@ -28,7 +32,7 @@ const env = {
   GITHUB_WORKFLOW_SHA: sha,
   GITHUB_EVENT_NAME: "workflow_dispatch",
   GITHUB_WORKFLOW_REF: `${repository}/${workflow}@refs/heads/main`,
-  RELEASE_TAG: "v2026.9.24-beta.1",
+  RELEASE_TAG: releaseTag,
   TARGET_SHA: targetSha,
   RELEASE_NPM_DIST_TAG: "beta",
 };
@@ -44,7 +48,7 @@ function fixture() {
     toolingRef: "main",
     toolingFullRef: "refs/heads/main",
     toolingSha: sha,
-    releaseTag: "v2026.9.24-beta.1",
+    releaseTag,
     targetSha,
     npmDistTag: "beta",
   };
@@ -55,7 +59,7 @@ function fixture() {
     parentWorkflow: workflow,
     ...identity,
     environment: "npm-release",
-    approvalJob: "Publish plugins, then OpenClaw",
+    approvalJob,
     approver: "octocat",
   };
   return {
@@ -63,7 +67,7 @@ function fixture() {
     expected: { repository, ...identity },
     artifact: {
       id: 50,
-      name: "openclaw-release-approval-v1-10-2",
+      name: artifactName,
       expired: false,
       workflow_run: { id: 10, head_sha: sha, repository_id: 99, head_repository_id: 99 },
     },
@@ -83,14 +87,12 @@ function fixture() {
       total_count: 1,
       jobs: [
         {
-          name: "Publish plugins, then OpenClaw",
+          name: approvalJob,
           head_sha: sha,
           run_id: 10,
           run_attempt: 2,
           status: "in_progress",
-          steps: [
-            { name: "Write release approval receipt", status: "completed", conclusion: "success" },
-          ],
+          steps: [{ name: receiptStep, status: "completed", conclusion: "success" }],
         },
       ],
     },
@@ -178,7 +180,18 @@ describe("release approval receipt", () => {
     }
   });
 
-  it.each<[string, (input: ReturnType<typeof fixture>) => void, RegExp]>([
+  const valid = fixture();
+  const job = expectDefined(valid.parentJobs.jobs[0], "job");
+  function receiptWith(overrides: Record<string, unknown>) {
+    return { ...valid.receipt, ...overrides };
+  }
+  function jobs(overrides: Partial<typeof job>) {
+    return { total_count: 1, jobs: [{ ...job, ...overrides }] };
+  }
+  function artifact(overrides: Partial<typeof valid.artifact.workflow_run>) {
+    return { ...valid.artifact, workflow_run: { ...valid.artifact.workflow_run, ...overrides } };
+  }
+  it.each<[Partial<ReturnType<typeof fixture>>, RegExp]>([
     ...(
       [
         ["parentRunId", "11"],
@@ -188,82 +201,28 @@ describe("release approval receipt", () => {
         ["targetSha", "d".repeat(40)],
         ["npmDistTag", "latest"],
       ] as const
-    ).map(([key, value]): [string, (input: ReturnType<typeof fixture>) => void, RegExp] => [
-      `different expected ${key}`,
-      (input) => {
-        input.expected[key] = value;
-      },
+    ).map(([key, value]): [Partial<ReturnType<typeof fixture>>, RegExp] => [
+      { expected: { ...valid.expected, [key]: value } },
       new RegExp(`${key} does not match`, "u"),
     ]),
+    [{ receipt: receiptWith({ extra: true }) }, /fields/u],
+    [{ receipt: receiptWith({ approver: "someone-else" }) }, /approver is not in/u],
+    [{ artifact: artifact({ id: 11 }) }, /artifact parent run/u],
+    [{ artifact: { ...valid.artifact, expired: true } }, /expired/u],
+    [{ artifact: artifact({ head_repository_id: 100 }) }, /artifact repository/u],
     [
-      "extra fields",
-      (input) => {
-        Object.assign(input.receipt, { extra: true });
-      },
-      /fields/u,
-    ],
-    [
-      "tampered approver",
-      (input) => {
-        input.receipt.approver = "someone-else";
-      },
-      /approver is not in/u,
-    ],
-    [
-      "another run",
-      (input: ReturnType<typeof fixture>) => {
-        input.artifact.workflow_run.id = 11;
-      },
-      /artifact parent run/u,
-    ],
-    [
-      "expired artifact",
-      (input: ReturnType<typeof fixture>) => {
-        input.artifact.expired = true;
-      },
-      /expired/u,
-    ],
-    [
-      "fork artifact",
-      (input: ReturnType<typeof fixture>) => {
-        input.artifact.workflow_run.head_repository_id = 100;
-      },
-      /artifact repository/u,
-    ],
-    [
-      "unsuccessful receipt step",
-      (input: ReturnType<typeof fixture>) => {
-        expectDefined(expectDefined(input.parentJobs.jobs[0], "job").steps[0], "step").conclusion =
-          "failure";
+      {
+        parentJobs: jobs({
+          steps: [{ ...expectDefined(job.steps[0], "step"), conclusion: "failure" }],
+        }),
       },
       /receipt step/u,
     ],
-    [
-      "missing parent job",
-      (input: ReturnType<typeof fixture>) => {
-        input.parentJobs = { total_count: 0, jobs: [] };
-      },
-      /parent job must be unique/u,
-    ],
-    [
-      "duplicate parent job",
-      (input: ReturnType<typeof fixture>) => {
-        input.parentJobs.jobs.push(expectDefined(input.parentJobs.jobs[0], "job"));
-        input.parentJobs.total_count = 2;
-      },
-      /parent job must be unique/u,
-    ],
-    [
-      "wrong job attempt",
-      (input: ReturnType<typeof fixture>) => {
-        expectDefined(input.parentJobs.jobs[0], "job").run_attempt = 1;
-      },
-      /job identity/u,
-    ],
-  ])("rejects %s", (_name, change, message) => {
-    const input = fixture();
-    change(input);
-    expect(() => verifyReleaseApprovalReceipt(input)).toThrow(message);
+    [{ parentJobs: { total_count: 0, jobs: [] } }, /parent job must be unique/u],
+    [{ parentJobs: { total_count: 2, jobs: [job, job] } }, /parent job must be unique/u],
+    [{ parentJobs: jobs({ run_attempt: 1 }) }, /job identity/u],
+  ])("rejects invalid receipt binding: %j", (override, message) => {
+    expect(() => verifyReleaseApprovalReceipt({ ...fixture(), ...override })).toThrow(message);
   });
 
   it("rejects completed parents under active and permits only successful detached parents", () => {
@@ -297,6 +256,7 @@ console.log(${JSON.stringify(JSON.stringify([approved()]))});
     );
     const output = join(directory, "receipt", "approval.json");
     const githubOutput = join(directory, "output");
+    const expectedOutput = `artifact_name=${artifactName}\n`;
     const args = [resolve("scripts/release-approval-receipt.mjs"), "create", "--output", output];
     const options = {
       encoding: "utf8",
@@ -305,15 +265,11 @@ console.log(${JSON.stringify(JSON.stringify([approved()]))});
     const result = spawnSync(process.execPath, args, options);
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(output, "utf8")).toBe(`${JSON.stringify(fixture().receipt)}\n`);
-    expect(readFileSync(githubOutput, "utf8")).toBe(
-      "artifact_name=openclaw-release-approval-v1-10-2\n",
-    );
+    expect(readFileSync(githubOutput, "utf8")).toBe(expectedOutput);
     const second = spawnSync(process.execPath, args, options);
     expect(second.status).toBe(1);
     expect(second.stderr).toContain("EEXIST");
-    expect(readFileSync(githubOutput, "utf8")).toBe(
-      "artifact_name=openclaw-release-approval-v1-10-2\n",
-    );
+    expect(readFileSync(githubOutput, "utf8")).toBe(expectedOutput);
   });
 });
 
@@ -330,7 +286,7 @@ describe("release approval artifact download", () => {
       expires_at: "2026-10-24T00:00:00Z",
     };
     const apiResponses: Record<string, unknown> = {
-      "actions/runs/10/artifacts?name=openclaw-release-approval-v1-10-2&per_page=100": {
+      [`actions/runs/10/artifacts?name=${artifactName}&per_page=100`]: {
         total_count: 1,
         artifacts: [artifact],
       },
@@ -383,7 +339,7 @@ describe("release approval artifact download", () => {
 });
 
 describe("parent authorization wait", () => {
-  const name = "openclaw-release-approval-v1-10-2";
+  const name = artifactName;
   const listing = `actions/runs/10/artifacts?name=${name}&per_page=100`;
   const authorization = {
     name,
@@ -417,56 +373,34 @@ describe("parent authorization wait", () => {
   }
 
   const completed = { status: "completed", conclusion: "failure" };
-  type AuthorizationCase = {
-    name: string;
-    pages: unknown[][];
-    parent?: typeof completed;
-    options?: { requireInProgress?: boolean; deadlineMs?: number };
-    error?: RegExp;
-  };
-  it.each<AuthorizationCase>([
-    { name: "waits for authorization", pages: [[], [], [authorization]] },
-    {
-      name: "allows detached authorization",
-      pages: [[authorization]],
-      parent: completed,
-      options: { requireInProgress: false },
-    },
-    {
-      name: "requires a live parent",
-      pages: [[authorization]],
-      parent: completed,
-      error: /completed\//u,
-    },
-    {
-      name: "parent exits without authorization",
-      pages: [[]],
-      parent: completed,
-      error: /completed\/failure without authorizing/u,
-    },
-    {
-      name: "deadline expires",
-      pages: [[]],
-      options: { deadlineMs: 0 },
-      error: /did not appear before the deadline/u,
-    },
-    {
-      name: "wrong parent",
-      pages: [[{ ...authorization, workflow_run: { id: 11, head_sha: sha } }]],
-      error: /does not belong to the parent/u,
-    },
-    {
-      name: "wrong tooling",
-      pages: [[{ ...authorization, workflow_run: { id: 10, head_sha: targetSha } }]],
-      error: /does not belong to the parent/u,
-    },
-    {
-      name: "expired",
-      pages: [[{ ...authorization, expired: true }]],
-      error: /does not belong to the parent/u,
-    },
-    { name: "ambiguous", pages: [[authorization, authorization]], error: /ambiguous/u },
-  ])("$name", async ({ pages, parent, options, error }) => {
+  type WaitOptions = { requireInProgress?: boolean; deadlineMs?: number };
+  const wrongBinding = /does not belong to the parent/u;
+  const binding = (id: number, head_sha = sha) => ({
+    ...authorization,
+    workflow_run: { id, head_sha },
+  });
+  it.each<[string, unknown[][], RegExp?, typeof completed?, WaitOptions?]>([
+    ["waits for authorization", [[], [], [authorization]]],
+    [
+      "allows detached authorization",
+      [[authorization]],
+      undefined,
+      completed,
+      { requireInProgress: false },
+    ],
+    ["requires a live parent", [[authorization]], /completed\//u, completed],
+    [
+      "parent exits without authorization",
+      [[]],
+      /completed\/failure without authorizing/u,
+      completed,
+    ],
+    ["deadline expires", [[]], /did not appear before the deadline/u, undefined, { deadlineMs: 0 }],
+    ["wrong parent", [[binding(11)]], wrongBinding],
+    ["wrong tooling", [[binding(10, targetSha)]], wrongBinding],
+    ["expired", [[{ ...authorization, expired: true }]], wrongBinding],
+    ["ambiguous", [[authorization, authorization]], /ambiguous/u],
+  ])("%s", async (_name, pages, error, parent, options) => {
     const result = awaitParentAuthorization({
       ...params,
       ...options,
@@ -482,8 +416,8 @@ describe("parent authorization wait", () => {
 
 describe("parent authorization CLI", () => {
   it.each([
-    ["wait-npm-authorization", "in_progress", null, 0, "openclaw-release-approval-v1-10-2"],
-    ["wait-npm-authorization", "completed", "success", 1, "openclaw-release-approval-v1-10-2"],
+    ["wait-npm-authorization", "in_progress", null, 0, artifactName],
+    ["wait-npm-authorization", "completed", "success", 1, artifactName],
     [
       "wait-clawhub-authorization",
       "completed",
