@@ -19,6 +19,8 @@ export const SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES: Readonly<
   Record<SchemaMigration["kind"], readonly string[]>
 > = {
   agent: [
+    "auth_profile_store",
+    "auth_profile_state",
     "session_nodes",
     "session_key_contract",
     "session_canonical_validation_pending",

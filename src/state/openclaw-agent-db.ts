@@ -436,6 +436,7 @@ function* openOpenClawAgentDatabaseSteps(
           verification,
           isValidatedReopen && reuseAdmittedIntegrity,
           reusedSchema,
+          repairAdmission?.integrityCheck,
         );
         assertCurrent(validationDatabase);
         if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
@@ -465,7 +466,16 @@ function* openOpenClawAgentDatabaseSteps(
         finishPhase("configuration");
         assertCurrent(validationDatabase);
         if (!isValidatedReopen) {
-          ensureOpenClawAgentSchema(db, agentId, pathname);
+          ensureOpenClawAgentSchema(
+            db,
+            agentId,
+            pathname,
+            undefined,
+            undefined,
+            undefined,
+            false,
+            repairAdmission?.integrityCheck,
+          );
         }
         finishPhase("schema");
         selected = openAgentEngineStore(db, agentId, pathname);
@@ -518,7 +528,14 @@ function* openOpenClawAgentDatabaseSteps(
     ) {
       assertCurrent(database);
       registerOpenClawAgentDatabase(
-        { agentId, path: pathname, env: options.env, admittedDb: selected },
+        {
+          agentId,
+          path: pathname,
+          env: options.env,
+          // A temporary QUICK repair handle must not publish FULL runtime admission.
+          admittedDb:
+            !engineInput && repairAdmission?.integrityCheck === "quick" ? undefined : selected,
+        },
         registrationObserver,
       );
     } else if (!reusedSchema) {
