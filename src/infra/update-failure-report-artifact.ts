@@ -283,16 +283,16 @@ export async function discardSavedUpdateFailureReport(
 export async function discardSavedUpdateFailureReportBestEffort(
   prepared: PreparedUpdateFailureReport,
 ): Promise<void> {
-  await discardSavedUpdateFailureReport(prepared).catch(() => {});
+  await discardSavedUpdateFailureReport(prepared).catch(() => {
+    // Optional artifact cleanup must not replace the report submission result.
+  });
 }
 
-/** Captures the immutable retired-artifact set for one fenced sweep generation. */
+/** Captures attempt artifacts once; cleanup protects the current receipt after enumeration. */
 export async function listRetiredUpdateFailureReportArtifacts(
   prepared: PreparedUpdateFailureReport,
-  keep?: PreparedUpdateFailureReport,
 ): Promise<string[]> {
   const base = path.parse(prepared.savedReportPath);
-  const keepPaths = new Set(keep ? [keep.savedReportPath, stagedReportPath(keep)] : []);
   const entries = await fs.readdir(base.dir).catch((error: unknown) => {
     if (hasErrorCode(error, "ENOENT")) {
       return [];
@@ -301,8 +301,7 @@ export async function listRetiredUpdateFailureReportArtifacts(
   });
   return entries
     .filter((entry) => isAttemptArtifactName(base, entry))
-    .map((entry) => path.join(base.dir, entry))
-    .filter((artifactPath) => !keepPaths.has(artifactPath));
+    .map((entry) => path.join(base.dir, entry));
 }
 
 /** Deletes only a previously captured set; this function never performs a fresh scan. */
@@ -310,7 +309,9 @@ export async function removeRetiredUpdateFailureReportArtifacts(
   artifactPaths: readonly string[],
 ): Promise<void> {
   for (const artifactPath of artifactPaths) {
-    await fs.rm(artifactPath, { force: true }).catch(() => {});
+    await fs.rm(artifactPath, { force: true }).catch(() => {
+      // A later sweep can remove these non-authoritative retired artifacts.
+    });
   }
 }
 
