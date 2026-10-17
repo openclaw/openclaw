@@ -18,6 +18,7 @@ import {
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import {
@@ -227,13 +228,16 @@ export const createTelegramMessageProcessor = (
       } catch (err) {
         runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
         if (!spooledReplay) {
-          try {
-            await bot.api.sendMessage(
-              context.chatId,
-              "Something went wrong while processing your request. Please try again.",
-              buildTelegramThreadParams(context.threadSpec),
-            );
-          } catch {}
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(
+                context.chatId,
+                "Something went wrong while processing your request. Please try again.",
+                buildTelegramThreadParams(context.threadSpec),
+              ),
+          }).catch(() => {});
         }
         return {
           kind: "failed-retryable",

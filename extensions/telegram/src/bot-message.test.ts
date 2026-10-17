@@ -1,5 +1,6 @@
 // Telegram tests cover bot message plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -10,6 +11,7 @@ import {
   runWithTelegramSpooledReplayUpdate,
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
+import { asTelegramClientFetch } from "./client-fetch.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
@@ -145,7 +147,7 @@ describe("telegram bot message processor", () => {
 
   function createDispatchFailureHarness(
     context: Record<string, unknown>,
-    sendMessage: ReturnType<typeof vi.fn>,
+    sendMessage: Api["sendMessage"],
   ) {
     const runtimeError = vi.fn();
     const dispatchError = new Error("dispatch exploded");
@@ -722,26 +724,42 @@ describe("telegram bot message processor", () => {
     );
   });
 
-  it("swallows fallback delivery failures after dispatch throws", async () => {
-    const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
+  it("reports a rejected fallback send without replacing the dispatch failure", async () => {
+    const botApiBodies: unknown[] = [];
+    const api = new Api("123456:fallback-fixture", {
+      fetch: asTelegramClientFetch(async (_input: unknown, init?: { body?: unknown }) => {
+        botApiBodies.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error_code: 403,
+            description: "Forbidden: bot was blocked by the user",
+          }),
+          { status: 403 },
+        );
+      }),
+    });
     const { processMessage, runtimeError, dispatchError } = createDispatchFailureHarness(
       {
         chatId: 123,
         route: { sessionKey: "agent:main:main" },
       },
-      sendMessage,
+      api.sendMessage.bind(api),
     );
     const result = await processSampleMessage(processMessage);
 
     expect(result).toEqual({ kind: "failed-retryable", error: dispatchError });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      123,
-      "Something went wrong while processing your request. Please try again.",
-      undefined,
-    );
-    expect(runtimeError).toHaveBeenCalledWith(
-      "telegram message processing failed: Error: dispatch exploded",
-    );
+    expect(botApiBodies).toEqual([
+      {
+        chat_id: 123,
+        text: "Something went wrong while processing your request. Please try again.",
+      },
+    ]);
+    expect(runtimeError.mock.calls).toEqual([
+      ["telegram message processing failed: Error: dispatch exploded"],
+      [
+        "telegram sendMessage failed: Call to 'sendMessage' failed! (403: Forbidden: bot was blocked by the user)",
+      ],
+    ]);
   });
 });
