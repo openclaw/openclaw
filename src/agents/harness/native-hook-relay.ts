@@ -124,7 +124,8 @@ function scheduleNativeHookRelayExpiry(
     if (relays.get(relayId) !== registration) {
       return;
     }
-    const remainingMs = registration.expiresAtMs - Date.now();
+    const remainingMs =
+      (lifetime.expiresAtMonotonicMs ?? registration.expiresAtMs) - performance.now();
     if (remainingMs < 0) {
       unregisterNativeHookRelay(relayId, registration);
       return;
@@ -137,6 +138,14 @@ function scheduleNativeHookRelayExpiry(
 
 function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | undefined {
   return resolveExpiresAtMsFromDurationMs(normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS));
+}
+
+function resolveNativeHookRelayMonotonicExpiresAtMs(ttlMs: number | undefined): number | undefined {
+  const ttlMsValue = normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
+  if (ttlMsValue === undefined) {
+    return undefined;
+  }
+  return performance.now() + ttlMsValue;
 }
 
 export function registerNativeHookRelay(
@@ -173,6 +182,7 @@ function registerNativeHookRelayInternal(
   const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
   const now = Date.now();
   const expiresAtMs = resolveNativeHookRelayExpiresAtMs(params.ttlMs);
+  const expiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(params.ttlMs);
   if (expiresAtMs === undefined) {
     throw new Error("Native hook relay expiry is outside the supported Date range");
   }
@@ -236,6 +246,7 @@ function registerNativeHookRelayInternal(
       foregroundOpen: true,
       foregroundToken: Symbol("native-hook-relay-foreground"),
       policyReady,
+      expiresAtMonotonicMs,
       ...(retained ? { retained } : {}),
       ...(retention ? { retention } : {}),
       ...(executionAdmission ? { executionAdmission } : {}),
@@ -297,7 +308,8 @@ function registerNativeHookRelayInternal(
           return;
         }
         const renewedExpiresAtMs = resolveNativeHookRelayExpiresAtMs(ttlMs);
-        if (renewedExpiresAtMs === undefined) {
+        const renewedExpiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(ttlMs);
+        if (renewedExpiresAtMs === undefined || renewedExpiresAtMonotonicMs === undefined) {
           return;
         }
         pendingRenewal = pendingRenewal.then(async () => {
@@ -329,6 +341,10 @@ function registerNativeHookRelayInternal(
           }
           current.expiresAtMs = renewedExpiresAtMs;
           handle.expiresAtMs = renewedExpiresAtMs;
+          const renewedLifetime = readRelayLifetime(current);
+          if (renewedLifetime) {
+            renewedLifetime.expiresAtMonotonicMs = renewedExpiresAtMonotonicMs;
+          }
           scheduleNativeHookRelayExpiry(relayId, current);
         });
       },
