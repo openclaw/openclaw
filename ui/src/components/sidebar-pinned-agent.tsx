@@ -3,7 +3,7 @@ import type { agentRosterCards } from "../lib/agents/roster-activity.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
-import { SessionGlyph } from "./solid/session-presentation.tsx";
+import { SessionGlyph, sessionRunVisibility } from "./solid/session-presentation.tsx";
 import { Tooltip } from "./solid/tooltip.tsx";
 import "../styles/sidebar-pinned-agents.css";
 
@@ -19,7 +19,7 @@ export function SidebarPinnedAgent(props: {
   menu: JSX.Element;
 }) {
   return (
-    <div class="sidebar-pinned-agent" data-pinned-agent={props.agent.id}>
+    <div class="sidebar-pinned-agent session-row-host" data-pinned-agent={props.agent.id}>
       <Tooltip class="sidebar-pinned-agent__tooltip" placement="right-start">
         <a
           class="sidebar-pinned-agent__link"
@@ -39,6 +39,7 @@ export function SidebarPinnedAgent(props: {
               circular
               content={<AgentIdentityAvatar agent={props.agent} />}
               running={props.agent.activeNow}
+              runVisibility={sessionRunVisibility}
             />
           </span>
           <span class="sidebar-pinned-agent__name">{props.agent.name}</span>

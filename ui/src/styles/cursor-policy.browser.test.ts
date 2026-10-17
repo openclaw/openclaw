@@ -67,7 +67,6 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "not-allowed", selector: "#disabled-new-tab-button" },
   { expected: "default", selector: "#shadow-disabled-new-tab-button", shadow: true },
   { expected: "wait", selector: ".sidebar-update-card__hold:disabled" },
-  { expected: "default", selector: ".session-tokens" },
   { expected: "default", selector: ".agent-tools-runtime-chip--more" },
   { expected: "default", selector: ".chat-assistant-attachment-card[data-openable]" },
 ];
@@ -164,7 +163,6 @@ function fixtureDocument(): string {
       <button class="chat-message-image-button" type="button">Image</button>
       <div class="chat-assistant-attachment-card" data-openable>Attachment</div>
       <div class="sidebar-session-group-drag-handle"></div>
-      <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>
       <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>
       <div class="chat-text"><a class="markdown-github-link markdown-github-item" data-github-kind="pull" href="https://github.com/openclaw/openclaw/pull/3434" target="_blank">#3434</a></div>

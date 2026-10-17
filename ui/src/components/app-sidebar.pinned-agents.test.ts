@@ -105,11 +105,39 @@ it("keeps every configured pin available and ignores unavailable saved agents", 
   expect(context.navigation.snapshot.pinnedAgentIds).toContain("missing");
 });
 
-it("offers agent-specific session actions and confirms agent deletion", async () => {
+it("keeps provisional session feedback visible below the pinned agent gallery", async () => {
+  const { sidebar, context } = await mountRoster(roster, []);
+  context.navigation.update({ pinnedAgentIds: ["main"] });
+  sidebar.sidebarAgentsMode = "roster";
+  sidebar.activeRouteId = "chat";
+  sidebar.sessionKey = "agent:main:creating";
+  await vi.waitFor(() =>
+    expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
+  );
+  const release = context.chatSubmissions.beginCreate({
+    creation: { sessionKey: "agent:main:creating", admitted: false },
+    displayName: "Preparing new conversation",
+    message: null,
+    canDisplay: () => true,
+  });
+  try {
+    await settleRoster(sidebar);
+    const pending = sidebar.querySelector(
+      ".sidebar-agent-roster > .sidebar-recent-session--creating",
+    );
+    expect(pending?.textContent).toContain("Preparing new conversation");
+    expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
+  } finally {
+    release();
+  }
+  await settleRoster(sidebar);
+  expect(sidebar.querySelector(".sidebar-recent-session--creating")).toBeNull();
+});
+
+it("offers agent sessions and settings without a create action, and confirms agent deletion", async () => {
   const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
-  const onOpenNewSession = vi.fn();
   const onNavigate = vi.fn();
-  sidebar.onOpenNewSession = onOpenNewSession;
+  const navigate = vi.spyOn(context, "navigate");
   sidebar.onNavigate = onNavigate;
   context.agents.refreshList = vi.fn(async () => context.agents.state.agentsList);
   gatewayHarness.publish({
@@ -121,23 +149,22 @@ it("offers agent-specific session actions and confirms agent deletion", async ()
 
   const openMenu = async () => {
     sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
-    await vi.waitFor(() =>
-      expect(sidebar.querySelector('[data-value="new-session"]')).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(sidebar.querySelector('[data-value="sessions"]')).not.toBeNull());
   };
   await openMenu();
-  expect(sidebar.querySelector('[data-value="new-session"]')?.textContent).toContain(
-    "Create new session",
-  );
-  expect(sidebar.querySelector('[data-value="sessions"]')?.textContent).toContain("View sessions");
+  expect(sidebar.querySelector('[data-value="new-session"]')).toBeNull();
+  expect(sidebar.querySelector('[data-value="sessions"]')?.textContent).toContain("Sessions");
+  expect(sidebar.querySelector('[data-value="settings"]')?.textContent).toContain("Settings");
   expect(sidebar.querySelector('[data-value="delete"]')?.textContent).toContain("Delete");
-  sidebar.querySelector<HTMLElement>('[data-value="new-session"]')!.click();
-  expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("main");
-
-  await openMenu();
   sidebar.querySelector<HTMLElement>('[data-value="sessions"]')!.click();
   expect(context.agentSelection.state.selectedId).toBe("main");
   expect(onNavigate).toHaveBeenCalledWith("sessions");
+
+  await openMenu();
+  sidebar.querySelector<HTMLElement>('[data-value="settings"]')!.click();
+  expect(navigate).toHaveBeenCalledWith("agents", {
+    pathname: "/settings/agents/main",
+  });
 
   await openMenu();
   sidebar.querySelector<HTMLElement>('[data-value="delete"]')!.click();

@@ -246,42 +246,33 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   expect(getComputedStyle(trace(reconnectedRows.at(-1)!)).animationPlayState).toBe("running");
 });
 
-it("registers running rows rendered by the real roster child after its parent update", async () => {
+it("registers the aggregate agent run ring without exposing session rows", async () => {
   const probe = visibilityProbe();
   const rows = runState({ agentId: "main", isMain: false }).result!.sessions;
-  const { sidebar } = await mountRoster(agents, rows);
+  const { sidebar, context, result } = await mountRoster(agents, rows);
   const scroller = sizeSidebar(sidebar, 800);
   sidebar.sidebarAgentsMode = "roster";
   await settleRoster(sidebar);
-  await revealPages(sidebar);
   const roster = sidebar.querySelector("openclaw-sidebar-agent-roster")!;
+  await waitForSolid(() => expect(runningRows(roster)).toHaveLength(1));
   const visibleRuns = runningRows(roster);
-  expect(visibleRuns).toHaveLength(11);
   expect(probe.activeObservers.size).toBe(1);
-  expect(visibleRuns.filter((row) => probe.observed.has(row))).toHaveLength(11);
-  expect(probe.observed.size).toBe(11);
+  expect(visibleRuns.filter((row) => probe.observed.has(row))).toHaveLength(1);
+  expect(probe.observed.size).toBe(1);
   const first = visibleRuns[0]!;
-  const hiddenRows = visibleRuns.slice(1);
-  expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+  expect(first.closest('[data-agent-group="main"]')).not.toBeNull();
+  expect(first.querySelector("[data-session-key]")).toBeNull();
   expect(first.getBoundingClientRect().bottom).toBeLessThan(
     scroller.getBoundingClientRect().bottom,
   );
-  expect(hiddenRows[0]!.getBoundingClientRect().top).toBeGreaterThan(
-    scroller.getBoundingClientRect().bottom,
-  );
   expectIndicator(ring(first), false, "running");
-  await waitForSolid(() => expect(hiddenRows.every((row) => offscreen(ring(row)))).toBe(true));
-  expect(hiddenRows.map((row) => getComputedStyle(ring(row)).animationPlayState)).toEqual(
-    Array(10).fill("paused"),
+  result.sessions = result.sessions.map((row) =>
+    Object.assign({}, row, { hasActiveRun: false, status: "done" }),
   );
-  scroller.scrollTop = scroller.scrollHeight;
-  await waitForSolid(() => {
-    expect(offscreen(ring(first))).toBe(true);
-    expect(hiddenRows.every((row) => !offscreen(ring(row)))).toBe(true);
-  });
-  expect(hiddenRows.map((row) => getComputedStyle(ring(row)).animationPlayState)).toEqual(
-    Array(10).fill("running"),
-  );
+  await rosterActivityStore(context).refresh();
+  await settleRoster(sidebar);
+  expect(runningRows(roster)).toHaveLength(0);
+  expect(probe.observed.size).toBe(0);
 });
 
 it.each(["chip", "roster"] as const)(
@@ -310,12 +301,18 @@ it.each(["chip", "roster"] as const)(
     sidebar.sidebarAgentsMode = mode;
     await settleRoster(sidebar);
     const indicators = () => [
-      ...sidebar.querySelectorAll<HTMLElement>(`.sidebar-recent-session :is(${indicatorSelector})`),
+      ...sidebar.querySelectorAll<HTMLElement>(
+        mode === "chip"
+          ? `.sidebar-recent-session :is(${indicatorSelector})`
+          : `.sidebar-agent-roster__avatar :is(${indicatorSelector})`,
+      ),
     ];
-    await waitForSolid(() => expect(indicators()).toHaveLength(4));
+    await waitForSolid(() => expect(indicators()).toHaveLength(mode === "chip" ? 4 : 1));
     const original = indicators();
-    const keys = original.map(
-      (element) => element.closest<HTMLElement>("[data-session-key]")!.dataset.sessionKey,
+    const keys = original.map((element) =>
+      mode === "chip"
+        ? element.closest<HTMLElement>("[data-session-key]")!.dataset.sessionKey
+        : element.closest<HTMLElement>("[data-agent-group]")!.dataset.agentGroup,
     );
     const animations = original.map((element) => element.getAnimations()[0]!);
     expect(animations.every(Boolean)).toBe(true);
@@ -340,13 +337,17 @@ it.each(["chip", "roster"] as const)(
         await rosterActivityStore(context).refresh();
       }
       await settleRoster(sidebar);
-      expect(sidebar.textContent).toContain("Run 0 " + update);
+      if (mode === "chip") {
+        expect(sidebar.textContent).toContain("Run 0 " + update);
+      }
       const current = keys.map((key) =>
         sidebar.querySelector<HTMLElement>(
-          `[data-session-key="${key}"] :is(${indicatorSelector})`,
+          mode === "chip"
+            ? `[data-session-key="${key}"] :is(${indicatorSelector})`
+            : `[data-agent-group="${key}"] .sidebar-agent-roster__avatar :is(${indicatorSelector})`,
         )!,
       );
-      expect(current).toHaveLength(4);
+      expect(current).toHaveLength(mode === "chip" ? 4 : 1);
       current.forEach((element, index) => {
         expect(element).toBe(original[index]);
         expect(element.getAnimations()[0]).toBe(animations[index]);

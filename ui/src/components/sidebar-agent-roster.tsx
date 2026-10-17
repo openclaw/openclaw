@@ -30,6 +30,7 @@ import { Menu } from "./solid/menu.tsx";
 import {
   SessionGlyph,
   TeamSessionSlots,
+  sessionRunVisibility,
   type TeamSessionSlotsProps,
 } from "./solid/session-presentation.tsx";
 import "../styles/sidebar-agent-roster.css";
@@ -266,23 +267,36 @@ export function SidebarAgentRoster(props: RosterProps) {
             <span role="status" aria-label={t("common.loading")} class="skeleton skeleton-line" />
           </Show>
           <Show when={pinnedCards().length > 0}>
-            <section class="sidebar-pinned-agents" aria-label={t("agentsHome.pinnedAgents")}>
+            <>
+              <section class="sidebar-pinned-agents" aria-label={t("agentsHome.pinnedAgents")}>
+                <For each={pinnedCards()} keyed={(card) => card.id}>
+                  {(card) => (
+                    <SidebarPinnedAgent
+                      agent={card()}
+                      href={card().target.href}
+                      loading={roster.snapshot().loading}
+                      active={
+                        isSessionRouteId(roster.host().activeRouteId) &&
+                        areUiSessionKeysEquivalent(
+                          roster.host().getRouteSessionKey(),
+                          card().mainKey,
+                        )
+                      }
+                      onOpen={() => roster.host().openMainSession(card().id)}
+                      menu={agentMenu(card)}
+                    />
+                  )}
+                </For>
+              </section>
               <For each={pinnedCards()} keyed={(card) => card.id}>
-                {(card) => (
-                  <SidebarPinnedAgent
-                    agent={card()}
-                    href={card().target.href}
-                    loading={roster.snapshot().loading}
-                    active={
-                      isSessionRouteId(roster.host().activeRouteId) &&
-                      areUiSessionKeysEquivalent(roster.host().getRouteSessionKey(), card().mainKey)
-                    }
-                    onOpen={() => roster.host().openMainSession(card().id)}
-                    menu={agentMenu(card)}
-                  />
-                )}
+                {(card) =>
+                  renderPendingSessionCreateRow(
+                    roster.host,
+                    untrack(() => card().id),
+                  )
+                }
               </For>
-            </section>
+            </>
           </Show>
           <For each={unpinnedCards()} keyed={(card) => card.id}>
             {(card) => {
@@ -339,6 +353,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                           circular
                           content={<AgentIdentityAvatar agent={card()} />}
                           running={card().activeNow}
+                          runVisibility={sessionRunVisibility}
                         />
                       </span>
                       <span class="sidebar-agent-roster__copy">
