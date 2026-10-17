@@ -393,6 +393,17 @@ export class SwarmRosterHydrator {
       const previous = previousChildren.get(row.key);
       return previous?.swarmGroupId !== row.swarmGroupId || previous?.status !== row.status;
     });
+    const initialGroupSizes = new Map<string, number>();
+    if (!this.childrenRead) {
+      for (const row of result.sessions) {
+        if (row.swarmGroupId) {
+          initialGroupSizes.set(
+            row.swarmGroupId,
+            (initialGroupSizes.get(row.swarmGroupId) ?? 0) + 1,
+          );
+        }
+      }
+    }
     const currentKeys = new Set(result.sessions.map((row) => row.key));
     const removedMember = [...described.keys()].some(
       (key) => previousChildren.has(key) && !currentKeys.has(key),
@@ -405,11 +416,15 @@ export class SwarmRosterHydrator {
         const group = this.parentRow?.swarm?.groups.find(
           (candidate) => candidate.groupId === row.swarmGroupId,
         );
-        // Boot's retained child list extends beyond the descriptor's bounded groups/members.
-        // Only a complete displayed group can certify a missing member on the first page.
+        // Boot's retained children extend beyond the descriptor's bounded window.
+        // A bounded group's aggregate must still cover the first page's members.
+        if (!group) {
+          return false;
+        }
+        const size = group.queued + group.running + group.done + group.failed;
         if (
-          !group ||
-          group.children?.length !== group.queued + group.running + group.done + group.failed
+          group.children?.length !== size &&
+          (initialGroupSizes.get(group.groupId) ?? 0) <= size
         ) {
           return false;
         }

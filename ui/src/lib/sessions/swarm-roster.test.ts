@@ -145,16 +145,16 @@ describe("isSwarmEnabledInConfig", () => {
 });
 
 describe("SwarmRosterHydrator", () => {
-  it.each(["older group", "bounded members"] as const)(
-    "shares the boot descriptor when retained children exceed its %s window",
+  it.each(["older group", "bounded members", "new member"] as const)(
+    "reconciles the initial %s child roster with the shared boot descriptor",
     async (window) => {
       vi.useFakeTimers();
       const children =
-        window === "bounded members"
-          ? Array.from({ length: 65 }, (_, index) => row(index))
-          : [row(0), { ...row(1), swarmGroupId: "older-terminal-group", status: "done" as const }];
-      const parent = swarmParent(children.slice(0, window === "bounded members" ? 64 : 1));
-      if (window === "bounded members") {
+        window === "older group"
+          ? [row(0), { ...row(1), swarmGroupId: "older-terminal-group", status: "done" as const }]
+          : Array.from({ length: window === "new member" ? 66 : 65 }, (_, index) => row(index));
+      const parent = swarmParent(children.slice(0, window === "older group" ? 1 : 64));
+      if (window !== "older group") {
         parent.swarm!.groups[0]!.running = 65;
       }
       const described = vi.fn(async () => ({ session: parent }));
@@ -186,11 +186,27 @@ describe("SwarmRosterHydrator", () => {
         onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
+      if (window === "new member") {
+        described.mockResolvedValue({
+          session: {
+            ...parent,
+            swarm: {
+              ...parent.swarm!,
+              groups: [{ ...parent.swarm!.groups[0]!, running: 66 }],
+            },
+          },
+        });
+      }
       childPage.resolve(result(children, 0, children.length));
       await vi.advanceTimersByTimeAsync(0);
       expect(hydrator.hydrated).toBe(true);
       expect(hydrator.rows).toHaveLength(children.length + 1);
-      expect(described).toHaveBeenCalledTimes(1);
+      expect(described).toHaveBeenCalledTimes(window === "new member" ? 2 : 1);
+      if (window === "new member") {
+        expect(
+          hydrator.rows.find((entry) => entry.key === parent.key)?.swarm?.groups[0]?.running,
+        ).toBe(66);
+      }
     },
   );
 
