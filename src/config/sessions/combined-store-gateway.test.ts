@@ -35,10 +35,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  applyGatewaySessionStoreAdmission,
+  applyGatewaySessionStoreAdmission as applyAdmission,
   type ResolvedGatewaySessionStoreTargets,
 } from "./combined-store-gateway.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.native.js";
+import { loadCombinedSessionStoreForGatewayCore as loadCombinedStore } from "./combined-store-gateway.native.js";
 import { storeTargetKey } from "./combined-store-paths.js";
 import * as sessionAccessor from "./session-accessor.js";
 import {
@@ -48,6 +48,27 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import type { SessionEntry } from "./types.js";
+
+function seed(
+  scope: Parameters<typeof replaceSessionEntrySync>[0],
+  sessionId: string,
+  fields: Partial<SessionEntry> = {},
+) {
+  return replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, ...fields });
+}
+const selectedModelFields = (modelOverride: string) => ({
+  providerOverride: "ollama",
+  modelOverride,
+  modelOverrideSource: "user" as const,
+  modelOverrideRouteResolution: "resolved" as const,
+});
+
+const explicitAgents = (ids: string[], owner = "ops"): OpenClawConfig["agents"] => ({
+  ownership: "explicit",
+  entries: Object.fromEntries(ids.map((id) => [id, {}])),
+  defaults: { sessionStore: { agentId: owner } },
+});
 
 async function withResidentRows(
   cfg: OpenClawConfig,
@@ -91,12 +112,12 @@ it("admits repeated default-layout fleet reads without stat or realpath calls", 
         discovery: { env: state.env, snapshot: undefined },
       };
       // The generation's first read prepares configured directories and their path set.
-      expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+      expect(applyAdmission(cfg, options, targets)).toBe(targets);
       const stat = vi.spyOn(fsSync, "statSync");
       const realpath = vi.spyOn(realpathSync, "native");
       try {
         for (let read = 0; read < 5; read++) {
-          expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+          expect(applyAdmission(cfg, options, targets)).toBe(targets);
         }
         expect(stat).not.toHaveBeenCalled();
         expect(realpath).not.toHaveBeenCalled();
@@ -125,12 +146,12 @@ it.runIf(process.platform !== "win32")(
           preserveSentinelOwners: "physical" as const,
           discovery: { env: state.env, snapshot: undefined },
         };
-        expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+        expect(applyAdmission(cfg, options, targets)).toBe(targets);
         await fs.unlink(alias);
         await fs.symlink(replacement, alias);
-        expect(applyGatewaySessionStoreAdmission(cfg, options, targets).durableTargets).toEqual([]);
+        expect(applyAdmission(cfg, options, targets).durableTargets).toEqual([]);
         const next = freezeJsonSnapshot<OpenClawConfig>({ session: { store: replacement } });
-        expect(applyGatewaySessionStoreAdmission(next, options, targets)).toBe(targets);
+        expect(applyAdmission(next, options, targets)).toBe(targets);
       });
     });
   },
@@ -199,11 +220,11 @@ it.runIf(process.platform !== "win32").each([
           discovery: { env: state.env, snapshot: undefined },
         };
         try {
-          expect(applyGatewaySessionStoreAdmission(cfg, options, targets)).toBe(targets);
+          expect(applyAdmission(cfg, options, targets)).toBe(targets);
           expect(failures).toBe(layout === "shared" ? 0 : 1);
           expect(readAgentDatabaseAdmissionRefusal("broken", { env: state.env })).toBeDefined();
           failingPath = aliases[0]!;
-          expect(() => applyGatewaySessionStoreAdmission(cfg, options, targets)).toThrow(error);
+          expect(() => applyAdmission(cfg, options, targets)).toThrow(error);
         } finally {
           statSpy.mockRestore();
           realpathSpy.mockRestore();
@@ -215,20 +236,13 @@ it.runIf(process.platform !== "win32").each([
 
 it("lists admitted sessions across cached targets while preserving a refused database", async () => {
   await withOpenClawTestState({ label: "combined-admission" }, async (state) => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {}, cleaner: {} } },
-    };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, cleaner: {} } } };
     for (const agentId of ["main", "cleaner"]) {
-      replaceSessionEntrySync(
-        { agentId, sessionKey: `agent:${agentId}:main` },
-        { sessionId: `${agentId}-session`, updatedAt: 1 },
-      );
+      seed({ agentId, sessionKey: `agent:${agentId}:main` }, `${agentId}-session`);
     }
-    expect(
-      Object.keys(
-        loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly: true }).store,
-      ),
-    ).toHaveLength(2);
+    expect(Object.keys(loadCombinedStore(cfg, { configuredAgentsOnly: true }).store)).toHaveLength(
+      2,
+    );
     const copyPath = openOpenClawAgentDatabase({ agentId: "cleaner" }).path;
     await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest();
@@ -249,14 +263,12 @@ it("lists admitted sessions across cached targets while preserving a refused dat
     const before = await fs.readFile(copyPath);
 
     for (const configuredAgentsOnly of [false, true]) {
-      const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
+      const combined = loadCombinedStore(cfg, { configuredAgentsOnly });
       expect(Object.keys(combined.store)).toEqual(["agent:main:main"]);
       expect(combined.diagnostics?.join("\n")).toContain(refusal?.reason);
     }
-    expect(() => loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "cleaner" })).toThrow(
-      refusal?.reason,
-    );
-    const scoped = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "main" });
+    expect(() => loadCombinedStore(cfg, { agentId: "cleaner" })).toThrow(refusal?.reason);
+    const scoped = loadCombinedStore(cfg, { agentId: "main" });
     expect(
       scoped.targetsBySessionKey.get("agent:main:main")?.readSourceEntry("agent:cleaner:main"),
     ).toBeUndefined();
@@ -275,11 +287,9 @@ it("lists admitted sessions across cached targets while preserving a refused dat
       env: state.env,
       operation: "gateway-startup",
     });
-    expect(
-      Object.keys(
-        loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly: true }).store,
-      ),
-    ).toHaveLength(2);
+    expect(Object.keys(loadCombinedStore(cfg, { configuredAgentsOnly: true }).store)).toHaveLength(
+      2,
+    );
   });
 });
 
@@ -289,16 +299,13 @@ it.each(["ops", "main"])(
     await withOpenClawTestState({ label: "combined-read-admission" }, async (state) => {
       const storePath = state.statePath("ops.sqlite");
       openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      replaceSessionEntrySync(
-        { agentId: "ops", storePath, sessionKey: "agent:ops:main" },
-        { sessionId: "ops-session", updatedAt: 1 },
-      );
+      seed({ agentId: "ops", storePath, sessionKey: "agent:ops:main" }, "ops-session");
       const cfg: OpenClawConfig = {
         agents: { entries: { ops: {} } },
         session: { store: state.statePath("{agentId}.sqlite") },
       };
       const opts = { agentId: "ops", projection: "list" as const };
-      const expected = loadCombinedSessionStoreForGatewayCore(cfg, opts);
+      const expected = loadCombinedStore(cfg, opts);
       expect(expected.durableTargets).toEqual([{ agentId: "ops", storePath }]);
       expect(expected.targetsBySessionKey.get("agent:ops:main")?.storeTarget).toEqual({
         agentId: "main",
@@ -311,7 +318,7 @@ it.each(["ops", "main"])(
       })!;
       try {
         expect(() =>
-          loadCombinedSessionStoreForGatewayCore(cfg, {
+          loadCombinedStore(cfg, {
             ...opts,
             loadEntries: (target, projection) => {
               expect(target).toEqual({ agentId: "main", storePath });
@@ -334,11 +341,7 @@ it("projects shared rows under their logical owner while retaining the physical 
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        entries: {
-          main: {},
-          ops: { model: { primary: "openai/gpt-5.5" } },
-          worker: {},
-        },
+        entries: { main: {}, ops: { model: { primary: "openai/gpt-5.5" } }, worker: {} },
         defaults: { sessionStore: { agentId: "ops" } },
       },
       session: { scope: "global", store: storePath },
@@ -346,13 +349,10 @@ it("projects shared rows under their logical owner while retaining the physical 
     setRuntimeConfigSnapshot(cfg);
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const sessionKey of ["global", "unknown", "agent:worker:task"]) {
-      replaceSessionEntrySync(
+      seed(
         { agentId: sessionKey.startsWith("agent:") ? "worker" : "ops", sessionKey, storePath },
-        {
-          sessionId: `session-${sessionKey}`,
-          updatedAt: 1,
-          displayName: sessionKey === "global" ? "Shared physical global title" : undefined,
-        },
+        `session-${sessionKey}`,
+        { displayName: sessionKey === "global" ? "Shared physical global title" : undefined },
       );
     }
     await persistSessionTranscriptTurn(
@@ -385,7 +385,7 @@ it("projects shared rows under their logical owner while retaining the physical 
         lastMessagePreview: "Shared physical global preview",
       });
       for (const configuredAgentsOnly of [false, true]) {
-        const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
+        const combined = loadCombinedStore(cfg, { configuredAgentsOnly });
         expect(combined.durableTargets).toEqual([{ agentId: "main", storePath }]);
         expect(
           [...combined.targetsBySessionKey.values()].map(({ storeTarget }) => storeTarget),
@@ -398,13 +398,9 @@ it("projects shared rows under their logical owner while retaining the physical 
           Object.fromEntries(
             [...combined.targetsBySessionKey].map(([key, target]) => [key, target.agentId]),
           ),
-        ).toEqual({
-          global: "ops",
-          unknown: "ops",
-          "agent:worker:task": "worker",
-        });
+        ).toEqual({ global: "ops", unknown: "ops", "agent:worker:task": "worker" });
 
-        const ownerPreserving = loadCombinedSessionStoreForGatewayCore(cfg, {
+        const ownerPreserving = loadCombinedStore(cfg, {
           configuredAgentsOnly,
           preserveSentinelOwners: true,
         });
@@ -448,7 +444,7 @@ it("projects shared rows under their logical owner while retaining the physical 
         ["ops", ["global", "unknown"]],
         ["worker", ["agent:worker:task"]],
       ] as const) {
-        const combined = loadCombinedSessionStoreForGatewayCore(cfg, { agentId });
+        const combined = loadCombinedStore(cfg, { agentId });
         expect(Object.keys(combined.store).toSorted()).toEqual([...keys].toSorted());
       }
     }).finally(releaseBackfill);
@@ -459,31 +455,24 @@ it("keeps fixed-store ownership out of separate registered and suffixed database
   await withOpenClawTestState({ label: "combined-store-partitions" }, async (state) => {
     const storePath = state.statePath("shared.json");
     const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
+      agents: explicitAgents(["main", "ops"]),
       session: { store: storePath },
     };
     for (const agentId of ["main", "ops"]) {
-      replaceSessionEntrySync(
+      seed(
         { agentId, defaultAgentId: "main", sessionKey: "global", storePath },
-        { sessionId: `global-${agentId}`, updatedAt: 1 },
+        `global-${agentId}`,
       );
     }
     for (const agentId of ["main", "ops"]) {
-      const combined = loadCombinedSessionStoreForGatewayCore(cfg, { agentId });
+      const combined = loadCombinedStore(cfg, { agentId });
       expect(combined.store.global?.sessionId).toBe(`global-${agentId}`);
       expect(combined.targetsBySessionKey.get("global")?.agentId).toBe(agentId);
     }
 
     const registeredPath = state.statePath("separate.sqlite");
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "unknown", storePath: registeredPath },
-      { sessionId: "separate-main", updatedAt: 1 },
-    );
-    const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly: true });
+    seed({ agentId: "main", sessionKey: "unknown", storePath: registeredPath }, "separate-main");
+    const combined = loadCombinedStore(cfg, { configuredAgentsOnly: true });
     expect(combined.store.unknown?.sessionId).toBe("separate-main");
     expect(combined.targetsBySessionKey.get("unknown")).toMatchObject({
       agentId: "main",
@@ -494,12 +483,7 @@ it("keeps fixed-store ownership out of separate registered and suffixed database
 
 it.each([
   { name: "physical sentinel", parent: "global", model: "qwen3:14b", source: "inherited" },
-  {
-    name: "shared physical sentinel",
-    parent: "global",
-    model: "qwen3:14b",
-    source: "inherited",
-  },
+  { name: "shared physical sentinel", parent: "global", model: "qwen3:14b", source: "inherited" },
   {
     name: "literal configured-main parent",
     parent: "agent:main:home",
@@ -552,16 +536,10 @@ it.each([
         parents.push(["work", "global", "qwen3:14b"]);
       }
       for (const [agentId, sessionKey, selectedModel] of parents) {
-        replaceSessionEntrySync(
+        seed(
           { agentId, sessionKey, storePath },
-          {
-            sessionId: `${agentId}-${sessionKey}`,
-            updatedAt: 1,
-            providerOverride: "ollama",
-            modelOverride: selectedModel,
-            modelOverrideSource: "user",
-            modelOverrideRouteResolution: "resolved",
-          },
+          `${agentId}-${sessionKey}`,
+          selectedModelFields(selectedModel),
         );
       }
       const key = "agent:work:dashboard:child";
@@ -570,7 +548,7 @@ it.each([
         { sessionId: "child", updatedAt: 2, parentSessionKey: parent },
       );
       if (shared) {
-        const combined = loadCombinedSessionStoreForGatewayCore(cfg);
+        const combined = loadCombinedStore(cfg);
         expect(combined.targetsBySessionKey.get(key)?.storeTarget).toEqual({
           agentId: "main",
           storePath,
@@ -629,17 +607,7 @@ it.each(["global", "per-sender"] as const)(
         spawnedBy: parent,
       };
       const writeParent = (sessionKey: string, model: string) =>
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: sessionKey,
-            updatedAt: 1,
-            providerOverride: "ollama",
-            modelOverride: model,
-            modelOverrideSource: "user",
-            modelOverrideRouteResolution: "resolved",
-          },
-        );
+        seed({ agentId: "main", sessionKey }, sessionKey, selectedModelFields(model));
       replaceSessionEntrySync({ agentId: "alpha", sessionKey: key }, child);
       registerAgentRunContext("combined-parent-live", {
         agentId: "alpha",
@@ -657,7 +625,7 @@ it.each(["global", "per-sender"] as const)(
             const displayParent = literal || scope !== "global" ? parent : "global";
             for (const opts of [{}, { agentId: "alpha" }]) {
               // Alpha loads first; both the full inventory and a missing-owner exact join agree.
-              const combined = loadCombinedSessionStoreForGatewayCore(cfg, opts);
+              const combined = loadCombinedStore(cfg, opts);
               expect(combined.store[key]).toMatchObject({
                 parentSessionKey: displayParent,
                 spawnedBy: displayParent,
@@ -750,7 +718,7 @@ it.each([false, true])(
         { agentId: "work", sessionKey: key },
         { sessionId: "child", updatedAt: 1, parentSessionKey: "agent:main:main" },
       );
-      const scoped = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "work" });
+      const scoped = loadCombinedStore(cfg, { agentId: "work" });
       expect(scoped.store[key]?.parentSessionKey).toBe("agent:main:main");
       const source = scoped.targetsBySessionKey.get(key)!;
       expect(source.readSourceEntry("agent:main:main")?.sessionId).toBe(
@@ -778,11 +746,7 @@ it.for([false, true])(
     await withOpenClawTestState({ label: "combined-store-retired-owner" }, async (state) => {
       const storePath = state.statePath("shared.sqlite");
       const cfg: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, worker: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
+        agents: explicitAgents(["ops", "worker"]),
         session: { store: storePath },
       };
       const physicalPath = alias
@@ -792,10 +756,7 @@ it.for([false, true])(
       if (alias) {
         await fs.symlink(physicalPath, storePath);
       }
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:main", storePath },
-        { sessionId: "retired-main", updatedAt: 1 },
-      );
+      seed({ agentId: "main", sessionKey: "agent:main:main", storePath }, "retired-main");
       replaceSessionEntrySync(
         { agentId: "ops", sessionKey: "global", storePath },
         {
@@ -808,7 +769,7 @@ it.for([false, true])(
 
       // Repeat the configured-only load to exercise the prepared target snapshot.
       for (const configuredAgentsOnly of [false, true, true]) {
-        const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
+        const combined = loadCombinedStore(cfg, { configuredAgentsOnly });
         if (configuredAgentsOnly) {
           expect(combined.store["agent:main:main"]).toBeUndefined();
           expect(combined.targetsBySessionKey.has("agent:main:main")).toBe(false);
@@ -822,7 +783,7 @@ it.for([false, true])(
           spawnedBy: "agent:main:main",
         });
       }
-      expect(loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "ops" }).store).toEqual({
+      expect(loadCombinedStore(cfg, { agentId: "ops" }).store).toEqual({
         global: expect.objectContaining({ sessionId: "ops-global" }),
       });
     });
@@ -835,11 +796,7 @@ it.for(["main", "unknown", "global"])(
     await withOpenClawTestState({ label: "combined-store-global-lineage" }, async (state) => {
       const storePath = state.statePath("shared.sqlite");
       const cfg: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: {}, worker: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
+        agents: explicitAgents(["main", "ops", "worker"]),
         session: { scope: "global", mainKey, store: storePath },
       };
       const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
@@ -902,20 +859,18 @@ it("filters retired stores by canonical lineage owners without selecting an impl
         { sessionId: name, updatedAt: 1, parentSessionKey, spawnedBy: parentSessionKey },
       );
     }
-    const unfiltered = loadCombinedSessionStoreForGatewayCore(cfg);
+    const unfiltered = loadCombinedStore(cfg);
     expect(unfiltered.store["agent:archive:retired"]).toMatchObject({
       parentSessionKey: "agent:main:main",
       spawnedBy: "agent:main:main",
     });
-    const filtered = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly: true });
+    const filtered = loadCombinedStore(cfg, { configuredAgentsOnly: true });
     expect(Object.keys(filtered.store)).toEqual(["agent:archive:configured"]);
     expect(
       Object.fromEntries(
         [...filtered.targetsBySessionKey].map(([key, target]) => [key, target.agentId]),
       ),
-    ).toEqual({
-      "agent:archive:configured": "archive",
-    });
+    ).toEqual({ "agent:archive:configured": "archive" });
     expect(filtered.store["agent:archive:configured"]).toMatchObject({
       parentSessionKey: "agent:ops:main",
       spawnedBy: "agent:ops:main",
@@ -930,37 +885,28 @@ it.skipIf(process.platform === "win32")(
       const storePath = state.statePath("shared.json");
       const sqlitePath = state.statePath("shared.sqlite");
       const cfg: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: {}, worker: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
+        agents: explicitAgents(["main", "ops", "worker"]),
         session: { store: storePath },
       };
       openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
       await fs.symlink(sqlitePath, storePath);
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "global", storePath },
-        { sessionId: "main-global", updatedAt: 1 },
-      );
-      replaceSessionEntrySync(
+      seed({ agentId: "main", sessionKey: "global", storePath }, "main-global");
+      seed(
         { agentId: "worker", defaultAgentId: "main", sessionKey: "unknown", storePath },
-        { sessionId: "worker-unknown", updatedAt: 1 },
+        "worker-unknown",
       );
       for (const configuredAgentsOnly of [false, true, true]) {
-        const combined = loadCombinedSessionStoreForGatewayCore(cfg, { configuredAgentsOnly });
+        const combined = loadCombinedStore(cfg, { configuredAgentsOnly });
         expect(combined.store.unknown?.sessionId).toBe("worker-unknown");
         expect(combined.targetsBySessionKey.get("unknown")?.agentId).toBe("worker");
         expect(combined.store.global?.sessionId).toBe("main-global");
         expect(combined.targetsBySessionKey.get("global")?.agentId).toBe("main");
       }
-      const scoped = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "worker" });
+      const scoped = loadCombinedStore(cfg, { agentId: "worker" });
       expect(scoped.targetsBySessionKey.get("unknown")?.agentId).toBe("worker");
-      expect(loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "ops" }).store).toEqual({});
+      expect(loadCombinedStore(cfg, { agentId: "ops" }).store).toEqual({});
       expect(
-        loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "main" }).targetsBySessionKey.get(
-          "global",
-        )?.agentId,
+        loadCombinedStore(cfg, { agentId: "main" }).targetsBySessionKey.get("global")?.agentId,
       ).toBe("main");
     });
   },
@@ -968,9 +914,7 @@ it.skipIf(process.platform === "win32")(
 
 it("omits retained prompt payloads unless a caller opts into the full projection", async () => {
   await withOpenClawTestState({ label: "combined-store-projection" }, async () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-    };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:main" },
       {
@@ -988,14 +932,12 @@ it("omits retained prompt payloads unless a caller opts into the full projection
       },
     );
 
-    const defaultEntry = loadCombinedSessionStoreForGatewayCore(cfg).store["agent:main:main"];
+    const defaultEntry = loadCombinedStore(cfg).store["agent:main:main"];
     expect.soft(defaultEntry?.sessionId).toBe("prompt-payload-session");
     expect.soft(defaultEntry?.skillsSnapshot).toBeUndefined();
     expect.soft(defaultEntry?.systemPromptReport).toBeUndefined();
 
-    const fullEntry = loadCombinedSessionStoreForGatewayCore(cfg, { projection: "full" }).store[
-      "agent:main:main"
-    ];
+    const fullEntry = loadCombinedStore(cfg, { projection: "full" }).store["agent:main:main"];
     expect.soft(fullEntry?.skillsSnapshot?.prompt).toBe("skill prompt body");
     expect(fullEntry?.systemPromptReport?.systemPrompt.chars).toBe(17);
   });

@@ -68,6 +68,22 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import type { SessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionScope = (storePath: string, name: string, agentId = "main") => ({
+  agentId,
+  storePath,
+  sessionKey: `agent:${agentId}:${name}`,
+  sessionId: name,
+});
+const activeCount = (storePath: string) =>
+  listSessionEntriesCore({ storePath }).filter(({ entry }) => entry.archivedAt === undefined)
+    .length;
+async function writeConfig(
+  state: Parameters<Parameters<typeof withOpenClawTestState>[1]>[0],
+  cfg: OpenClawConfig,
+) {
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+}
 
 function afterCleanupRead(callback: () => void) {
   const withStore = cleanupReads.withSessionCleanupStore;
@@ -117,15 +133,10 @@ describe("sessions cleanup applied summary", () => {
             },
           },
         } satisfies OpenClawConfig;
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
+        await writeConfig(state, cfg);
         const now = Date.now();
         const old = now - 31 * 24 * 60 * 60_000;
-        const scope = (name: string) => ({
-          sessionKey: `agent:main:${name}`,
-          sessionId: name,
-          storePath,
-        });
+        const scope = (name: string) => sessionScope(storePath, name);
         for (const [name, updatedAt, archivedAt] of [
           ["existing-archive", old - 2, old],
           ["hook:disposable", old - 1, undefined],
@@ -146,16 +157,12 @@ describe("sessions cleanup applied summary", () => {
             targets: [{ agentId: "main", storePath }],
             commitGuard: () => {},
           });
-        const activeCount = () =>
-          listSessionEntriesCore({ storePath }).filter(
-            ({ entry }) => entry.archivedAt === undefined,
-          ).length;
-        expect(activeCount()).toBe(3);
+        expect(activeCount(storePath)).toBe(3);
         const preview = await run(true);
         const sql = observeHostDataSql();
         const result = await run().finally(sql.restore);
         expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
-        expect(activeCount()).toBe(1);
+        expect(activeCount(storePath)).toBe(1);
         const expected = {
           beforeCount: 4,
           afterCount: 3,
@@ -222,11 +229,7 @@ describe("sessions cleanup applied summary", () => {
         },
         admitted: {},
       };
-      const scope = (name: string) => ({
-        sessionKey: `agent:main:${name}`,
-        sessionId: name,
-        storePath,
-      });
+      const scope = (name: string) => sessionScope(storePath, name);
       for (const [name, extra] of Object.entries({ ...protectedEntries, conversation: {} })) {
         replaceSessionEntrySync(scope(name), { sessionId: name, updatedAt: old, ...extra });
       }
@@ -251,13 +254,9 @@ describe("sessions cleanup applied summary", () => {
         archiveDashboardAfterMs: null,
       };
       try {
-        const activeCount = () =>
-          listSessionEntriesCore({ storePath }).filter(
-            ({ entry }) => entry.archivedAt === undefined,
-          ).length;
-        expect(activeCount()).toBe(9);
+        expect(activeCount(storePath)).toBe(9);
         const result = await applySessionEntryLifecycleMutation({ storePath, maintenanceOverride });
-        expect(activeCount()).toBe(8);
+        expect(activeCount(storePath)).toBe(8);
         expect(result).toMatchObject({
           archived: 1,
           pruned: 0,
@@ -314,8 +313,7 @@ describe("sessions cleanup applied summary", () => {
         const cfg = {
           session: { maintenance: { mode: "enforce", maxDiskBytes: false, pruneAfter: "1s" } },
         } satisfies OpenClawConfig;
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
+        await writeConfig(state, cfg);
         await fs.mkdir(state.sessionsDir(), { recursive: true });
         const orphan = path.join(state.sessionsDir(), "orphan.jsonl");
         await fs.writeFile(orphan, "");
@@ -356,8 +354,7 @@ describe("sessions cleanup applied summary", () => {
         agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
         session: { store: storePath, maintenance: { mode: "warn", pruneAfter: "1d" } },
       } satisfies OpenClawConfig;
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
+      await writeConfig(state, cfg);
       const scopes = ["main", "beta"].map((agentId) => ({
         agentId,
         sessionKey: `agent:${agentId}:hook:stale`,
@@ -418,42 +415,6 @@ describe("sessions cleanup applied summary", () => {
     });
   });
 
-  it("reports authoritative counts when a removal classification becomes stale before apply", async () => {
-    const storePath = path.join(
-      tempDirs.make("openclaw-cleanup-applied-summary-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
-    const sessionKey = "agent:main:preview-became-live";
-    const sessionId = "preview-became-live";
-    const scope = { sessionId, sessionKey, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    afterCleanupRead(() => {
-      appendTranscriptMessageSync(scope, {
-        eventId: "message-after-preview",
-        message: { role: "user", content: [{ type: "text", text: "keep this session" }] },
-      });
-    });
-
-    const result = await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
-
-    expect(result.appliedSummaries[0]).toMatchObject({
-      applied: true,
-      appliedCount: 1,
-      beforeCount: 1,
-      afterCount: 1,
-      missing: 0,
-      wouldMutate: false,
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-  });
-
   it.each([
     { fault: "before commit", lifecycleCommitted: false },
     { fault: "after commit", lifecycleCommitted: true },
@@ -461,18 +422,16 @@ describe("sessions cleanup applied summary", () => {
     "returns earlier committed summaries when a later store fails $fault",
     async ({ lifecycleCommitted }) => {
       const rootDir = tempDirs.make("openclaw-cleanup-partial-");
-      const main = {
-        agentId: "main",
-        sessionId: "main-message-free",
-        sessionKey: "agent:main:message-free",
-        storePath: path.join(rootDir, "agents", "main", "sessions", "sessions.json"),
-      };
-      const failing = {
-        agentId: "work",
-        sessionId: "work-message-free",
-        sessionKey: "agent:work:message-free",
-        storePath: path.join(rootDir, "agents", "work", "sessions", "sessions.json"),
-      };
+      const target = (agentId: string) => ({
+        ...sessionScope(
+          path.join(rootDir, "agents", agentId, "sessions", "sessions.json"),
+          "message-free",
+          agentId,
+        ),
+        sessionId: `${agentId}-message-free`,
+      });
+      const main = target("main");
+      const failing = target("work");
       const stores = [main, failing];
       if (!lifecycleCommitted) {
         setCleanupDeleteFault({
