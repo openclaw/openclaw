@@ -81,17 +81,14 @@ async function readMetadata(filePath: string) {
 
 async function expectPlaybackResponses(
   requests: ReturnType<typeof startMediaRequest>[],
-  playbackMode = "transcode",
+  expected: typeof transcodeMetadata & { mimeType?: string } = transcodeMetadata,
 ) {
   for (const request of requests) {
-    expect(await readMetadataResponse(request)).toMatchObject({
-      ...transcodeMetadata,
-      playback: playbackMode,
-    });
+    expect(await readMetadataResponse(request)).toMatchObject(expected);
   }
 }
 
-function blockPlaybackProbes(codecName = "pcm_s16le") {
+async function createBlockedMedia(count: number, codec = "pcm_s16le") {
   const started = createDeferred();
   const gate = createDeferred();
   let active = 0;
@@ -103,19 +100,15 @@ function blockPlaybackProbes(codecName = "pcm_s16le") {
     }
     await gate.promise;
     active--;
-    return audioProbe("1", codecName);
+    return audioProbe("1", codec);
   });
-  return {
+  const probes = {
     started: started.promise,
     release: gate.resolve,
     get peak() {
       return peak;
     },
   };
-}
-
-async function createBlockedMedia(count: number, codec = "pcm_s16le") {
-  const probes = blockPlaybackProbes(codec);
   const root = tempDirs.make("ui-media-meta-", resolvePreferredOpenClawTmpDir());
   const paths = Array.from({ length: count }, (_, index) =>
     path.join(root, `${index}.${codec === "mp3" ? "mp3" : "caf"}`),
@@ -143,20 +136,22 @@ async function createBlockedMedia(count: number, codec = "pcm_s16le") {
 
 function observeMetadataRequests() {
   const resolveMetadata = playback.resolvePlaybackMetadataForSource;
-  const waiting = new Map<number, ReturnType<typeof createDeferred<void>>>();
+  let changed = createDeferred();
   let count = 0;
   vi.spyOn(playback, "resolvePlaybackMetadataForSource").mockImplementation((params) => {
     const result = resolveMetadata(params);
-    waiting.get(++count)?.resolve();
+    count++;
+    changed.resolve();
+    changed = createDeferred();
     return result;
   });
-  return (target: number) => {
-    if (count >= target) {
-      return Promise.resolve();
+  return async (target: number) => {
+    for (;;) {
+      if (count >= target) {
+        return;
+      }
+      await changed.promise;
     }
-    const reached = createDeferred();
-    waiting.set(target, reached);
-    return reached.promise;
   };
 }
 
@@ -210,12 +205,7 @@ it("retains exotic playback metadata while distinct files fill the inspection sl
     expect(opened.handle.fd).toBe(-1);
   }
   probes.release();
-  for (const metadata of await Promise.all(requests.map(readMetadataResponse))) {
-    expect(metadata).toMatchObject({
-      ...transcodeMetadata,
-      mimeType: "audio/x-caf",
-    });
-  }
+  await expectPlaybackResponses(requests, { ...transcodeMetadata, mimeType: "audio/x-caf" });
   expect(runFfprobe).toHaveBeenCalledTimes(3);
   expect(probes.peak).toBe(2);
 });
@@ -298,7 +288,10 @@ it.each(["meta", "playback"] as const)(
     await observed(metadata ? 4 : 1);
     await abandon(retired);
     probes.release();
-    await expectPlaybackResponses(live, metadata ? "transcode" : "native");
+    await expectPlaybackResponses(live, {
+      ...transcodeMetadata,
+      playback: metadata ? "transcode" : "native",
+    });
     await Promise.all(retired.map(({ handled }) => handled));
     if (!metadata) {
       expect(await abandoned.handled).toBe(true);
