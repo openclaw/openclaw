@@ -188,7 +188,16 @@ function harness(provider?: string) {
     feed(0.2);
     feed(0);
   };
+  const answer = (text: string, answerRunId = runId) =>
+    emit("chat", {
+      runId: answerRunId,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+  const called = (method: string) => request.mock.calls.some(([name]) => name === method);
   return {
+    answer,
+    called,
     state,
     request,
     utterance,
@@ -219,23 +228,28 @@ function harness(provider?: string) {
   };
 }
 
+function observeSend(h: ReturnType<typeof harness>) {
+  const sent = createDeferred();
+  const implementation = expectDefined(h.request.getMockImplementation(), "Gateway fixture");
+  h.request.mockImplementation(async (method, params) => {
+    const result = await implementation(method, params);
+    if (method === "chat.send") {
+      sent.resolve();
+    }
+    return result;
+  });
+  return sent.promise;
+}
+
 it.each(["displayed-leaf", null])(
   "preserves the displayed branch when admitting a split voice turn (%s)",
   async (leaf) => {
     const h = harness();
     h.state.chatDisplayedLeafEntryId = leaf;
-    const sent = createDeferred();
-    const implementation = expectDefined(h.request.getMockImplementation(), "Gateway fixture");
-    h.request.mockImplementation(async (method, params) => {
-      const result = await implementation(method, params);
-      if (method === "chat.send") {
-        sent.resolve();
-      }
-      return result;
-    });
+    const sent = observeSend(h);
     await h.state.toggleRealtimeTalk();
     h.utterance();
-    await sent.promise;
+    await sent;
     expect(h.request).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
@@ -261,17 +275,9 @@ it.each(["openai", undefined])(
       transport: "gateway-relay",
       brain: "none",
     });
-    const sent = createDeferred();
-    const impl = h.request.getMockImplementation()!;
-    h.request.mockImplementation(async (method, params) => {
-      const result = await impl(method, params);
-      if (method === "chat.send") {
-        sent.resolve();
-      }
-      return result;
-    });
+    const sent = observeSend(h);
     h.utterance();
-    await sent.promise;
+    await sent;
     expect(expectDefined(tracks[0], "captured microphone track").stop).toHaveBeenCalledOnce();
     expect(h.request).toHaveBeenCalledWith(
       "chat.send",
@@ -281,19 +287,8 @@ it.each(["openai", undefined])(
       }),
       { timeoutMs: 30_000 },
     );
-    h.emit("chat", {
-      runId: "unrelated",
-      state: "final",
-      message: { role: "assistant", content: [{ type: "text", text: "Wrong answer" }] },
-    });
-    h.emit("chat", {
-      runId: h.getRunId(),
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "The local model answered." }],
-      },
-    });
+    h.answer("Wrong answer", "unrelated");
+    h.answer("The local model answered.");
     await h.speech.promise;
     await speechStarted.promise;
     expect(h.request).toHaveBeenCalledWith(provider ? "talk.speak" : "tts.speak", {
@@ -311,28 +306,16 @@ it.each(["openai", undefined])(
 it("stopping during the model response aborts the owned run and ignores late output", async () => {
   const h = harness();
   await h.state.toggleRealtimeTalk();
-  const sent = createDeferred();
-  const impl = h.request.getMockImplementation()!;
-  h.request.mockImplementation(async (method, params) => {
-    const result = await impl(method, params);
-    if (method === "chat.send") {
-      sent.resolve();
-    }
-    return result;
-  });
+  const sent = observeSend(h);
   h.utterance();
-  await sent.promise;
+  await sent;
   const runId = h.getRunId();
   h.emit("chat", { runId, state: "final" });
   await h.state.toggleRealtimeTalk();
-  h.emit("chat", {
-    runId,
-    state: "final",
-    message: { role: "assistant", content: [{ type: "text", text: "Too late" }] },
-  });
+  h.answer("Too late", runId);
   await Promise.resolve();
   expect(h.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "agent:local:main", runId });
-  expect(h.request.mock.calls.some(([method]) => method === "tts.speak")).toBe(false);
+  expect(h.called("tts.speak")).toBe(false);
   expect(tracks).toHaveLength(1);
 });
 
@@ -348,14 +331,10 @@ it("leaves the accepted run running when waiting for its answer times out", asyn
   );
   // Dismissing the failed call must not turn its earlier detach into an abort.
   await h.state.toggleRealtimeTalk();
-  expect(h.request.mock.calls.some(([method]) => method === "chat.abort")).toBe(false);
-  h.emit("chat", {
-    runId: h.getRunId(),
-    state: "final",
-    message: { role: "assistant", content: [{ type: "text", text: "Answered later" }] },
-  });
+  expect(h.called("chat.abort")).toBe(false);
+  h.answer("Answered later");
   await vi.advanceTimersByTimeAsync(0);
-  expect(h.request.mock.calls.some(([method]) => method === "tts.speak")).toBe(false);
+  expect(h.called("tts.speak")).toBe(false);
 });
 
 it.each(["page cleanup", "Read aloud"])(
@@ -373,16 +352,12 @@ it.each(["page cleanup", "Read aloud"])(
       } else {
         playback.prepare(expectDefined(h.state.client, "current Gateway client"));
       }
-      h.emit("chat", {
-        runId: h.getRunId(),
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "Answered later" }] },
-      });
+      h.answer("Answered later");
       await vi.advanceTimersByTimeAsync(0);
       expect(h.state.realtimeTalkStatus).toBe("idle");
       expect(h.state.realtimeTalkSession).toBeNull();
-      expect(h.request.mock.calls.some(([method]) => method === "chat.abort")).toBe(false);
-      expect(h.request.mock.calls.some(([method]) => method === "tts.speak")).toBe(false);
+      expect(h.called("chat.abort")).toBe(false);
+      expect(h.called("tts.speak")).toBe(false);
     } finally {
       playback.stop();
     }
@@ -422,35 +397,23 @@ it.each(["Stop", "cleanup"])(
     } else {
       expect(aborts).toEqual([]);
     }
-    expect(h.request.mock.calls.some(([method]) => method === "tts.speak")).toBe(false);
+    expect(h.called("tts.speak")).toBe(false);
   },
 );
 
 it("keeps listening for the model answer after an empty final", async () => {
   const h = harness();
-  const sent = createDeferred();
-  const impl = h.request.getMockImplementation()!;
-  h.request.mockImplementation(async (method, params) => {
-    const result = await impl(method, params);
-    if (method === "chat.send") {
-      sent.resolve();
-    }
-    return result;
-  });
+  const sent = observeSend(h);
   await h.state.toggleRealtimeTalk();
   h.utterance();
-  await sent.promise;
+  await sent;
   const runId = h.getRunId();
   h.emit("chat", { runId, state: "final" });
   await vi.advanceTimersByTimeAsync(0);
   expect(h.state.realtimeTalkStatus).toBe("thinking");
   expect(tracks).toHaveLength(1);
   expect(h.request).toHaveBeenCalledWith("agent.wait", { runId, timeoutMs: 120_000 });
-  h.emit("chat", {
-    runId,
-    state: "final",
-    message: { role: "assistant", content: [{ type: "text", text: "The delayed answer." }] },
-  });
+  h.answer("The delayed answer.", runId);
   await h.speech.promise;
   await speechStarted.promise;
   expect(h.request).toHaveBeenCalledWith("tts.speak", { text: "The delayed answer." });
@@ -491,11 +454,7 @@ it.each(["text before", "empty before", "text after"])(
     await vi.advanceTimersByTimeAsync(0);
     if (sequence !== "text before") {
       expect(h.state.realtimeTalkStatus).toBe("thinking");
-      h.emit("chat", {
-        runId: h.getRunId(),
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "Already answered." }] },
-      });
+      h.answer("Already answered.");
       await vi.advanceTimersByTimeAsync(0);
     }
     expect(h.request).toHaveBeenCalledWith("tts.speak", { text: "Already answered." });
@@ -523,7 +482,7 @@ it("waits for buffered local STT to finish instead of dropping a slow final tran
   h.utterance();
   await closing.promise;
   await vi.advanceTimersByTimeAsync(20_000);
-  expect(h.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  expect(h.called("chat.send")).toBe(false);
   expect(expectDefined(tracks[0], "captured microphone track").stop).toHaveBeenCalledOnce();
   finalized.resolve();
   await sent.promise;
@@ -571,8 +530,8 @@ it("discards buffered STT when Stop interrupts finalization instead of sending a
     await settled.promise;
   }
   expect(h.state.realtimeTalkStatus).toBe("idle");
-  expect(h.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-  expect(h.request.mock.calls.some(([method]) => method === "tts.speak")).toBe(false);
+  expect(h.called("chat.send")).toBe(false);
+  expect(h.called("tts.speak")).toBe(false);
 });
 
 it.each(["stop", "provider review"])(
@@ -622,7 +581,7 @@ it("lets Read aloud supersede Talk while its configuration is pending", async ()
     expect(h.state.realtimeTalkStatus).toBe("idle");
     configuration.resolve({ config: { talk: { realtime: { mode: "stt-tts" } } } });
     await starting;
-    expect(h.request.mock.calls.some(([method]) => method === "talk.session.create")).toBe(false);
+    expect(h.called("talk.session.create")).toBe(false);
     expect(tracks).toHaveLength(0);
     const newerAudio = expectDefined(audios[1], "newer Read aloud clip");
     expect(newerAudio.pause).toHaveBeenCalledOnce();
@@ -656,7 +615,7 @@ it("surfaces a rejected chat admission instead of waiting forever for a model re
   expect(h.state.realtimeTalkDetail).toBe(
     "The voice reply was interrupted. Start Talk again to retry.",
   );
-  expect(h.request.mock.calls.some(([method]) => method === "chat.send")).toBe(true);
-  expect(h.request.mock.calls.some(([method]) => method === "tts.speak")).toBe(false);
+  expect(h.called("chat.send")).toBe(true);
+  expect(h.called("tts.speak")).toBe(false);
   expect(tracks).toHaveLength(1);
 });

@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
-import type { RealtimeTalkTransportContext } from "./shared.ts";
+import type { RealtimeTalkCallbacks, RealtimeTalkTransportContext } from "./shared.ts";
 
 const transportMock = vi.hoisted(() => ({
   context: undefined as RealtimeTalkTransportContext | undefined,
@@ -27,6 +28,26 @@ vi.mock("./webrtc.ts", () => ({
 
 import { RealtimeTalkSession } from "./session.ts";
 
+async function start<T>(request: T, callbacks: RealtimeTalkCallbacks) {
+  const session = new RealtimeTalkSession({ request } as never, "agent:main:main", callbacks);
+  await session.start();
+  const context = transportMock.context;
+  const handleTranscript = context?.callbacks.onTranscript;
+  if (!context || !handleTranscript) {
+    throw new Error("expected realtime transcript callback");
+  }
+  return { session, context, handleTranscript };
+}
+function voiceSession(voiceSessionId: string) {
+  return { provider: "openai", transport: "webrtc", voiceSessionId, clientSecret: "secret" };
+}
+function calls<T extends [string, ...unknown[]]>(
+  request: { mock: { calls: T[] } },
+  method: string,
+) {
+  return request.mock.calls.filter(([name]) => name === method);
+}
+
 useRealtimeTalkMicrophoneFixture();
 
 describe("RealtimeTalkSession transcript queue", () => {
@@ -37,40 +58,23 @@ describe("RealtimeTalkSession transcript queue", () => {
   });
 
   it("does not admit normalized-empty finals into a stalled transcript queue", async () => {
-    let releaseFirstTranscript!: () => void;
-    const firstTranscriptPending = new Promise<void>((resolve) => {
-      releaseFirstTranscript = resolve;
-    });
+    const firstTranscript = createDeferred();
     const transcriptEntryIds: string[] = [];
     const request = vi.fn(async (method: string, params?: { entryId?: string }) => {
       if (method === "talk.client.create") {
-        return {
-          provider: "openai",
-          transport: "webrtc",
-          voiceSessionId: "voice-empty-finals",
-          clientSecret: "secret",
-        };
+        return voiceSession("voice-empty-finals");
       }
       if (method === "talk.client.transcript") {
         transcriptEntryIds.push(String(params?.entryId));
         if (params?.entryId === "1") {
-          await firstTranscriptPending;
+          await firstTranscript.promise;
         }
       }
       return { ok: true };
     });
     const onStatus = vi.fn();
     const onTranscript = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
-      onStatus,
-      onTranscript,
-    });
-    await session.start();
-    const context = transportMock.context;
-    const handleTranscript = context?.callbacks.onTranscript;
-    if (!context || !handleTranscript) {
-      throw new Error("expected realtime transcript callback");
-    }
+    const { session, context, handleTranscript } = await start(request, { onStatus, onTranscript });
 
     handleTranscript({ role: "user", text: "first", final: true });
     for (let index = 0; index < 10_000; index += 1) {
@@ -85,7 +89,7 @@ describe("RealtimeTalkSession transcript queue", () => {
     expect(onStatus.mock.calls.filter(([status]) => status === "error")).toHaveLength(0);
     expect(onTranscript).toHaveBeenCalledTimes(10_041);
 
-    releaseFirstTranscript();
+    firstTranscript.resolve();
     await context.flushTranscriptWrites?.();
 
     expect(transcriptEntryIds).toEqual(Array.from({ length: 41 }, (_, index) => String(index + 1)));
@@ -95,29 +99,21 @@ describe("RealtimeTalkSession transcript queue", () => {
   it("stops once when stalled transcript persistence exceeds its bounded queue", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    let releaseFirstTranscript!: () => void;
-    const firstTranscriptPending = new Promise<void>((resolve) => {
-      releaseFirstTranscript = resolve;
-    });
+    const firstTranscript = createDeferred();
     const transcriptEntryIds: string[] = [];
     let firstAttempt = true;
     try {
       const request = vi.fn(
         async (method: string, params?: { entryId?: string; text?: string }) => {
           if (method === "talk.client.create") {
-            return {
-              provider: "openai",
-              transport: "webrtc",
-              voiceSessionId: "voice-overflow",
-              clientSecret: "secret",
-            };
+            return voiceSession("voice-overflow");
           }
           if (method === "talk.client.transcript") {
             transcriptEntryIds.push(String(params?.entryId));
             if (params?.entryId === "1") {
               if (firstAttempt) {
                 firstAttempt = false;
-                await firstTranscriptPending;
+                await firstTranscript.promise;
               }
               throw new Error("still unavailable");
             }
@@ -126,14 +122,7 @@ describe("RealtimeTalkSession transcript queue", () => {
         },
       );
       const onStatus = vi.fn();
-      const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
-        onStatus,
-      });
-      await session.start();
-      const onTranscript = transportMock.context?.callbacks.onTranscript;
-      if (!onTranscript) {
-        throw new Error("expected realtime transcript callback");
-      }
+      const { session, handleTranscript: onTranscript } = await start(request, { onStatus });
 
       for (let index = 0; index < 10_000; index += 1) {
         onTranscript({
@@ -147,11 +136,9 @@ describe("RealtimeTalkSession transcript queue", () => {
       expect(transportMock.stop).toHaveBeenCalledOnce();
       expect(onStatus.mock.calls.filter(([status]) => status === "error")).toHaveLength(1);
       expect(warn).toHaveBeenCalledOnce();
-      expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toHaveLength(
-        0,
-      );
+      expect(calls(request, "talk.client.close")).toHaveLength(0);
 
-      releaseFirstTranscript();
+      firstTranscript.resolve();
       await vi.advanceTimersByTimeAsync(2_500);
       await vi.runAllTimersAsync();
 
@@ -162,13 +149,11 @@ describe("RealtimeTalkSession transcript queue", () => {
         ...Array.from({ length: 40 }, (_, index) => String(index + 2)),
       ]);
       expect(
-        request.mock.calls
-          .filter(([method]) => method === "talk.client.transcript")
-          .every(([, params]) => String(params?.text).length === 8_000),
+        calls(request, "talk.client.transcript").every(
+          ([, params]) => String(params?.text).length === 8_000,
+        ),
       ).toBe(true);
-      expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toHaveLength(
-        1,
-      );
+      expect(calls(request, "talk.client.close")).toHaveLength(1);
       expect(onStatus.mock.calls.filter(([status]) => status === "error")).toHaveLength(1);
       expect(warn).toHaveBeenCalledTimes(2);
 
@@ -194,12 +179,7 @@ describe("RealtimeTalkSession transcript queue", () => {
           options?: { signal?: AbortSignal; timeoutMs?: number },
         ) => {
           if (method === "talk.client.create") {
-            return {
-              provider: "openai",
-              transport: "webrtc",
-              voiceSessionId: "voice-drain-timeout",
-              clientSecret: "secret",
-            };
+            return voiceSession("voice-drain-timeout");
           }
           if (method === "talk.client.transcript") {
             const signal = options?.signal;
@@ -222,14 +202,7 @@ describe("RealtimeTalkSession transcript queue", () => {
         },
       );
       const onStatus = vi.fn();
-      const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
-        onStatus,
-      });
-      await session.start();
-      const handleTranscript = transportMock.context?.callbacks.onTranscript;
-      if (!handleTranscript) {
-        throw new Error("expected realtime transcript callback");
-      }
+      const { session, handleTranscript } = await start(request, { onStatus });
 
       handleTranscript({ role: "user", text: "stalled", final: true });
       for (let index = 0; index < 40; index += 1) {
@@ -243,9 +216,7 @@ describe("RealtimeTalkSession transcript queue", () => {
       await vi.runAllTimersAsync();
 
       expect(transcriptSignals[0]?.aborted).toBe(true);
-      expect(
-        request.mock.calls.filter(([method]) => method === "talk.client.transcript"),
-      ).toHaveLength(1);
+      expect(calls(request, "talk.client.transcript")).toHaveLength(1);
       expect(request).toHaveBeenCalledWith(
         "talk.client.close",
         {

@@ -18,29 +18,18 @@ function transportFixture(context: RealtimeTalkTransportContext) {
   return { start: async () => "ready" as const, stop };
 }
 
+function transportConstructor(_session: unknown, context: RealtimeTalkTransportContext) {
+  return transportFixture(context);
+}
+
 vi.mock("./webrtc.ts", () => ({
-  WebRtcSdpRealtimeTalkTransport: vi.fn(function (
-    _session: unknown,
-    context: RealtimeTalkTransportContext,
-  ) {
-    return transportFixture(context);
-  }),
+  WebRtcSdpRealtimeTalkTransport: vi.fn(transportConstructor),
 }));
 vi.mock("./google-live.ts", () => ({
-  GoogleLiveRealtimeTalkTransport: vi.fn(function (
-    _session: unknown,
-    context: RealtimeTalkTransportContext,
-  ) {
-    return transportFixture(context);
-  }),
+  GoogleLiveRealtimeTalkTransport: vi.fn(transportConstructor),
 }));
 vi.mock("./gateway-relay.ts", () => ({
-  GatewayRelayRealtimeTalkTransport: vi.fn(function (
-    _session: unknown,
-    context: RealtimeTalkTransportContext,
-  ) {
-    return transportFixture(context);
-  }),
+  GatewayRelayRealtimeTalkTransport: vi.fn(transportConstructor),
 }));
 
 import { RealtimeTalkSession } from "./session.ts";
@@ -52,6 +41,10 @@ function microphone() {
     getAudioTracks: () => [track],
   } as unknown as MediaStream;
   return { track, stream };
+}
+
+function useMicrophone(getUserMedia: MediaDevices["getUserMedia"]) {
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 }
 
 const sessions: RealtimeTalkSession[] = [];
@@ -105,7 +98,7 @@ describe("Realtime Talk microphone preparation", () => {
         permissionRequested.resolve();
         return permission.promise;
       });
-      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+      useMicrophone(getUserMedia);
       const request = vi.fn(async (method: string) => {
         if (method === "talk.client.create" && transport === "gateway-relay") {
           throw new Error("Use relay session creation");
@@ -142,13 +135,7 @@ describe("Realtime Talk microphone preparation", () => {
   );
 
   it("allocates no provider session when microphone permission is denied", async () => {
-    vi.stubGlobal("navigator", {
-      mediaDevices: {
-        getUserMedia: vi.fn(async () => {
-          throw new DOMException("Denied", "NotAllowedError");
-        }),
-      },
-    });
+    useMicrophone(vi.fn().mockRejectedValue(new DOMException("Denied", "NotAllowedError")));
     const request = vi.fn(async () => clientSession());
     await expect(sessionFor(request).start()).rejects.toThrow();
     expect(request).not.toHaveBeenCalled();
@@ -159,7 +146,7 @@ describe("Realtime Talk microphone preparation", () => {
     const permission = createDeferred<MediaStream>();
     const media = microphone();
     const getUserMedia = vi.fn(() => permission.promise);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    useMicrophone(getUserMedia);
     const request = vi.fn(async () => clientSession());
     const session = sessionFor(request);
     const starting = session.start();
@@ -175,7 +162,7 @@ describe("Realtime Talk microphone preparation", () => {
 
   it("releases prepared microphone ownership when provider creation fails", async () => {
     const media = microphone();
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => media.stream) } });
+    useMicrophone(vi.fn(async () => media.stream));
     const request = vi.fn(async () => {
       throw new Error("Provider allocation failed");
     });
@@ -194,7 +181,7 @@ describe("Realtime Talk microphone preparation", () => {
         .fn()
         .mockResolvedValueOnce(replacement ? previous.stream : candidate.stream)
         .mockResolvedValueOnce(candidate.stream);
-      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+      useMicrophone(getUserMedia);
       let creates = 0;
       const request = vi.fn(async (method: string) => {
         if (method !== "talk.client.create") {
