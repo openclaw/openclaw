@@ -31,7 +31,7 @@ async function directoryLink(target: string, link: string) {
 }
 
 describe("developer source observation", () => {
-  it("batches source edits, excludes outputs, and follows trusted links without restarting for scope baselines", async () => {
+  it("batches edits and follows links without baseline restarts", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const cwd = temp.make("source-owner-");
     const outside = temp.make("source-owner-target-");
@@ -76,12 +76,20 @@ describe("developer source observation", () => {
     });
     let changed = createDeferredCore<string | undefined>();
     const onChange = vi.fn((name?: string) => changed.resolve(name));
+    const resetChange = () => {
+      onChange.mockClear();
+      changed = createDeferredCore<string | undefined>();
+    };
+    const expectChange = async (name: string) => {
+      await changed.promise;
+      expect(onChange).toHaveBeenCalledExactlyOnceWith(name);
+    };
     const onError = vi.fn();
     const onLog = vi.fn();
     const observer = createSourceObserver(["src", "package.json"], {
       cwd,
       env: { CHOKIDAR_USEPOLLING: "1", CHOKIDAR_INTERVAL: "250" },
-      ignored: (name) => name.endsWith(".test.ts") || name.split(path.sep).includes("node_modules"),
+      ignored,
       onChange,
       onError,
       onLog,
@@ -97,12 +105,10 @@ describe("developer source observation", () => {
       releaseReread.resolve();
     }
     await observer.ready;
-    await changed.promise;
     const repository = subscriptions[0]!;
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(cwd, "src", "first.ts"));
+    await expectChange(path.join(cwd, "src", "first.ts"));
     expect(onLog).toHaveBeenCalledExactlyOnceWith("Watching sources (poll).");
-    onChange.mockClear();
-    changed = createDeferredCore<string | undefined>();
+    resetChange();
     reads.length = 0;
 
     await fs.writeFile(path.join(cwd, "src", "first.ts"), "one");
@@ -114,8 +120,7 @@ describe("developer source observation", () => {
       path.join(cwd, "src", "first.ts"),
       path.join(cwd, "src", "second.ts"),
     ]);
-    onChange.mockClear();
-    changed = createDeferredCore<string | undefined>();
+    resetChange();
     await fs.writeFile(path.join(cwd, "src", "ignored.test.ts"), "test");
     await fs.writeFile(path.join(cwd, "src", "node_modules", "ignored.ts"), "dependency");
     await repository.reconcile();
@@ -124,8 +129,7 @@ describe("developer source observation", () => {
     const target = await targetReady.promise;
     await fs.writeFile(path.join(outside, "first", "main.ts"), "linked source");
     await target.reconcile();
-    await changed.promise;
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(alias, "main.ts"));
+    await expectChange(path.join(alias, "main.ts"));
 
     const replaced = createDeferredCore();
     const setScopes = target.setScopes.bind(target);
@@ -133,23 +137,18 @@ describe("developer source observation", () => {
       await setScopes(scopes);
       replaced.resolve();
     });
-    onChange.mockClear();
-    changed = createDeferredCore<string | undefined>();
+    resetChange();
     await fs.unlink(alias);
     await directoryLink(path.join(outside, "second"), alias);
     await repository.reconcile();
     await replaced.promise;
-    await changed.promise;
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(alias, "main.ts"));
-    onChange.mockClear();
-    changed = createDeferredCore<string | undefined>();
+    await expectChange(path.join(alias, "main.ts"));
+    resetChange();
     await fs.writeFile(path.join(outside, "first", "retired.ts"), "old target");
     await fs.writeFile(path.join(outside, "second", "current.ts"), "new target");
     await target.reconcile();
-    await changed.promise;
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(alias, "current.ts"));
-    onChange.mockClear();
-    changed = createDeferredCore<string | undefined>();
+    await expectChange(path.join(alias, "current.ts"));
+    resetChange();
     reads.length = 0;
     await fs.writeFile(path.join(cwd, "package.json"), "{}");
     invalidate!({ reason: "overflow" });
@@ -160,16 +159,13 @@ describe("developer source observation", () => {
     await fs.writeFile(nextPackage, '{"private":true}');
     await fs.rename(nextPackage, path.join(cwd, "package.json"));
     invalidate!({ reason: "overflow" });
-    await changed.promise;
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(cwd, "package.json"));
+    await expectChange(path.join(cwd, "package.json"));
     expect(reads).toContain(path.join(cwd, "package.json"));
     expect(reads).toContain(path.join(cwd, "src", "first.ts"));
-    onChange.mockClear();
-    changed = createDeferredCore<string | undefined>();
+    resetChange();
     await fs.writeFile(path.join(cwd, "src", "new.ts"), "new source");
     invalidate!({ reason: "event", changes: [{ path: "src/new.ts", type: "content" }] });
-    await changed.promise;
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(cwd, "src", "new.ts"));
+    await expectChange(path.join(cwd, "src", "new.ts"));
     expect(onError).not.toHaveBeenCalled();
 
     await observer.close();
@@ -178,7 +174,7 @@ describe("developer source observation", () => {
     );
   });
 
-  it("reports lost source authority and retires observation before close completes", async () => {
+  it("retires observation after source authority loss", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const cwd = temp.make("source-owner-loss-");
     await fs.mkdir(path.join(cwd, "src"));
@@ -226,17 +222,20 @@ async function discoveryFixture() {
   const outside = temp.make("source-target-");
   await fs.mkdir(path.join(cwd, "src"));
   const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
-  return { cwd, outside, alias: path.join(cwd, "src", "linked"), discovery };
+  return {
+    cwd,
+    outside,
+    alias: path.join(cwd, "src", "linked"),
+    discover: () => discovery.discover(signal()),
+  };
 }
 
 describe("developer source discovery", () => {
-  it("rediscovers a file replaced by a directory between enumeration and hashing", async () => {
-    const cwd = temp.make("source-kind-change-");
+  it("rediscovers file-to-directory replacement during hashing", async () => {
+    const { cwd, discover } = await discoveryFixture();
     const source = path.join(cwd, "src", "main.ts");
-    await fs.mkdir(path.dirname(source));
     await fs.writeFile(source, "original source");
-    const discovery = createSourceTargetDiscovery(cwd, ["src"], ignored);
-    const initial = await discovery.discover(signal());
+    const initial = await discover();
     const authority = expectDefined(initial[0], "admitted observation").authority;
     const open = authority.open.bind(authority);
     vi.spyOn(authority, "open").mockImplementationOnce(async (relative, settings) => {
@@ -248,30 +247,28 @@ describe("developer source discovery", () => {
       return await opening;
     });
 
-    const current = await discovery.discover(signal());
+    const current = await discover();
     expect(current).toHaveLength(1);
-    expect([...expectDefined(current[0], "rediscovered observation").files.keys()]).toEqual([
-      path.join(source, "child.ts"),
-    ]);
+    expect(filesIn(current)).toEqual([path.join(source, "child.ts")]);
   });
 
-  it("rebuilds link addition, retarget, removal, and dangling destination creation with pinned Roots", async () => {
-    const { outside, alias, discovery } = await discoveryFixture();
-    const initial = await discovery.discover(signal());
+  it("pins Roots across link lifecycle changes", async () => {
+    const { outside, alias, discover } = await discoveryFixture();
+    const initial = await discover();
     const destination = path.join(outside, "missing", "deep");
     await directoryLink(destination, alias);
-    const dangling = await discovery.discover(signal());
+    const dangling = await discover();
     expect(dangling).toHaveLength(2);
     expect(mapped(dangling, path.join(destination, "main.ts"))).toContain(
       path.join(alias, "main.ts"),
     );
     await fs.mkdir(destination, { recursive: true });
     await fs.writeFile(path.join(destination, "main.ts"), "first");
-    const created = await discovery.discover(signal());
+    const created = await discover();
     expect(authorities(created)).toEqual(authorities(dangling));
     await fs.unlink(alias);
     await directoryLink(path.join(outside, "second"), alias);
-    const retargeted = await discovery.discover(signal());
+    const retargeted = await discover();
     expect(expectDefined(retargeted[0], "admitted observation").authority).toBe(
       expectDefined(initial[0], "admitted observation").authority,
     );
@@ -283,48 +280,48 @@ describe("developer source discovery", () => {
       path.join(alias, "main.ts"),
     );
     await fs.unlink(alias);
-    expect(await discovery.discover(signal())).toHaveLength(1);
+    expect(await discover()).toHaveLength(1);
   });
 
-  it("does not re-admit a replaced target authority, even after its last alias was removed", async () => {
-    const { outside, alias, discovery } = await discoveryFixture();
+  it("rejects replaced authority after alias removal", async () => {
+    const { outside, alias, discover } = await discoveryFixture();
     const boundary = path.join(outside, "boundary");
     await fs.mkdir(path.join(boundary, "source"), { recursive: true });
     await directoryLink(path.join(boundary, "source"), alias);
-    await discovery.discover(signal());
+    await discover();
     await fs.unlink(alias);
-    await discovery.discover(signal());
+    await discover();
     await fs.rename(boundary, boundary + "-retired");
     await fs.mkdir(path.join(boundary, "source"), { recursive: true });
     await directoryLink(path.join(boundary, "source"), alias);
-    await expect(discovery.discover(signal())).rejects.toThrow();
+    await expect(discover()).rejects.toThrow();
   });
 
-  it("bounds lifetime Root admission across source retargets without discarding prior authority", async () => {
-    const { outside, alias, discovery } = await discoveryFixture();
+  it("bounds lifetime Root admission and reuses prior authority", async () => {
+    const { outside, alias, discover } = await discoveryFixture();
     let first: SourceTargetGroup[] | undefined;
     for (let index = 0; index < 128; index++) {
       const destination = path.join(outside, String(index), "source");
       await fs.mkdir(destination, { recursive: true });
       await directoryLink(destination, alias);
       if (index === 127) {
-        await expect(discovery.discover(signal())).rejects.toThrow("lifetime Root budget");
+        await expect(discover()).rejects.toThrow("lifetime Root budget");
       } else {
-        const groups = await discovery.discover(signal());
+        const groups = await discover();
         first ??= groups;
       }
       await fs.unlink(alias);
     }
     await directoryLink(path.join(outside, "0", "source"), alias);
-    const reused = await discovery.discover(signal());
+    const reused = await discover();
     expect(authorities(reused)).toEqual(authorities(first!));
   });
 
   // Windows junction creation normalizes parent components before storing the target.
   it.skipIf(process.platform === "win32")(
-    "resolves symlink targets before parent traversal and retains dangling prefixes",
+    "resolves symlink parents and retains dangling prefixes",
     async () => {
-      const { outside, alias, discovery } = await discoveryFixture();
+      const { outside, alias, discover } = await discoveryFixture();
       await fs.mkdir(path.join(outside, "actual", "child"), { recursive: true });
       await fs.mkdir(path.join(outside, "actual", "source"));
       await fs.mkdir(path.join(outside, "source"));
@@ -333,26 +330,26 @@ describe("developer source discovery", () => {
       const intermediate = path.join(outside, "intermediate");
       await directoryLink(path.join(outside, "actual", "child"), intermediate);
       await directoryLink(intermediate + "/../source", alias);
-      const discovered = await discovery.discover(signal());
+      const discovered = await discover();
       expect(await fs.readdir(alias)).toEqual(["main.ts"]);
       expect(filesIn(discovered)).toEqual([path.join(alias, "main.ts")]);
       expect(mapped(discovered, intermediate)).toContain(alias);
       await fs.unlink(intermediate);
-      const dangling = await discovery.discover(signal());
+      const dangling = await discover();
       expect(filesIn(dangling)).toEqual([]);
       expect(mapped(dangling, intermediate)).toContain(alias);
       await directoryLink(path.join(outside, "actual", "child"), intermediate);
-      const restored = await discovery.discover(signal());
+      const restored = await discover();
       expect(filesIn(restored)).toEqual([path.join(alias, "main.ts")]);
     },
   );
 
-  it("keeps a symbolic parent of a declared destination observable", async () => {
-    const { outside, alias, discovery } = await discoveryFixture();
+  it("observes symbolic destination parents", async () => {
+    const { outside, alias, discover } = await discoveryFixture();
     await fs.mkdir(path.join(outside, "actual", "deep"), { recursive: true });
     await directoryLink(path.join(outside, "actual"), path.join(outside, "alias"));
     await directoryLink(path.join(outside, "alias", "deep"), alias);
-    const groups = await discovery.discover(signal());
+    const groups = await discover();
     expect(mapped(groups, path.join(outside, "alias"))).toContain(alias);
     expect(mapped(groups, path.join(outside, "actual", "deep", "main.ts"))).toContain(
       path.join(alias, "main.ts"),
