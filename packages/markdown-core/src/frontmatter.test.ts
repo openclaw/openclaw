@@ -38,11 +38,18 @@ metadata: {"openclaw": {"events": ["test#tag"]}}${comment}
     },
   );
 
-  it("normalizes an indented YAML flow mapping without a line-parser fallback", () => {
+  it.each(["", "  "])("normalizes YAML flow mappings with %j indentation", (indent) => {
     const result = parseFrontmatterBlock(`---
-  metadata: {openclaw: {emoji: lobster}} # display metadata
+${indent}metadata: {openclaw: {emoji: lobster}} # display metadata
 ---`);
     expect(JSON.parse(result.metadata ?? "")).toEqual({ openclaw: { emoji: "lobster" } });
+  });
+
+  it("preserves compact inline JSON5 metadata", () => {
+    const metadata = "{openclaw:{emoji:'lobster'}}";
+    const result = parseFrontmatterBlock(`---\nmetadata: ${metadata}\n---`);
+    expect(result.metadata).toBe(metadata);
+    expect(JSON5.parse(result.metadata ?? "")).toEqual({ openclaw: { emoji: "lobster" } });
   });
 
   it("keeps a flow value that continues on the next line", () => {

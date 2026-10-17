@@ -16,6 +16,31 @@ describe("skills descriptor formatting", () => {
   });
   afterAll(() => envSnapshot.restore());
 
+  it("retains inline YAML skill metadata in skills list and info JSON", async () => {
+    const workspaceDir = tempDirs.make("inline-yaml-metadata-");
+    await writeWorkspaceSkills(workspaceDir, [
+      {
+        name: "inline-yaml",
+        description: "Synthetic inline YAML skill",
+        metadata: "{openclaw: {emoji: lobster, homepage: https://example.test/inline-yaml}}",
+      },
+    ]);
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      config: { plugins: { enabled: false } },
+    });
+    const list = JSON.parse(formatSkillsList(report, { json: true }));
+    const info = JSON.parse(formatSkillInfo(report, "inline-yaml", { json: true }));
+    const listedSkill = list.skills.find((entry: { name: string }) => entry.name === "inline-yaml");
+    for (const skill of [listedSkill, info]) {
+      expect(skill).toMatchObject({
+        name: "inline-yaml",
+        emoji: "lobster",
+        homepage: "https://example.test/inline-yaml",
+      });
+    }
+  });
+
   it("keeps C1 tab-separated descriptions in their table cell", async () => {
     const description = "left\x9b31\tmright\x9b0m";
     const workspaceDir = tempDirs.make("tab-spacing-");

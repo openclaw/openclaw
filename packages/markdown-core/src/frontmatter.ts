@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import JSON5 from "json5";
 import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
@@ -194,10 +195,19 @@ function parseYamlFrontmatterOnce(
         continue;
       }
       const inlineValue = inlineColonValues.get(key);
-      result[key] =
-        coerced.kind === "structured" && inlineValue !== undefined && Object.hasOwn(fallback, key)
-          ? inlineValue
-          : coerced.value;
+      result[key] = coerced.value;
+      if (
+        coerced.kind === "structured" &&
+        inlineValue !== undefined &&
+        Object.hasOwn(fallback, key)
+      ) {
+        try {
+          JSON5.parse(inlineValue);
+          result[key] = inlineValue;
+        } catch {
+          // Plain YAML values need the normalized JSON that metadata readers accept.
+        }
+      }
     }
 
     for (const [key, value] of Object.entries(fallback)) {
