@@ -46,8 +46,8 @@ import {
 } from "./active-jobs.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import { writeCronJobScratch } from "./scratch-store.js";
-import { CronService, type CronEvent } from "./service.js";
-import * as cronServiceState from "./service/state.js";
+import type { CronService, CronEvent } from "./service.js";
+import { createCronServiceWithStateForTest } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
@@ -176,15 +176,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
         await completed.promise;
       }
     }
-    let ownedState: ReturnType<typeof cronServiceState.createCronServiceState> | undefined;
-    const createState = cronServiceState.createCronServiceState;
-    const captureState = vi.spyOn(cronServiceState, "createCronServiceState");
-    captureState.mockImplementationOnce((serviceDeps) => {
-      captureState.mockRestore();
-      ownedState = createState(serviceDeps);
-      return ownedState;
-    });
-    cron = new CronService({
+    const created = createCronServiceWithStateForTest({
       scheduler,
       storePath,
       cronEnabled: true,
@@ -208,6 +200,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
         }
       },
     });
+    cron = created.cron;
     await cron.start();
     const added = await cron.add(
       {
@@ -245,13 +238,10 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
     }
     return {
       cron,
-      runner,
-      cfg,
       monitor,
       storePath,
       sessionKey,
       reply,
-      deps,
       runOnce,
       request,
       waitForRequest,
@@ -259,10 +249,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       waitForFinished,
       holdLane,
       tick: () => {
-        if (!ownedState) {
-          throw new Error("Expected the constructed cron state");
-        }
-        const pending = onTimer(ownedState);
+        const pending = onTimer(created.state);
         scheduledRuns.push(pending);
         return pending;
       },

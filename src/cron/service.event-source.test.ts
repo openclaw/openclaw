@@ -113,6 +113,27 @@ async function waitForEventRun(
   expect(await cron.waitForManualRun(result.runId, 5_000)).toBe(true);
 }
 
+function interceptActivation(cron: CronService, jobs: CronJob[], beforeCommit: () => void) {
+  const createAdmission = workerAdmission.createSqliteWorkerWriteAdmission;
+  return vi
+    .spyOn(workerAdmission, "createSqliteWorkerWriteAdmission")
+    .mockImplementation((assertCurrent, locations, attachment) =>
+      createAdmission(
+        (request) => {
+          if (
+            request.stage === "commit" &&
+            jobs.every((job) => cron.getJob(job.id)?.state.queuedAtMs !== undefined)
+          ) {
+            beforeCommit();
+          }
+          assertCurrent(request);
+        },
+        locations,
+        attachment,
+      ),
+    );
+}
+
 describe("event automation durable admission", () => {
   it("atomically transfers ingress to one receipt, preserving instructions and creator policy while busy", async () => {
     const started = createDeferredCore();
@@ -400,25 +421,10 @@ describe("event automation durable admission", () => {
   it("rolls back the receipt and ingress together when source authority closes at activation commit", async () => {
     const f = await fixture();
     const { event, options } = await f.claim("commit-revoked");
-    const createAdmission = workerAdmission.createSqliteWorkerWriteAdmission;
     let revoke = false;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerWriteAdmission")
-      .mockImplementation((assertCurrent, locations, attachment) =>
-        createAdmission(
-          (request) => {
-            if (
-              request.stage === "commit" &&
-              f.cron.getJob(f.job.id)?.state.queuedAtMs !== undefined
-            ) {
-              revoke = true;
-            }
-            assertCurrent(request);
-          },
-          locations,
-          attachment,
-        ),
-      );
+    const admission = interceptActivation(f.cron, [f.job], () => {
+      revoke = true;
+    });
     try {
       await expect(
         f.cron.runEvent(f.job.id, {
@@ -508,24 +514,9 @@ describe("event automation durable admission", () => {
         },
       }),
     );
-    const createAdmission = workerAdmission.createSqliteWorkerWriteAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerWriteAdmission")
-      .mockImplementation((assertCurrent, locations, attachment) =>
-        createAdmission(
-          (request) => {
-            if (
-              request.stage === "commit" &&
-              jobs.every((job) => f.cron.getJob(job.id)?.state.queuedAtMs !== undefined)
-            ) {
-              sourceARevoked = true;
-            }
-            assertCurrent(request);
-          },
-          locations,
-          attachment,
-        ),
-      );
+    const admission = interceptActivation(f.cron, jobs, () => {
+      sourceARevoked = true;
+    });
     try {
       await Promise.all(
         queues.map((queue, index) => queue.enqueue(events[index]!.eventId, events[index]!)),

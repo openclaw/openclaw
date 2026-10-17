@@ -125,6 +125,18 @@ function futureJob(id: string, nowMs: number, withNextRun = true): CronJob {
   };
 }
 
+function systemEventJob(id: string, schedule: CronJob["schedule"]) {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    schedule,
+    sessionTarget: "main" as const,
+    wakeMode: "next-heartbeat" as const,
+    payload: { kind: "systemEvent" as const, text: id },
+  };
+}
+
 describe("CronService read ops while job is running", () => {
   it("publishes the scheduler's next run after a cached list and status read", async () => {
     const now = Date.parse("2026-09-30T12:00:00.000Z");
@@ -134,14 +146,9 @@ describe("CronService read ops while job is running", () => {
     const { cron, state } = createService(store.storePath, { scheduler });
     try {
       await cron.start();
-      const job = await cron.add({
-        name: "snapshot tick",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "snapshot tick" },
-      });
+      const job = await cron.add(
+        systemEventJob("snapshot tick", { kind: "every", everyMs: 60_000, anchorMs: now }),
+      );
       const before = await cron.listPage();
       const beforeStatus = await cron.status();
       expect(before.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
@@ -390,15 +397,7 @@ describe("CronService", () => {
       await cronA.status();
       await cronB.status();
       const addJob = (service: CronService, id: string) =>
-        service.add({
-          id,
-          name: id,
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: id },
-        });
+        service.add(systemEventJob(id, { kind: "every", everyMs: 60_000 }));
       await addJob(cronA, "first-cached-service-job");
       await addJob(cronB, "second-cached-service-job");
       expect((await loadCronStore(store.storePath)).jobs.map((job) => job.id)).toEqual([
@@ -428,37 +427,24 @@ describe("CronService", () => {
     const clockA = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
     const clockB = createGatewaySchedulerClock(clockA.clock.now());
 
-    const { cron: cronA, state: stateA } = createCronServiceWithStateForTest({
+    const deps = { enqueueSystemEvent, requestHeartbeat, runIsolatedAgentJob };
+    const { cron: cronA, state: stateA } = createService(store.storePath, {
       scheduler: createTestGatewayScheduler(clockA.clock),
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      runIsolatedAgentJob,
+      ...deps,
     });
 
     await cronA.start();
     const atMs = Date.parse("2025-12-13T00:00:01.000Z");
     await cronA.add({
-      name: "shared store job",
-      enabled: true,
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      ...systemEventJob("shared store job", { kind: "at", at: new Date(atMs).toISOString() }),
       payload: { kind: "systemEvent", text: "hello" },
     });
 
     const aliasedStorePath = `${path.dirname(store.storePath)}/../${path.basename(path.dirname(store.storePath))}/${path.basename(store.storePath)}`;
 
-    const { cron: cronB, state: stateB } = createCronServiceWithStateForTest({
+    const { cron: cronB, state: stateB } = createService(aliasedStorePath, {
       scheduler: createTestGatewayScheduler(clockB.clock),
-      storePath: aliasedStorePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      runIsolatedAgentJob,
+      ...deps,
     });
 
     await cronB.start();
@@ -500,15 +486,7 @@ describe("CronService", () => {
     await readStatus(writer.state);
     const baseMs = Date.parse("2025-12-13T00:00:00.000Z");
     const addAtJob = (state: ReturnType<typeof createCronServiceState>, id: string, atMs: number) =>
-      add(state, {
-        id,
-        name: id,
-        enabled: true,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: id },
-      });
+      add(state, systemEventJob(id, { kind: "at", at: new Date(atMs).toISOString() }));
 
     await addAtJob(stale.state, "later-job", baseMs + 60_000);
     await addAtJob(writer.state, "earlier-job", baseMs + 10_000);
@@ -535,15 +513,9 @@ describe("CronService", () => {
 
 function recurringJob(id: string, nowMs: number, nextRunAtMs: number): CronJob {
   return {
-    id,
-    name: id,
-    enabled: true,
+    ...futureJob(id, nowMs),
     deleteAfterRun: false,
-    createdAtMs: nowMs,
-    updatedAtMs: nowMs,
     schedule: { kind: "every", everyMs: 5 * 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "test" },
     delivery: { mode: "none" },
     state: { nextRunAtMs },

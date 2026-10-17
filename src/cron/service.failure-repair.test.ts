@@ -54,6 +54,18 @@ function repairPolicyFixture(overrides: Partial<CronJob>, nowMs = runningAtMs) {
   return { state, job, deferredNotifications };
 }
 
+function applyError(
+  fixture: ReturnType<typeof repairPolicyFixture>,
+  result: Partial<Parameters<typeof applyJobResult>[2]>,
+) {
+  applyJobResult(
+    fixture.state,
+    fixture.job,
+    { status: "error", startedAt: runningAtMs, endedAt: runningAtMs + 1_000, ...result },
+    { deferredNotifications: fixture.deferredNotifications },
+  );
+}
+
 describe("CronService failure repair", () => {
   it("repairs once per failure streak, alerts on continued failures, and rearms after recovery", async () => {
     await withRepair(
@@ -365,53 +377,32 @@ describe("CronService failure repair", () => {
   });
 
   it.each([
-    {
-      name: "owned",
-      owner: owned.owner,
-      delivery: createTelegramDelivery(),
-      failureAlert: undefined,
-      repairs: 1,
-      alerts: 0,
-    },
+    { name: "owned", owner: owned.owner, repairs: 1, alerts: 0 },
     {
       name: "owner without an external route",
       owner: owned.owner,
-      delivery: { mode: "none" as const },
-      failureAlert: undefined,
+      noRoute: true,
       repairs: 1,
       alerts: 0,
     },
     {
       name: "owned when repair cannot start",
       owner: owned.owner,
-      delivery: createTelegramDelivery(),
-      failureAlert: undefined,
       rejectRepair: true,
       repairs: 1,
       alerts: 1,
     },
-    {
-      name: "unowned",
-      owner: undefined,
-      delivery: createTelegramDelivery(),
-      failureAlert: undefined,
-      repairs: 0,
-      alerts: 1,
-    },
+    { name: "unowned", repairs: 0, alerts: 1 },
     {
       name: "unowned without a route",
-      owner: undefined,
-      delivery: { mode: "none" as const },
-      failureAlert: undefined,
+      noRoute: true,
       repairs: 0,
       alerts: 0,
       notices: 1,
     },
     {
       name: "inherited best-effort alert suppressed",
-      owner: undefined,
-      delivery: { ...createTelegramDelivery(), bestEffort: true },
-      failureAlert: undefined,
+      bestEffort: true,
       repairs: 0,
       alerts: 0,
       notices: 1,
@@ -419,15 +410,22 @@ describe("CronService failure repair", () => {
     {
       name: "alerts disabled",
       notices: 1,
-      owner: undefined,
-      delivery: createTelegramDelivery(),
       failureAlert: false as const,
       repairs: 0,
       alerts: 0,
     },
   ])(
     "notifies a terminal one-shot script failure: $name",
-    async ({ owner, delivery, failureAlert, rejectRepair, repairs, alerts, notices = 0 }) => {
+    async ({
+      owner,
+      noRoute,
+      bestEffort,
+      failureAlert,
+      rejectRepair,
+      repairs,
+      alerts,
+      notices = 0,
+    }) => {
       await withRepair(
         async ({
           cron,
@@ -454,7 +452,7 @@ describe("CronService failure repair", () => {
           const script = 'await automations({ action: "wake", text: "Resume work" })';
           const job = await addJob("continue PR work", {
             owner,
-            delivery,
+            delivery: noRoute ? { mode: "none" } : { ...createTelegramDelivery(), bestEffort },
             failureAlert,
             schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
             deleteAfterRun: true,
@@ -471,16 +469,20 @@ describe("CronService failure repair", () => {
               autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 1 },
             },
           });
-          expect(runCronFailureRepair).toHaveBeenCalledTimes(repairs);
-          expect(sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
-          expect(enqueueSystemEvent).toHaveBeenCalledTimes(notices);
-          expect(requestHeartbeat).toHaveBeenCalledTimes(notices);
-          if (notices) {
-            expect(enqueueSystemEvent).toHaveBeenCalledWith(
-              expect.stringContaining("auto-disabled"),
-              expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
-            );
-          }
+          const expectNotifications = () => {
+            expect(runScriptJob).toHaveBeenCalledOnce();
+            expect(runCronFailureRepair).toHaveBeenCalledTimes(repairs);
+            expect(sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
+            expect(enqueueSystemEvent).toHaveBeenCalledTimes(notices);
+            expect(requestHeartbeat).toHaveBeenCalledTimes(notices);
+            if (notices) {
+              expect(enqueueSystemEvent).toHaveBeenCalledWith(
+                expect.stringContaining("auto-disabled"),
+                expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
+              );
+            }
+          };
+          expectNotifications();
           if (alerts) {
             expect(sendCronFailureAlert).toHaveBeenCalledWith(
               expect.objectContaining({
@@ -512,17 +514,7 @@ describe("CronService failure repair", () => {
           }
           // A due scan cannot fire the disabled job or duplicate the notification.
           await cron.run(job.id, "due");
-          expect(runScriptJob).toHaveBeenCalledOnce();
-          expect(runCronFailureRepair).toHaveBeenCalledTimes(repairs);
-          expect(sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
-          expect(enqueueSystemEvent).toHaveBeenCalledTimes(notices);
-          expect(requestHeartbeat).toHaveBeenCalledTimes(notices);
-          if (notices) {
-            expect(enqueueSystemEvent).toHaveBeenCalledWith(
-              expect.stringContaining("auto-disabled"),
-              expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
-            );
-          }
+          expectNotifications();
         },
       );
     },
@@ -636,12 +628,7 @@ describe("CronService failure repair", () => {
         schedule: { kind: "every", everyMs: 3_600_000, anchorMs: runningAtMs },
         state: { consecutiveErrors: 1 },
       });
-      applyJobResult(
-        state,
-        job,
-        { status: "error", startedAt: runningAtMs, endedAt: runningAtMs + 1_000, ...result },
-        { deferredNotifications },
-      );
+      applyError({ state, job, deferredNotifications }, result);
       expect(job.state).toMatchObject({ consecutiveErrors: 2, lastErrorReason: "timeout" });
       expect(job.state.nextRunAtMs).toBe(runningAtMs + 1_000 + 60_000);
       expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
@@ -679,16 +666,11 @@ describe("CronService failure repair", () => {
         ...overrides,
         state: { consecutiveErrors },
       });
-      applyJobResult(
-        state,
-        job,
+      applyError(
+        { state, job, deferredNotifications },
         {
-          status: "error",
           error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443",
-          startedAt: runningAtMs,
-          endedAt: runningAtMs + 1_000,
         },
-        { deferredNotifications },
       );
       expect(job.state.consecutiveErrors).toBe(consecutiveErrors + 1);
       if (consecutiveErrors < 3) {
@@ -735,12 +717,7 @@ describe("CronService failure repair", () => {
       payload,
       state: { consecutiveErrors: 1 },
     });
-    applyJobResult(
-      state,
-      job,
-      { status: "error", error: "boom", startedAt: runningAtMs, endedAt: runningAtMs + 1_000 },
-      { deferredNotifications },
-    );
+    applyError({ state, job, deferredNotifications }, { error: "boom" });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
       "failure-repair",
     ]);
