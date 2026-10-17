@@ -48,31 +48,45 @@ const { createMemoryRuntime } = await vi.importActual<{
   }) => MemoryPluginRuntime;
 }>("../../extensions/memory-core/runtime-api.js");
 
+function memoryConfig(
+  workspace: string,
+  search: NonNullable<OpenClawConfig["memory"]>["search"],
+): OpenClawConfig {
+  return {
+    plugins: { enabled: false },
+    agents: { defaults: { workspace } },
+    memory: { search: { store: { vector: { enabled: false } }, ...search } },
+  };
+}
+
+function embeddingProvider(id: string, close: () => Promise<void>, embed = async () => [1, 0, 0]) {
+  return { id, model: "synthetic-embedding", embed, embedBatch: async () => [[1, 0, 0]], close };
+}
+
+async function getManager(
+  owner: ReturnType<typeof registerMemoryOwner>,
+  cfg: OpenClawConfig,
+  overrides: Partial<Parameters<MemoryPluginRuntime["getMemorySearchManager"]>[0]> = {},
+) {
+  const result = await owner.runtime.getMemorySearchManager({ cfg, agentId: "main", ...overrides });
+  assert(result.manager, result.error ?? "Expected a memory manager");
+  return result.manager;
+}
+
 it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {
   const state = await createOpenClawTestState({
     scenario: "minimal",
     label: "memory-runtime-owners",
   });
-  const config: OpenClawConfig = {
-    plugins: { enabled: false },
-    agents: { defaults: { workspace: state.workspaceDir } },
-    memory: {
-      search: {
-        provider: "none",
-        store: { vector: { enabled: false } },
-      },
-    },
-  };
+  const config = memoryConfig(state.workspaceDir, { provider: "none" });
   const first = registerMemoryOwner(config);
   const second = registerMemoryOwner(config);
   try {
-    const one = await first.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-    const two = await second.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-    assert(one.manager, one.error ?? "Expected a memory manager");
-    assert(two.manager, two.error ?? "Expected a memory manager");
+    await getManager(first, config);
+    const two = await getManager(second, config);
     await first.runtime.closeAllMemorySearchManagers?.();
-    expect(two.manager.status().sources).toBeDefined();
-    await expect(two.manager.search("sibling still live")).resolves.toEqual([]);
+    expect(two.status().sources).toBeDefined();
+    await expect(two.search("sibling still live")).resolves.toEqual([]);
   } finally {
     await first.runtime.closeAllMemorySearchManagers?.();
     await second.runtime.closeAllMemorySearchManagers?.();
@@ -145,18 +159,11 @@ it.each([
   const fallback = mode === "pending-fallback" || mode === "healthy-fallback";
   const providerId = fallback ? "primary-probe" : "embedding-probe";
   const targetId = fallback ? "fallback-probe" : providerId;
-  const config: OpenClawConfig = {
-    plugins: { enabled: false },
-    agents: { defaults: { workspace: state.workspaceDir } },
-    memory: {
-      search: {
-        provider: providerId,
-        model: "synthetic-embedding",
-        fallback: fallback ? targetId : "none",
-        store: { vector: { enabled: false } },
-      },
-    },
-  };
+  const config = memoryConfig(state.workspaceDir, {
+    provider: providerId,
+    model: "synthetic-embedding",
+    fallback: fallback ? targetId : "none",
+  });
   const owner = registerMemoryOwner(config, { legacy: mode === "legacy-retained" });
   const sibling = registerMemoryOwner(config);
   const successor = registerMemoryOwner(config);
@@ -182,15 +189,7 @@ it.each([
     if (mode.startsWith("pending")) {
       await releaseCreate.promise;
     }
-    return {
-      provider: {
-        id: targetId,
-        model: "synthetic-embedding",
-        embed,
-        embedBatch: async () => [[1, 0, 0]],
-        close,
-      },
-    };
+    return { provider: embeddingProvider(targetId, close, embed) };
   });
   const close = vi.fn(async () => {
     closeEntered.resolve();
@@ -215,28 +214,11 @@ it.each([
   const siblingClose = vi.fn(async () => {});
   registerAdapter(sibling, config, {
     id: providerId,
-    create: async () => ({
-      provider: {
-        id: providerId,
-        model: "synthetic-embedding",
-        embed: async () => [1, 0, 0],
-        embedBatch: async () => [[1, 0, 0]],
-        close: siblingClose,
-      },
-    }),
+    create: async () => ({ provider: embeddingProvider(providerId, siblingClose) }),
   });
   const successorClose = vi.fn(async () => {});
   const successorCreate = vi.fn(async () => ({
-    provider:
-      mode === "late-probe"
-        ? null
-        : {
-            id: targetId,
-            model: "synthetic-embedding",
-            embed: async () => [1, 0, 0],
-            embedBatch: async () => [[1, 0, 0]],
-            close: successorClose,
-          },
+    provider: mode === "late-probe" ? null : embeddingProvider(targetId, successorClose),
   }));
   const replacement = registerAdapter(successor, config, {
     id: targetId,
@@ -250,15 +232,7 @@ it.each([
   if (mode === "ready") {
     registerAdapter(owner, unaffectedConfig, {
       id: "unaffected-probe",
-      create: async () => ({
-        provider: {
-          id: "unaffected-probe",
-          model: "synthetic-embedding",
-          embed: async () => [1, 0, 0],
-          embedBatch: async () => [[1, 0, 0]],
-          close: unaffectedClose,
-        },
-      }),
+      create: async () => ({ provider: embeddingProvider("unaffected-probe", unaffectedClose) }),
     });
   }
   const next = createEmptyPluginRegistry();
@@ -281,16 +255,10 @@ it.each([
     expect(owner.instance.run(() => getMemoryEmbeddingProvider(targetId, config))).toBe(
       retiring.registration.provider,
     );
-    let result = await owner.runtime.getMemorySearchManager({
-      cfg: config,
-      agentId: "main",
-      ...(mode === "transient" ? { purpose: "cli" } : {}),
-    });
-    const other = await sibling.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-    assert(result.manager, result.error ?? "Expected a memory manager");
-    assert(other.manager, other.error ?? "Expected a memory manager");
-    await other.manager.probeEmbeddingAvailability();
-    probe = result.manager.probeEmbeddingAvailability();
+    let manager = await getManager(owner, config, mode === "transient" ? { purpose: "cli" } : {});
+    const other = await getManager(sibling, config);
+    await other.probeEmbeddingAvailability();
+    probe = manager.probeEmbeddingAvailability();
     await entered.promise;
     if (mode === "late-probe") {
       await probeEntered.promise;
@@ -305,16 +273,13 @@ it.each([
         ),
       });
       await primaryOnly.drain();
-      await expect(result.manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
+      await expect(manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
       expect(close).toHaveBeenCalledOnce();
       primaryOnly.rollback();
-      const previousManager = result.manager;
-      result = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-      assert(result.manager, result.error ?? "Expected a fresh fallback manager");
-      expect(result.manager).not.toBe(previousManager);
-      await expect(result.manager.probeEmbeddingAvailability()).resolves.toMatchObject({
-        ok: true,
-      });
+      const previousManager = manager;
+      manager = await getManager(owner, config);
+      expect(manager).not.toBe(previousManager);
+      await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
     }
     if (mode === "legacy-retained") {
       const unchanged = prepareMemoryRuntimeReload(owner.registry, owner.registry);
@@ -323,15 +288,15 @@ it.each([
       expect(close).not.toHaveBeenCalled();
     }
     if (mode === "ready") {
-      const unaffected = await owner.runtime.getMemorySearchManager({
-        cfg: unaffectedConfig,
-        agentId: "unaffected",
-      });
-      assert(unaffected.manager, unaffected.error ?? "Expected an unaffected manager");
-      await unaffected.manager.probeEmbeddingAvailability();
+      const unaffected = await getManager(owner, unaffectedConfig, { agentId: "unaffected" });
+      await unaffected.probeEmbeddingAvailability();
     }
     const providerClosesBeforeReload = close.mock.calls.length;
     const reload = prepareMemoryRuntimeReload(owner.registry, next);
+    const commitReload = () => {
+      activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
+      reload.commit();
+    };
     let drained = false;
     drain = reload.drain().then((drainResult) => {
       drained = true;
@@ -345,10 +310,8 @@ it.each([
     if (mode !== "legacy-retained") {
       // Only prepareReload declares an admission fence for concurrent acquisition.
       const creationsBeforeLateAcquisition = create.mock.calls.length;
-      const late = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "late" });
-      assert(late.manager, late.error ?? "Expected a memory manager");
-      lateManager = late.manager;
-      await expect(late.manager.probeEmbeddingAvailability()).rejects.toThrow("reloading");
+      lateManager = await getManager(owner, config, { agentId: "late" });
+      await expect(lateManager.probeEmbeddingAvailability()).rejects.toThrow("reloading");
       expect(create).toHaveBeenCalledTimes(creationsBeforeLateAcquisition);
     }
     releaseCreate.resolve();
@@ -360,19 +323,16 @@ it.each([
         errors: [expect.objectContaining({ message: "synthetic provider cleanup refused" })],
       });
       expect(siblingClose).not.toHaveBeenCalled();
-      activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
-      reload.commit();
+      commitReload();
     } else if (mode === "timeout") {
       const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
       await closeEntered.promise;
       await vi.advanceTimersByTimeAsync(500);
       await expired;
-      activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
-      reload.commit();
-      const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-      assert(fresh.manager, fresh.error ?? "Expected a replacement manager");
-      expect(fresh.manager).not.toBe(result.manager);
-      await expect(fresh.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+      commitReload();
+      const fresh = await getManager(owner, config);
+      expect(fresh).not.toBe(manager);
+      await expect(fresh.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
       let joined = false;
       const finalClose = reload.close().then(() => {
         joined = true;
@@ -386,46 +346,36 @@ it.each([
       const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
       await vi.advanceTimersByTimeAsync(500);
       await expired;
-      activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
-      reload.commit();
-      const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-      assert(fresh.manager, fresh.error ?? "Expected a replacement manager");
-      expect(fresh.manager).not.toBe(result.manager);
-      await expect(fresh.manager.probeEmbeddingAvailability()).resolves.toMatchObject({
-        ok: false,
-      });
+      commitReload();
+      const fresh = await getManager(owner, config);
+      expect(fresh).not.toBe(manager);
+      await expect(fresh.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: false });
       releaseProbe.resolve();
       await expect(probe).resolves.toMatchObject({ ok: true });
       await expect(reload.close()).resolves.toMatchObject({
-        errors: [
-          expect.objectContaining({
-            message: `Plugin ${targetId} is retiring`,
-          }),
-        ],
+        errors: [expect.objectContaining({ message: `Plugin ${targetId} is retiring` })],
       });
     } else {
       await drain;
       expect(close).toHaveBeenCalledTimes(
         providerClosesBeforeReload + (mode === "unavailable-create" ? 0 : 1),
       );
-      activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
-      reload.commit();
+      commitReload();
     }
-    await expect(result.manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
-    await expect(other.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+    await expect(manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
+    await expect(other.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
     expect(siblingClose).not.toHaveBeenCalled();
     expect(unaffectedClose).not.toHaveBeenCalled();
-    const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-    assert(fresh.manager, fresh.error ?? "Expected a memory manager");
+    const fresh = await getManager(owner, config);
     if (mode === "late-probe") {
-      await expect(fresh.manager.search("replacement provider required")).rejects.toThrow(
+      await expect(fresh.search("replacement provider required")).rejects.toThrow(
         'Memory search unavailable: embedding provider "embedding-probe" is configured but unavailable.',
       );
     } else {
       if (mode.startsWith("pending")) {
-        await expect(fresh.manager.search("replacement provider acquisition")).resolves.toEqual([]);
+        await expect(fresh.search("replacement provider acquisition")).resolves.toEqual([]);
       }
-      await expect(fresh.manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
+      await expect(fresh.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
     }
     // A real search acquires each required successor provider, unlike advisory cached probes.
     if (lateManager) {

@@ -166,6 +166,36 @@ function createOwnedMigrationRegistry(
   return registry;
 }
 
+function mockInstalledProviders(
+  entries: Array<{ pluginId: string; providerId: string; enabled?: boolean }>,
+) {
+  mocks.loadPluginRegistrySnapshot.mockReturnValue(
+    createMockPluginIndex(
+      entries.map(({ pluginId, enabled = true }) => ({ pluginId, origin: "installed", enabled })),
+    ),
+  );
+  mocks.loadPluginManifestRegistry.mockImplementation((params) => ({
+    diagnostics: [],
+    plugins: entries
+      .filter(({ enabled }) => params?.includeDisabled || enabled !== false)
+      .map(({ pluginId, providerId }) => ({
+        id: pluginId,
+        origin: "installed",
+        contracts: { migrationProviders: [providerId] },
+      })),
+  }));
+}
+
+function mockInspection(active: PluginRegistry, loaded: PluginRegistry) {
+  mocks.resolveRuntimePluginRegistry.mockImplementation((params) =>
+    params === undefined ? active : undefined,
+  );
+  mocks.acquirePluginRegistryForInspection.mockResolvedValue({
+    registry: loaded,
+    release: mocks.release,
+  });
+}
+
 describe("migration provider runtime", () => {
   beforeEach(async () => {
     clearPluginMetadataLifecycleCaches();
@@ -224,21 +254,7 @@ describe("migration provider runtime", () => {
         await owner.dispose();
       });
       expect(store.tryGetRuntime()).toBeNull();
-      mocks.loadPluginRegistrySnapshot.mockReturnValue(
-        createMockPluginIndex([
-          { pluginId: "managed-migration", origin: "installed", enabled: true },
-        ]),
-      );
-      mocks.loadPluginManifestRegistry.mockReturnValue({
-        plugins: [
-          {
-            id: "managed-migration",
-            origin: "installed",
-            contracts: { migrationProviders: [provider.id] },
-          },
-        ],
-        diagnostics: [],
-      });
+      mockInstalledProviders([{ pluginId: "managed-migration", providerId: provider.id }]);
       mocks.resolveRuntimePluginRegistry.mockReturnValue(
         route === "acquired registry" ? undefined : registry,
       );
@@ -413,50 +429,11 @@ describe("migration provider runtime", () => {
     const provider = createMigrationProvider("external-import");
     const active = createEmptyPluginRegistry();
     const loaded = createOwnedMigrationRegistry("external-migration", provider);
-    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? active : undefined,
-    );
-    mocks.acquirePluginRegistryForInspection.mockResolvedValue({
-      registry: loaded,
-      release: mocks.release,
-    });
-    mocks.loadPluginRegistrySnapshot.mockReturnValue(
-      createMockPluginIndex([
-        {
-          pluginId: "external-migration",
-          origin: "installed",
-          enabled: true,
-        },
-        {
-          pluginId: "disabled-external-migration",
-          origin: "installed",
-          enabled: false,
-        },
-      ]),
-    );
-    mocks.loadPluginManifestRegistry.mockImplementation((params?: Record<string, unknown>) => ({
-      diagnostics: [],
-      plugins: params?.includeDisabled
-        ? [
-            {
-              id: "external-migration",
-              origin: "installed",
-              contracts: { migrationProviders: ["external-import"] },
-            },
-            {
-              id: "disabled-external-migration",
-              origin: "installed",
-              contracts: { migrationProviders: ["external-import"] },
-            },
-          ]
-        : [
-            {
-              id: "external-migration",
-              origin: "installed",
-              contracts: { migrationProviders: ["external-import"] },
-            },
-          ],
-    }));
+    mockInspection(active, loaded);
+    mockInstalledProviders([
+      { pluginId: "external-migration", providerId: "external-import" },
+      { pluginId: "disabled-external-migration", providerId: "external-import", enabled: false },
+    ]);
 
     await withPluginMigrationProviders(
       { providerId: "external-import", cfg },
@@ -480,13 +457,7 @@ describe("migration provider runtime", () => {
     const provider = createMigrationProvider("hermes");
     const active = createEmptyPluginRegistry();
     const loaded = createOwnedMigrationRegistry("migrate-hermes", provider);
-    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? active : undefined,
-    );
-    mocks.acquirePluginRegistryForInspection.mockResolvedValue({
-      registry: loaded,
-      release: mocks.release,
-    });
+    mockInspection(active, loaded);
     mocks.listBundledPluginMetadata.mockReturnValue([
       {
         manifest: {
@@ -525,40 +496,8 @@ describe("migration provider runtime", () => {
       provider: activeProvider,
     } as never);
     const loaded = createOwnedMigrationRegistry("external-migration", externalProvider);
-    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? active : undefined,
-    );
-    mocks.acquirePluginRegistryForInspection.mockResolvedValue({
-      registry: loaded,
-      release: mocks.release,
-    });
-    mocks.loadPluginRegistrySnapshot.mockReturnValue(
-      createMockPluginIndex([
-        {
-          pluginId: "external-migration",
-          origin: "installed",
-          enabled: true,
-        },
-      ]),
-    );
-    mocks.loadPluginManifestRegistry.mockImplementation((params?: Record<string, unknown>) => ({
-      diagnostics: [],
-      plugins: params?.includeDisabled
-        ? [
-            {
-              id: "external-migration",
-              origin: "installed",
-              contracts: { migrationProviders: ["external-import"] },
-            },
-          ]
-        : [
-            {
-              id: "external-migration",
-              origin: "installed",
-              contracts: { migrationProviders: ["external-import"] },
-            },
-          ],
-    }));
+    mockInspection(active, loaded);
+    mockInstalledProviders([{ pluginId: "external-migration", providerId: "external-import" }]);
 
     await withPluginMigrationProviders({}, async (providers) => {
       expect(providers.map((provider) => provider.id)).toEqual([

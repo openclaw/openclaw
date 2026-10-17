@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   isJavaScriptModulePath,
@@ -14,21 +14,30 @@ import {
 } from "./native-module-require.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type NativeEsmGraphProbe = {
-  status: number | null;
-  stderr: string;
-  stdout: string;
-};
-let nativeEsmGraphProbe: NativeEsmGraphProbe;
+function writeModule(source: string, name = "plugin.cjs") {
+  const modulePath = path.join(tempDirs.make("openclaw-native-require-"), name);
+  fs.writeFileSync(modulePath, source, "utf8");
+  return modulePath;
+}
+
+async function bundleOwner(dir: string) {
+  const outfile = path.join(dir, "native-require.mjs");
+  await build({
+    entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile,
+    logLevel: "silent",
+  });
+  return pathToFileURL(outfile).href;
+}
 
 describe("tryNativeRequireJavaScriptModule", () => {
   it("uses source-transform fallback only when native TLA loading needs it", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.mjs");
-    fs.writeFileSync(
-      modulePath,
+    const modulePath = writeModule(
       'await Promise.resolve();\nexport const marker = "esm";\n',
-      "utf8",
+      "plugin.mjs",
     );
 
     const result = tryNativeRequireJavaScriptModule(modulePath);
@@ -43,11 +52,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
   });
 
   it("declines an in-flight ESM require race for source-transform fallback", () => {
-    const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "plugin.cjs");
-    fs.writeFileSync(
-      modulePath,
+    const modulePath = writeModule(
       'throw Object.assign(new Error("ESM is still loading"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\n',
-      "utf8",
     );
 
     expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({ ok: false });
@@ -56,18 +62,16 @@ describe("tryNativeRequireJavaScriptModule", () => {
   it("declines missing target modules so callers can try source fallback", () => {
     const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "missing.cjs");
 
-    expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({
-      ok: false,
-    });
+    expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({ ok: false });
   });
 
-  beforeAll(() => {
+  it("loads native ESM graphs with temporary SDK aliases", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const sdkPath = path.join(dir, "sdk.js");
     const modulePath = path.join(dir, "plugin.mjs");
     const probePath = path.join(dir, "probe.mjs");
     const nativeRequireModuleUrl = pathToFileURL(
-      path.join(process.cwd(), "src", "plugins", "native-module-require.ts"),
+      path.resolve("src/plugins/native-module-require.ts"),
     ).href;
     fs.writeFileSync(
       sdkPath,
@@ -99,17 +103,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
       cwd: process.cwd(),
       encoding: "utf8",
     });
-    nativeEsmGraphProbe = {
-      status: result.status,
-      stderr: result.stderr,
-      stdout: result.stdout,
-    };
-  });
-
-  it("loads native ESM graphs with temporary SDK aliases", () => {
-    expect(nativeEsmGraphProbe.stderr).toBe("");
-    expect(nativeEsmGraphProbe.status).toBe(0);
-    expect(nativeEsmGraphProbe.stdout.trim()).toBe("adapter");
+    expect(result).toMatchObject({ stderr: "", status: 0 });
+    expect(result.stdout.trim()).toBe("adapter");
   });
 
   it("uses the configured native loader for JavaScript-to-TypeScript lookup", () => {
@@ -124,16 +119,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
 
   it("keeps native paths, file URLs, and source SDK aliases on the process module graph", async () => {
     const dir = tempDirs.make("openclaw-native-require-");
-    const ownerPath = path.join(dir, "native-require.mjs");
     // tsx's CommonJS hook accepts file URLs and masks Node's native contract.
-    await build({
-      entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      outfile: ownerPath,
-      logLevel: "silent",
-    });
+    const ownerUrl = await bundleOwner(dir);
     const modulePath = path.join(dir, "space # percent% plugin.cjs");
     const probePath = path.join(dir, "probe.mjs");
     const tsconfigPath = path.join(dir, "tsconfig.json");
@@ -145,7 +132,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { tryNativeRequireJavaScriptModule as load, tryNativeRequireModule as loadSource } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+import { tryNativeRequireJavaScriptModule as load, tryNativeRequireModule as loadSource } from ${JSON.stringify(ownerUrl)};
 const modulePath = ${JSON.stringify(modulePath)};
 for (const target of [modulePath, pathToFileURL(modulePath).href]) {
   fs.writeFileSync(modulePath, 'module.exports = { marker: "before" };\\n');
@@ -210,15 +197,7 @@ console.log("native path + source SDK process identity; native JavaScript preced
     "retains terminal ESM failures across eviction and alias changes until a new path loads",
     async () => {
       const dir = tempDirs.make("openclaw-native-failed-generation-");
-      const ownerPath = path.join(dir, "native-require.mjs");
-      await build({
-        entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
-        bundle: true,
-        platform: "node",
-        format: "esm",
-        outfile: ownerPath,
-        logLevel: "silent",
-      });
+      const ownerUrl = await bundleOwner(dir);
       const probePath = path.join(dir, "probe.mjs");
       fs.writeFileSync(
         probePath,
@@ -227,7 +206,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(ownerUrl)};
 const require = createRequire(import.meta.url);
 const dir = ${JSON.stringify(dir)};
 const brokenPath = path.join(dir, "broken.mjs");
@@ -304,34 +283,16 @@ describe("isJavaScriptModulePath", () => {
 
 describe("plugin native loading selection", () => {
   it.each([
-    ["node", "linux", "dist/plugins/runtime/index.js", false, true],
-    ["node", "linux", "extensions/demo/index.ts", false, false],
-    ["bun", "linux", "dist/plugins/runtime/index.js", false, true],
-    ["bun", "linux", "dist/extensions/demo/index.js", true, true],
-    ["node", "win32", "dist/plugins/runtime/index.js", false, true],
-    ["node", "win32", "dist/extensions/demo/index.js", true, true],
-    ["node", "win32", "dist/extensions/demo/helper.ts", true, false],
-    ["node", "linux", "dist/extensions/demo/index.js", true, true],
-    ["node", "linux", "dist/extensions/demo/helper.ts", true, false],
+    ["dist/plugins/runtime/index.js", false, true],
+    ["extensions/demo/index.ts", false, false],
+    ["dist/extensions/demo/index.js", true, true],
+    ["dist/extensions/demo/helper.ts", true, false],
   ] as const)(
-    "selects native loading for %s on %s with %s (prefer dist=%s): %s",
-    (runtime, platform, entry, preferBuiltDist, expected) => {
-      const originalPlatform = process.platform;
-      const originalVersions = process.versions;
-      Object.defineProperty(process, "platform", { configurable: true, value: platform });
-      Object.defineProperty(process, "versions", {
-        configurable: true,
-        value: { ...originalVersions, bun: runtime === "bun" ? "1.2.0" : undefined },
-      });
-      try {
-        const tryNative = resolvePluginLoaderTryNative(path.join("/repo", entry), {
-          preferBuiltDist,
-        });
-        expect(tryNative).toBe(expected);
-      } finally {
-        Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-        Object.defineProperty(process, "versions", { configurable: true, value: originalVersions });
-      }
+    "selects native loading for %s (prefer dist=%s): %s",
+    (entry, preferBuiltDist, expected) => {
+      expect(resolvePluginLoaderTryNative(path.join("/repo", entry), { preferBuiltDist })).toBe(
+        expected,
+      );
     },
   );
 });

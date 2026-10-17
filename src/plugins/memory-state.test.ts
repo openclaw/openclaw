@@ -67,6 +67,12 @@ function registerArtifacts(pluginId: string, artifacts: MemoryPluginPublicArtifa
   registerMemoryCapability(pluginId, { publicArtifacts: { listArtifacts: async () => artifacts } });
 }
 
+const promptParams = () => ({
+  availableTools: new Set(["wiki_search"]),
+  agentId: "first",
+  agentSessionKey: "agent:first:main",
+});
+
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
@@ -101,55 +107,27 @@ describe("memory plugin state", () => {
   });
 
   it("lists active public memory artifacts in deterministic order", async () => {
-    registerArtifacts("memory-core", [
-      {
-        kind: "daily-note",
-        workspaceDir: "/tmp/workspace-b",
-        relativePath: "memory/2026-04-06.md",
-        absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
-        agentIds: ["beta"],
-        contentType: "markdown" as const,
-      },
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/workspace-a",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/workspace-a/MEMORY.md",
-        agentIds: ["main"],
-        contentType: "markdown" as const,
-      },
-    ]);
-
+    const daily = memoryArtifact({
+      kind: "daily-note",
+      workspaceDir: "/tmp/workspace-b",
+      relativePath: "memory/2026-04-06.md",
+      absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+      agentIds: ["beta"],
+    });
+    const root = memoryArtifact({
+      workspaceDir: "/tmp/workspace-a",
+      absolutePath: "/tmp/workspace-a/MEMORY.md",
+    });
+    registerArtifacts("memory-core", [daily, root]);
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/workspace-a",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/workspace-a/MEMORY.md",
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
-        kind: "daily-note",
-        workspaceDir: "/tmp/workspace-b",
-        relativePath: "memory/2026-04-06.md",
-        absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
-        agentIds: ["beta"],
-        contentType: "markdown",
-      },
+      root,
+      daily,
     ]);
   });
 
   it("normalizes public memory artifacts without agent ids", async () => {
-    const legacyArtifact = {
-      kind: "memory-root",
-      workspaceDir: "/tmp/workspace",
-      relativePath: "MEMORY.md",
-      absolutePath: "/tmp/workspace/MEMORY.md",
-      contentType: "markdown" as const,
-    } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact;
-
-    registerArtifacts("memory-core", [legacyArtifact]);
+    const { agentIds: _agentIds, ...legacyArtifact } = memoryArtifact();
+    registerArtifacts("memory-core", [legacyArtifact as MemoryPluginPublicArtifact]);
 
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
       memoryArtifact({ agentIds: [] }),
@@ -317,23 +295,10 @@ describe("memory plugin state", () => {
     ["replaced tool", { availableTools: new Set(["memory_search"]) }],
   ])("rejects prepared state after a change to the %s", async (_name, changed) => {
     registerMemoryPromptPreparation("memory-wiki", async () => ["private wiki state"]);
-    const prepared = await prepareMemoryPromptSection({
-      availableTools: new Set(["wiki_search"]),
-      agentId: "first",
-      agentSessionKey: "agent:first:main",
-    });
-
-    expect(() =>
-      buildMemoryPromptSection(
-        {
-          availableTools: new Set(["wiki_search"]),
-          agentId: "first",
-          agentSessionKey: "agent:first:main",
-          ...changed,
-        },
-        prepared,
-      ),
-    ).toThrow("prepared memory prompt section does not match the current run");
+    const prepared = await prepareMemoryPromptSection(promptParams());
+    expect(() => buildMemoryPromptSection({ ...promptParams(), ...changed }, prepared)).toThrow(
+      "prepared memory prompt section does not match the current run",
+    );
   });
 
   it("removes prompt preparations from future runs without mutating an in-flight snapshot", async () => {
