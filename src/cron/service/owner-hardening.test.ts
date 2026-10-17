@@ -25,6 +25,7 @@ import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { makeCronRecoveryJob } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { findCronRunRecoveryInDatabase } from "./run-history-recovery.js";
 
@@ -32,7 +33,6 @@ const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service
 const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
 
 const children = new Set<ChildProcess>();
-let runnerScript = "";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
@@ -43,16 +43,20 @@ afterEach(async () => {
   const activeChildren = [...children].filter(
     (child) => child.exitCode === null && child.signalCode === null,
   );
-  for (const child of activeChildren) {
-    child.kill("SIGKILL");
-  }
+  activeChildren.forEach((child) => child.kill("SIGKILL"));
   await Promise.all(activeChildren.map(waitForExit));
   children.clear();
 });
 
-beforeEach(async () => {
-  vi.useRealTimers();
-  runnerScript = path.join(tempDirs.make("cron-owner-hardening-script-"), "runner.mjs");
+beforeEach(() => vi.useRealTimers());
+
+async function crashRunner(
+  storePath: string,
+  jobId: string,
+  mode: "crash-activation" | "manual-postcommit-crash",
+) {
+  const runnerScript = path.join(tempDirs.make("cron-owner-hardening-script-"), "runner.mjs");
+  const outputPath = `${runnerScript}.output`;
   await fsPromises.writeFile(
     runnerScript,
     `
@@ -100,30 +104,6 @@ beforeEach(async () => {
       cron.stop();
     `,
   );
-});
-
-function makeCommandJob(id: string, nextRunAtMs: number): CronJob {
-  return {
-    id,
-    agentId: "alpha",
-    name: id,
-    enabled: true,
-    createdAtMs: nextRunAtMs - 1,
-    updatedAtMs: nextRunAtMs - 1,
-    schedule: { kind: "every", everyMs: 60_000, anchorMs: nextRunAtMs },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "command", argv: ["true"] },
-    state: { nextRunAtMs },
-  };
-}
-
-async function crashRunner(
-  storePath: string,
-  jobId: string,
-  mode: "crash-activation" | "manual-postcommit-crash",
-  outputPath = `${runnerScript}.output`,
-) {
   const stateDir = resolveOpenClawStateDirForDatabasePath(openOpenClawStateDatabase().path);
   const args = [runnerScript, storePath, jobId, mode, outputPath];
   const child = spawn(
@@ -141,13 +121,17 @@ async function crashRunner(
   });
   await waitForExit(child);
   expect(child.signalCode, `child exit ${child.exitCode}: ${diagnostic}`).toBe("SIGKILL");
+  return outputPath;
+}
+
+function makeCommandJob(id: string, nextRunAtMs: number): CronJob {
+  return { ...makeCronRecoveryJob(id, nextRunAtMs), state: { nextRunAtMs } };
 }
 
 async function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
+  if (child.exitCode === null && child.signalCode === null) {
+    await once(child, "exit");
   }
-  await once(child, "exit");
 }
 
 function makeParentService(storePath: string, runCommandJob = vi.fn()) {
@@ -186,13 +170,12 @@ async function seed(...jobs: CronJob[]) {
 it("records a queued manual request when the Gateway crashes before activation", async () => {
   const job = makeCommandJob("atomic-activation-crash", Date.now() + 60_000);
   const storePath = await seed(job);
-  const outputPath = `${runnerScript}.activation-output`;
   // Hand the seeded database to the child Gateway before simulating its crash.
   await closeOpenClawStateDatabaseAsync();
-  await crashRunner(storePath, job.id, "crash-activation", outputPath);
+  const outputPath = await crashRunner(storePath, job.id, "crash-activation");
   expect(fs.existsSync(outputPath)).toBe(false);
   const queued = (await loadCronStore(storePath)).jobs[0];
-  expect(queued?.state).toMatchObject({ queuedAtMs: expect.any(Number) });
+  expect(queued?.state.queuedAtMs).toEqual(expect.any(Number));
   expect(queued?.state.runningAtMs).toBeUndefined();
   expect(receipts(storePath, job.id)).toMatchObject([
     { status: "running", startedAtMs: queued?.state.queuedAtMs },
@@ -237,37 +220,30 @@ it.each([false, true])(
     );
     const completed = Promise.all(runs);
     try {
-      await withinTest(
-        Promise.all(
-          gates.map((gate, index) =>
-            awaitGateBeforeSettlement(
-              gate.promise,
-              distinct ? runs[index] : completed,
-              "No payload was admitted",
-            ),
-          ),
+      const admissions = gates.map((gate, index) =>
+        awaitGateBeforeSettlement(
+          gate.promise,
+          distinct ? runs[index] : completed,
+          "No payload was admitted",
         ),
-        signal,
       );
+      await withinTest(Promise.all(admissions), signal);
       expect(runners.map((runner) => runner.mock.calls.length)).toEqual(jobs.map(() => 1));
       if (distinct) {
-        const persisted = await loadCronStore(storePath);
-        for (const job of jobs) {
-          expect(persisted.jobs.find((row) => row.id === job.id)?.state.runningAtMs).toEqual(
-            expect.any(Number),
-          );
-          expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "running" });
-        }
+        const { jobs: persisted } = await loadCronStore(storePath);
+        expect(
+          jobs.map(({ id }) => persisted.find((row) => row.id === id)?.state.runningAtMs),
+        ).toEqual(jobs.map(() => expect.any(Number)));
+        expect(jobs.map(({ id }) => receipts(storePath, id)[0])).toMatchObject(
+          jobs.map(() => ({ status: "running" })),
+        );
       }
       finish.resolve();
-      const results = await completed;
-      expect(results).toEqual(
+      const outcomes = [true, distinct].map((ran) => ({ ok: true, ran }));
+      expect(await completed).toEqual(
         distinct
-          ? jobs.map(() => ({ ok: true, ran: true }))
-          : expect.arrayContaining([
-              expect.objectContaining({ ok: true, ran: true }),
-              expect.objectContaining({ ok: true, ran: false }),
-            ]),
+          ? outcomes
+          : expect.arrayContaining(outcomes.map((outcome) => expect.objectContaining(outcome))),
       );
       expect(runners.map((runner) => runner.mock.calls.length)).toEqual(jobs.map(() => 1));
       if (!distinct) {
@@ -276,9 +252,7 @@ it.each([false, true])(
     } finally {
       finish.resolve();
       await Promise.allSettled(runs);
-      for (const cron of callers) {
-        cron.stop();
-      }
+      callers.forEach((cron) => cron.stop());
     }
   },
 );
@@ -289,10 +263,7 @@ it("records manual task recovery before postcommit notification can crash", asyn
   const storePath = await seed(job);
   await crashRunner(storePath, job.id, "manual-postcommit-crash");
   const persisted = (await loadCronStore(storePath)).jobs[0];
-  expect(persisted?.state).toMatchObject({
-    lastRunStatus: "error",
-    consecutiveErrors: 10,
-  });
+  expect(persisted?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 10 });
   expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "error" });
   const recovered = findCronRunRecoveryInDatabase({
     database: openOpenClawStateDatabase().db,
@@ -300,8 +271,5 @@ it("records manual task recovery before postcommit notification can crash", asyn
     startedAt: persisted!.state.lastRunAtMs!,
     storeKey: cronStoreKey(storePath),
   });
-  expect(recovered.finalized?.entry).toMatchObject({
-    jobId: job.id,
-    status: "error",
-  });
+  expect(recovered.finalized?.entry).toMatchObject({ jobId: job.id, status: "error" });
 });
