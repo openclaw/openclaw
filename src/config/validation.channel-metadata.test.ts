@@ -175,6 +175,32 @@ describe("config validation metadata", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
   });
 
+  it("warns on, but still loads, channel ids that parsing may have rounded", () => {
+    // A config saved before input refused them: the unquoted 19-digit id is already rounded.
+    const rounded = Number("1471383327500481391");
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        zalo: {
+          allowFrom: ["1471383327500481391", rounded, -1001234567890, 2 ** 54],
+          accounts: { work: { groupAllowFrom: [rounded] } },
+          // Not an id list: no id warning.
+          mediaMaxMb: rounded,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    const unsafe = result.warnings.filter((warning) =>
+      warning.message.includes("beyond the safe integer range"),
+    );
+    expect(unsafe.map((warning) => warning.path)).toEqual([
+      "channels.zalo.allowFrom.1",
+      "channels.zalo.allowFrom.3",
+      "channels.zalo.accounts.work.groupAllowFrom.0",
+    ]);
+    expect(unsafe[0]?.message).toContain("may have been rounded");
+  });
+
   it("applies channel schema defaults even in raw mode", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(
       registry(

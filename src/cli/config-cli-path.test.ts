@@ -35,6 +35,65 @@ describe("parseConfigSetValue", () => {
     expect(() => parseConfigSetValue(raw, strict)).toThrow("Value must be a finite number");
   });
 
+  it.each([
+    { raw: "1471383327500481391", strictJson: false, literal: "1471383327500481391" },
+    { raw: "[1471383327500481391]", strictJson: false, literal: "1471383327500481391" },
+    { raw: "[1471383327500481391e0]", strictJson: false, literal: "1471383327500481391e0" },
+    { raw: "[147138332750048139.1e1]", strictJson: false, literal: "147138332750048139.1e1" },
+    { raw: "[+1471383327500481391]", strictJson: false, literal: "+1471383327500481391" },
+    { raw: "[0x146B5D2E2A1F0C6F]", strictJson: false, literal: "0x146B5D2E2A1F0C6F" },
+    { raw: "[-0x146B5D2E2A1F0C6F]", strictJson: false, literal: "-0x146B5D2E2A1F0C6F" },
+    // JSON5 ends a `//` comment at any line terminator, so the id after it is parsed.
+    { raw: "[// note\r1471383327500481391]", strictJson: false, literal: "1471383327500481391" },
+    {
+      raw: "[// note\u20281471383327500481391]",
+      strictJson: false,
+      literal: "1471383327500481391",
+    },
+    {
+      raw: '{"allowFrom":[-1471383327500481391]}',
+      strictJson: true,
+      literal: "-1471383327500481391",
+    },
+  ])("rejects $raw, which would be saved as a different number", ({ raw, strictJson, literal }) => {
+    expect(() => parseConfigSetValue(raw, strictJson)).toThrow(
+      `${literal} would be saved as a different number`,
+    );
+  });
+
+  it("keeps quoted long ids and numbers that are stored as written", () => {
+    // 2^54 and the already-rounded id are stored exactly as written, so nothing changes.
+    expect(
+      parseConfigSetValue(
+        `["1471383327500481391", 18014398509481984, 1471383327500481300, 1.5e300, 0.1, -1001234567890] // 1471383327500481391`,
+        false,
+      ),
+    ).toEqual([
+      "1471383327500481391",
+      18014398509481984,
+      1471383327500481300,
+      1.5e300,
+      0.1,
+      -1001234567890,
+    ]);
+  });
+
+  it.each([
+    { label: "LF", terminator: "\n" },
+    { label: "CRLF", terminator: "\r\n" },
+    { label: "U+2028", terminator: "\u2028" },
+  ])("keeps digits inside a string continued over $label", ({ terminator }) => {
+    expect(parseConfigSetValue(`["a\\${terminator}1471383327500481391"]`, false)).toEqual([
+      "a1471383327500481391",
+    ]);
+  });
+
+  it("keeps signed hexadecimal numbers that are stored exactly", () => {
+    expect(parseConfigSetValue("[+0x40000000000000, -0x40000000000000]", false)).toEqual([
+      18014398509481984, -18014398509481984,
+    ]);
+  });
+
   it("still reports JSON parse errors in strict JSON mode", () => {
     expect(() => parseConfigSetValue("not-json", true)).toThrow(
       expect.objectContaining({
