@@ -46,7 +46,7 @@ const request = (key: string, selection: ScanRequest["selection"]): ScanRequest 
 });
 const write = (dir: string, name: string, description: string) =>
   writeSkill({ dir: path.join(dir, name), name, description });
-const localFact = (index: number) => [`local-${index}`, `Workspace ${index}`];
+const localFact = (index: number) => [`local-${index}`, `Workspace ${index}`] as const;
 async function scan(requests: ScanRequest[]) {
   const result = await worker({ kind: "scan", path: process.env.PATH, requests });
   if (result.kind !== "scan") {
@@ -54,7 +54,7 @@ async function scan(requests: ScanRequest[]) {
   }
   return result.results;
 }
-const facts = ({ skill }: SkillEntry) => [skill.name, skill.description];
+const facts = ({ skill }: SkillEntry) => [skill.name, skill.description] as const;
 function selected(
   workspaceDir: string,
   roots: WorkspaceSkillSource[],
@@ -135,7 +135,7 @@ it.each(["standalone", "gateway"])(
         );
         const results = await scan(structuredClone(requests));
         const expected = dirs.map((_, index) =>
-          [localFact(index), [pluginName, description]].toSorted((a, b) =>
+          [localFact(index), [pluginName, description] as const].toSorted((a, b) =>
             a[0].localeCompare(b[0]),
           ),
         );
