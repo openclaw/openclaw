@@ -8,11 +8,9 @@ import {
   type BootRecord,
 } from "./boot-record.ts";
 
-const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
-
 const credential = () => "test-token";
 const scope = "https://gateway.example";
-const key = BOOT_RECORD_PREFIX + scope;
+const key = `openclaw.control.bootRecord.v1:${scope}`;
 const record = (): BootRecord => ({
   version: 2,
   authMethod: "token",

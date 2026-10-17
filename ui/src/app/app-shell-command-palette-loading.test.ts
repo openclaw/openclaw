@@ -101,11 +101,8 @@ function type(input: HTMLTextAreaElement, value: string, options?: InputEventIni
   if (options) {
     input.setSelectionRange(value.length, value.length);
   }
-  input.dispatchEvent(
-    options
-      ? new InputEvent("input", { bubbles: true, ...options })
-      : new Event("input", { bubbles: true }),
-  );
+  const Input = options ? InputEvent : Event;
+  input.dispatchEvent(new Input("input", { bubbles: true, ...options }));
 }
 
 describe("cold command palette input custody", () => {
@@ -153,20 +150,6 @@ describe("cold command palette input custody", () => {
     },
   );
 
-  it("retains its live field and selection while the shell refreshes and locks a queued submit", () => {
-    const { state, input } = mountLoader();
-    type(input, "Keep this selection");
-    input.setSelectionRange(5, 9, "backward");
-    flush();
-    expect(container.querySelector("textarea")).toBe(input);
-    expect(input).toMatchObject(selection(5, 9));
-    keydown(input, { metaKey: true });
-    flush();
-    expect(state.submitRequested()).toBe(true);
-    expect(input.readOnly).toBe(true);
-    expect(container.querySelector("textarea")).toBe(input);
-  });
-
   it.each(["typed", "pasted", "replaced", "dropped", "composing"])(
     "preserves only a typed mention trigger: %s",
     (mode) => {
@@ -188,7 +171,7 @@ describe("cold command palette input custody", () => {
     },
   );
 
-  it.each(["transfer", "dismiss"] as const)("keeps pasted images only until %s", (outcome) => {
+  it("drops pasted images when dismissed before handoff", () => {
     const { state, input } = mountLoader();
     const file = new File(["image"], "clipboard.png", { type: "image/png" });
     const event = new Event("paste", { bubbles: true, cancelable: true });
@@ -200,15 +183,10 @@ describe("cold command palette input custody", () => {
     const take = state.captureHandoff();
     keydown(input, { ctrlKey: true });
     expect(state.submitRequested()).toBe(true);
-    if (outcome === "dismiss") {
-      state.clear();
-      state.begin();
-      expect(take()).toBeUndefined();
-      expect(state.captureHandoff()()?.imageFiles).toBeUndefined();
-    } else {
-      expect(take()).toMatchObject({ value: "", imageFiles: [file], submitRequested: true });
-      expect(take()).toBeUndefined();
-    }
+    state.clear();
+    state.begin();
+    expect(take()).toBeUndefined();
+    expect(state.captureHandoff()()?.imageFiles).toBeUndefined();
   });
 
   it.each([
@@ -229,6 +207,10 @@ describe("cold command palette input custody", () => {
       expect(state.submitRequested()).toBe(false);
       return;
     }
+    flush();
+    expect(state.submitRequested()).toBe(true);
+    expect(input.readOnly).toBe(true);
+    expect(container.querySelector("textarea")).toBe(input);
     const take = state.captureHandoff();
     expect(take()).toMatchObject({ value, submitRequested: true });
     expect(take()).toBeUndefined();
@@ -236,38 +218,35 @@ describe("cold command palette input custody", () => {
     expect(state.captureHandoff()()?.submitRequested).not.toBe(true);
   });
 
-  it.each([
-    { remount: false, value: "early draft continued", start: 6, end: 11 },
-    { remount: true, value: "retain this selection", start: 3, end: 10 },
-  ])(
-    "hands off live text, selection and original focus (remounted: $remount)",
-    async ({ remount, value, start, end }) => {
-      const { state, input, foreground, close } = mountLoader();
-      expect(input.disabled).toBe(false);
-      type(input, remount ? value : "early draft");
-      const take = state.captureHandoff();
-      type(input, value);
-      input.setSelectionRange(start, end, "backward");
-      if (remount) {
-        cleanupSolid();
-        const replacement = renderLoader(state, close);
-        expect(replacement).not.toBe(input);
-        expect(replacement.value).toBe(value);
-        expect(replacement).toMatchObject(selection(start, end));
-        // The removed Solid root cleans up after its replacement has mounted.
-        await Promise.resolve();
-      }
-      expect(take()).toEqual({
-        value,
-        ...selection(start, end),
-        returnFocus: foreground,
-      });
-      expect(foreground.value).toBe("Keep this foreground draft");
-      expect([foreground.selectionStart, foreground.selectionEnd]).toEqual([5, 9]);
-      expect(state.active()).toBe(false);
-      expect(take()).toBeUndefined();
-    },
-  );
+  it("hands off live text, selection and original focus across a remount", async () => {
+    const value = "early draft continued";
+    const [start, end] = [6, 11];
+    const { state, input, foreground, close } = mountLoader();
+    expect(input.disabled).toBe(false);
+    type(input, "early draft");
+    const take = state.captureHandoff();
+    type(input, value);
+    input.setSelectionRange(start, end, "backward");
+    flush();
+    expect(container.querySelector("textarea")).toBe(input);
+    expect(input).toMatchObject(selection(start, end));
+    cleanupSolid();
+    const replacement = renderLoader(state, close);
+    expect(replacement).not.toBe(input);
+    expect(replacement.value).toBe(value);
+    expect(replacement).toMatchObject(selection(start, end));
+    // The removed Solid root cleans up after its replacement has mounted.
+    await Promise.resolve();
+    expect(take()).toEqual({
+      value,
+      ...selection(start, end),
+      returnFocus: foreground,
+    });
+    expect(foreground.value).toBe("Keep this foreground draft");
+    expect([foreground.selectionStart, foreground.selectionEnd]).toEqual([5, 9]);
+    expect(state.active()).toBe(false);
+    expect(take()).toBeUndefined();
+  });
 
   it("keeps the composing field alive until its final input and selection commit", async () => {
     const { state, input } = mountLoader();

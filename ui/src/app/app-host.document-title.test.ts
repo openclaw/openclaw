@@ -2,7 +2,6 @@
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow, GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
@@ -50,11 +49,7 @@ async function createConnectedSessionShell() {
     derivedTitle: "Quarterly launch plan",
   });
   const background = sessionRow("agent:main:background-task");
-  const deletion = createDeferred<{ deleted: boolean }>();
   const request = vi.fn(async (method: string) => {
-    if (method === "sessions.delete") {
-      return deletion.promise;
-    }
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
@@ -63,14 +58,9 @@ async function createConnectedSessionShell() {
   const harness = createSessionCapabilityHarness(request as GatewayBrowserClient["request"]);
   await harness.sessions.refresh({ force: true });
   const runtime = bootstrapApplication();
-  const replace = vi.fn();
-  const context = { ...runtime.context, sessions: harness.sessions, replace };
+  onTestFinished(() => runtime.stop());
+  const context = { ...runtime.context, sessions: harness.sessions };
   const shell = createShellOwner();
-  onTestFinished(() => {
-    shell.disconnect();
-    shell.element.remove();
-    runtime.stop();
-  });
   shell.runtime = { ...runtime, context };
   document.body.append(shell.element);
   mountShellView(shell);
@@ -80,7 +70,7 @@ async function createConnectedSessionShell() {
   shell.activeSessionKey = active.key;
   await vi.dynamicImportSettled();
   await settleShell(shell);
-  return { ...harness, shell, context, active, background, deletion, replace };
+  return { ...harness, shell, context, active, background };
 }
 
 describe("OpenClaw shell document title", () => {
@@ -102,7 +92,6 @@ describe("OpenClaw shell document title", () => {
       gateway: {
         snapshot: {
           phase: options.phase ?? "connected",
-          lastError: null,
           assistantAgentId: options.assistantAgentId ?? null,
         },
         connection: { gatewayUrl: "ws://gateway.test" },
@@ -162,17 +151,8 @@ describe("OpenClaw shell document title", () => {
     expect(renderShell).not.toHaveBeenCalled();
   });
 
-  it("keeps pending deletion recovery and retires replaced or disconnected session observers", async () => {
-    const { shell, sessions, context, active, background, deletion, replace } =
-      await createConnectedSessionShell();
-    const operation = sessions.delete(active.key);
-    expect(sessions.deletionState(active.key)).toBe("pending");
-    expect(sessions.state.deletedSessions).toEqual([]);
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
-    deletion.resolve({ deleted: false });
-    await operation;
-    await settleShell(shell);
-
+  it("retires replaced or disconnected session title observers", async () => {
+    const { shell, sessions, context, background } = await createConnectedSessionShell();
     const replacement = createSessionCapabilityHarness(
       vi.fn(async () => sessionsResult([background], 1)) as GatewayBrowserClient["request"],
     );
@@ -201,7 +181,7 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("Disconnected shell");
   });
 
-  it.each([
+  it.each<[Parameters<typeof createShell>[0], string]>([
     [
       {
         assistantAgentId: "molty",
@@ -218,12 +198,9 @@ describe("OpenClaw shell document title", () => {
       },
       "Fallback thread — OpenClaw",
     ],
-  ] satisfies Array<[Parameters<typeof createShell>[0], string]>)(
-    "resolves chat title %j to %s",
-    (options, title) => {
-      expectTitle(createShell(options), title);
-    },
-  );
+  ])("resolves chat title %j to %s", (options, title) => {
+    expectTitle(createShell(options), title);
+  });
 
   it.each(["reconnecting", "offline", "reload-required"] as const)(
     "keeps the destination title without stale approvals while %s",

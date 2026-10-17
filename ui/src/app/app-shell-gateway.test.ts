@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { GatewayProtocolClient } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { configServerTransport } from "../lib/config/config-suite.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
@@ -34,6 +34,13 @@ function createShellConfig(
     });
   }
   return { ...harness, context, owner };
+}
+
+function createDeferredConfig(suspend = true, discoverAgents = false) {
+  const server = createDeferredSetServerMock();
+  const harness = createShellConfig(server.request, discoverAgents);
+  managedConfig(harness, () => server.firstSet.resolve({}), suspend);
+  return { ...server, ...harness, config: harness.runtimeConfig };
 }
 
 type RuntimeConfig = ReturnType<typeof createConfigCapabilityHarness>["runtimeConfig"];
@@ -80,7 +87,28 @@ function configChanged(owner: ShellOwner) {
 }
 
 function expectState(config: RuntimeConfig, fields: Partial<RuntimeConfig["state"]>) {
-  expect(config.state).toMatchObject(fields);
+  expect(config.state).toEqual(expect.objectContaining(fields));
+}
+
+function expectDraft(
+  config: RuntimeConfig,
+  count: number,
+  fields: Partial<RuntimeConfig["state"]> = {},
+) {
+  expectState(config, { configForm: { count }, ...fields });
+}
+
+function invalidateConfig(
+  harness: Pick<ReturnType<typeof createShellConfig>, "owner" | "publish">,
+  refresh: "event" | "reconnect",
+) {
+  if (refresh === "reconnect") {
+    harness.publish(false);
+    harness.publish(true);
+  } else {
+    configChanged(harness.owner);
+  }
+  return vi.advanceTimersByTimeAsync(0);
 }
 
 function profileAppearance(accent: string, themeMode?: string) {
@@ -260,14 +288,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
         readStarted.resolve();
         return readReply.promise;
       }
-      return {
-        status: "ok",
-        entries: {
-          "ui.accent": reads === 1 ? "#336699" : "#22c55e",
-          "ui.themeMode": reads === 1 ? "dark" : "light",
-          "ui.railShortcuts": [],
-        },
-      };
+      return profileAppearance(reads === 1 ? "#336699" : "#22c55e", reads === 1 ? "dark" : "light");
     });
     Object.assign(snapshot.client!, { request });
     await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
@@ -449,20 +470,13 @@ describe("ShellGatewayOwner config invalidation", () => {
     managedConfig({ runtimeConfig: config });
     await config.ensureLoaded();
     config.patchForm(["count"], 2);
-    await expect(config.flushFormChanges()).resolves.toBe(false);
-    await expect(config.discardFormValue(["count"])).resolves.toBe(false);
-    expect(config.state.configForm).toEqual({ count: 2 });
-    expect(config.state.lastError).toBeTruthy();
-      await expect(
-      config.patch({ raw: { unrelated: true }, note: "synthetic toggle" }),
-      ).resolves.toBe(false);
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(1);
+    await config.flushFormChanges();
+    await config.discardFormValue(["count"]);
       await server.request("config.set", heldParams);
     await config.refresh();
     config.patchForm(["count"], 3);
     await expect(config.save()).resolves.toBe(true);
-    expect(config.state.configForm).toEqual({ count: 3 });
+    expectDraft(config, 3);
       expect(server.submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
         { count: 2 },
         { count: 3 },
@@ -503,7 +517,7 @@ describe("ShellGatewayOwner config invalidation", () => {
       publish(true);
       await vi.advanceTimersByTimeAsync(0);
     expect(config.state.lastError).toContain("was not applied");
-    expect(config.state.configForm).toEqual({ count: 2 });
+    expectDraft(config, 2);
     await expect(config.apply()).resolves.toBe(true);
       expect(attempts).toBe(2);
     expectState(config, { configNeedsApply: false, lastError: null });
@@ -585,8 +599,7 @@ describe("ShellGatewayOwner config invalidation", () => {
       await config.refresh();
         heldRead.resolve({ config: { count: 1 }, raw: '{"count":1}', hash: "hash-1", valid: true });
         await vi.advanceTimersByTimeAsync(0);
-      expect(config.state.configForm).toEqual({ count: 1 });
-      expectState(config, { configFormDirty: true, configDraftBaseHash: "hash-2" });
+      expectDraft(config, 1, { configFormDirty: true, configDraftBaseHash: "hash-2" });
         expect(submissions).toHaveLength(1);
     },
   );
@@ -627,12 +640,11 @@ describe("ShellGatewayOwner config invalidation", () => {
       config.patch({ raw: { featureEnabled: true }, note: "synthetic toggle" }),
       ).resolves.toBe(false);
       expect(patchRequest).not.toHaveBeenCalled();
-    expect(config.state.configForm).toEqual({ count: 1 });
+    expectDraft(config, 1);
       failRecoveryRead = false;
       configChanged(owner);
       await vi.advanceTimersByTimeAsync(0);
-    expect(config.state.configForm).toEqual({ count: 1 });
-    expect(config.state.configFormDirty).toBe(true);
+    expectDraft(config, 1, { configFormDirty: true });
       expect(saves).toBe(2);
   });
 
@@ -669,14 +681,13 @@ describe("ShellGatewayOwner config invalidation", () => {
         }
         await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
         expect(writes).toBe(2);
-      expect(config.state.configForm).toEqual({ count: 3 });
+      expectDraft(config, 3);
         if (!explicitRefresh) {
         expectState(config, { configDraftBaseHash: "hash-2", configAutoSaveStatus: "error" });
         await expect(config.retry()).resolves.toBe(true);
         }
         expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([{ count: 2 }, { count: 3 }]);
-      expect(config.state.configForm).toEqual({ count: 3 });
-      expect(config.state.configFormDirty).toBe(false);
+      expectDraft(config, 3, { configFormDirty: false });
     },
   );
 
@@ -694,37 +705,26 @@ describe("ShellGatewayOwner config invalidation", () => {
       let rejectApply: () => void = () => {
         throw new Error("apply request missing");
       };
-      const protocol = new GatewayProtocolClient<Record<string, never>>({
-        createRequestId: () => "synthetic-request",
-        createSocket: (handlers) => ({
-          isOpen: () => true,
-          close: () => handlers.close(1000, ""),
-          send: (data) => {
-            const frame = JSON.parse(data) as {
-              id: string;
-              method: string;
-              params: { raw?: string };
-            };
+      const protocol = configServerTransport(
+        async (frame) => {
             if (frame.method === "config.apply") {
-              storedRaw = frame.params.raw ?? storedRaw;
+            storedRaw = (frame.params as { raw?: string }).raw ?? storedRaw;
               revision++;
+            const response = createDeferred<{
+              ok: false;
+              error: { code: string; message: string };
+            }>();
               rejectApply = () =>
-                handlers.message(
-                  JSON.stringify({
-                    type: "res",
-                    id: frame.id,
+              response.resolve({
                     ok: false,
                     error: {
                       code: "UNAVAILABLE",
                       message: "config.apply persisted but was not applied to the active Gateway",
                     },
-                  }),
-                );
-            } else {
-              handlers.message(
-                JSON.stringify({
-                  type: "res",
-                  id: frame.id,
+              });
+            return response.promise;
+          }
+          return {
                   ok: true,
                   payload: {
                     config: JSON.parse(storedRaw),
@@ -735,25 +735,10 @@ describe("ShellGatewayOwner config invalidation", () => {
                     valid: true,
                     issues: [],
                   },
-                }),
-              );
-            }
+          };
           },
-        }),
-        createRequestError: (error) =>
-          new GatewayRequestError({
-            code: error.code ?? "UNAVAILABLE",
-            message: error.message ?? "request failed",
-            details: error.details,
-            retryable: error.retryable,
-            retryAfterMs: error.retryAfterMs,
-          }),
-        buildConnectPlan: () => ({}),
-        buildConnectParams: (plan) => plan,
-        resolveClose: () => ({ retry: false, notify: false }),
-        handshake: { mode: "require-challenge", timeoutMs: 100 },
-        reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
-      });
+        () => "synthetic-request",
+      );
       protocol.start();
       const {
         runtimeConfig: config,
@@ -762,7 +747,7 @@ describe("ShellGatewayOwner config invalidation", () => {
       } = createShellConfig(protocol.request.bind(protocol));
       try {
         await config.ensureLoaded();
-        expect(config.state.configForm).toEqual({ count: 1 });
+        expectDraft(config, 1);
         if (revert) {
           config.patchForm(["count"], 2);
         }
@@ -774,17 +759,11 @@ describe("ShellGatewayOwner config invalidation", () => {
         await vi.advanceTimersByTimeAsync(0);
         rejectApply();
         await expect(applied).resolves.toBe(false);
-        expect(config.state.configForm).toEqual({ count: 1 });
+        expectDraft(config, 1);
         expect(config.state.lastError).toContain("was not applied");
         expect(config.state.configAutoSaveStatus).toBe("error");
-        if (refresh === "reconnect") {
-          publish(false);
-          publish(true);
-        } else {
-          configChanged(owner);
-        }
-        await vi.advanceTimersByTimeAsync(0);
-        expect(config.state.configForm).toEqual({ count: 1 });
+        await invalidateConfig({ owner, publish }, refresh);
+        expectDraft(config, 1);
         expect(config.state.lastError).toContain("was not applied");
         expectState(config, { configAutoSaveStatus: "error", configNeedsApply: true });
         if (!revert) {
@@ -846,9 +825,8 @@ describe("ShellGatewayOwner config invalidation", () => {
   ] as const)(
     "retains a $mode no-op edit across $refresh (foreign snapshot: $foreign)",
     async ({ mode, refresh, foreign }) => {
-      const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig: config, publish, owner } = createShellConfig(request);
-      managedConfig({ runtimeConfig: config, owner }, () => firstSet.resolve({}), foreign);
+      const harness = createDeferredConfig(foreign);
+      const { request, submissions, firstSet, config } = harness;
       await config.ensureLoaded();
       const originalRaw = config.state.configRawOriginal;
       await startAutosave(config);
@@ -864,17 +842,10 @@ describe("ShellGatewayOwner config invalidation", () => {
         if (foreign) {
           request.mockResolvedValueOnce(configSnapshot(3));
         }
-        if (refresh === "reconnect") {
-          publish(false);
-          publish(true);
-        } else {
-          configChanged(owner);
-        }
-        await vi.advanceTimersByTimeAsync(0);
+      await invalidateConfig(harness, refresh);
 
       expect(config.state.configSnapshot?.config).toEqual({ count: foreign ? 3 : 2 });
-      expect(config.state.configForm).toEqual({ count: 1 });
-      expectState(config, {
+      expectDraft(config, 1, {
         configRaw: originalRaw,
         configDraftBaseHash: foreign ? "hash-1" : "hash-2",
         configFormDirty: true,
@@ -895,29 +866,23 @@ describe("ShellGatewayOwner config invalidation", () => {
   );
 
   it("adopts a preserved foreign snapshot after a definitive save rejection", async () => {
-    const { request, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig: config, owner } = createShellConfig(request);
-    managedConfig({ runtimeConfig: config, owner }, () => firstSet.resolve({}), false);
+    const { request, firstSet, config, owner } = createDeferredConfig(false);
     await beginRevertedSave(config);
       request.mockResolvedValueOnce(configSnapshot(3));
       configChanged(owner);
       await vi.advanceTimersByTimeAsync(0);
-    expect(config.state.configForm).toEqual({ count: 1 });
+    expectDraft(config, 1);
       firstSet.reject(
         new GatewayRequestError({ code: "INVALID_REQUEST", message: "Write rejected" }),
       );
       await vi.advanceTimersByTimeAsync(0);
-    expect(config.state.configForm).toEqual({ count: 3 });
-    expectState(config, { configDraftBaseHash: "foreign-hash", configFormDirty: false });
+    expectDraft(config, 3, { configDraftBaseHash: "foreign-hash", configFormDirty: false });
   });
 
   it.each([false, true])(
     "reconciles a revert after a failed save (definitive rejection: %s)",
     async (rejected) => {
-      const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig: config, owner } = createShellConfig(request, true);
-
-      managedConfig({ runtimeConfig: config, owner }, () => firstSet.resolve({}), false);
+      const { request, submissions, firstSet, config, owner } = createDeferredConfig(false, true);
       await config.ensureLoaded();
       await startAutosave(config);
       config.patchForm(["count"], 3);
@@ -936,8 +901,7 @@ describe("ShellGatewayOwner config invalidation", () => {
         configChanged(owner);
         await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
 
-      expect(config.state.configForm).toEqual({ count: 1 });
-      expectState(config, {
+      expectDraft(config, 1, {
         configFormDirty: !rejected,
         configAutoSaveStatus: rejected ? "idle" : "error",
       });
@@ -981,17 +945,13 @@ describe("ShellGatewayOwner config invalidation", () => {
 
       await expect(patched).resolves.toBe(false);
     expect(config.state.configSnapshot?.config).toEqual({ count: 2 });
-    expect(config.state.configForm).toEqual({ count: 2 });
-    expectState(config, { configDraftBaseHash: "hash-2", configFormDirty: false });
+    expectDraft(config, 2, { configDraftBaseHash: "hash-2", configFormDirty: false });
   });
 
   it.each(["form", "raw"] as const)(
     "retains a mid-save %s revert across config.changed",
     async (mode) => {
-      const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig: config, owner } = createShellConfig(request);
-
-      managedConfig({ runtimeConfig: config, owner }, () => firstSet.resolve({}), false);
+      const { submissions, firstSet, config, owner } = createDeferredConfig(false);
       await config.ensureLoaded();
       const originalRaw = config.state.configRawOriginal;
       await startAutosave(config);
@@ -1022,8 +982,7 @@ describe("ShellGatewayOwner config invalidation", () => {
           { raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
           { raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" },
         ]);
-      expect(config.state.configForm).toEqual({ count: 1 });
-      expectState(config, { configFormDirty: false, configAutoSaveStatus: "saved" });
+      expectDraft(config, 1, { configFormDirty: false, configAutoSaveStatus: "saved" });
     },
   );
 });

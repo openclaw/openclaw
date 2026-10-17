@@ -19,10 +19,6 @@ type ShellPanelToggleState = ShellChromeHost & {
   runtime: { context: ApplicationContext };
 };
 
-function chromeOwner(shell: ShellPanelToggleState): ShellChromeOwner {
-  return new ShellChromeOwner(shell);
-}
-
 function listen(type: string, listener: EventListener) {
   window.addEventListener(type, listener);
   onTestFinished(() => window.removeEventListener(type, listener));
@@ -73,7 +69,7 @@ function configurePanelShell(
   }
   document.body.append(shell.element);
   onTestFinished(() => shell.element.remove());
-  return { shell, element, owner: chromeOwner(shell) };
+  return { shell, element, owner: new ShellChromeOwner(shell) };
 }
 
 afterEach(() => {
@@ -129,7 +125,7 @@ describe("OpenClaw shell panel toggles", () => {
     shell.routeState = { routeId: "chat" };
 
     const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
-    chromeOwner(shell).panels.handleDeferredTerminalToggle(event);
+    new ShellChromeOwner(shell).panels.handleDeferredTerminalToggle(event);
 
     expect(customElements.get(terminalElement.tagName)).toBeUndefined();
     expect(takeSessionPanelToggle("terminal")).toBe(event);
