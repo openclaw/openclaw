@@ -239,44 +239,28 @@ type IncompatibleReplacementCase = {
   tailDelta?: string;
 };
 
+function heldIncompatible(
+  name: string,
+  replacementText: string,
+  overrides: Partial<IncompatibleReplacementCase> = {},
+): IncompatibleReplacementCase {
+  return { name, previousText: "Echo", replacementText, replaceable: true, ...overrides };
+}
+
 export const incompatibleReplacementCases: IncompatibleReplacementCase[] = [
   { name: "rewritten", replacementText: "final answer" },
   { name: "shortened", replacementText: "dra" },
   { name: "rewritten then extended by a delta", replacementText: "other answer", tailDelta: "!" },
   { name: "cleared", replacementText: "" },
-  {
-    name: "replaced by a held provisional item",
-    previousText: "Echo",
-    replacementText: "Replacement",
-    replaceable: true,
-  },
-  {
-    name: "cleared by a held provisional item",
-    previousText: "Echo",
-    replacementText: "",
-    replaceable: true,
-  },
-  {
-    name: "cleared by an explicit empty final result",
-    previousText: "Echo",
-    replacementText: "Echo tail",
-    resultText: "",
-    replaceable: true,
-  },
-  {
-    name: "cleared by held output without a text-bearing result",
-    previousText: "Echo",
-    replacementText: "",
+  heldIncompatible("replaced by a held provisional item", "Replacement"),
+  heldIncompatible("cleared by a held provisional item", ""),
+  heldIncompatible("cleared by an explicit empty final result", "Echo tail", { resultText: "" }),
+  heldIncompatible("cleared by held output without a text-bearing result", "", {
     noResultText: true,
-    replaceable: true,
-  },
-  {
-    name: "replaced by a held item followed by its native terminal echo",
-    previousText: "Echo",
-    replacementText: "Replacement",
-    replaceable: true,
+  }),
+  heldIncompatible("replaced by a held item followed by its native terminal echo", "Replacement", {
     terminalEcho: true,
-  },
+  }),
   {
     name: "cleared on the same item before recovery reuses its ID",
     itemId: "failed-answer",
@@ -306,6 +290,21 @@ type CompatibleReplacementCase = {
   expectedDeltas: string;
 };
 
+function heldCompatible(
+  name: string,
+  overrides: Partial<CompatibleReplacementCase> = {},
+): CompatibleReplacementCase {
+  return {
+    name,
+    previousDelta: "Echo",
+    replacementText: "Echo tail",
+    replacementDelta: "",
+    replaceable: true,
+    expectedDeltas: "Echo tail",
+    ...overrides,
+  };
+}
+
 export const compatibleReplacementCases: CompatibleReplacementCase[] = [
   {
     name: "a producer replacement snapshot without a delta",
@@ -325,68 +324,27 @@ export const compatibleReplacementCases: CompatibleReplacementCase[] = [
     replacementDelta: "answer",
     expectedDeltas: "final answer",
   },
-  {
-    name: "a held append-compatible replacement",
-    previousDelta: "Echo",
-    replacementText: "Echo tail",
-    replacementDelta: "",
-    replaceable: true,
-    expectedDeltas: "Echo tail",
-  },
-  {
-    name: "a corrected held replacement",
-    previousDelta: "Echo",
-    intermediateText: "Replacement",
-    replacementText: "Echo tail",
-    replacementDelta: "",
-    replaceable: true,
-    expectedDeltas: "Echo tail",
-  },
-  {
-    name: "a held draft recovered only by the authoritative final result",
-    previousDelta: "Echo",
+  heldCompatible("a held append-compatible replacement"),
+  heldCompatible("a corrected held replacement", { intermediateText: "Replacement" }),
+  heldCompatible("a held draft recovered only by the authoritative final result", {
     replacementText: "Replacement",
-    replacementDelta: "",
     resultText: "Echo tail",
-    expectedDeltas: "Echo tail",
-    replaceable: true,
-  },
-  {
-    name: "held text without a text-bearing final payload",
-    previousDelta: "Echo",
-    replacementText: "Echo tail",
-    replacementDelta: "",
-    noResultText: true,
-    expectedDeltas: "Echo tail",
-    replaceable: true,
-  },
-  {
-    name: "an initial held draft cleared by an explicit empty result",
+  }),
+  heldCompatible("held text without a text-bearing final payload", { noResultText: true }),
+  heldCompatible("an initial held draft cleared by an explicit empty result", {
+    previousDelta: undefined,
     replacementText: "Draft",
-    replacementDelta: "",
     resultText: "",
     expectedDeltas: "",
-    replaceable: true,
-  },
-  {
-    name: "a held replacement completed by its native terminal echo",
-    previousDelta: "Echo",
-    replacementText: "Echo tail",
-    replacementDelta: "",
-    expectedDeltas: "Echo tail",
-    replaceable: true,
+  }),
+  heldCompatible("a held replacement completed by its native terminal echo", {
     terminalEcho: true,
-  },
-  {
-    name: "an incompatible native echo recovered by the final result",
-    previousDelta: "Echo",
+  }),
+  heldCompatible("an incompatible native echo recovered by the final result", {
     replacementText: "Replacement",
-    replacementDelta: "",
     resultText: "Echo tail",
-    expectedDeltas: "Echo tail",
-    replaceable: true,
     terminalEcho: true,
-  },
+  }),
 ];
 
 type BufferedReplacementCase = {
@@ -440,46 +398,35 @@ export function emitIncompatibleAssistantReplacement(
     noResultText,
     resultText,
   } = scenario;
-  emitAgentEvent({
-    runId,
-    stream: "assistant",
-    data: {
-      text: previousText,
-      delta: previousText,
-      ...(itemId ? { itemId } : replaceable ? { itemId: "answer-1" } : {}),
-    },
+  const emit = assistantEmitter(runId);
+  emit({
+    text: previousText,
+    delta: previousText,
+    ...(itemId ? { itemId } : replaceable ? { itemId: "answer-1" } : {}),
   });
-  emitAgentEvent({
-    runId,
-    stream: "assistant",
-    data: {
-      text: replacementText,
-      ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
-      replace: true,
-      ...(itemId
-        ? { itemId, delta: "" }
-        : replaceable
-          ? { itemId: "answer-2", replaceable: true }
-          : { phase: "commentary" }),
-    },
+  emit({
+    text: replacementText,
+    ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
+    replace: true,
+    ...(itemId
+      ? { itemId, delta: "" }
+      : replaceable
+        ? { itemId: "answer-2", replaceable: true }
+        : { phase: "commentary" }),
   });
   if (recoveryText !== undefined) {
-    emitAgentEvent({
-      runId,
-      stream: "assistant",
-      data: {
-        text: recoveryText,
-        ...(recoveryItemId
-          ? { itemId: recoveryItemId, delta: recoveryText }
-          : { delta: "", replace: true }),
-      },
+    emit({
+      text: recoveryText,
+      ...(recoveryItemId
+        ? { itemId: recoveryItemId, delta: recoveryText }
+        : { delta: "", replace: true }),
     });
   }
   if (terminalEcho) {
-    emitAgentEvent({ runId, stream: "assistant", data: { text: replacementText } });
+    emit({ text: replacementText });
   }
   if (tailDelta) {
-    emitAgentEvent({ runId, stream: "assistant", data: { delta: tailDelta } });
+    emit({ delta: tailDelta });
   }
   emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
   return {
@@ -501,43 +448,32 @@ export function emitCompatibleAssistantReplacement(
     noResultText,
     resultText,
   } = scenario;
+  const emit = assistantEmitter(runId);
   if (previousDelta) {
-    emitAgentEvent({
-      runId,
-      stream: "assistant",
-      data: {
-        text: previousDelta,
-        delta: previousDelta,
-        ...(replaceable ? { itemId: "answer-1" } : {}),
-      },
+    emit({
+      text: previousDelta,
+      delta: previousDelta,
+      ...(replaceable ? { itemId: "answer-1" } : {}),
     });
   }
   if (intermediateText !== undefined) {
-    emitAgentEvent({
-      runId,
-      stream: "assistant",
-      data: {
-        text: intermediateText,
-        delta: "",
-        replace: true,
-        ...(replaceable ? { itemId: "answer-2", replaceable: true } : {}),
-      },
+    emit({
+      text: intermediateText,
+      delta: "",
+      replace: true,
+      ...(replaceable ? { itemId: "answer-2", replaceable: true } : {}),
     });
   }
-  emitAgentEvent({
-    runId,
-    stream: "assistant",
-    data: {
-      text: replacementText,
-      replace: true,
-      ...(replaceable
-        ? { itemId: intermediateText === undefined ? "answer-2" : "answer-3", replaceable: true }
-        : { phase: "commentary" }),
-      ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
-    },
+  emit({
+    text: replacementText,
+    replace: true,
+    ...(replaceable
+      ? { itemId: intermediateText === undefined ? "answer-2" : "answer-3", replaceable: true }
+      : { phase: "commentary" }),
+    ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
   });
   if (terminalEcho) {
-    emitAgentEvent({ runId, stream: "assistant", data: { text: replacementText } });
+    emit({ text: replacementText });
   }
   emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
   return { payloads: noResultText ? [] : [{ text: resultText ?? replacementText }] };
@@ -548,21 +484,23 @@ export function emitBufferedAssistantReplacement(
   scenario: Pick<BufferedReplacementCase, "replacement" | "finalText">,
 ) {
   const { replacement, finalText } = scenario;
-  emitAgentEvent({
-    runId,
-    stream: "assistant",
-    data: {
-      text: "coordination draft",
-      delta: "coordination draft",
-      replaceable: true,
-    },
+  const emit = assistantEmitter(runId);
+  emit({
+    text: "coordination draft",
+    delta: "coordination draft",
+    replaceable: true,
   });
-  emitAgentEvent({ runId, stream: "assistant", data: { ...replacement, replaceable: true } });
+  emit({ ...replacement, replaceable: true });
   if (finalText) {
-    emitAgentEvent({ runId, stream: "assistant", data: { text: finalText } });
+    emit({ text: finalText });
   }
   emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
   return { payloads: finalText ? [{ text: finalText }] : [] };
+}
+
+function assistantEmitter(runId: string) {
+  return (data: Parameters<typeof emitAgentEvent>[0]["data"]) =>
+    emitAgentEvent({ runId, stream: "assistant", data });
 }
 
 export function createOpenAiHttpTestClient(port: number): OpenAI {

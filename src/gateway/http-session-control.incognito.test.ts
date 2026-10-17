@@ -227,28 +227,42 @@ async function replaceMemoryEntry(sessionKey: string, entry: SessionEntry) {
 }
 const historyUrl = (key: string) => `${baseUrl}/sessions/${encodeURIComponent(key)}/history`;
 
+function pauseGate() {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  return {
+    entered: entered.promise,
+    resume: resume.resolve,
+    pause: async () => {
+      entered.resolve();
+      await resume.promise;
+    },
+  };
+}
+
+function observeHostSql() {
+  const host = observeHostDataSql();
+  return { ...host, [Symbol.dispose]: host.restore };
+}
+
 it.each(["application/json", "text/event-stream"])(
   "serves unbound memory %s history without host SQL and joins the stream consumer",
   async (accept) => {
     const key = await seed();
-    const host = observeHostDataSql();
-    try {
-      const response = await fetch(historyUrl(key.toUpperCase()), { headers: { accept } });
-      expect(response.status).toBe(200);
-      if (accept === "application/json") {
-        expect(JSON.stringify(await response.json())).toContain("Private actor history");
-      } else {
-        const reader = response.body!.getReader();
-        expect(JSON.stringify(await readSseEvent(reader, { buffer: "" }))).toContain(
-          "Private actor history",
-        );
-        await reader.cancel();
-      }
-      await lastHandled;
-      expect(host.queries).toEqual([]);
-    } finally {
-      host.restore();
+    using host = observeHostSql();
+    const response = await fetch(historyUrl(key.toUpperCase()), { headers: { accept } });
+    expect(response.status).toBe(200);
+    if (accept === "application/json") {
+      expect(JSON.stringify(await response.json())).toContain("Private actor history");
+    } else {
+      const reader = response.body!.getReader();
+      expect(JSON.stringify(await readSseEvent(reader, { buffer: "" }))).toContain(
+        "Private actor history",
+      );
+      await reader.cancel();
     }
+    await lastHandled;
+    expect(host.queries).toEqual([]);
   },
 );
 
@@ -256,21 +270,19 @@ it.each(["application/json", "text/event-stream"])(
   "withholds %s history after auth revocation during its read",
   async (accept) => {
     const key = await seed();
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
+    const gate = pauseGate();
     const read = historyState.readSessionHistorySnapshotAsync;
     vi.spyOn(historyState, "readSessionHistorySnapshotAsync").mockImplementation(
       async (...args) => {
         const result = await read(...args);
-        entered.resolve();
-        await resume.promise;
+        await gate.pause();
         return result;
       },
     );
     const response = fetch(historyUrl(key), { headers: { accept } });
-    await awaitGateBeforeSettlement(entered.promise, response, "history did not enter its read");
+    await awaitGateBeforeSettlement(gate.entered, response, "history did not enter its read");
     runtime.current = false;
-    resume.resolve();
+    gate.resume();
     const denied = await response;
     expect(denied.status).toBe(404);
     expect(await denied.text()).not.toContain("Private actor history");
@@ -279,14 +291,10 @@ it.each(["application/json", "text/event-stream"])(
 
 it("checks the captured avatar source after its media wait", async () => {
   const key = await seed();
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  runtime.beforeMedia = async () => {
-    entered.resolve();
-    await resume.promise;
-  };
+  const gate = pauseGate();
+  runtime.beforeMedia = gate.pause;
   const response = fetch(`${baseUrl}${buildControlUiChannelAvatarUrl("", key, "synthetic")}`);
-  await awaitGateBeforeSettlement(entered.promise, response, "avatar did not enter media read");
+  await awaitGateBeforeSettlement(gate.entered, response, "avatar did not enter media read");
   try {
     await replaceMemoryEntry(key, {
       sessionId: "replacement",
@@ -295,24 +303,20 @@ it("checks the captured avatar source after its media wait", async () => {
       lifecycleRevision: "replacement",
     });
   } finally {
-    resume.resolve();
+    gate.resume();
   }
   expect((await response).status).toBe(403);
 });
 
 it("uses the unbound memory source for admin kill without host SQL", async () => {
   const key = await seed();
-  const host = observeHostDataSql();
-  try {
-    const response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(key)}/kill`, {
-      method: "POST",
-    });
-    expect(await response.json()).toEqual({ ok: true, killed: true });
-    expect(runtime.kill).toHaveBeenCalledOnce();
-    expect(host.queries).toEqual([]);
-  } finally {
-    host.restore();
-  }
+  using host = observeHostSql();
+  const response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(key)}/kill`, {
+    method: "POST",
+  });
+  expect(await response.json()).toEqual({ ok: true, killed: true });
+  expect(runtime.kill).toHaveBeenCalledOnce();
+  expect(host.queries).toEqual([]);
 });
 
 it("revalidates tool policy after hooks while preserving unbound memory tool execution", async () => {
@@ -324,30 +328,22 @@ it("revalidates tool policy after hooks while preserving unbound memory tool exe
       toolCallIdPrefix: "http",
       senderIsOwner: true,
     });
-  const host = observeHostDataSql();
+  using host = observeHostSql();
+  expect((await invoke()).ok).toBe(true);
+  const gate = pauseGate();
+  runtime.beforeHook = gate.pause;
+  const pending = invoke();
+  await awaitGateBeforeSettlement(gate.entered, pending, "tool hook did not run");
   try {
-    expect((await invoke()).ok).toBe(true);
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    runtime.beforeHook = async () => {
-      entered.resolve();
-      await resume.promise;
-    };
-    const pending = invoke();
-    await awaitGateBeforeSettlement(entered.promise, pending, "tool hook did not run");
-    try {
-      const entry = memorySessionActorOwners.read(location)?.readSession(key, authority)?.entry;
-      assert(entry);
-      await replaceMemoryEntry(key, { ...entry, permissionMode: "read-only" });
-    } finally {
-      resume.resolve();
-    }
-    expect(await pending).toMatchObject({ ok: false, status: 403 });
-    expect(runtime.execute).toHaveBeenCalledOnce();
-    expect(host.queries).toEqual([]);
+    const entry = memorySessionActorOwners.read(location)?.readSession(key, authority)?.entry;
+    assert(entry);
+    await replaceMemoryEntry(key, { ...entry, permissionMode: "read-only" });
   } finally {
-    host.restore();
+    gate.resume();
   }
+  expect(await pending).toMatchObject({ ok: false, status: 403 });
+  expect(runtime.execute).toHaveBeenCalledOnce();
+  expect(host.queries).toEqual([]);
 });
 
 it("carries configured-role authority into unbound memory sessions_send and refuses a replaced target", async () => {
@@ -394,14 +390,10 @@ it("carries configured-role authority into unbound memory sessions_send and refu
   });
   try {
     expect(await invoke()).toMatchObject({ ok: true, status: 200 });
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    runtime.beforeHook = async () => {
-      entered.resolve();
-      await resume.promise;
-    };
+    const gate = pauseGate();
+    runtime.beforeHook = gate.pause;
     const pending = invoke();
-    await awaitGateBeforeSettlement(entered.promise, pending, "nested hook did not run");
+    await awaitGateBeforeSettlement(gate.entered, pending, "nested hook did not run");
     try {
       await replaceMemoryEntry(nestedKey, {
         sessionId: "nested-replacement",
@@ -409,7 +401,7 @@ it("carries configured-role authority into unbound memory sessions_send and refu
         incognito: true,
       });
     } finally {
-      resume.resolve();
+      gate.resume();
     }
     expect((await pending).ok).toBe(false);
     expect(runtime.execute).toHaveBeenCalledOnce();

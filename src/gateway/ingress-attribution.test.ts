@@ -33,6 +33,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const unattributableSource = (index: number) => ({
+  kind: "unattributable-proxy" as const,
+  reason: "proxy_attribution_required" as const,
+  guidance: PROXY_ATTRIBUTION_GUIDANCE,
+  remoteAddress: `192.0.2.${index}`,
+});
+
+function warningFixture() {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const warn = vi.fn();
+  const report = createGatewayUnattributableProxyReporter({ warn });
+  const attribution = prepareGatewayIngressAttribution({
+    req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
+  });
+  if (attribution.kind !== "unattributable-proxy") {
+    throw new Error("expected unattributable proxy");
+  }
+  return { warn, report, attribution };
+}
+
 describe("gateway ingress attribution", () => {
   it("keeps clean headerless loopback on the ordinary listener local", async () => {
     const attribution = prepareGatewayIngressAttribution({ req: request() });
@@ -151,14 +172,10 @@ describe("gateway ingress attribution", () => {
       prepareGatewayIngressAttribution({ req: second }),
     ];
 
-    expect(firstAttribution).toMatchObject({
-      kind: "tailscale-funnel",
-      rateLimit: { subject: { key: "203.0.113.10" } },
-    });
-    expect(secondAttribution).toMatchObject({
-      kind: "tailscale-funnel",
-      rateLimit: { subject: { key: "203.0.113.11" } },
-    });
+    expect([firstAttribution, secondAttribution]).toMatchObject([
+      { kind: "tailscale-funnel", rateLimit: { subject: { key: "203.0.113.10" } } },
+      { kind: "tailscale-funnel", rateLimit: { subject: { key: "203.0.113.11" } } },
+    ]);
   });
 
   it("attributes unmarked tailnet traffic to the managed Funnel policy", async () => {
@@ -182,16 +199,7 @@ describe("gateway ingress attribution", () => {
   });
 
   it("does not let continued traffic keep a source suppressed forever", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const warn = vi.fn();
-    const report = createGatewayUnattributableProxyReporter({ warn });
-    const attribution = prepareGatewayIngressAttribution({
-      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
-    });
-    if (attribution.kind !== "unattributable-proxy") {
-      throw new Error("expected unattributable proxy");
-    }
+    const { warn, report, attribution } = warningFixture();
 
     // A peer that never stops sending must not refresh its own suppression record.
     for (let minute = 0; minute <= 6; minute += 1) {
@@ -203,42 +211,23 @@ describe("gateway ingress attribution", () => {
   });
 
   it("retains a full late-window source set across the next budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const warn = vi.fn();
-    const report = createGatewayUnattributableProxyReporter({ warn });
-    const attribution = (index: number) =>
-      ({
-        kind: "unattributable-proxy",
-        reason: "proxy_attribution_required",
-        guidance: PROXY_ATTRIBUTION_GUIDANCE,
-        remoteAddress: `192.0.2.${index}`,
-      }) as const;
+    const { warn, report } = warningFixture();
 
     vi.setSystemTime(5 * 60_000 - 1_000);
     for (let index = 0; index < 16; index += 1) {
-      report(attribution(index));
+      report(unattributableSource(index));
     }
     expect(warn).toHaveBeenCalledTimes(16);
 
     vi.setSystemTime(5 * 60_000 + 1_000);
-    report(attribution(16));
-    report(attribution(0));
+    report(unattributableSource(16));
+    report(unattributableSource(0));
 
     expect(warn).toHaveBeenCalledTimes(17);
   });
 
   it("resets source suppression when the wall clock moves backward", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const warn = vi.fn();
-    const report = createGatewayUnattributableProxyReporter({ warn });
-    const attribution = prepareGatewayIngressAttribution({
-      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
-    });
-    if (attribution.kind !== "unattributable-proxy") {
-      throw new Error("expected unattributable proxy");
-    }
+    const { warn, report, attribution } = warningFixture();
 
     vi.setSystemTime(4 * 60_000);
     report(attribution);
@@ -257,12 +246,7 @@ describe("gateway ingress attribution", () => {
     const report = createGatewayUnattributableProxyReporter({ warn });
 
     for (let index = 0; index < 1_000; index += 1) {
-      report({
-        kind: "unattributable-proxy",
-        reason: "proxy_attribution_required",
-        guidance: PROXY_ATTRIBUTION_GUIDANCE,
-        remoteAddress: `192.0.2.${index}`,
-      });
+      report(unattributableSource(index));
     }
 
     expect(warn).toHaveBeenCalledTimes(16);

@@ -1,5 +1,3 @@
-// HTTP authorization utility tests protect gateway request authorization,
-// declared operator scopes, origin handling, and failure response routing.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -9,25 +7,12 @@ vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({
-    gateway: {
-      controlUi: {
-        allowedOrigins: ["https://control.example.com"],
-      },
-    },
-  })),
+const defaultConfig = vi.hoisted(() => ({
+  gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
 }));
 
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({
-    gateway: {
-      controlUi: {
-        allowedOrigins: ["https://control.example.com"],
-      },
-    },
-  })),
-}));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => defaultConfig) }));
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => defaultConfig) }));
 
 // Export every binding http-auth-utils.js imports from http-common.js so this
 // factory stays safe under isolate:false regardless of which paths execute.
@@ -65,18 +50,49 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
 
+const trustedProxyAuth = {
+  mode: "trusted-proxy",
+  allowTailscale: false,
+  trustedProxy: { userHeader: "x-user" },
+} as const;
+const tokenAuth = { mode: "token", allowTailscale: false, token: "shared-secret" } as const;
+const authorityMethods = {
+  hasCurrentClientAuthority: expect.any(Function),
+  assertCurrent: expect.any(Function),
+  revalidate: expect.any(Function),
+};
+const guestAuth = { ok: true, method: "trusted-proxy", user: "guest@example.test" } as const;
+const guestProfile = {
+  id: "profile-guest",
+  displayName: "Guest",
+  avatarMime: null,
+  mergedInto: null,
+  createdAt: 1,
+  updatedAt: 2,
+};
+const guestRole = (others: "view" | "none") => ({
+  sessions: { others },
+  agents: ["guest"],
+  scopes: ["operator.read" as const],
+});
+const withGuestRole = (others: "view" | "none") => ({
+  gateway: { roles: { default: "guest", definitions: { guest: guestRole(others) } } },
+});
+const authorize = (
+  params: Partial<Parameters<typeof authorizeGatewayHttpRequestOrReply>[0]> = {},
+) =>
+  authorizeGatewayHttpRequestOrReply({
+    req: createReq(),
+    res: {} as ServerResponse,
+    auth: trustedProxyAuth,
+    ...params,
+  });
+
 describe("authorizeGatewayHttpRequestOrReply", () => {
   beforeEach(() => {
     vi.mocked(authorizeHttpGatewayConnect).mockReset();
     vi.mocked(sendGatewayAuthFailure).mockReset();
-    vi.spyOn(profileWrites, "ensureCanonicalUserProfileForEmail").mockResolvedValue({
-      id: "profile-guest",
-      displayName: "Guest",
-      avatarMime: null,
-      mergedInto: null,
-      createdAt: 1,
-      updatedAt: 2,
-    });
+    vi.spyOn(profileWrites, "ensureCanonicalUserProfileForEmail").mockResolvedValue(guestProfile);
     vi.spyOn(profileWrites, "ensureCanonicalGatewayOwnerProfile").mockResolvedValue({
       id: ownerProfile.profileId,
       displayName: ownerProfile.displayName,
@@ -103,7 +119,10 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     vi.spyOn(githubIdentity, "createAuthenticatedGitHubIdentitySync").mockReturnValue(undefined);
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(getRuntimeConfig).mockReturnValue(defaultConfig);
+  });
 
   it.each(["password"] as const)(
     "marks %s-authenticated requests as untrusted for declared HTTP scopes",
@@ -148,14 +167,9 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       const { res } = makeMockHttpResponse();
       vi.mocked(getRuntimeConfig).mockImplementation(() => currentConfig);
       try {
-        const admitted = await authorizeGatewayHttpRequestOrReply({
+        const admitted = await authorize({
           req: createReq({ authorization: "Bearer upstream-idp-token" }),
           res,
-          auth: {
-            mode: "trusted-proxy",
-            allowTailscale: false,
-            trustedProxy: { userHeader: "x-user" },
-          },
           trustedProxies: ["127.0.0.1"],
         });
         expect(admitted).toMatchObject({
@@ -213,45 +227,36 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
           vi.mocked(getRuntimeConfig).mockReturnValue(config);
         }
       };
+      const updateGateway = (gateway: ReturnType<typeof getRuntimeConfig>["gateway"]) =>
+        setCurrentConfig({ ...currentConfig, gateway: { ...currentConfig.gateway, ...gateway } });
+      const changeOrigins = () =>
+        updateGateway({
+          controlUi: { allowedOrigins: ["https://changed.example.test"] },
+        });
+      const changeIdentityScopes = (email: string) =>
+        updateGateway({
+          auth: { ...currentConfig.gateway?.auth, identityScopes: { [email]: ["operator.admin"] } },
+        });
       vi.mocked(authorizeHttpGatewayConnect).mockImplementationOnce(async () => {
         if (outcome === "stale-at-entry") {
-          setCurrentConfig({
-            ...currentConfig,
-            gateway: {
-              ...currentConfig.gateway,
-              controlUi: { allowedOrigins: ["https://changed.example.test"] },
-            },
-          });
+          changeOrigins();
         }
-        return { ok: true, method: "trusted-proxy", user: "guest@example.test" };
+        return guestAuth;
       });
       vi.mocked(profileWrites.ensureCanonicalUserProfileForEmail).mockImplementationOnce(
         async (_email, options) => {
           started.resolve();
           await release.promise;
           options?.assertCurrent?.();
-          return {
-            id: "profile-guest",
-            displayName: "Guest",
-            avatarMime: null,
-            mergedInto: null,
-            createdAt: 1,
-            updatedAt: 2,
-          };
+          return guestProfile;
         },
       );
       let completed = false;
-      const pending = authorizeGatewayHttpRequestOrReply({
+      const pending = authorize({
         ...(configSource === "gateway"
           ? { cfg: currentConfig, getRuntimeConfig: () => currentConfig }
           : {}),
-        req: createReq(),
         res: response as ServerResponse,
-        auth: {
-          mode: "trusted-proxy",
-          allowTailscale: false,
-          trustedProxy: { userHeader: "x-user" },
-        },
       }).then((result) => {
         completed = true;
         return result;
@@ -274,29 +279,14 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
           response.destroyed = true;
         }
         if (outcome === "policy-changed") {
-          setCurrentConfig({
-            ...currentConfig,
-            gateway: {
-              ...currentConfig.gateway,
-              controlUi: { allowedOrigins: ["https://changed.example.test"] },
-            },
-          });
+          changeOrigins();
         }
         const cookieGeneration = resolveControlUiPluginAuthCookieGeneration(
           "shared-auth",
           currentConfig,
         );
         if (outcome === "identity-grants") {
-          setCurrentConfig({
-            ...currentConfig,
-            gateway: {
-              ...currentConfig.gateway,
-              auth: {
-                ...currentConfig.gateway?.auth,
-                identityScopes: { "other@example.test": ["operator.admin"] },
-              },
-            },
-          });
+          changeIdentityScopes("other@example.test");
         }
         release.resolve();
         const result = await pending;
@@ -306,16 +296,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
             expect(resolveControlUiPluginAuthCookieGeneration("shared-auth", currentConfig)).toBe(
               cookieGeneration,
             );
-            setCurrentConfig({
-              ...currentConfig,
-              gateway: {
-                ...currentConfig.gateway,
-                auth: {
-                  ...currentConfig.gateway?.auth,
-                  identityScopes: { "guest@example.test": ["operator.admin"] },
-                },
-              },
-            });
+            changeIdentityScopes("guest@example.test");
             expect(result?.hasCurrentClientAuthority()).toBe(true);
             await expect(result?.revalidate()).resolves.toBeUndefined();
           }
@@ -334,69 +315,44 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   it.each([true, false])(
     "binds trusted-proxy requests to their canonical profile with roles enabled: %s",
     async (rolesConfigured) => {
-      const role = {
-        sessions: { others: "view" as const },
-        agents: ["guest"],
-        scopes: ["operator.read" as const],
-      };
+      const role = guestRole("view");
       vi.mocked(getRuntimeConfig).mockReturnValue({
         gateway: rolesConfigured
           ? { roles: { default: "guest", definitions: { guest: role } } }
           : {},
       });
       const ensureProfile = vi.mocked(profileWrites.ensureCanonicalUserProfileForEmail);
-      const rolePolicy = vi
-        .spyOn(operatorRoles, "resolveOperatorRolePolicyForAssignment")
-        .mockReturnValue(rolesConfigured ? role : undefined);
-      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-        ok: true,
-        method: "trusted-proxy",
-        user: "guest@example.test",
-      });
+      vi.spyOn(operatorRoles, "resolveOperatorRolePolicyForAssignment").mockReturnValue(
+        rolesConfigured ? role : undefined,
+      );
+      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(guestAuth);
 
-      try {
-        await expect(
-          authorizeGatewayHttpRequestOrReply({
-            req: createReq({ authorization: "Bearer upstream-idp-token" }),
-            res: {} as ServerResponse,
-            auth: {
-              mode: "trusted-proxy",
-              allowTailscale: false,
-              trustedProxy: { userHeader: "x-user" },
-            },
-          }),
-        ).resolves.toEqual({
-          hasCurrentClientAuthority: expect.any(Function),
-          assertCurrent: expect.any(Function),
-          revalidate: expect.any(Function),
-          authMethod: "trusted-proxy",
-          user: "guest@example.test",
-          trustDeclaredOperatorScopes: true,
-          operatorAccessAuthority: null,
-          authenticatedUserProfile: {
-            profileId: "profile-guest",
-            displayName: "Guest",
-            avatarRevision: "2",
-            hasAvatar: false,
-            updatedAt: 2,
-          },
-          preparedSessionProfile: {
-            profileId: "profile-guest",
-            aliases: new Set(["profile-guest"]),
-            role: null,
-            githubLogin: undefined,
-          },
-          ...(rolesConfigured ? { operatorRolePolicy: role } : {}),
-        });
-        expect(ensureProfile).toHaveBeenCalledWith("guest@example.test", {
-          assertCurrent: expect.any(Function),
-        });
-      } finally {
-        rolePolicy.mockRestore();
-        vi.mocked(getRuntimeConfig).mockReturnValue({
-          gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
-        });
-      }
+      await expect(
+        authorize({ req: createReq({ authorization: "Bearer upstream-idp-token" }) }),
+      ).resolves.toEqual({
+        ...authorityMethods,
+        authMethod: "trusted-proxy",
+        user: "guest@example.test",
+        trustDeclaredOperatorScopes: true,
+        operatorAccessAuthority: null,
+        authenticatedUserProfile: {
+          profileId: "profile-guest",
+          displayName: "Guest",
+          avatarRevision: "2",
+          hasAvatar: false,
+          updatedAt: 2,
+        },
+        preparedSessionProfile: {
+          profileId: "profile-guest",
+          aliases: new Set(["profile-guest"]),
+          role: null,
+          githubLogin: undefined,
+        },
+        ...(rolesConfigured ? { operatorRolePolicy: role } : {}),
+      });
+      expect(ensureProfile).toHaveBeenCalledWith("guest@example.test", {
+        assertCurrent: expect.any(Function),
+      });
     },
   );
 
@@ -419,44 +375,24 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
           throw error;
         });
       }
-      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-        ok: true,
-        method: "trusted-proxy",
-        user: "guest@example.test",
-      });
+      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(guestAuth);
       const response = {} as ServerResponse;
 
-      try {
-        const result = await authorizeGatewayHttpRequestOrReply({
-          req: createReq(),
-          res: response,
-          auth: {
-            mode: "trusted-proxy",
-            allowTailscale: false,
-            trustedProxy: { userHeader: "x-user" },
-          },
+      const result = await authorize({ res: response });
+      if (rolesConfigured) {
+        expect(result).toBeNull();
+        expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
+          ok: false,
+          reason: "user_profile_unavailable",
         });
-        if (rolesConfigured) {
-          expect(result).toBeNull();
-          expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
-            ok: false,
-            reason: "user_profile_unavailable",
-          });
-        } else {
-          expect(result).toEqual({
-            hasCurrentClientAuthority: expect.any(Function),
-            assertCurrent: expect.any(Function),
-            revalidate: expect.any(Function),
-            authMethod: "trusted-proxy",
-            user: "guest@example.test",
-            trustDeclaredOperatorScopes: true,
-          });
-          expect(sendGatewayAuthFailure).not.toHaveBeenCalled();
-        }
-      } finally {
-        vi.mocked(getRuntimeConfig).mockReturnValue({
-          gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
+      } else {
+        expect(result).toEqual({
+          ...authorityMethods,
+          authMethod: "trusted-proxy",
+          user: "guest@example.test",
+          trustDeclaredOperatorScopes: true,
         });
+        expect(sendGatewayAuthFailure).not.toHaveBeenCalled();
       }
     },
   );
@@ -477,26 +413,10 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         hasAvatar: true,
       },
     });
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-      ok: true,
-      method: "trusted-proxy",
-      user: "guest@example.test",
-    });
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(guestAuth);
 
-    await expect(
-      authorizeGatewayHttpRequestOrReply({
-        req: createReq(),
-        res: {} as ServerResponse,
-        auth: {
-          mode: "trusted-proxy",
-          allowTailscale: false,
-          trustedProxy: { userHeader: "x-user" },
-        },
-      }),
-    ).resolves.toEqual({
-      hasCurrentClientAuthority: expect.any(Function),
-      assertCurrent: expect.any(Function),
-      revalidate: expect.any(Function),
+    await expect(authorize()).resolves.toEqual({
+      ...authorityMethods,
       authMethod: "trusted-proxy",
       user: "guest@example.test",
       trustDeclaredOperatorScopes: true,
@@ -519,123 +439,48 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   });
 
   it("rejects unbound device tokens when operator roles require durable identity", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: ["guest"],
-              scopes: ["operator.read"],
-            },
-          },
-        },
-      },
-    });
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
-      ok: true,
-      method: "device-token",
-    });
+    vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole("view"));
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "device-token" });
     const response = {} as ServerResponse;
 
-    try {
-      await expect(
-        authorizeGatewayHttpRequestOrReply({
-          req: createReq(),
-          res: response,
-          auth: { mode: "token", allowTailscale: false, token: "shared-secret" },
-        }),
-      ).resolves.toBeNull();
-      expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
-        ok: false,
-        reason: "user_profile_unavailable",
-      });
-    } finally {
-      vi.mocked(getRuntimeConfig).mockReturnValue({
-        gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
-      });
-    }
+    await expect(authorize({ res: response, auth: tokenAuth })).resolves.toBeNull();
+    expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
+      ok: false,
+      reason: "user_profile_unavailable",
+    });
   });
 
   it.each(["trusted-proxy", "tailscale", "bootstrap-token"] as const)(
     "rejects identity-less %s authentication when operator roles require durable identity",
     async (method) => {
-      vi.mocked(getRuntimeConfig).mockReturnValue({
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: ["guest"],
-                scopes: ["operator.read"],
-              },
-            },
-          },
-        },
-      });
+      vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole("none"));
       vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method });
       const response = {} as ServerResponse;
 
-      try {
-        await expect(
-          authorizeGatewayHttpRequestOrReply({
-            req: createReq(),
-            res: response,
-            auth: { mode: "token", allowTailscale: false, token: "shared-secret" },
-          }),
-        ).resolves.toBeNull();
-        expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
-          ok: false,
-          reason: "user_profile_unavailable",
-        });
-      } finally {
-        vi.mocked(getRuntimeConfig).mockReturnValue({
-          gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
-        });
-      }
+      await expect(authorize({ res: response, auth: tokenAuth })).resolves.toBeNull();
+      expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
+        ok: false,
+        reason: "user_profile_unavailable",
+      });
     },
   );
 
   it("preserves shared-secret owner authentication when operator roles are configured", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "none" },
-              agents: ["guest"],
-              scopes: ["operator.read"],
-            },
-          },
-        },
-      },
-    });
+    vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole("none"));
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
 
-    try {
-      await expect(
-        authorizeGatewayHttpRequestOrReply({
-          req: createReq({ authorization: "Bearer shared-secret" }),
-          res: {} as ServerResponse,
-          auth: { mode: "token", allowTailscale: false, token: "shared-secret" },
-        }),
-      ).resolves.toEqual({
-        hasCurrentClientAuthority: expect.any(Function),
-        assertCurrent: expect.any(Function),
-        revalidate: expect.any(Function),
-        authMethod: "token",
-        trustDeclaredOperatorScopes: false,
-        authenticatedUserProfile: ownerProfile,
-        operatorRoleActor: { kind: "system" },
-      });
-    } finally {
-      vi.mocked(getRuntimeConfig).mockReturnValue({
-        gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
-      });
-    }
+    await expect(
+      authorize({
+        req: createReq({ authorization: "Bearer shared-secret" }),
+        auth: tokenAuth,
+      }),
+    ).resolves.toEqual({
+      ...authorityMethods,
+      authMethod: "token",
+      trustDeclaredOperatorScopes: false,
+      authenticatedUserProfile: ownerProfile,
+      operatorRoleActor: { kind: "system" },
+    });
   });
 
   it("forwards browser-origin policy into HTTP auth", async () => {
@@ -645,18 +490,12 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       user: "operator",
     });
 
-    await authorizeGatewayHttpRequestOrReply({
+    await authorize({
       req: createReq({
         host: "gateway.example.com",
         origin: "https://evil.example",
         "sec-fetch-site": "cross-site",
       }),
-      res: {} as ServerResponse,
-      auth: {
-        mode: "trusted-proxy",
-        allowTailscale: false,
-        trustedProxy: { userHeader: "x-user" },
-      },
       trustedProxies: ["127.0.0.1"],
     });
 

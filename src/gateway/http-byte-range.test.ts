@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import http, { type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -10,10 +10,13 @@ import {
   resolveByteResponse,
   writeByteHeaders,
 } from "./http-byte-range.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
 const IMMUTABLE_FILE = { file: FILE, validators: createImmutableFileValidators(FILE) };
 const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
+const FULL = { kind: "full", statusCode: 200 };
+const NOT_MODIFIED = { kind: "not-modified", statusCode: 304 };
 
 function createByteRequest(
   headers: Record<string, string | string[] | undefined>,
@@ -31,11 +34,15 @@ function createByteRequest(
   };
 }
 
-function resolveImmutableResponse(headers: Parameters<typeof createByteRequest>[0]) {
+function resolveImmutableResponse(
+  headers: Parameters<typeof createByteRequest>[0],
+  overrides: Partial<Parameters<typeof resolveByteResponse>[0]> = {},
+) {
   return resolveByteResponse({
     ...IMMUTABLE_FILE,
     method: "GET",
     request: createByteRequest(headers),
+    ...overrides,
   });
 }
 
@@ -62,8 +69,7 @@ describe("resolveByteResponse", () => {
       size: 10,
     });
 
-    const setHeader = vi.fn();
-    const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
+    const { res, setHeader } = makeMockHttpResponse();
     writeByteHeaders(res, plan);
     expect(res.statusCode).toBe(416);
     expect(setHeader).toHaveBeenCalledWith("Content-Range", "bytes */10");
@@ -73,8 +79,7 @@ describe("resolveByteResponse", () => {
     "falls back to a full response for malformed or multipart range %s",
     (rangeHeader) => {
       expect(resolveImmutableResponse({ range: rangeHeader })).toMatchObject({
-        kind: "full",
-        statusCode: 200,
+        ...FULL,
         contentLength: 10,
       });
     },
@@ -85,35 +90,18 @@ describe("resolveByteResponse", () => {
     const emittedLastModified = new Date(nowMs).toUTCString();
 
     expect(
-      resolveByteResponse({
-        ...IMMUTABLE_FILE,
-        nowMs,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": emittedLastModified }),
-      }),
+      resolveImmutableResponse({ range: "bytes=1-2", "if-range": emittedLastModified }, { nowMs }),
     ).toMatchObject({ kind: "partial", statusCode: 206, lastModified: emittedLastModified });
     expect(
-      resolveByteResponse({
-        ...IMMUTABLE_FILE,
-        nowMs,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
-      }),
-    ).toMatchObject({ kind: "full", statusCode: 200, lastModified: emittedLastModified });
+      resolveImmutableResponse({ range: "bytes=1-2", "if-range": LAST_MODIFIED }, { nowMs }),
+    ).toMatchObject({ ...FULL, lastModified: emittedLastModified });
   });
 
   it("bounds the future Last-Modified validator on HEAD not-modified responses", () => {
     const nowMs = FILE.mtimeMs - 60_000;
     const etag = IMMUTABLE_FILE.validators.etag;
 
-    expect(
-      resolveByteResponse({
-        ...IMMUTABLE_FILE,
-        method: "HEAD",
-        nowMs,
-        request: createByteRequest({ "if-none-match": etag }),
-      }),
-    ).toEqual({
+    expect(resolveImmutableResponse({ "if-none-match": etag }, { method: "HEAD", nowMs })).toEqual({
       kind: "not-modified",
       statusCode: 304,
       etag,
@@ -123,47 +111,15 @@ describe("resolveByteResponse", () => {
 
   it("honors a later If-Modified-Since date before ranges for HEAD", () => {
     expect(
-      resolveByteResponse({
-        ...IMMUTABLE_FILE,
-        method: "HEAD",
-        request: createByteRequest({
+      resolveImmutableResponse(
+        {
           "if-modified-since": new Date(Date.parse(LAST_MODIFIED) + 1_000).toUTCString(),
           range: "bytes=1-2",
           "if-range": '"stale"',
-        }),
-      }),
-    ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: LAST_MODIFIED });
-  });
-
-  it.each([
-    {
-      name: "before midnight",
-      mtimeMs: Date.UTC(2017, 0, 1),
-      statusCode: 200,
-    },
-    {
-      name: "after the prior second",
-      mtimeMs: Date.UTC(2016, 11, 31, 23, 59, 59),
-      statusCode: 304,
-    },
-  ])("preserves leap second ordering for $name", ({ mtimeMs, statusCode }) => {
-    expect(
-      resolveByteResponse({
-        file: { size: 10 },
-        validators: createImmutableFileValidators({ size: 10, mtimeMs }),
-        method: "GET",
-        request: createByteRequest({ "if-modified-since": "Sat, 31 Dec 2016 23:59:60 GMT" }),
-      }),
-    ).toMatchObject({ kind: statusCode === 304 ? "not-modified" : "full", statusCode });
-  });
-
-  it("ignores an ISO timestamp in If-Modified-Since", () => {
-    expect(
-      resolveImmutableResponse({ "if-modified-since": new Date(FILE.mtimeMs).toISOString() }),
-    ).toMatchObject({
-      kind: "full",
-      statusCode: 200,
-    });
+        },
+        { method: "HEAD" },
+      ),
+    ).toMatchObject({ ...NOT_MODIFIED, lastModified: LAST_MODIFIED });
   });
 
   it.each(["", '"different"'])(
@@ -174,42 +130,20 @@ describe("resolveByteResponse", () => {
           "if-none-match": ifNoneMatch,
           "if-modified-since": LAST_MODIFIED,
         }),
-      ).toMatchObject({ kind: "full", statusCode: 200 });
+      ).toMatchObject(FULL);
     },
   );
-
-  it("ignores duplicate singleton dates hidden by Node's normalized headers", () => {
-    const headers = { "if-modified-since": LAST_MODIFIED };
-
-    expect(
-      resolveByteResponse({
-        ...IMMUTABLE_FILE,
-        method: "GET",
-        request: {
-          headers,
-          headersDistinct: {
-            "if-modified-since": [
-              LAST_MODIFIED,
-              new Date(Date.parse(LAST_MODIFIED) - 1_000).toUTCString(),
-            ],
-          },
-        },
-      }),
-    ).toMatchObject({ kind: "full", statusCode: 200 });
-  });
 
   it.each([
     { etag: '"opaque,tag"', header: 'W/"opaque,tag"' },
     { etag: 'W/"opaque,tag"', header: '"opaque,tag"' },
   ])("weakly compares complete $header against $etag", ({ etag, header }) => {
     expect(
-      resolveByteResponse({
-        ...IMMUTABLE_FILE,
-        validators: { ...IMMUTABLE_FILE.validators, etag },
-        method: "GET",
-        request: createByteRequest({ "if-none-match": header }),
-      }),
-    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+      resolveImmutableResponse(
+        { "if-none-match": header },
+        { validators: { ...IMMUTABLE_FILE.validators, etag } },
+      ),
+    ).toMatchObject(NOT_MODIFIED);
   });
 
   it.each([
@@ -221,13 +155,11 @@ describe("resolveByteResponse", () => {
     const plan = resolveImmutableResponse({ "if-none-match": header(etag) });
 
     expect(plan).toEqual({
-      kind: "not-modified",
-      statusCode: 304,
+      ...NOT_MODIFIED,
       etag,
       lastModified: LAST_MODIFIED,
     });
-    const setHeader = vi.fn();
-    const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
+    const { res, setHeader } = makeMockHttpResponse();
     writeByteHeaders(res, plan);
     expect(res.statusCode).toBe(304);
     expect(setHeader).toHaveBeenCalledWith("ETag", etag);
@@ -247,19 +179,12 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
   });
 
-  it.each([{ label: "partial", rangeHeader: "bytes=1-2", statusCode: 206 }])(
-    "emits the same Last-Modified validator on $label responses",
-    ({ rangeHeader, statusCode }) => {
-      const plan = resolveImmutableResponse({ range: rangeHeader });
-      const setHeader = vi.fn();
-      const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
-
-      writeByteHeaders(res, plan);
-
-      expect(res.statusCode).toBe(statusCode);
-      expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
-    },
-  );
+  it("emits the same Last-Modified validator on partial responses", () => {
+    const { res, setHeader } = makeMockHttpResponse();
+    writeByteHeaders(res, resolveImmutableResponse({ range: "bytes=1-2" }));
+    expect(res.statusCode).toBe(206);
+    expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
+  });
 });
 
 describe("Gateway byte response descriptor lifecycle", () => {

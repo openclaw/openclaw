@@ -1,5 +1,3 @@
-// HTTP common tests cover JSON/text response helpers, auth failures, security
-// headers, SSE headers, body parsing, and disconnect diagnostics.
 import { EventEmitter } from "node:events";
 import { createServer, ServerResponse, type IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,14 +32,19 @@ beforeEach(() => {
   resetDiagnosticEventsForTest();
 });
 
-function headerNames(setHeader: ReturnType<typeof vi.fn>): string[] {
-  return setHeader.mock.calls
-    .map((call) => call[0])
-    .filter((name): name is string => typeof name === "string");
+function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): void {
+  expect(setHeader.mock.calls.map(([header]) => header)).not.toContain(name);
 }
 
-function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): void {
-  expect(headerNames(setHeader)).not.toContain(name);
+function mockDisconnect(
+  socket = new EventEmitter(),
+  resSocket: EventEmitter | null = socket,
+  controller = new AbortController(),
+) {
+  const { req, res } = makeMockHttpReqRes(socket, resSocket);
+  const onDisconnect = vi.fn();
+  const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+  return { res, controller, onDisconnect, cleanup };
 }
 
 describe("setDefaultSecurityHeaders", () => {
@@ -83,10 +86,7 @@ describe("sendMissingScopeForbidden", () => {
     expect(end).toHaveBeenCalledWith(
       JSON.stringify({
         ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: undefined",
-        },
+        error: { type: "forbidden", message: "missing scope: undefined" },
       }),
     );
   });
@@ -223,7 +223,6 @@ describe("setSseHeaders", () => {
 
   it("skips flushHeaders gracefully when the response does not expose one", () => {
     const { res, setHeader } = makeMockHttpResponse();
-    // Ensure flushHeaders is not defined on the mock response.
     expect((res as unknown as { flushHeaders?: () => void }).flushHeaders).toBeUndefined();
     setSseHeaders(res);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
@@ -271,11 +270,7 @@ describe("HTTP response root ownership", () => {
 describe("watchClientDisconnect", () => {
   it("immediately aborts when the request socket was already destroyed", () => {
     const socket = Object.assign(new EventEmitter(), { destroyed: true });
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-
-    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
+    const { res, controller, onDisconnect, cleanup } = mockDisconnect(socket);
 
     expect(controller.signal.aborted).toBe(true);
     expect(onDisconnect).toHaveBeenCalledTimes(1);
@@ -288,10 +283,7 @@ describe("watchClientDisconnect", () => {
 
   it("aborts when the response closes before the socket close is observable", () => {
     const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, socket);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-    watchClientDisconnect(req, res, controller, onDisconnect);
+    const { res, controller, onDisconnect } = mockDisconnect(socket);
 
     res.emit("close");
 
@@ -349,12 +341,10 @@ describe("watchClientDisconnect", () => {
 
   it("does not double-abort when the controller is already aborted", () => {
     const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, null);
     const controller = new AbortController();
     controller.abort();
     const abortSpy = vi.spyOn(controller, "abort");
-    const onDisconnect = vi.fn();
-    watchClientDisconnect(req, res, controller, onDisconnect);
+    const { onDisconnect } = mockDisconnect(socket, null, controller);
     socket.emit("close");
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(abortSpy).not.toHaveBeenCalled();
@@ -363,10 +353,7 @@ describe("watchClientDisconnect", () => {
   it("releases both socket watchers after one disconnect and notifies once", () => {
     const reqSocket = new EventEmitter();
     const resSocket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(reqSocket, resSocket);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-    watchClientDisconnect(req, res, controller, onDisconnect);
+    const { controller, onDisconnect } = mockDisconnect(reqSocket, resSocket);
     expect(reqSocket.listenerCount("close")).toBe(1);
     expect(resSocket.listenerCount("close")).toBe(1);
     reqSocket.emit("close");
@@ -381,9 +368,7 @@ describe("watchClientDisconnect", () => {
     "keeps completed work un-aborted after %s",
     (phase) => {
       const socket = new EventEmitter();
-      const { req, res } = makeMockHttpReqRes(socket, null);
-      const controller = new AbortController();
-      const cleanup = watchClientDisconnect(req, res, controller);
+      const { res, controller, cleanup } = mockDisconnect(socket, null);
       expect(socket.listenerCount("close")).toBe(1);
       if (phase === "cleanup") {
         cleanup();
