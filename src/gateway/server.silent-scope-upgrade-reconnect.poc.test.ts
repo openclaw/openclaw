@@ -62,36 +62,6 @@ async function expectReadScopedPairing(deviceId: string) {
   return paired;
 }
 
-async function expectRejectedScopeUpgradeAttempt({
-  attempt,
-  requestedEvent,
-  deviceId,
-  token,
-}: {
-  attempt: ScopeUpgradeAttempt;
-  requestedEvent: Promise<unknown>;
-  deviceId: string;
-  token: string;
-}) {
-  const pending = await devicePairingModule.listDevicePairing();
-  expect(pending.pending).toHaveLength(1);
-  expect(attempt.error?.details).toMatchObject({
-    requestId: pending.pending[0]?.requestId,
-    reason: "scope-upgrade",
-    requestedRole: "operator",
-    requestedScopes: ["operator.admin"],
-    approvedScopes: ["operator.read"],
-    remediationHint: "Review the requested scopes, then approve the pending upgrade.",
-  });
-  expect(await requestedEvent).toMatchObject({
-    payload: { requestId: pending.pending[0]?.requestId, deviceId, scopes: ["operator.admin"] },
-  });
-  expect(await getPairedDevice(deviceId)).toMatchObject({
-    approvedScopes: ["operator.read"],
-    tokens: { operator: { scopes: ["operator.read"], token } },
-  });
-}
-
 describe("gateway silent scope-upgrade reconnect", () => {
   let started: Awaited<ReturnType<typeof startServerWithClient>>;
   const sockets = new Set<Awaited<ReturnType<typeof openTrackedWs>>>();
@@ -154,11 +124,26 @@ describe("gateway silent scope-upgrade reconnect", () => {
       "pairing required: device is asking for more scopes than currently approved",
     );
 
-    await expectRejectedScopeUpgradeAttempt({
-      attempt: sharedAuthUpgradeAttempt,
-      requestedEvent,
-      deviceId: paired.deviceId,
-      token: paired.token,
+    const pending = await devicePairingModule.listDevicePairing();
+    expect(pending.pending).toHaveLength(1);
+    expect(sharedAuthUpgradeAttempt.error?.details).toMatchObject({
+      requestId: pending.pending[0]?.requestId,
+      reason: "scope-upgrade",
+      requestedRole: "operator",
+      requestedScopes: ["operator.admin"],
+      approvedScopes: ["operator.read"],
+      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+    });
+    expect(await requestedEvent).toMatchObject({
+      payload: {
+        requestId: pending.pending[0]?.requestId,
+        deviceId: paired.deviceId,
+        scopes: ["operator.admin"],
+      },
+    });
+    expect(await getPairedDevice(paired.deviceId)).toMatchObject({
+      approvedScopes: ["operator.read"],
+      tokens: { operator: { scopes: ["operator.read"], token: paired.token } },
     });
 
     const afterUpgrade = await connectReq(await openWs(), {

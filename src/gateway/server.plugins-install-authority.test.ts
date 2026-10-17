@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -18,7 +18,7 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { startGatewayServerCore } from "./server-start.js";
 
@@ -175,33 +175,32 @@ describe("gateway plugin install authority", () => {
       "token" | "deviceToken" | "deviceIdentity" | "clientName" | "mode" | "origin"
     >,
   ) {
-    const connected = createDeferredCore<HelloOk>();
-    const closed = createDeferredCore<{ code: number; reason: string }>();
-    const client = new GatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      clientName: "gateway-client",
-      clientVersion: "1.0.0",
-      platform: "test",
-      mode: "backend",
-      deviceIdentity: null,
-      scopes: ["operator.admin"],
-      ...options,
-      // Each connection presents only its declared credential, never a cached fallback.
-      hostDeps: {
-        loadDeviceAuthToken: () => null,
-        storeDeviceAuthToken: () => {},
-        clearDeviceAuthToken: () => {},
+    const closed = createDeferredCore();
+    const client = await acquireGatewayTestClient(
+      {
+        url: `ws://127.0.0.1:${port}`,
+        clientName: "gateway-client",
+        clientVersion: "1.0.0",
+        platform: "test",
+        mode: "backend",
+        deviceIdentity: null,
+        scopes: ["operator.admin"],
+        ...options,
+        // Each connection presents only its declared credential, never a cached fallback.
+        hostDeps: {
+          loadDeviceAuthToken: () => null,
+          storeDeviceAuthToken: () => {},
+          clearDeviceAuthToken: () => {},
+        },
+        onClose: () => closed.resolve(),
       },
-      onHelloOk: (hello) => connected.resolve(hello),
-      onConnectError: (error) => connected.reject(error),
-      onClose: (code, reason) => {
-        connected.reject(new Error(`closed ${code}: ${reason}`));
-        closed.resolve({ code, reason });
+      {
+        timeoutMs: 10_000,
+        timeoutMessage: "gateway connect timeout",
+        closeMessage: "closed",
       },
-    });
+    );
     clients.push(client);
-    client.start();
-    await wait(connected.promise, "gateway connect timeout");
     return { client, closed: closed.promise };
   }
 
@@ -286,29 +285,23 @@ describe("gateway plugin install authority", () => {
     "$label preserves the initiating authority at $phase",
     async ({ label, phase, action }) => {
       const pluginId = `authority-${label}`;
-      const source = state.path(`sources/${pluginId}`);
-      await fs.mkdir(source, { recursive: true });
-      await fs.writeFile(
-        `${source}/package.json`,
-        JSON.stringify({
-          name: pluginId,
-          version: "1.0.0",
-          main: "index.cjs",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      await fs.writeFile(
-        `${source}/openclaw.plugin.json`,
-        JSON.stringify({
-          id: pluginId,
-          name: pluginId,
-          activation: { onStartup: true },
-          contracts: { tools: [`${pluginId.replaceAll("-", "_")}_probe`] },
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        }),
-      );
-      await fs.writeFile(
-        `${source}/index.cjs`,
+      const sourceDir = `sources/${pluginId}`;
+      const source = state.statePath(sourceDir);
+      await state.writeJson(`${sourceDir}/package.json`, {
+        name: pluginId,
+        version: "1.0.0",
+        main: "index.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      await state.writeJson(`${sourceDir}/openclaw.plugin.json`, {
+        id: pluginId,
+        name: pluginId,
+        activation: { onStartup: true },
+        contracts: { tools: [`${pluginId.replaceAll("-", "_")}_probe`] },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      });
+      await state.writeText(
+        `${sourceDir}/index.cjs`,
         `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
       api.registerGatewayMethod(${JSON.stringify(`${pluginId}.probe`)}, ({respond}) => respond(true, {active: true}));
       api.registerTool({name: ${JSON.stringify(`${pluginId.replaceAll("-", "_")}_probe`)}, description: "Report readiness", parameters: {type: "object", properties: {}}, execute: async () => ({content: [{type: "text", text: "ready"}]})});

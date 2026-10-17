@@ -116,12 +116,12 @@ describe("live device scope upgrade", () => {
       sharedAuthWs.close();
     }
     const ws = await openWs(headers);
-    const hello = await connectOk(ws, {
+    await connectOk(ws, {
       skipDefaultAuth: true,
       deviceToken: paired.token,
       ...options,
     });
-    return { ...paired, ws, hello };
+    return { ...paired, ws };
   }
 
   async function openLimitedBrowserDevice(name: string) {

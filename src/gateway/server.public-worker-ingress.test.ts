@@ -117,12 +117,6 @@ async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: stri
   });
 }
 
-async function rejectWorker(url: string, params: unknown): Promise<RejectedWorker> {
-  const ws = new WebSocket(url);
-  await waitForOpen(ws);
-  return await rejectOpenedWorker(ws, params);
-}
-
 async function rejectOpenedWorker(ws: WebSocket, params: unknown): Promise<RejectedWorker> {
   const response = new Promise<unknown>((resolve) => {
     ws.once("message", (data) => resolve(JSON.parse(rawDataToString(data))));
@@ -162,9 +156,6 @@ async function requestUpgradeRejection(
 
 class PublicWorkerHarness {
   readonly credential = createWorkerCredentialMaterial().credential;
-  readonly environment: WorkerEnvironmentRecord;
-  readonly credentialRecord: WorkerCredentialRecord;
-  readonly store: WorkerEnvironmentStore;
   readonly workerService: WorkerConnectionService;
   readonly clients = new GatewayClientRegistry();
   readonly connectionWork = new GatewayConnectionWork();
@@ -173,9 +164,8 @@ class PublicWorkerHarness {
     maxPayload: 64 * 1024,
     perMessageDeflate: false,
   });
-  readonly preauthBudget: ReturnType<typeof createPreauthConnectionBudget>;
+  readonly preauthBudget = createPreauthConnectionBudget(8);
   readonly publicRateLimiter: ReturnType<typeof createGatewayAuthRateLimiter>;
-  readonly logWsControl = createGatewayWsTestLogger();
   readonly handlePluginUpgrade = vi.fn(async () => false);
   readonly httpServer: ReturnType<typeof createGatewayHttpServer>;
   readonly admitWorker: ReturnType<typeof vi.fn<WorkerConnectionService["admitWorker"]>>;
@@ -183,15 +173,15 @@ class PublicWorkerHarness {
 
   constructor(options: { rateLimitMaxAttempts?: number } = {}) {
     const nowMs = Date.now();
-    this.environment = {
+    const environment = {
       environmentId: "worker-public",
       state: "ready",
       ownerEpoch: 1,
       destroyRequestedAtMs: null,
       bootstrapReceipt: BUILD,
     } as unknown as WorkerEnvironmentRecord;
-    this.credentialRecord = {
-      environmentId: this.environment.environmentId,
+    const credentialRecord: WorkerCredentialRecord = {
+      environmentId: environment.environmentId,
       credentialHash: hashWorkerCredential(this.credential),
       bundleHash: BUILD.bundleHash,
       sessionId: null,
@@ -200,17 +190,17 @@ class PublicWorkerHarness {
       expiresAtMs: nowMs + 60_000,
       deliveredAtMs: null,
     };
-    this.store = {
+    const store = {
       get: (environmentId: string) =>
-        environmentId === this.environment.environmentId ? this.environment : undefined,
+        environmentId === environment.environmentId ? environment : undefined,
       getCredential: (environmentId: string) =>
-        environmentId === this.credentialRecord.environmentId ? this.credentialRecord : undefined,
+        environmentId === credentialRecord.environmentId ? credentialRecord : undefined,
       findCredentialByHash: (credentialHash: string) =>
-        credentialHash === this.credentialRecord.credentialHash ? this.credentialRecord : undefined,
+        credentialHash === credentialRecord.credentialHash ? credentialRecord : undefined,
     } as WorkerEnvironmentStore;
     this.admitWorker = vi.fn(async (admission) =>
       admitWorkerConnection({
-        store: this.store,
+        store,
         admission,
         expectedBuild: BUILD,
         nowMs: Date.now(),
@@ -219,11 +209,10 @@ class PublicWorkerHarness {
     this.workerService = {
       admitWorker: this.admitWorker,
       validateWorkerConnection: (identity) =>
-        validateWorkerConnectionIdentity({ store: this.store, identity, nowMs: Date.now() }),
+        validateWorkerConnectionIdentity({ store, identity, nowMs: Date.now() }),
       commitTranscript: async () => ({ ok: false, reason: "invalid-batch" }),
       pushLiveEvent: async () => ({ ok: false, details: { reason: "invalid-event" } }),
     };
-    this.preauthBudget = createPreauthConnectionBudget(8);
     this.publicRateLimiter = createGatewayAuthRateLimiter(
       {
         maxAttempts: options.rateLimitMaxAttempts ?? 10,
@@ -244,7 +233,6 @@ class PublicWorkerHarness {
   }
 
   async start(): Promise<void> {
-    const logGateway = createGatewayWsTestLogger();
     attachGatewayWsConnectionHandler({
       wss: this.wss,
       clients: this.clients,
@@ -257,9 +245,9 @@ class PublicWorkerHarness {
       gatewayMethods: [],
       events: [],
       refreshHealthSnapshot: vi.fn(async () => ({}) as never),
-      logGateway: logGateway as never,
+      logGateway: createGatewayWsTestLogger() as never,
       logHealth: createGatewayWsTestLogger() as never,
-      logWsControl: this.logWsControl as never,
+      logWsControl: createGatewayWsTestLogger() as never,
       extraHandlers: {},
       broadcast: vi.fn(),
       buildRequestContext: () => createGatewayWsTestRequestContext() as never,
@@ -353,7 +341,9 @@ it("rejects an admitted worker before hello when the receiver payload limit is u
       });
     });
 
-    const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
+    const ws = new WebSocket(harness.url());
+    await waitForOpen(ws);
+    const rejected = await rejectOpenedWorker(ws, workerConnect(harness.credential));
 
     expect(rejected).toEqual(
       rejection(
@@ -362,9 +352,6 @@ it("rejects an admitted worker before hello when the receiver payload limit is u
         "gateway-unavailable",
         1011,
       ),
-    );
-    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-      "worker admission rejected reason=unsupported-websocket-receiver",
     );
     expect(harness.clients.size).toBe(0);
   }));

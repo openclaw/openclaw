@@ -13,6 +13,7 @@ import {
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createTestNodeSocket } from "./node-registry.test-helpers.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
@@ -191,14 +192,10 @@ test("sessions.list preserves separate registered targets under a fixed store ow
   });
 });
 
-test.for(
-  (["delete", "draft", "join", "leave"] as const).map((change) => ({
-    change,
-    alias: process.platform !== "win32",
-  })),
-)(
-  "sessions.list refreshes $change against the selected physical database (alias=$alias)",
-  async ({ change, alias }) => {
+test.for(["delete", "draft", "join", "leave"] as const)(
+  "sessions.list refreshes %s against the selected physical database",
+  async (change) => {
+    const alias = process.platform !== "win32";
     await withSessionState(`physical-sharing-${change}-${alias}`, async (stateDir) => {
       const storePath = path.join(stateDir, "shared.sqlite");
       const physicalPath = alias
@@ -337,17 +334,12 @@ test("captured sentinel rows never substitute a later same-owner session after d
         bootId: "retired-sentinel",
         cfg,
       });
-      const send = vi.fn();
+      const socket = createTestNodeSocket();
       const recipient = {
         ...client,
         connId: "sentinel-reader",
         connect: { ...client.connect, scopes: ["operator.admin"] },
-        socket: {
-          readyState: 1,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-        } as unknown as GatewayWsClient["socket"],
+        socket: socket as unknown as GatewayWsClient["socket"],
       } as GatewayWsClient;
       connection.clients.add(recipient);
       const detach = connection.attachSessionRowProjection(projection);
@@ -357,7 +349,7 @@ test("captured sentinel rows never substitute a later same-owner session after d
           agentId: "main",
           session: selected.sessions[0],
         });
-        expect(send).not.toHaveBeenCalled();
+        expect(socket.send).not.toHaveBeenCalled();
       } finally {
         detach();
         await connection.mentionInbox.dispose();

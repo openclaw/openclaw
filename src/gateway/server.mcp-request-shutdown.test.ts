@@ -17,6 +17,7 @@ import { fetchMcpAppView, getMcpAppViewLease } from "../agents/mcp-ui-resource.j
 import { writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { McpServerConfig } from "../config/types.mcp.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
@@ -34,6 +35,9 @@ const testLifetime = createFixtureLifetime();
 afterEach(() => testLifetime.cleanup());
 
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+const mcpConfig = (servers: Record<string, McpServerConfig>): OpenClawConfig => ({
+  mcp: { apps: { enabled: true }, servers },
+});
 async function prepareView(runtime: SessionMcpRuntime, serverName: string, toolName: string) {
   return expectDefined(
     await fetchMcpAppView({
@@ -108,14 +112,13 @@ describe("MCP App request shutdown", () => {
       let gateway: GatewayHarness | undefined;
       let ws: WebSocket | undefined;
       let runtime: SessionMcpRuntime | undefined;
-      let root: string | undefined;
       let closing: Promise<void> | undefined;
       let emergencyCleanup: Promise<void> | undefined;
       let emergencyTimer: ReturnType<typeof setTimeout> | undefined;
       let emergencyUsed = false;
       let callStarted = false;
       let callSettled = false;
-      const restorers: Array<() => void> = [];
+      let restoreCall: (() => void) | undefined;
       const releaseFailingCandidate = () => {
         emergencyUsed = true;
         emergencyCleanup ??= runtime?.dispose();
@@ -128,7 +131,7 @@ describe("MCP App request shutdown", () => {
           serverOptions: { bind: "loopback", auth: { mode: "none" } },
         });
         await gateway.server.startupSettled;
-        root = await fs.mkdtemp(path.join(resolveStateDir(), "mcp-shutdown-"));
+        const root = testLifetime.createTempDir("mcp-shutdown-", resolveStateDir());
         const enteredPath = path.join(root, "tool-entered");
         const server = await writeMcpServer(
           root,
@@ -138,19 +141,14 @@ describe("MCP App request shutdown", () => {
           `${fixtureReceiptClientSource(receipts.endpoint)}\n  const enteredPath = ${JSON.stringify(enteredPath)};`,
           "  ",
         );
-        const cfg: OpenClawConfig = {
-          mcp: {
-            apps: { enabled: true },
-            servers: {
-              shutdown: {
-                ...server,
-                codex: { defaultToolsApprovalMode: "approve" },
-                // Existing supported operator setting; shutdown must cancel before this deadline.
-                requestTimeoutMs: 600_000,
-              },
-            },
+        const cfg = mcpConfig({
+          shutdown: {
+            ...server,
+            codex: { defaultToolsApprovalMode: "approve" },
+            // Shutdown must cancel before this supported operator deadline.
+            requestTimeoutMs: 600_000,
           },
-        };
+        });
         await writeConfigFile(cfg);
         ws = await gateway.openWs();
         await connectOk(ws, { scopes: ["operator.admin"] });
@@ -180,7 +178,7 @@ describe("MCP App request shutdown", () => {
             callFinished.resolve();
           }
         });
-        restorers.push(() => call.mockRestore());
+        restoreCall = () => call.mockRestore();
 
         const response = rpcReq(ws, "mcp.app.callTool", {
           sessionKey,
@@ -230,12 +228,7 @@ describe("MCP App request shutdown", () => {
           await emergencyCleanup;
           ws?.terminate();
           await (closing ?? gateway?.server.close({ drainTimeoutMs: 0 }));
-          for (const restore of restorers) {
-            restore();
-          }
-          if (root) {
-            await fs.rm(root, { recursive: true, force: true });
-          }
+          restoreCall?.();
         });
       }
     }));
@@ -286,92 +279,84 @@ async function callStandaloneTool(port: number, ticket: string, label: string): 
 }
 
 describe("MCP App standalone ticket authority", () => {
-  it("binds paired operator scope, separates ticket strength, and revalidates live grants", async () => {
-    let gateway: GatewayHarness | undefined;
-    let runtime: SessionMcpRuntime | undefined;
-    let writer: WebSocket | undefined;
-    let reader: WebSocket | undefined;
-    let root: string | undefined;
-    try {
-      await writeConfigFile({ mcp: { apps: { enabled: true } } });
-      gateway = await createGatewaySuiteHarness({
-        serverOptions: { bind: "loopback", auth: { mode: "none" } },
-      });
-      await gateway.server.startupSettled;
+  it("binds paired operator scope, separates ticket strength, and revalidates live grants", () =>
+    testLifetime.run(async () => {
+      let gateway: GatewayHarness | undefined;
+      let runtime: SessionMcpRuntime | undefined;
+      let writer: WebSocket | undefined;
+      let reader: WebSocket | undefined;
+      try {
+        await writeConfigFile({ mcp: { apps: { enabled: true } } });
+        gateway = await createGatewaySuiteHarness({
+          serverOptions: { bind: "loopback", auth: { mode: "none" } },
+        });
+        await gateway.server.startupSettled;
 
-      root = await fs.mkdtemp(path.join(resolveStateDir(), "mcp-app-authority-"));
-      const markerPath = path.join(root, "tool-calls.jsonl");
-      const server = await writeMcpServer(
-        root,
-        "authority",
-        {
-          name: "mutate",
-          inputSchema: { type: "object", properties: { label: { type: "string" } } },
-          _meta: { ui: { resourceUri: "ui://authority/app", visibility: ["app"] } },
-        },
-        'appendFileSync(markerPath, JSON.stringify(request.params.arguments) + "\\n");\n    send(request.id, { content: [{ type: "text", text: "mutated" }] });',
-        `const markerPath = ${JSON.stringify(markerPath)};`,
-      );
-
-      const sessionId = `mcp-app-authority-${randomUUID()}`;
-      const sessionKey = `agent:main:${sessionId}`;
-      runtime = await getOrCreateSessionMcpRuntime({
-        sessionId,
-        sessionKey,
-        workspaceDir: root,
-        cfg: {
-          mcp: {
-            apps: { enabled: true },
-            servers: { authority: server },
+        const root = testLifetime.createTempDir("mcp-app-authority-", resolveStateDir());
+        const markerPath = path.join(root, "tool-calls.jsonl");
+        const server = await writeMcpServer(
+          root,
+          "authority",
+          {
+            name: "mutate",
+            inputSchema: { type: "object", properties: { label: { type: "string" } } },
+            _meta: { ui: { resourceUri: "ui://authority/app", visibility: ["app"] } },
           },
-        },
-      });
-      const prepared = await prepareView(runtime, "authority", "mutate");
+          'appendFileSync(markerPath, JSON.stringify(request.params.arguments) + "\\n");\n    send(request.id, { content: [{ type: "text", text: "mutated" }] });',
+          `const markerPath = ${JSON.stringify(markerPath)};`,
+        );
 
-      writer = await connectPairedOperator(gateway, ["operator.read", "operator.write"]);
-      reader = await connectPairedOperator(gateway, ["operator.read"]);
-      const viewParams = { sessionKey, agentId: "main", viewId: prepared.viewId };
-      const writerTicket = await standaloneTicket(writer, viewParams);
-      const readerTicket = await standaloneTicket(reader, viewParams);
-      expect(readerTicket).not.toBe(writerTicket);
-      const { port } = gateway;
-      const expectCalls = async (expected = "") => {
-        expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe(expected);
-      };
-      const standalone = async (ticket: string, label: string, status: number) => {
-        const response = await callStandaloneTool(port, ticket, label);
-        expect(response.status).toBe(status);
-        return response;
-      };
+        const sessionId = `mcp-app-authority-${randomUUID()}`;
+        const sessionKey = `agent:main:${sessionId}`;
+        runtime = await getOrCreateSessionMcpRuntime({
+          sessionId,
+          sessionKey,
+          workspaceDir: root,
+          cfg: mcpConfig({ authority: server }),
+        });
+        const prepared = await prepareView(runtime, "authority", "mutate");
 
-      const directReaderCall = await rpcReq(reader, "mcp.app.callTool", {
-        ...viewParams,
-        toolName: "mutate",
-        arguments: { label: "direct-reader" },
-      });
-      expect(directReaderCall.ok).toBe(false);
-      await expectCalls();
-      await standalone(readerTicket, "standalone-reader", 403);
-      await expectCalls();
-      const writerStandaloneCall = await standalone(writerTicket, "standalone-writer", 200);
-      expect(await writerStandaloneCall.json()).toMatchObject({ ok: true });
-      await expectCalls('{"label":"standalone-writer"}\n');
+        writer = await connectPairedOperator(gateway, ["operator.read", "operator.write"]);
+        reader = await connectPairedOperator(gateway, ["operator.read"]);
+        const viewParams = { sessionKey, agentId: "main", viewId: prepared.viewId };
+        const writerTicket = await standaloneTicket(writer, viewParams);
+        const readerTicket = await standaloneTicket(reader, viewParams);
+        expect(readerTicket).not.toBe(writerTicket);
+        const { port } = gateway;
+        const expectCalls = async (expected = "") => {
+          expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe(expected);
+        };
+        const standalone = async (ticket: string, label: string, status: number) => {
+          const response = await callStandaloneTool(port, ticket, label);
+          expect(response.status).toBe(status);
+          return response;
+        };
 
-      const liveView = expectDefined(
-        getMcpAppViewLease(prepared.viewId, runtime),
-        "live MCP App view",
-      );
-      liveView.authorizeAppInteraction = async () => false;
-      await standalone(writerTicket, "revoked-writer", 403);
-      await expectCalls('{"label":"standalone-writer"}\n');
-    } finally {
-      writer?.terminate();
-      reader?.terminate();
-      await runtime?.dispose();
-      await gateway?.close();
-      if (root) {
-        await fs.rm(root, { recursive: true, force: true });
+        const directReaderCall = await rpcReq(reader, "mcp.app.callTool", {
+          ...viewParams,
+          toolName: "mutate",
+          arguments: { label: "direct-reader" },
+        });
+        expect(directReaderCall.ok).toBe(false);
+        await expectCalls();
+        await standalone(readerTicket, "standalone-reader", 403);
+        await expectCalls();
+        const writerStandaloneCall = await standalone(writerTicket, "standalone-writer", 200);
+        expect(await writerStandaloneCall.json()).toMatchObject({ ok: true });
+        await expectCalls('{"label":"standalone-writer"}\n');
+
+        const liveView = expectDefined(
+          getMcpAppViewLease(prepared.viewId, runtime),
+          "live MCP App view",
+        );
+        liveView.authorizeAppInteraction = async () => false;
+        await standalone(writerTicket, "revoked-writer", 403);
+        await expectCalls('{"label":"standalone-writer"}\n');
+      } finally {
+        writer?.terminate();
+        reader?.terminate();
+        await runtime?.dispose();
+        await gateway?.close();
       }
-    }
-  });
+    }));
 });

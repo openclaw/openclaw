@@ -42,7 +42,7 @@ const sessionId = "archive-placement-session";
 const archivedAt = (storePath: string, key = sessionKey) =>
   loadSessionEntry({ storePath, sessionKey: key })?.archivedAt;
 function expectUnavailableArchive(
-  result: Awaited<ReturnType<typeof patchPlacement>>,
+  result: Awaited<ReturnType<typeof directSessionReq>>,
   storePath: string,
 ) {
   expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: true } });
@@ -59,25 +59,28 @@ async function preparePlacement(
       [sessionKey]: sessionStoreEntry(sessionId, initiallyArchived ? { archivedAt: 1 } : {}),
     },
   });
+  const context: Record<string, unknown> = {};
   const fixture = {
     dir,
     storePath,
     placement: workerPlacement({ sessionId, sessionKey, state }),
     reclaim: vi.fn<() => Promise<ReturnType<typeof workerPlacement>>>(),
     patch(
-      context: Record<string, unknown> = {},
+      overrides: Record<string, unknown> = {},
       archived = true,
-    ): ReturnType<typeof patchPlacement> {
-      return patchPlacement(
-        {
-          workerSessionPlacementService: placementReader(() => fixture.placement),
-          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim: fixture.reclaim },
-          ...context,
-        },
-        archived,
+    ): ReturnType<typeof directSessionReq> {
+      Object.assign(context, overrides);
+      return directSessionReq(
+        "sessions.patch",
+        { key: sessionKey, archived, expectedSessionId: sessionId },
+        { context },
       );
     },
   };
+  Object.assign(context, {
+    workerSessionPlacementService: placementReader(() => fixture.placement),
+    workerPlacementDispatchService: { dispatch: vi.fn(), reclaim: fixture.reclaim },
+  });
   return fixture;
 }
 
@@ -93,14 +96,6 @@ const waitForPhase = (phase: Promise<unknown>, archive: Promise<unknown>) =>
       throw new Error("Archive settled before its fixture phase", { cause: result });
     }),
   ]);
-
-function patchPlacement(context: Record<string, unknown>, archived = true) {
-  return directSessionReq(
-    "sessions.patch",
-    { key: sessionKey, archived, expectedSessionId: sessionId },
-    { context },
-  );
-}
 
 afterEach(async () => {
   // Join gated requests even when a runner timeout leaves the test body suspended.
@@ -302,9 +297,7 @@ test.each(["rejected", "unavailable"] as const)(
   async (failure) => {
     const fixture = await preparePlacement("active");
     const release = vi.fn();
-    const reclaim = vi.fn(async () => {
-      throw new Error("provider reclaim rejected");
-    });
+    const reclaim = fixture.reclaim.mockRejectedValue(new Error("provider reclaim rejected"));
     const workerPlacementDispatchService =
       failure === "rejected" ? { dispatch: vi.fn(), reclaim } : { dispatch: vi.fn() };
 
@@ -387,10 +380,7 @@ test("sessions.patch keeps reconciliation pending before cancellation", async ()
 
 test("sessions.patch keeps restore blocked for an active cloud placement", async () => {
   const fixture = await preparePlacement("active", true);
-  const restored = await patchPlacement(
-    { workerSessionPlacementService: placementReader(() => fixture.placement) },
-    false,
-  );
+  const restored = await fixture.patch({ workerPlacementDispatchService: undefined }, false);
 
   expect(restored).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   expect(archivedAt(fixture.storePath)).toBe(1);

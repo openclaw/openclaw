@@ -4,11 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  listSessionEntriesCore,
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
   agentDiscoveryMock,
@@ -62,19 +58,11 @@ async function resetSession(permissionMode?: "guarded") {
   });
 }
 
-async function createPermissionSessionStore() {
-  const { storePath } = await createSessionStoreDir();
-  for (const [sessionKey, sessionId] of [
-    [mainKey, "main-session"],
-    [groupKey, "sess-group"],
-  ]) {
-    await upsertSessionEntryCore({ sessionKey, storePath }, sessionStoreEntry(sessionId));
-  }
-  return { storePath };
-}
-
 test("webchat session mutations follow operator scope policy", async () => {
-  const { storePath } = await createPermissionSessionStore();
+  const storePath = await seedSessions({
+    [mainKey]: sessionStoreEntry("main-session"),
+    [groupKey]: sessionStoreEntry("sess-group"),
+  });
 
   const ws = await connectWebchatClient({
     port: getHarness().port,
@@ -143,44 +131,39 @@ test("session:patch hook mutations cannot change the response path", async () =>
   });
 
   const { ws } = await openClient();
-  const patched = await rpcOk<{
-    entry: { label?: string };
-    resolved: {
-      modelProvider: string;
-      model: string;
-      agentRuntime: { id: string; source: string };
-    };
-  }>(ws, "sessions.patch", {
-    key: "agent:main:main",
-    label: "cfg-isolation",
-  });
+  const resolved = {
+    modelProvider: "anthropic",
+    model: "claude-opus-4-6",
+    agentRuntime: { id: "openclaw", source: "implicit" },
+    runtimeSelectionLocked: false,
+  };
+  const patched = await rpcOk<{ entry: { label?: string }; resolved: typeof resolved }>(
+    ws,
+    "sessions.patch",
+    { key: mainKey, label: "cfg-isolation" },
+  );
 
   expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledOnce();
   expect(sessionHookMocks.triggerInternalHook.mock.calls[0]?.[0]).toMatchObject({
     type: "session",
     action: "patch",
-    sessionKey: "agent:main:main",
+    sessionKey: mainKey,
     context: {
       sessionEntry: { sessionId: "sess-cfg-isolation-test", label: "cfg-isolation" },
       patch: { label: "cfg-isolation" },
     },
   });
-  expect(patched?.resolved).toEqual({
-    modelProvider: "anthropic",
-    model: "claude-opus-4-6",
-    agentRuntime: { id: "openclaw", source: "implicit" },
-    runtimeSelectionLocked: false,
-  });
+  expect(patched?.resolved).toEqual(resolved);
   expect(patched?.entry.label).toBe("cfg-isolation");
 
   ws.close();
 });
 
 test("sessions.patch stores and clears rootless modes while preserving recorded roots", async () => {
-  const pinnedSessionKey = "agent:main:dashboard:pinned-permission";
+  const pinnedKey = "agent:main:dashboard:pinned-permission";
   const storePath = await seedSessions({
     main: sessionStoreEntry("sess-rootless-permission"),
-    [pinnedSessionKey]: sessionStoreEntry("sess-pinned-permission", {
+    [pinnedKey]: sessionStoreEntry("sess-pinned-permission", {
       sessionRoot: "/workspace/project",
     }),
   });
@@ -194,8 +177,8 @@ test("sessions.patch stores and clears rootless modes while preserving recorded 
     expect(stored()).toMatchObject({ permissionMode: "guarded" });
     await patchMode(mainKey, null);
     expect(stored()).not.toHaveProperty("permissionMode");
-    await patchMode(pinnedSessionKey, "workspace");
-    expect(stored(pinnedSessionKey)).toMatchObject({
+    await patchMode(pinnedKey, "workspace");
+    expect(stored(pinnedKey)).toMatchObject({
       permissionMode: "workspace",
       sessionRoot: "/workspace/project",
     });
@@ -215,10 +198,7 @@ test("createGatewaySession stores a permission mode without a prepared session r
     permissionMode: "guarded",
   });
 
-  expect(created).toMatchObject({
-    ok: true,
-    entry: { permissionMode: "guarded" },
-  });
+  expect(created).toMatchObject({ ok: true, entry: { permissionMode: "guarded" } });
   expect(created).not.toHaveProperty("entry.sessionRoot");
 });
 
