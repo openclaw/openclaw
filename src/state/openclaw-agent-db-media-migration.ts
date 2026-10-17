@@ -36,9 +36,27 @@ export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   if (db.location()) {
     maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   }
-  yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
+  yield* agentDatabaseIntegrityBeforeMutationSteps(
+    db,
+    agentId,
+    pathname,
+    undefined,
+    undefined,
+    false,
+    false,
+    options.integrityCheck,
+  );
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });
-  ensureOpenClawAgentSchema(db, agentId, pathname, targetVersion);
+  ensureOpenClawAgentSchema(
+    db,
+    agentId,
+    pathname,
+    targetVersion,
+    undefined,
+    undefined,
+    false,
+    options.integrityCheck,
+  );
 }

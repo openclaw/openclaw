@@ -296,9 +296,9 @@ async function migrateAgentDatabase(params: {
     assertMediaSchemaMigration();
     const schemaMode = userVersion < OPENCLAW_AGENT_SCHEMA_VERSION ? "legacy" : "current";
     const schemaSql = getOpenClawAgentMigrationSchema(userVersion);
-    // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
       repairCanonicalSqliteIndexes(database, params.pathname, schemaSql, {
+        integrity: { check: params.integrityCheck ?? "quick" },
         validateAfterRepair: () =>
           assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode),
       });
