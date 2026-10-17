@@ -11,11 +11,27 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { domProbe } from "../dom-probe.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
+import {
+  questionRequest,
+  confirmQuestion,
+  approvalRequest,
+  attentionLabel,
+} from "./compact.test-support.ts";
 import { mountRoster, settleRoster } from "./roster.test-support.ts";
 
 const sessionKey = "agent:main:attention";
+
+function directRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  extra: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
+  return { key, kind: "direct", label, updatedAt, ...extra };
+}
 
 function setRows(
   harness: ReturnType<typeof createSessionsHarness>,
@@ -36,16 +52,12 @@ function failedRow(
   key = sessionKey,
   overrides: Partial<GatewaySessionRow> = {},
 ): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    label: "Blocked investigation",
-    updatedAt: 2,
+  return directRow(key, "Blocked investigation", 2, {
     endedAt: 2,
     status: "failed",
     lastRunError: "Provider credits exhausted",
     ...overrides,
-  };
+  });
 }
 
 function agentAttentionRow(
@@ -73,42 +85,54 @@ async function errorDescription(container: ParentNode): Promise<string> {
     .join(" ");
 }
 
+function questionsGateway() {
+  return createGatewayHarness({
+    request: vi.fn().mockResolvedValue({ questions: [] }),
+  } as unknown as GatewayBrowserClient);
+}
+
+async function mountAttention(
+  rows: GatewaySessionRow[],
+  gateway = createGateway({} as GatewayBrowserClient),
+  agents: Parameters<typeof mountSidebar>[3] = null,
+  approvals: readonly ExecApprovalRequest[] = [],
+) {
+  const sessionsHarness = createSessionsHarness("main", [rows[0]!.key]);
+  setRows(sessionsHarness, rows);
+  const mounted = await mountSidebar(gateway, sessionsHarness.sessions, "panel", agents, approvals);
+  return {
+    ...mounted,
+    dom: domProbe(mounted.sidebar),
+    sessionsHarness,
+  };
+}
+
+function deploymentRow(): GatewaySessionRow {
+  return directRow(sessionKey, "Deploy", 2, {
+    agentStatus: { note: "Deploying to staging", expiresAt: Date.now() + 60_000 },
+  });
+}
+
 describe("AppSidebar session attention", () => {
   it("keeps an active waiting session hand-only and restores its ring after resolution", async () => {
-    const client = {
-      request: vi.fn().mockResolvedValue({ questions: [] }),
-    } as unknown as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
-      {
-        key: sessionKey,
-        kind: "direct",
-        label: "Waiting session",
-        updatedAt: 2,
-        status: "running",
-        hasActiveRun: true,
-      },
-    ]);
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessionsHarness.sessions);
-    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`)!;
-    expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
-    gatewayHarness.publishEvent("question.requested", {
-      id: "question-active",
-      agentId: "main",
-      sessionKey,
-      questions: [
-        {
-          questionId: "confirm",
-          header: "Confirm",
-          question: "Continue?",
-          options: [{ label: "Continue" }],
-        },
+    const gatewayHarness = questionsGateway();
+    const { sidebar, dom } = await mountAttention(
+      [
+        directRow(sessionKey, "Waiting session", 2, {
+          status: "running",
+          hasActiveRun: true,
+        }),
       ],
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-      status: "pending",
-    });
+      gatewayHarness.gateway,
+    );
+    const row = dom.query(`[data-session-key="${sessionKey}"]`)!;
+    expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
+    gatewayHarness.publishEvent(
+      "question.requested",
+      questionRequest("question-active", sessionKey, {
+        questions: [confirmQuestion([{ label: "Continue" }])],
+      }),
+    );
     await settleLitElement(sidebar);
     expect(
       row.querySelector('[data-session-attention="question"]')?.getAttribute("aria-label"),
@@ -124,18 +148,13 @@ describe("AppSidebar session attention", () => {
     expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
   });
   it("preserves diagnostic paths in failed-run previews", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
+    const { dom } = await mountAttention([
       failedRow(sessionKey, {
         lastRunError:
           "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
       }),
     ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
-    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`)!;
+    const row = dom.query(`[data-session-key="${sessionKey}"]`)!;
 
     expect(await errorDescription(row)).toContain(
       "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
@@ -144,16 +163,10 @@ describe("AppSidebar session attention", () => {
 
   it("projects canonical main attention onto the agent header across row refresh ordering", async () => {
     const mainKey = "agent:main:main";
-    const client = {
-      request: vi.fn().mockResolvedValue({ questions: [] }),
-    } as unknown as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const sessionsHarness = createSessionsHarness("main", [mainKey]);
-    setRows(sessionsHarness, [agentAttentionRow(mainKey)]);
-    const { sidebar, context } = await mountSidebar(
+    const gatewayHarness = questionsGateway();
+    const { sidebar, context, sessionsHarness, dom } = await mountAttention(
+      [agentAttentionRow(mainKey)],
       gatewayHarness.gateway,
-      sessionsHarness.sessions,
-      "panel",
       TWO_AGENTS,
     );
     sidebar.connected = true;
@@ -164,27 +177,16 @@ describe("AppSidebar session attention", () => {
       await rosterActivityStore(context).refresh();
       await settleRoster(sidebar);
     };
-    const home = () =>
-      sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
+    const home = () => dom.query('[data-agent-group="main"] .sidebar-agent-roster__header');
 
     expect(home()?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
 
-    gatewayHarness.publishEvent("question.requested", {
-      id: "question-home",
-      agentId: "main",
-      sessionKey: mainKey,
-      questions: [
-        {
-          questionId: "confirm",
-          header: "Confirm",
-          question: "Continue?",
-          options: [{ label: "Continue", description: "Resume the run." }],
-        },
-      ],
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-      status: "pending",
-    });
+    gatewayHarness.publishEvent(
+      "question.requested",
+      questionRequest("question-home", mainKey, {
+        questions: [confirmQuestion([{ label: "Continue", description: "Resume the run." }])],
+      }),
+    );
     await settleLitElement(sidebar);
     expect(home()?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
@@ -203,48 +205,29 @@ describe("AppSidebar session attention", () => {
     ]);
     await settleLitElement(sidebar);
     expect(home()?.querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(
-      home()?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
-    ).toBe("Run failed:   Message failed:  delivery unavailable");
-    expect(
-      home()?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
-    ).not.toMatch(/[⚠✉]/u);
+    expect(attentionLabel(home(), "error")).toBe(
+      "Run failed:   Message failed:  delivery unavailable",
+    );
+    expect(attentionLabel(home(), "error")).not.toMatch(/[⚠✉]/u);
 
-    await publishRows([
-      { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
-    ]);
+    await publishRows([directRow(mainKey, "Home", 3, { status: "done" })]);
     await settleLitElement(sidebar);
     expect(home()?.querySelector("[data-session-attention]")).toBeNull();
   });
 
   it("shows question attention ahead of a run error and clears it on resolution", async () => {
-    const client = {
-      request: vi.fn().mockResolvedValue({ questions: [] }),
-    } as unknown as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [agentAttentionRow()]);
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessionsHarness.sessions);
+    const gatewayHarness = questionsGateway();
+    const { sidebar, dom } = await mountAttention([agentAttentionRow()], gatewayHarness.gateway);
 
-    gatewayHarness.publishEvent("question.requested", {
-      id: "question-1",
-      agentId: "main",
-      sessionKey,
-      questions: [
-        {
-          questionId: "confirm",
-          header: "Confirm",
-          question: "Continue?",
-          options: [{ label: "Continue", description: "Resume the run." }],
-        },
-      ],
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-      status: "pending",
-    });
+    gatewayHarness.publishEvent(
+      "question.requested",
+      questionRequest("question-1", sessionKey, {
+        questions: [confirmQuestion([{ label: "Continue", description: "Resume the run." }])],
+      }),
+    );
     await settleLitElement(sidebar);
 
-    const questionAttention = sidebar.querySelector('[data-session-attention="question"]');
+    const questionAttention = dom.query('[data-session-attention="question"]');
     expect(questionAttention).not.toBeNull();
     expect(questionAttention?.getAttribute("aria-label")).toBe(
       "Waiting for your answer\nContinue?",
@@ -256,7 +239,7 @@ describe("AppSidebar session attention", () => {
         ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
     ).toBe("Continue?");
     expect(
-      sidebar.querySelector(`[data-session-key="${sessionKey}"] .sidebar-recent-session__subtitle`),
+      dom.query(`[data-session-key="${sessionKey}"] .sidebar-recent-session__subtitle`),
     ).toBeNull();
     expect(sidebar.textContent).not.toContain("Run failed:");
 
@@ -265,15 +248,14 @@ describe("AppSidebar session attention", () => {
       status: "cancelled",
     });
     await settleLitElement(sidebar);
-    expect(sidebar.querySelector('[data-session-attention="question"]')).toBeNull();
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    expect(dom.query('[data-session-attention="question"]')).toBeNull();
+    expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
     expect(sidebar.textContent).toContain("Blocked: need the staging password");
   });
 
   it("shows hourglass attention ahead of a run error", async () => {
     const attention = "hourglass";
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
+    const { sidebar, dom } = await mountAttention([
       agentAttentionRow(sessionKey, {
         agentStatus: {
           note: "Blocked: need the staging password",
@@ -282,63 +264,33 @@ describe("AppSidebar session attention", () => {
         },
       }),
     ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
 
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
-    expect(sidebar.querySelector('[data-session-attention="agent"] svg circle')).not.toBeNull();
+    expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
+    expect(dom.query('[data-session-attention="agent"] svg circle')).not.toBeNull();
     expect(sidebar.textContent).toContain("Blocked: need the staging password");
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
   it("shows an unflagged agent status note in the subtitle slot", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
-      {
-        key: sessionKey,
-        kind: "direct",
-        label: "Deploy",
-        updatedAt: 2,
-        agentStatus: { note: "Deploying to staging", expiresAt: Date.now() + 60_000 },
-      },
-    ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
+    const { sidebar, dom } = await mountAttention([deploymentRow()]);
 
     sidebar.sessionOrganizer.setSessionsShowPreview(true);
     await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Deploying to staging");
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+    expect(dom.query('[data-session-attention="agent"]')).toBeNull();
   });
 
   it("defaults to one line without hiding attention", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
-      {
-        key: sessionKey,
-        kind: "direct",
-        label: "Deploy",
-        updatedAt: 2,
-        agentStatus: { note: "Deploying to staging", expiresAt: Date.now() + 60_000 },
-      },
-    ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
+    const { sidebar, sessionsHarness, dom } = await mountAttention([deploymentRow()]);
 
-    const previewRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    const previewRow = dom.query(`[data-session-key="${sessionKey}"]`);
     expect(previewRow?.textContent).not.toContain("Deploying to staging");
     expect(previewRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
 
     setRows(sessionsHarness, [failedRow()]);
     await settleLitElement(sidebar);
 
-    const attentionRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    const attentionRow = dom.query(`[data-session-key="${sessionKey}"]`);
     expect(attentionRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
     expect(attentionRow?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
     expect(
@@ -353,13 +305,8 @@ describe("AppSidebar session attention", () => {
 
   it("keeps status expiry retired through queued updates after disconnect", async () => {
     vi.useFakeTimers();
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [agentAttentionRow()]);
-    const { sidebar, provider } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    const { sidebar, provider, sessionsHarness, dom } = await mountAttention([agentAttentionRow()]);
+    expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
 
     const owner = getAppSidebarOwner(sidebar.hostElement)!;
     sidebar.invalidate();
@@ -371,42 +318,30 @@ describe("AppSidebar session attention", () => {
 
     document.body.append(provider);
     await settleLitElement(sidebar);
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+    expect(dom.query('[data-session-attention="agent"]')).toBeNull();
 
     setRows(sessionsHarness, [agentAttentionRow()]);
     await settleLitElement(sidebar);
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
     await vi.advanceTimersByTimeAsync(60_001);
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+    expect(dom.query('[data-session-attention="agent"]')).toBeNull();
   });
 
   it.each(["exec", "plugin"] as const)(
     "shows %s approval request details ahead of a run error",
     async (kind) => {
-      const approval = {
-        id: "approval-1",
+      const approval = approvalRequest(sessionKey, {
         kind,
         pluginTitle: kind === "exec" ? undefined : "Enable the calendar plugin",
-        request: { command: "git status", sessionKey },
-        createdAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
-      } satisfies ExecApprovalRequest;
-      const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-      setRows(sessionsHarness, [failedRow()]);
-      const { sidebar } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        sessionsHarness.sessions,
-        "panel",
-        null,
-        [approval],
-      );
+      });
+      const { sidebar, dom } = await mountAttention([failedRow()], undefined, null, [approval]);
 
-      const indicator = sidebar.querySelector('[data-session-attention="approval"]');
+      const indicator = dom.query('[data-session-attention="approval"]');
       expect(indicator?.getAttribute("aria-label")).toBe(
         `Waiting for approval\n${kind === "exec" ? "git status" : "Enable the calendar plugin"}`,
       );
       expect(indicator?.getAttribute("tabindex")).toBe("0");
-      const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+      const row = dom.query(`[data-session-key="${sessionKey}"]`);
       expect(row?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
       expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
       expect(sidebar.textContent).not.toContain("Run failed:");
@@ -415,13 +350,7 @@ describe("AppSidebar session attention", () => {
 
   it("uses canonical main attention without duplicating the agent header approval badge", async () => {
     const mainKey = "agent:main:main";
-    const approval = {
-      id: "approval-main",
-      kind: "exec",
-      request: { command: "git status", sessionKey: mainKey },
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-    } satisfies ExecApprovalRequest;
+    const approval = approvalRequest(mainKey, { id: "approval-main" });
     const { sidebar } = await mountSidebar(
       createGateway({} as GatewayBrowserClient),
       createSessionsHarness("main", [mainKey]).sessions,
@@ -429,11 +358,12 @@ describe("AppSidebar session attention", () => {
       TWO_AGENTS,
       [approval],
     );
+    const dom = domProbe(sidebar);
 
     sidebar.connected = true;
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(sidebar);
-    const homeAttention = sidebar.querySelector(
+    const homeAttention = dom.query(
       '[data-agent-group="main"] .sidebar-agent-roster__header [data-session-attention="approval"]',
     );
     expect(homeAttention).not.toBeNull();
@@ -443,24 +373,19 @@ describe("AppSidebar session attention", () => {
         ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
     ).toBe("git status");
 
-    expect(
-      sidebar.querySelector(".sidebar-workspace-header__main")?.getAttribute("aria-label"),
-    ).not.toContain("pending approval");
+    expect(dom.attr(".sidebar-workspace-header__main", "aria-label")).not.toContain(
+      "pending approval",
+    );
   });
 
   it("keeps a read failure dismissed after the sessions list refreshes", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [failedRow()]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
+    const { sidebar, sessionsHarness, dom } = await mountAttention([failedRow()]);
 
-    expect(sidebar.querySelector('[data-session-attention="error"]')).not.toBeNull();
+    expect(dom.query('[data-session-attention="error"]')).not.toBeNull();
     setRows(sessionsHarness, [failedRow(sessionKey, { lastReadAt: 2 })]);
     await settleLitElement(sidebar);
 
-    expect(sidebar.querySelector('[data-session-attention="error"]')).toBeNull();
+    expect(dom.query('[data-session-attention="error"]')).toBeNull();
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
@@ -470,24 +395,16 @@ describe("AppSidebar session attention", () => {
     const failedKey = "agent:main:subagent:review";
     const rows = (
       [
-        {
-          key: parentKey,
-          kind: "direct",
-          label: "Release preparation",
-          updatedAt: 4,
+        directRow(parentKey, "Release preparation", 4, {
           status: "done",
           childSessions: [childKey],
-        },
-        {
-          key: childKey,
-          kind: "direct",
-          label: "Validate candidate",
-          updatedAt: 3,
+        }),
+        directRow(childKey, "Validate candidate", 3, {
           status: "running",
           hasActiveRun: true,
           spawnedBy: parentKey,
           childSessions: [failedKey],
-        },
+        }),
         failedRow(failedKey, { label: "Source review", spawnedBy: childKey }),
       ] satisfies GatewaySessionRow[]
     ).map((row) => Object.assign({}, row, { agentId: "main" }));
@@ -497,18 +414,18 @@ describe("AppSidebar session attention", () => {
       result,
       context,
     } = await mountRoster(TWO_AGENTS, rows);
-    const parentRow = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
+    const dom = domProbe(sidebar);
+    const parentRow = () => dom.query(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
     const description = await errorDescription(parentRow());
     expect(description).toContain(childFailure);
     expect(description).not.toContain("Run failed:");
 
     sidebar.sidebarAgentsMode = "roster";
-    const agentHeader = () =>
-      sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
+    const agentHeader = () => dom.query('[data-agent-group="main"] .sidebar-agent-roster__header');
     await waitForFast(() => {
       expect(
-        sidebar.querySelector(`openclaw-sidebar-agent-roster [data-session-key="${parentKey}"]`),
+        dom.query(`openclaw-sidebar-agent-roster [data-session-key="${parentKey}"]`),
       ).toBeNull();
       expect(
         agentHeader()
@@ -530,14 +447,11 @@ describe("AppSidebar session attention", () => {
   });
 
   it("shows attention again when a later failure follows a read", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [failedRow(sessionKey, { lastReadAt: 2 })]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
+    const { sidebar, sessionsHarness, dom } = await mountAttention([
+      failedRow(sessionKey, { lastReadAt: 2 }),
+    ]);
 
-    expect(sidebar.querySelector('[data-session-attention="error"]')).toBeNull();
+    expect(dom.query('[data-session-attention="error"]')).toBeNull();
     setRows(sessionsHarness, [failedRow(sessionKey, { endedAt: 3, updatedAt: 3, lastReadAt: 2 })]);
     await settleLitElement(sidebar);
 
@@ -549,8 +463,7 @@ describe("AppSidebar session attention", () => {
       "openclaw:sidebar:sessions:collapsed-sections",
       JSON.stringify(["ungrouped"]),
     );
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [
+    const { dom } = await mountAttention([
       agentAttentionRow(),
       {
         key: "agent:main:peer",
@@ -559,13 +472,9 @@ describe("AppSidebar session attention", () => {
         worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
       },
     ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
 
-    const section = sidebar.querySelector('[data-session-section="ungrouped"]');
-    expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
+    const section = dom.query('[data-session-section="ungrouped"]');
+    expect(dom.query('[data-session-section="work"]')).not.toBeNull();
     expect(
       section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-expanded"),
     ).toBe("false");
@@ -578,9 +487,7 @@ describe("AppSidebar session attention", () => {
     for (const kind of ["question", "approval"] as const) {
       localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
       const childKey = `agent:main:subagent:${kind}`;
-      const gatewayHarness = createGatewayHarness({
-        request: vi.fn().mockResolvedValue({ questions: [] }),
-      } as unknown as GatewayBrowserClient);
+      const gatewayHarness = questionsGateway();
       const sessionsHarness = createSessionsHarness("main", [parentKey]);
       setRows(sessionsHarness, [
         { key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] },
@@ -591,13 +498,7 @@ describe("AppSidebar session attention", () => {
           worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
         },
       ]);
-      const approval = {
-        id: "approval-child",
-        kind: "exec",
-        request: { command: "git status", sessionKey: childKey },
-        createdAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
-      } satisfies ExecApprovalRequest;
+      const approval = approvalRequest(childKey, { id: "approval-child" });
       const { sidebar } = await mountSidebar(
         gatewayHarness.gateway,
         sessionsHarness.sessions,
@@ -605,41 +506,34 @@ describe("AppSidebar session attention", () => {
         null,
         kind === "approval" ? [approval] : [],
       );
+      const dom = domProbe(sidebar);
       if (kind === "question") {
-        gatewayHarness.publishEvent("question.requested", {
-          id: "question-child",
-          agentId: "main",
-          sessionKey: childKey,
-          questions: [
-            { questionId: "confirm", header: "Confirm", question: "Continue?", options: [] },
-          ],
-          createdAtMs: Date.now(),
-          expiresAtMs: Date.now() + 60_000,
-          status: "pending",
-        });
+        gatewayHarness.publishEvent(
+          "question.requested",
+          questionRequest("question-child", childKey),
+        );
         await settleLitElement(sidebar);
       }
       expect(
-        sidebar.querySelector(
-          `[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`,
-        ),
+        dom.query(`[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`),
       ).not.toBeNull();
       expect(
-        sidebar
-          .querySelector(`[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`)
-          ?.getAttribute("aria-label"),
+        dom.attr(
+          `[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`,
+          "aria-label",
+        ),
       ).toBe(
         kind === "question"
           ? "Waiting for your answer\nContinue?"
           : "Waiting for approval\ngit status",
       );
-      expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-      expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
-      sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
+      expect(dom.query(`[data-session-key="${childKey}"]`)).toBeNull();
+      expect(dom.query('[data-session-section="work"]')).not.toBeNull();
+      dom.query<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
       await settleLitElement(sidebar);
       expect(
-        sidebar
-          .querySelector('[data-session-section="ungrouped"]')
+        dom
+          .query('[data-session-section="ungrouped"]')
           ?.querySelector(".sidebar-session-group-attention"),
       ).not.toBeNull();
       sidebar.remove();
@@ -661,39 +555,30 @@ describe("AppSidebar session attention", () => {
       sessions: childKeys.map((key, index) =>
         index === 5
           ? { ...agentAttentionRow(key), spawnedBy: parentKey, label: "Attention child" }
-          : {
-              key,
+          : directRow(key, `Quiet child ${index + 1}`, index + 1, {
               spawnedBy: parentKey,
-              kind: "direct" as const,
-              label: `Quiet child ${index + 1}`,
-              updatedAt: index + 1,
-            },
+            }),
       ),
     });
     setRows(sessionsHarness, [
-      {
-        key: parentKey,
-        kind: "direct",
-        label: "Parent task",
-        updatedAt: 1,
+      directRow(parentKey, "Parent task", 1, {
         childSessions: childKeys,
-      },
+      }),
     ]);
     const { sidebar } = await mountSidebar(
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
+    const dom = domProbe(sidebar);
 
-    sidebar.querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)?.click();
+    dom.query<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)?.click();
     await waitForFast(() => {
       expect(
-        sidebar.querySelector(`[data-session-key="${parentKey}"] [data-session-attention="agent"]`),
+        dom.query(`[data-session-key="${parentKey}"] [data-session-attention="agent"]`),
       ).not.toBeNull();
-      expect(sidebar.querySelector(`[data-session-key="${childKeys[5]}"]`)).not.toBeNull();
+      expect(dom.query(`[data-session-key="${childKeys[5]}"]`)).not.toBeNull();
     });
-    expect(sidebar.querySelector(`[data-session-key="${childKeys[4]}"]`)).toBeNull();
-    expect(sidebar.querySelector("[data-show-more-children]")?.textContent?.trim()).toBe(
-      "Show 1 more",
-    );
+    expect(dom.query(`[data-session-key="${childKeys[4]}"]`)).toBeNull();
+    expect(dom.text("[data-show-more-children]")?.trim()).toBe("Show 1 more");
   });
 });

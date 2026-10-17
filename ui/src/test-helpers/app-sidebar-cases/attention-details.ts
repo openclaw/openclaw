@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
 import {
@@ -9,8 +8,10 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { domProbe } from "../dom-probe.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { waitForFast } from "../wait-for.ts";
+import { approvalRequest, attentionLabel, questionRequest } from "./compact.test-support.ts";
 import { mountRoster, roster, session, settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar session attention details", () => {
@@ -24,13 +25,12 @@ describe("AppSidebar session attention details", () => {
     async (agentId, requesterAgentId, ownsRequest) => {
       const now = Date.now();
       const requestTarget = { sessionKey: "global", agentId: requesterAgentId };
-      const approval = {
+      const approval = approvalRequest("global", {
         id: "global-approval",
-        kind: "exec",
         request: { command: "git status --short", ...requestTarget },
         createdAtMs: now + 1,
         expiresAtMs: now + 60_000,
-      } satisfies ExecApprovalRequest;
+      });
       const sessionsHarness = createSessionsHarness(agentId, ["global"]);
       const gatewayHarness = createGatewayHarness(
         createTestGatewayClient(async (method) =>
@@ -63,41 +63,39 @@ describe("AppSidebar session attention details", () => {
         { ...TWO_AGENTS, scope: "global" },
         [approval],
       );
+      const dom = domProbe(sidebar);
+      const header = () =>
+        dom.query(`[data-agent-group="${agentId}"] .sidebar-agent-roster__header`);
       sidebar.connected = true;
       sidebar.sidebarAgentsMode = "roster";
       await settleRoster(sidebar);
-      gatewayHarness.publishEvent("question.requested", {
-        id: "global-question",
-        ...requestTarget,
-        questions: [
-          {
-            questionId: "confirm",
-            header: "Confirm",
-            question: "Review the changes?",
-            options: [],
-          },
-        ],
-        createdAtMs: now,
-        expiresAtMs: now + 60_000,
-        status: "pending",
-      });
+      gatewayHarness.publishEvent(
+        "question.requested",
+        questionRequest("global-question", "global", {
+          agentId: requesterAgentId,
+          questions: [
+            {
+              questionId: "confirm",
+              header: "Confirm",
+              question: "Review the changes?",
+              options: [],
+            },
+          ],
+          createdAtMs: now,
+          expiresAtMs: now + 60_000,
+        }),
+      );
       await sidebar.updateComplete;
-      expect(
-        sidebar
-          .querySelector(
-            `[data-agent-group="${agentId}"] .sidebar-agent-roster__header [data-session-attention]`,
-          )
-          ?.getAttribute("aria-label"),
-      ).toBe(ownsRequest ? "Waiting for your answer\nReview the changes?" : undefined);
-      expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
+      expect(attentionLabel(header())).toBe(
+        ownsRequest ? "Waiting for your answer\nReview the changes?" : undefined,
+      );
+      expect(dom.query('[data-session-key="global"]')).toBeNull();
       await selectSidebarView(sidebar, "pages");
       await selectSidebarView(sidebar, "sessions");
       await settleRoster(sidebar);
-      const header = () =>
-        sidebar.querySelector(`[data-agent-group="${agentId}"] .sidebar-agent-roster__header`);
       await waitForFast(() => expect(header()).not.toBeNull());
-      expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
-      expect(header()?.querySelector("[data-session-attention]")?.getAttribute("aria-label")).toBe(
+      expect(dom.query('[data-session-key="global"]')).toBeNull();
+      expect(attentionLabel(header())).toBe(
         ownsRequest ? "Waiting for your answer\nReview the changes?" : undefined,
       );
       gatewayHarness.publishEvent("question.resolved", {
@@ -105,7 +103,7 @@ describe("AppSidebar session attention details", () => {
         status: "cancelled",
       });
       await sidebar.updateComplete;
-      expect(header()?.querySelector("[data-session-attention]")?.getAttribute("aria-label")).toBe(
+      expect(attentionLabel(header())).toBe(
         ownsRequest ? "Waiting for approval\ngit status --short" : undefined,
       );
       await selectSidebarView(sidebar, "pages");
@@ -115,13 +113,9 @@ describe("AppSidebar session attention details", () => {
       sessionsHarness.publishList({ result: { ...result, count: 0, sessions: [] } });
       await rosterActivityStore(context).refresh();
       await settleRoster(sidebar);
-      expect(
-        sidebar
-          .querySelector(
-            `[data-agent-group="${agentId}"] .sidebar-agent-roster__header [data-session-attention]`,
-          )
-          ?.getAttribute("aria-label"),
-      ).toBe(ownsRequest ? "Waiting for approval\ngit status --short" : undefined);
+      expect(attentionLabel(header())).toBe(
+        ownsRequest ? "Waiting for approval\ngit status --short" : undefined,
+      );
       sidebar.setSessionOwnerFilter("synthetic-unmatched-owner");
       await sidebar.updateComplete;
       expect(header()?.querySelector("[data-session-attention]")).toBeNull();
@@ -140,16 +134,13 @@ describe("AppSidebar session attention details", () => {
       const { sidebar, gatewayHarness } = await mountRoster(roster, [
         session("main", now, { key, label: "Deployment" }),
       ]);
+      const dom = domProbe(sidebar);
       sidebar.sidebarAgentsMode = mode;
       if (mode === "roster") {
-        await waitForFast(() =>
-          expect(sidebar.querySelector('[data-agent-group="main"]')).not.toBeNull(),
-        );
-        expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+        await waitForFast(() => expect(dom.query('[data-agent-group="main"]')).not.toBeNull());
+        expect(dom.query(`[data-session-key="${key}"]`)).toBeNull();
       } else {
-        await waitForFast(() =>
-          expect(sidebar.querySelector(`[data-session-key="${key}"]`)).not.toBeNull(),
-        );
+        await waitForFast(() => expect(dom.query(`[data-session-key="${key}"]`)).not.toBeNull());
       }
       const publish = (
         id: string,
@@ -176,7 +167,7 @@ describe("AppSidebar session attention details", () => {
       publish("oldest", ["Continue with deployment?", "Which environment?"], now);
       await sidebar.updateComplete;
       const indicator = () =>
-        sidebar.querySelector(
+        dom.query(
           mode === "roster"
             ? '[data-agent-group="main"] .sidebar-agent-roster__header [data-session-attention="question"]'
             : `[data-session-key="${key}"] [data-session-attention="question"]`,
@@ -186,9 +177,7 @@ describe("AppSidebar session attention details", () => {
           "3 questions need your answer\nContinue with deployment?\n+2 more",
         ),
       );
-      expect(
-        sidebar.querySelector(`[data-session-key="${key}"] .sidebar-recent-session__subtitle`),
-      ).toBeNull();
+      expect(dom.query(`[data-session-key="${key}"] .sidebar-recent-session__subtitle`)).toBeNull();
       gatewayHarness.publishEvent("question.resolved", {
         id: "oldest",
         status: "answered",
@@ -224,13 +213,12 @@ describe("AppSidebar session attention details", () => {
       const parentKey = isHome ? "agent:main:main" : "agent:main:deployment";
       const childKey = "agent:main:subagent:deploy";
       const persistentKey = "agent:main:dashboard:release";
-      const approval = {
+      const approval = approvalRequest(parentKey, {
         id: "approval-older",
-        kind: "exec",
         request: { command: "pnpm test", sessionKey: parentKey },
         createdAtMs: now - 2,
         expiresAtMs: now + 60_000,
-      } satisfies ExecApprovalRequest;
+      });
       const parent = session("main", now, {
         key: parentKey,
         isMain: isHome,
@@ -250,34 +238,27 @@ describe("AppSidebar session attention details", () => {
         [approval],
         [child, persistent],
       );
+      const dom = domProbe(sidebar);
       sidebar.sidebarAgentsMode = "roster";
-      await waitForFast(() =>
-        expect(sidebar.querySelector('[data-agent-group="main"]')).not.toBeNull(),
-      );
-      expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
+      await waitForFast(() => expect(dom.query('[data-agent-group="main"]')).not.toBeNull());
+      expect(dom.query(`[data-session-key="${parentKey}"]`)).toBeNull();
       for (const [id, key, createdAtMs, question] of [
         ["parent-question", parentKey, now, "Which deployment region?"],
         ["child-question", childKey, now - 1, "Which environment?"],
       ] as const) {
-        gatewayHarness.publishEvent("question.requested", {
-          id,
-          sessionKey: key,
-          agentId: "main",
-          createdAtMs,
-          expiresAtMs: now + 60_000,
-          status: "pending",
-          questions: [{ questionId: "confirm", header: "Deploy", question, options: [] }],
-        });
+        gatewayHarness.publishEvent(
+          "question.requested",
+          questionRequest(id, key, {
+            createdAtMs,
+            expiresAtMs: now + 60_000,
+            questions: [{ questionId: "confirm", header: "Deploy", question, options: [] }],
+          }),
+        );
       }
       await sidebar.updateComplete;
-      const header = () =>
-        sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
+      const header = () => dom.query('[data-agent-group="main"] .sidebar-agent-roster__header');
       await waitForFast(() =>
-        expect(
-          header()
-            ?.querySelector('[data-session-attention="approval"]')
-            ?.getAttribute("aria-label"),
-        ).toBe("Waiting for approval\npnpm test"),
+        expect(attentionLabel(header(), "approval")).toBe("Waiting for approval\npnpm test"),
       );
       context.overlays.snapshot.approvalQueue = [];
       for (const [notify] of vi.mocked(context.overlays.subscribe).mock.calls) {
@@ -285,26 +266,22 @@ describe("AppSidebar session attention details", () => {
       }
       await sidebar.updateComplete;
       await waitForFast(() =>
-        expect(
-          header()
-            ?.querySelector('[data-session-attention="question"]')
-            ?.getAttribute("aria-label"),
-        ).toBe("2 questions need your answer\nWhich environment?\n+1 more"),
+        expect(attentionLabel(header(), "question")).toBe(
+          "2 questions need your answer\nWhich environment?\n+1 more",
+        ),
       );
-      gatewayHarness.publishEvent("question.requested", {
-        id: "persistent-question",
-        sessionKey: persistentKey,
-        agentId: "main",
-        createdAtMs: now - 3,
-        expiresAtMs: now + 60_000,
-        status: "pending",
-        questions: [
-          { questionId: "revision", header: "Release", question: "Which revision?", options: [] },
-        ],
-      });
-      const attention = () =>
-        header()?.querySelector("[data-session-attention]")?.getAttribute("aria-label");
-      expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+      gatewayHarness.publishEvent(
+        "question.requested",
+        questionRequest("persistent-question", persistentKey, {
+          createdAtMs: now - 3,
+          expiresAtMs: now + 60_000,
+          questions: [
+            { questionId: "revision", header: "Release", question: "Which revision?", options: [] },
+          ],
+        }),
+      );
+      const attention = () => attentionLabel(header());
+      expect(dom.query(`[data-session-key="${childKey}"]`)).toBeNull();
       await waitForFast(() =>
         expect(attention()).toBe("3 questions need your answer\nWhich revision?\n+2 more"),
       );
