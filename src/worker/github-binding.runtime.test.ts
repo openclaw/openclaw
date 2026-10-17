@@ -53,7 +53,19 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   async function commit(directory: string, message: string) {
     await git(directory, "add", ".");
-    await git(directory, "commit", "--quiet", "--no-gpg-sign", "--allow-empty", "-m", message);
+    await git(
+      directory,
+      "-c",
+      "user.name=Worker Fixture",
+      "-c",
+      "user.email=worker@openclaw.invalid",
+      "commit",
+      "--quiet",
+      "--no-gpg-sign",
+      "--allow-empty",
+      "-m",
+      message,
+    );
     return (await git(directory, "rev-parse", "HEAD")).trim();
   }
 
@@ -66,20 +78,13 @@ describe("prepareWorkerGitHubEnvironment", () => {
     return remoteHead;
   }
 
-  const prepare = (overrides: Partial<Parameters<typeof prepareWorkerGitHubEnvironment>[0]> = {}) =>
+  const prepare = () =>
     prepareWorkerGitHubEnvironment({
       binding,
       stateDir: path.join(root, "state"),
       turnId: "turn",
       cwd,
-      ...overrides,
     });
-
-  async function expectUnfetched(remoteHead: string) {
-    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
-    expect(remoteHead).not.toBe(initialHead);
-    await expect(git(cwd, "rev-parse", "--verify", "FETCH_HEAD")).rejects.toThrow();
-  }
 
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "worker-checkout-")));
@@ -92,8 +97,6 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await git(root, "init", "--quiet", "--bare", "origin.git");
     // The binding rewrites origin to the verified GitHub URL; route it to the local bare repo.
     await git(root, "config", "--global", `url.${origin}.insteadOf`, remoteUrl);
-    await git(root, "config", "--global", "user.name", binding.gitAuthor.name);
-    await git(root, "config", "--global", "user.email", binding.gitAuthor.email);
     await git(cwd, "init", "--quiet", `--initial-branch=${binding.branch}`);
     initialHead = await commit(cwd, "Initial commit");
     await git(cwd, "remote", "add", "origin", origin);
@@ -129,9 +132,19 @@ describe("prepareWorkerGitHubEnvironment", () => {
     const controller = new AbortController();
     controller.abort(new Error("worker fenced: owner-epoch-mismatch"));
 
-    await expect(prepare({ signal: controller.signal })).rejects.toThrow("worker fenced");
+    await expect(
+      prepareWorkerGitHubEnvironment({
+        binding,
+        stateDir: path.join(root, "state"),
+        turnId: "turn",
+        cwd,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("worker fenced");
 
-    await expectUnfetched(remoteHead);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    await expect(git(cwd, "rev-parse", "--verify", "FETCH_HEAD")).rejects.toThrow();
   });
 
   it("rejects the fetch when the turn is fenced while it is being spawned", async () => {
@@ -148,10 +161,18 @@ describe("prepareWorkerGitHubEnvironment", () => {
       return await runCommand(argv, options);
     });
 
-    await prepare({ signal: controller.signal });
+    await prepareWorkerGitHubEnvironment({
+      binding,
+      stateDir: path.join(root, "state"),
+      turnId: "turn",
+      cwd,
+      signal: controller.signal,
+    });
 
     expect(fetchAttempts).toBe(1);
-    await expectUnfetched(remoteHead);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    await expect(git(cwd, "rev-parse", "--verify", "FETCH_HEAD")).rejects.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("GitHub checkout binding failed"));
   });
 
@@ -169,7 +190,9 @@ describe("prepareWorkerGitHubEnvironment", () => {
     } as never);
     await expect(prepare()).resolves.toBeUndefined();
 
-    await expectUnfetched(remoteHead);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    await expect(git(cwd, "rev-parse", "--verify", "FETCH_HEAD")).rejects.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("profile is not owner-only"));
   });
 
@@ -177,9 +200,16 @@ describe("prepareWorkerGitHubEnvironment", () => {
     const remoteHead = await publishEarlierTurn();
     const { remoteUrl: _omitted, ...withoutRemote } = binding;
 
-    await prepare({ binding: withoutRemote });
+    await prepareWorkerGitHubEnvironment({
+      binding: withoutRemote,
+      stateDir: path.join(root, "state"),
+      turnId: "turn",
+      cwd,
+    });
 
-    await expectUnfetched(remoteHead);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    await expect(git(cwd, "rev-parse", "--verify", "FETCH_HEAD")).rejects.toThrow();
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -204,10 +234,20 @@ describe("prepareWorkerGitHubEnvironment", () => {
       GIT_AUTHOR_EMAIL: binding.gitAuthor.email,
     });
     const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
+    expect(fetchCall?.[0]).toEqual([
+      "git",
+      "-C",
+      cwd,
+      "fetch",
+      "--quiet",
+      "origin",
+      binding.branch,
+    ]);
     const options = fetchCall?.[1];
     if (typeof options !== "object") {
       throw new Error("Expected options for Git fetch");
     }
+    expect(options.timeoutMs).toBe(60_000);
     // Project only fixture-owned keys so a failed assertion cannot dump the host environment.
     const expectedEnv = {
       ...prepared?.localIdentityEnv,
@@ -248,7 +288,13 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   it("rotates the retained profile and refuses writes after cancellation", async () => {
     const controller = new AbortController();
-    const prepared = await prepare({ turnId: "renewed", signal: controller.signal });
+    const prepared = await prepareWorkerGitHubEnvironment({
+      binding,
+      stateDir: path.join(root, "state"),
+      turnId: "renewed",
+      cwd,
+      signal: controller.signal,
+    });
     if (!prepared) {
       throw new Error("Expected profile");
     }
@@ -264,9 +310,16 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   it("does not remove a newer profile when the previous turn finishes cleanup", async () => {
     const previous = await prepare();
-    const current = await prepare({ turnId: "next-turn" });
+    const current = await prepareWorkerGitHubEnvironment({
+      binding,
+      stateDir: path.join(root, "state"),
+      turnId: "next-turn",
+      cwd,
+    });
     const previousProfile = previous?.localIdentityEnv.GH_CONFIG_DIR;
     const currentProfile = current?.localIdentityEnv.GH_CONFIG_DIR;
+    expect(previousProfile).toBeTruthy();
+    expect(currentProfile).toBeTruthy();
     expect(currentProfile).not.toBe(previousProfile);
     if (!previousProfile || !currentProfile) {
       throw new Error("Expected both turns' GitHub profiles");

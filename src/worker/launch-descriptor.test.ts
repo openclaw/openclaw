@@ -1,39 +1,52 @@
 import { describe, expect, it } from "vitest";
 import {
+  WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import type { WorkerGitHubLaunchBinding, WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
-const githubIdentity: WorkerGitHubLaunchBinding = {
-  token: "worker-github-token",
-  login: "worker-bot",
-  branch: "session/worker-1",
-};
-const earlierMessage = {
-  role: "user" as const,
-  content: [{ type: "text" as const, text: "Earlier context." }],
-  timestamp: 1,
-};
-const without = (value: object, ...keys: string[]) =>
-  Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
-
 function launchDescriptor(): WorkerLaunchDescriptor {
-  const plan = testWorkerDescriptor("/tmp/openclaw-worker/workspace", "Inspect the workspace.");
   return {
-    ...plan,
+    version: 4,
     connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
+    admission: {
+      environmentId: "environment-1",
+      credential: ["worker", "fixture", "value"].join("-"),
+      sessionId: "session-1",
+      ownerEpoch: 3,
+      rpcSetVersion: WORKER_RPC_SET_VERSION,
+      handshake: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.7.12",
+        protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+      },
+    },
     assignment: {
-      ...plan.assignment,
+      agentId: "agent-1",
+      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+      agentRuntimeIdentityToken: "signed-runtime-token",
+      runId: "run-1",
+      turnId: "turn-1",
+      prompt: "Inspect the workspace.",
+      suppressPromptTranscript: false,
+      workspaceDir: "/tmp/openclaw-worker/workspace",
       permissionMode: "workspace",
-      workerContainmentRoot: plan.assignment.workspaceDir,
+      workerContainmentRoot: "/tmp/openclaw-worker/workspace",
+      modelRef: { provider: "provider-1", model: "model-1" },
       inferenceOptions: { reasoning: "medium", maxTokens: 512 },
-      initialMessages: [earlierMessage],
+      initialMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Earlier context." }],
+          timestamp: 1,
+        },
+      ],
       transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
       toolAuthority: {
@@ -127,11 +140,16 @@ describe("worker launch descriptor", () => {
 
   it("round-trips turn-bound GitHub identity without adding it to worker admission", () => {
     const descriptor = launchDescriptor();
+    const identity = {
+      token: "worker-github-token",
+      login: "worker-bot",
+      branch: "session/worker-1",
+    };
     for (const github of [
       undefined,
-      githubIdentity,
+      identity,
       {
-        ...githubIdentity,
+        ...identity,
         remoteUrl: "https://github.com/openclaw/openclaw.git",
         gitAuthor: { name: "Worker Bot", email: "worker@example.test" },
       },
@@ -145,7 +163,7 @@ describe("worker launch descriptor", () => {
       const connectParams = buildWorkerConnectParams(parsed);
       expect(connectParams).toMatchObject({
         role: "worker",
-        client: { id: "openclaw-worker", mode: "worker", version: "2026.8.1" },
+        client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
         admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
       });
       expect(connectParams).not.toHaveProperty("github");
@@ -156,7 +174,11 @@ describe("worker launch descriptor", () => {
   });
 
   it("rejects malformed or open GitHub launch bindings", () => {
-    const github = githubIdentity;
+    const github: WorkerGitHubLaunchBinding = {
+      token: "worker-github-token",
+      login: "worker-bot",
+      branch: "session/worker-1",
+    };
     const withBinding = (overrides: Record<string, unknown>) =>
       Object.assign({}, github, overrides);
     const invalidBindings: unknown[] = [
@@ -165,17 +187,19 @@ describe("worker launch descriptor", () => {
       { login: github.login, branch: github.branch },
       { token: github.token, branch: github.branch },
       { token: github.token, login: github.login },
-      ...["", "token with space", "token\u0001", "x".repeat(2049)].map((token) =>
+      ...["", "token with space", "token\n", "token\u0001", "x".repeat(2049)].map((token) =>
         withBinding({ token }),
       ),
-      ...["", "worker_bot", "worker\n", "x".repeat(40)].map((login) => withBinding({ login })),
+      ...["", "worker_bot", "worker.bot", "worker\n", "x".repeat(40)].map((login) =>
+        withBinding({ login }),
+      ),
       ...[
         "",
         "-branch",
         "branch with space",
         "branch\u0000",
         "x".repeat(257),
-        ...["..", "~", "@{"].map((part) => `branch${part}name`),
+        ...["..", "~", "^", ":", "?", "*", "[", "\\", "@{"].map((part) => `branch${part}name`),
       ].map((branch) => withBinding({ branch })),
       ...[
         "http://github.com/openclaw/openclaw.git",
@@ -207,11 +231,11 @@ describe("worker launch descriptor", () => {
 
   it("accepts the permission context pair only when both fields are present", () => {
     const descriptor = launchDescriptor();
-    const withoutContext = without(
-      descriptor.assignment,
-      "permissionMode",
-      "workerContainmentRoot",
-    );
+    const {
+      permissionMode: _permissionMode,
+      workerContainmentRoot: _root,
+      ...withoutContext
+    } = descriptor.assignment;
     expect(
       parseWorkerLaunchDescriptor({ ...descriptor, assignment: withoutContext }).assignment,
     ).toEqual(withoutContext);
@@ -250,6 +274,14 @@ describe("worker launch descriptor", () => {
         kind: "websocket",
         url: "ws://127.0.0.1/__openclaw__/worker",
         tlsFingerprint: "ab".repeat(32),
+      },
+      {
+        kind: "websocket",
+        url: "ws://127.0.0.1/__openclaw__/worker",
+        cloudflareAccess: {
+          clientId: "cf-worker-plaintext-id",
+          clientSecret: "cf-worker-plaintext-secret",
+        },
       },
       ...["", "ab:cd:ef", "g".repeat(64)].map((tlsFingerprint) => ({
         kind: "websocket",
@@ -319,9 +351,14 @@ describe("worker launch descriptor", () => {
     for (const exec of [
       null,
       {},
+      { security: "deny" },
+      { ask: "off" },
+      { security: "full" },
       { security: "full", ask: "off" },
+      { security: null, ask: "off" },
+      { security: "deny", ask: false },
       { host: "gateway", security: "full", ask: "off", unexpected: true },
-      ...[undefined, null, ["head"]].map((safeBins) => ({
+      ...[undefined, null, false, {}, ["head"], ["/usr/bin/head"]].map((safeBins) => ({
         host: "gateway",
         security: "allowlist",
         ask: "off",
@@ -334,6 +371,8 @@ describe("worker launch descriptor", () => {
       { host: "gateway", security: "full", ask: "sometimes" },
       { host: "node", security: "full", ask: "off", node: "" },
       { host: "node", security: "full", ask: "off", node: " worker-node" },
+      { host: "node", security: "full", ask: "off", nodeCwd: 42 },
+      { host: "node", security: "full", ask: "off", nodeCwd: "" },
       { host: "node", security: "full", ask: "off", nodeCwd: " /remote/workspace" },
     ]) {
       expectExecDeniedOrDescriptorRejected(
@@ -344,13 +383,21 @@ describe("worker launch descriptor", () => {
 
   it("preserves resolved exec authority and optional fields while rejecting inherited grants", () => {
     const descriptor = launchDescriptor();
-    for (const exec of [
-      { host: "sandbox", security: "deny", ask: "off" },
-      { host: "gateway", security: "allowlist", ask: "on-miss" },
-      { host: "node", security: "full", ask: "always", node: "worker-node" },
-    ] as const) {
-      descriptor.assignment.toolAuthority.exec = exec;
-      expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+    for (const host of ["sandbox", "gateway", "node"] as const) {
+      for (const security of ["deny", "allowlist", "full"] as const) {
+        for (const ask of ["off", "on-miss", "always"] as const) {
+          descriptor.assignment.toolAuthority.exec =
+            host === "node"
+              ? {
+                  host,
+                  security,
+                  ask,
+                  node: "worker-node",
+                }
+              : { host, security, ask };
+          expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+        }
+      }
     }
     const allowedToolNames = ["read"];
     const exec = { host: "node", security: "full", ask: "off" };
@@ -453,10 +500,14 @@ describe("worker launch descriptor", () => {
 
   it("requires admitted execution context and a bounded host-assigned agent identity", () => {
     const descriptor = launchDescriptor();
-    for (const assignment of [
-      without(descriptor.assignment, "operationalRunInstance", "agentRuntimeIdentityToken"),
-      without(descriptor.assignment, "agentId"),
-    ]) {
+    const {
+      operationalRunInstance: _operationalRunInstance,
+      agentRuntimeIdentityToken: _agentRuntimeIdentityToken,
+      ...legacyAssignment
+    } = descriptor.assignment;
+
+    const { agentId: _agentId, ...assignmentWithoutAgent } = descriptor.assignment;
+    for (const assignment of [legacyAssignment, assignmentWithoutAgent]) {
       expectInvalidDescriptor({ ...descriptor, assignment });
     }
     for (const agentId of ["", " agent-1", "a".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH + 1)]) {
@@ -477,15 +528,19 @@ describe("worker launch descriptor", () => {
 
   it("caps initial history at the inference context limit", () => {
     const descriptor = launchDescriptor();
+    const message = descriptor.assignment.initialMessages[0];
+    if (!message) {
+      throw new Error("expected launch fixture message");
+    }
     descriptor.assignment.initialMessages = Array.from(
       { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES },
-      () => structuredClone(earlierMessage),
+      () => structuredClone(message),
     );
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
     descriptor.assignment.initialMessages = Array.from(
       { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES + 1 },
-      () => structuredClone(earlierMessage),
+      () => structuredClone(message),
     );
 
     expectInvalidDescriptor(descriptor);
