@@ -5,7 +5,6 @@ import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -15,6 +14,11 @@ import {
   readGatewayLockProcessNamespace,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import {
+  StateDatabaseAccessError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-errors.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
 /** Admission and reclamation use the same namespace-qualified PID evidence. */
@@ -32,36 +36,11 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   );
 }
 
-export class StateDatabaseAccessError extends Error {
-  override name = "StateDatabaseAccessError";
-}
-
-export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
-  () =>
-    class extends StateDatabaseAccessError {
-      constructor(
-        readonly databasePath: string,
-        message: string,
-      ) {
-        super(message);
-      }
-    },
-);
-
-/** A live foreign process holds offline-maintenance custody of this database. */
-export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
-  () =>
-    class extends StateDatabaseAccessError {
-      constructor(
-        readonly databasePath: string,
-        message: string,
-      ) {
-        super(message);
-      }
-    },
-);
+export {
+  StateDatabaseAccessError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-errors.js";
 
 export const isStateDatabaseMaintenanceContention = (error: unknown): boolean =>
   error instanceof AggregateError

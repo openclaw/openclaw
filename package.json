@@ -7,7 +7,13 @@
       "sqlite",
       "postgres"
     ],
-    "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
+    "postgresFamilies": [
+      "state",
+      "agent",
+      "workboard",
+      "logbook",
+      "team-reports"
+    ],
     "schemaVersions": {
       "state": 26,
       "agent": 28
@@ -470,7 +476,8 @@
     "!dist/plugin-sdk/memory-host-search.d.ts",
     "!dist/plugin-sdk/codex-client-version-runtime.d.ts",
     "!dist/plugin-sdk/realtime-transcription-provider.d.ts",
-    "!dist/plugin-sdk/meeting-config.d.ts"
+    "!dist/plugin-sdk/meeting-config.d.ts",
+    "!dist/plugin-sdk/terminal-safe-text.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -820,6 +827,9 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
+    },
+    "./plugin-sdk/terminal-safe-text": {
+      "default": "./dist/plugin-sdk/terminal-safe-text.js"
     },
     "./plugin-sdk/agent-scope-runtime": {
       "types": "./dist/plugin-sdk/agent-scope-runtime.d.ts",

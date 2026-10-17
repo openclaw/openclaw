@@ -968,6 +968,9 @@
       ],
       "openclaw/plugin-sdk/meeting-config": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/meeting-config.d.ts"
+      ],
+      "openclaw/plugin-sdk/terminal-safe-text": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/terminal-safe-text.d.ts"
       ]
     }
   }
