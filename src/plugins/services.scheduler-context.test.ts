@@ -19,7 +19,6 @@ import { registerPluginHttpRoute } from "./http-registry.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
-  retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
@@ -125,7 +124,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
   const runFromRequest = async <T>(run: () => T | Promise<T>): Promise<T> => {
     const caller = new AbortController();
     const facts = new CallerFacts();
-    const cache = Object.assign(createPluginCache(), { facts });
+    await using cache = Object.assign(createPluginCache(), { facts });
     const metadataSnapshot = Object.assign(createEmptyPluginMetadataSnapshot(), { facts });
     const callerRegistry = Object.assign(createEmptyPluginRegistry(), { facts });
     const callerInstance = new PluginInstance("service-start-caller", { cache });
@@ -157,7 +156,6 @@ it("owns service callbacks after startup and reload callers finish", async () =>
     } finally {
       caller.abort(new Error("Caller completed"));
       await callerInstance.dispose();
-      await retirePluginCache(cache);
     }
   };
   const services = await runFromRequest(() =>
@@ -202,9 +200,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
     await services.stop();
     expect(registry.httpRoutes).toHaveLength(0);
   } finally {
-    for (const resource of resources) {
-      resource.emitDestroy();
-    }
+    resources.forEach((resource) => resource.emitDestroy());
     await services.stop();
     await close();
     await instance.dispose();

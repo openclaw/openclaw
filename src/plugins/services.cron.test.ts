@@ -76,11 +76,12 @@ function capturingRegistry(
   return { registry, contexts };
 }
 
-async function startService(getCronService?: () => CronService) {
+async function startService(getCronService: () => CronService) {
   const { registry, contexts } = capturingRegistry(["test-plugin"]);
   const handle = await startPluginServices({ registry, config: {}, getCronService });
   handles.add(handle);
-  return { context: expectDefined(contexts.get("test-plugin"), "started service context"), handle };
+  const context = expectDefined(contexts.get("test-plugin"), "started service context");
+  return { context, handle, service: expectDefined(context.getCron?.(), "Gateway scheduler") };
 }
 
 function createJob(name = family.name) {
@@ -99,7 +100,7 @@ function createJob(name = family.name) {
 it("keeps one handle per scheduler and reconciles through a successor service", async () => {
   const { cron } = await createScheduler();
   const first = await startService(() => cron);
-  const service = expectDefined(first.context.getCron?.(), "Gateway scheduler");
+  const { service } = first;
   expect(first.context.getCron?.()).toBe(service);
   const isEnabled = expectDefined(service.isEnabled, "scheduler enabled observation");
   expect(await isEnabled()).toBe(false);
@@ -114,8 +115,7 @@ it("keeps one handle per scheduler and reconciles through a successor service", 
     ].map((read) => expect(read).rejects.toThrow("no longer active")),
   );
 
-  const next = await startService(() => cron);
-  const successor = expectDefined(next.context.getCron?.(), "replacement scheduler");
+  const { service: successor } = await startService(() => cron);
   const job = expectDefined(
     (await successor.list({ includeDisabled: true }))[0],
     "managed plugin job",
@@ -134,8 +134,7 @@ it.each(["service stop", "scheduler replacement"] as const)(
     const replacement = await createScheduler();
     const job = await original.cron.add({ ...createJob(), enabled: true });
     let current = original.cron;
-    const { context, handle } = await startService(() => current);
-    const service = expectDefined(context.getCron?.(), "Gateway scheduler");
+    const { context, handle, service } = await startService(() => current);
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const blocker = original.cron.updateWithPrecondition(job.id, {}, async () => {
@@ -209,14 +208,14 @@ it("isolates service deadlines and joins admitted work before retiring its owner
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const siblingFired = createDeferredCore();
-  let callbackFinished = false;
+  const callbackFinished = vi.fn();
   first.schedule({
     id: "refresh",
     atMs: 200,
     run: async () => {
       entered.resolve();
       await release.promise;
-      callbackFinished = true;
+      callbackFinished();
     },
   });
   sibling.schedule({ id: "refresh", atMs: 200, run: () => siblingFired.resolve() });
@@ -230,19 +229,15 @@ it("isolates service deadlines and joins admitted work before retiring its owner
     });
     expect([first.signal.aborted, sibling.signal.aborted]).toEqual([true, false]);
     expect(() => first.schedule({ id: "late", atMs: 300, run: () => {} })).toThrow();
-    let stopFinished = false;
-    void stopping.then(() => {
-      stopFinished = true;
-    });
+    const stopFinished = vi.fn();
+    void stopping.then(stopFinished);
     await Promise.resolve();
-    expect({ stopFinished, callbackFinished }).toEqual({
-      stopFinished: false,
-      callbackFinished: false,
-    });
+    expect(stopFinished).not.toHaveBeenCalled();
+    expect(callbackFinished).not.toHaveBeenCalled();
     release.resolve();
     await stopping;
     await firing;
-    expect(callbackFinished).toBe(true);
+    expect(callbackFinished).toHaveBeenCalledOnce();
     const next = createDeferredCore();
     sibling.schedule({ id: "refresh", atMs: 300, run: () => next.resolve() });
     await clock.advanceTo(300);

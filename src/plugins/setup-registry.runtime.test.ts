@@ -12,7 +12,7 @@ import {
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   projectPluginMetadataSnapshot,
@@ -24,6 +24,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runti
 
 const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 type Runtime = typeof import("./setup-registry.runtime.js");
+type Descriptor = ReturnType<Runtime["resolvePluginSetupCliBackendDescriptor"]>;
 type Fixture = NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]>;
 
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
@@ -64,27 +65,22 @@ function metadata(...plugins: Fixture["plugins"]) {
   return createPluginMetadataSnapshotFixture({ plugins });
 }
 
-function expectBackend(
-  actual: ReturnType<Runtime["resolvePluginSetupCliBackendDescriptor"]>,
-  pluginId: string,
-  id: string,
-) {
+function scoped<T extends { restore(): void }>(resource: T) {
+  return Object.assign(resource, { [Symbol.dispose]: () => resource.restore() });
+}
+
+function expectBackend(actual: Descriptor, pluginId: string, id: string) {
   expect(actual).toEqual({ pluginId, backend: { id } });
 }
 
-function createCurrentSnapshot(
-  manifestHash: string,
-  backend: string,
-  workspaceDir?: string,
-): PluginMetadataSnapshot {
+function currentSnapshot(hash: string, backend: string, workspaceDir?: string) {
   const snapshot = metadata({
     id: "openai",
-    rootDir: `/tmp/openai-${manifestHash}`,
+    rootDir: `/tmp/openai-${hash}`,
     cliBackends: [backend],
-    enabledByDefault: true,
   });
   snapshot.index.policyHash = snapshot.policyHash = resolveInstalledPluginIndexPolicyHash({});
-  return Object.assign(snapshot, { configFingerprint: manifestHash, workspaceDir });
+  return Object.assign(snapshot, { configFingerprint: hash, workspaceDir });
 }
 
 describe("setup-registry descriptor lookup", () => {
@@ -96,8 +92,8 @@ describe("setup-registry descriptor lookup", () => {
     const compatRoot = tempDirs.make("openclaw-cli-compat-");
     const strictRoot = tempDirs.make("openclaw-cli-strict-");
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    const cache = createPluginCache();
     try {
+      await using cache = createPluginCache();
       setTestEnvValue("OPENCLAW_STATE_DIR", strictRoot);
       const compatEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };
       const strictEnv = { ...process.env };
@@ -107,10 +103,8 @@ describe("setup-registry descriptor lookup", () => {
       await withPluginCache(cache, async () => {
         const snapshot = metadata({
           id: "bundled-cli-owner",
-          origin: "bundled",
           providers: ["fixture-provider"],
           cliBackends: ["scope-cli"],
-          enabledByDefault: true,
         });
         snapshot.index.plugins[0]!.contributions = {
           channels: [],
@@ -126,28 +120,20 @@ describe("setup-registry descriptor lookup", () => {
         const config = { plugins: { allow: ["other-owner"] } };
         await prepareBundledDiscoveryMode(compatEnv);
         await prepareBundledDiscoveryMode(strictEnv);
-        const sql = observeMainThreadSql();
-        try {
-          sql.calibrate();
-          for (const env of [compatEnv, strictEnv, compatEnv]) {
-            const enabled = env === compatEnv;
-            const params = { config, env, metadataSnapshot: snapshot };
-            expect(descriptor({ ...params, backend: "scope-cli" })).toEqual(
-              enabled ? { pluginId: "bundled-cli-owner", backend: { id: "scope-cli" } } : undefined,
-            );
-            expect(ids(params)).toEqual(enabled ? ["scope-cli"] : []);
-          }
-          sql.expectIdle();
-        } finally {
-          sql.restore();
+        using sql = scoped(observeMainThreadSql());
+        sql.calibrate();
+        for (const env of [compatEnv, strictEnv, compatEnv]) {
+          const enabled = env === compatEnv;
+          const params = { config, env, metadataSnapshot: snapshot };
+          expect(descriptor({ ...params, backend: "scope-cli" })).toEqual(
+            enabled ? { pluginId: "bundled-cli-owner", backend: { id: "scope-cli" } } : undefined,
+          );
+          expect(ids(params)).toEqual(enabled ? ["scope-cli"] : []);
         }
+        sql.expectIdle();
       });
     } finally {
-      try {
-        await retirePluginCache(cache);
-      } finally {
-        envSnapshot.restore();
-      }
+      envSnapshot.restore();
     }
   });
 
@@ -166,17 +152,12 @@ describe("setup-registry descriptor lookup", () => {
       { id: "third-owner", cliBackends: ["Shared-CLI"] },
     );
     const config = { plugins: { entries: { "first-owner": { enabled: false } } } };
+    const orderedIds = ["shared-cli", "shared-cli", "SHARED-CLI", "setup-cli", "Shared-CLI"];
     withPluginMetadataSnapshotScope(
       snapshot,
       () => {
         expectBackend(descriptor({ backend: "SHARED-CLI", config }), "second-owner", "shared-cli");
-        expect(ids({ config })).toEqual([
-          "shared-cli",
-          "shared-cli",
-          "SHARED-CLI",
-          "setup-cli",
-          "Shared-CLI",
-        ]);
+        expect(ids({ config })).toEqual(orderedIds);
         expectBackend(descriptor({ backend: "SETUP-CLI", config }), "second-owner", "setup-cli");
       },
       { trustConfigIdentity: true },
@@ -186,7 +167,7 @@ describe("setup-registry descriptor lookup", () => {
   it("keeps descriptors inside a narrower scoped view of the same metadata generation", async () => {
     const { resolvePluginSetupCliBackendDescriptor: descriptor } =
       await import("./setup-registry.runtime.js");
-    const snapshot = createCurrentSnapshot("scoped", "Scoped-CLI");
+    const snapshot = currentSnapshot("scoped", "Scoped-CLI");
     const narrowed = projectPluginMetadataSnapshot(snapshot, []);
     const resolve = (view: PluginMetadataSnapshot) =>
       withPluginMetadataSnapshotScope(view, () => descriptor({ backend: "scoped-cli" }), {
@@ -213,10 +194,10 @@ describe("setup-registry descriptor lookup", () => {
       ["alpha", "Codex-CLI", "next-cli"],
       ["bravo", "Next-CLI", "codex-cli"],
     ] as const) {
-      setCurrentPluginMetadataSnapshot(
-        createCurrentSnapshot(manifestHash, backend, "/workspace/a"),
-        { config: {}, env: process.env },
-      );
+      setCurrentPluginMetadataSnapshot(currentSnapshot(manifestHash, backend, "/workspace/a"), {
+        config: {},
+        env: process.env,
+      });
       expectBackend(descriptor({ backend: backend.toLowerCase(), config: {} }), "openai", backend);
       expect(descriptor({ backend: missing, config: {} })).toBeUndefined();
     }

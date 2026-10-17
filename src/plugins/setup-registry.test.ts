@@ -35,10 +35,10 @@ type SetupRegistryApi = import("./types.js").OpenClawPluginApi;
 type ManifestRecord = import("./manifest-registry.js").PluginManifestRecord;
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.test-fixtures.js").clearPluginSetupRegistryCache;
-let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
-let resolvePluginSetupProviderCore: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
-let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
-let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
+let resolveRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
+let resolveProvider: typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
+let resolveBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
+let runMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
@@ -99,10 +99,10 @@ beforeAll(async () => {
   // A non-isolated sibling may have cached this owner before these hoisted mocks.
   vi.resetModules();
   ({
-    resolvePluginSetupRegistry,
-    resolvePluginSetupProviderCore,
-    resolvePluginSetupCliBackend,
-    runPluginSetupConfigMigrations,
+    resolvePluginSetupRegistry: resolveRegistry,
+    resolvePluginSetupProviderCore: resolveProvider,
+    resolvePluginSetupCliBackend: resolveBackend,
+    runPluginSetupConfigMigrations: runMigrations,
   } = await import("./setup-registry.js"));
   ({ clearPluginSetupRegistryCache } = await import("./setup-registry.test-fixtures.js"));
 });
@@ -124,7 +124,7 @@ describe("setup registry", () => {
       api.registerCliBackend(backend("bound-cli", "acme", "bound"));
     });
 
-    const registry = resolvePluginSetupRegistry({ env: {} });
+    const registry = resolveRegistry({ env: {} });
 
     expect(registry.diagnostics).toEqual([
       diagnostic("setup-cli-backend-missing-model-provider", "acme-plugin", {
@@ -141,7 +141,7 @@ describe("setup registry", () => {
 
   it("ignores setup entries without a registration callback", () => {
     setupPlugin({ id: "empty" });
-    expect(resolvePluginSetupRegistry({ pluginIds: ["empty"], env: {} })).toEqual(emptyRegistry);
+    expect(resolveRegistry({ pluginIds: ["empty"], env: {} })).toEqual(emptyRegistry);
   });
 
   it("uses provider auth aliases to route setup provider owner lookup", () => {
@@ -159,7 +159,7 @@ describe("setup registry", () => {
         auth: [],
       });
     });
-    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toMatchObject({
+    expect(resolveProvider({ provider: "openai", env: {} })).toMatchObject({
       id: "openai-current",
       label: "Current",
     });
@@ -170,9 +170,9 @@ describe("setup registry", () => {
       id: "openai",
       setup: { providers: [{ id: "openai" }], cliBackends: ["codex-cli"], requiresRuntime: false },
     });
-    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
-    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
-    expect(resolvePluginSetupRegistry({ env: {} })).toEqual({
+    expect(resolveProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolveBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
+    expect(resolveRegistry({ env: {} })).toEqual({
       ...emptyRegistry,
       diagnostics: [
         diagnostic("setup-descriptor-runtime-disabled", "openai", { message: expect.any(String) }),
@@ -190,7 +190,7 @@ describe("setup registry", () => {
       api.registerProvider({ id: "anthropic", label: "Anthropic", auth: [] });
       api.registerCliBackend(backend("claude-cli", "anthropic", "claude"));
     });
-    const registry = resolvePluginSetupRegistry({ env: {} });
+    const registry = resolveRegistry({ env: {} });
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
     expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["claude-cli"]);
     expect(registry.diagnostics).toMatchObject([
@@ -217,11 +217,10 @@ describe("setup registry", () => {
       "export default { register(api) { api.registerProvider({ id: 'openai', label: 'Shadow', auth: [] }); } };\n",
     );
     manifests({ id: "workspace-shadow", rootDir, setup: { providers: [{ id: "openai" }] } });
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(workspace);
-    try {
-      expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
-    } finally {
-      cwd.mockRestore();
+    {
+      using cwd = vi.spyOn(process, "cwd");
+      cwd.mockReturnValue(workspace);
+      expect(resolveProvider({ provider: "openai", env: {} })).toBeUndefined();
     }
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
@@ -255,8 +254,7 @@ describe("setup registry", () => {
         pluginId: "openai",
         backend: { id: "codex-cli", modelProvider: "openai", config: { command: "codex" } },
       };
-      const lookup = (id: string) =>
-        resolvePluginSetupCliBackend({ backend: id, env: {}, metadataSnapshot });
+      const lookup = (id: string) => resolveBackend({ backend: id, env: {}, metadataSnapshot });
       expect(lookup("codex-cli")).toEqual(expected);
       expect(lookup("codex-cli")).toEqual(expected);
       expect(lookup("legacy-openai-cli")).toBeUndefined();
@@ -269,7 +267,7 @@ describe("setup registry", () => {
     registration((api) =>
       api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 }),
     );
-    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toMatchObject([
+    expect(resolveRegistry({ env: {} }).diagnostics).toMatchObject([
       diagnostic("setup-registration-failed", "runtime-dependent-setup", {
         message: expect.stringContaining(
           'Plugin "runtime-dependent-setup" runtime is intentionally unavailable during "setup-only" registration.',
@@ -291,21 +289,15 @@ describe("setup registry", () => {
     registration((api, source) =>
       (source.includes(throwing.rootDir) ? throwingRegister : healthyRegister)(api),
     );
-    const first = resolvePluginSetupRegistry();
-    const second = resolvePluginSetupRegistry();
+    const first = resolveRegistry();
+    const second = resolveRegistry();
+    const healthyBackend = backend("shared-cli", "shared-provider", "healthy");
     for (const registry of [first, second]) {
       expect(registry.providers).toMatchObject([
         { pluginId: "shared-plugin", provider: { id: "shared-provider", label: "healthy" } },
       ]);
       expect(registry.cliBackends).toEqual([
-        {
-          pluginId: "shared-plugin",
-          backend: {
-            id: "shared-cli",
-            modelProvider: "shared-provider",
-            config: { command: "healthy" },
-          },
-        },
+        { pluginId: "shared-plugin", backend: healthyBackend },
       ]);
       expect(registry.configMigrations).toHaveLength(1);
       expect(registry.configMigrations[0]?.migrate({})?.changes).toEqual(["healthy"]);
@@ -332,10 +324,10 @@ describe("setup registry", () => {
         throw new Error("async registration rejected");
       });
     });
-    const first = resolvePluginSetupRegistry();
+    const first = resolveRegistry();
     await Promise.resolve();
     await Promise.resolve();
-    const second = resolvePluginSetupRegistry();
+    const second = resolveRegistry();
     for (const registry of [first, second]) {
       expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["shared-provider"]);
       expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["shared-cli"]);
@@ -361,8 +353,8 @@ describe("setup registry", () => {
       );
       expect(
         kind === "provider"
-          ? resolvePluginSetupProviderCore({ provider: "openai", env: {} })
-          : resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} }),
+          ? resolveProvider({ provider: "openai", env: {} })
+          : resolveBackend({ backend: "codex-cli", env: {} }),
       ).toBeUndefined();
       expect(mocks.createJiti).not.toHaveBeenCalled();
     },
@@ -388,7 +380,7 @@ describe("setup registry", () => {
       }));
     });
     const config = { plugins: { entries: { fixture: {} } } };
-    const result = runPluginSetupConfigMigrations({ config, env: {} });
+    const result = runMigrations({ config, env: {} });
 
     expect(result.config.gateway).toEqual({ port: 18789, bind: "loopback" });
     expect(result.changes).toEqual(["first", "last"]);
