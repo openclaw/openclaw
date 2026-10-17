@@ -41,6 +41,8 @@ export function registerEmbeddedSessionReaderTests<Projection extends { dispose:
   unregisterConfigWriteListenerMock: Mock;
   flushMicrotasks: () => Promise<void>;
 }) {
+  const unavailable = (pending: Promise<unknown>) =>
+    expect(pending).rejects.toThrow("Embedded session projection is unavailable");
   it("publishes the current runtime after startup maintenance and before the first local turn", async () => {
     const initialConfig = { agents: { entries: { main: {} } } };
     const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
@@ -56,7 +58,6 @@ export function registerEmbeddedSessionReaderTests<Projection extends { dispose:
 
     const backend = createBackend();
     backend.start();
-
     const send = backend.sendChat({
       sessionKey: "agent:main:main",
       message: "hello",
@@ -114,9 +115,7 @@ export function registerEmbeddedSessionReaderTests<Projection extends { dispose:
       await backend.stop();
     }
     expect(sessionProjection.dispose).toHaveBeenCalledOnce();
-    await expect(createEmbeddedCallGateway()({ method: "sessions.list" })).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
+    await unavailable(createEmbeddedCallGateway()({ method: "sessions.list" }));
   });
 
   it("disposes projection startup that finishes after shutdown begins", async () => {
@@ -134,9 +133,7 @@ export function registerEmbeddedSessionReaderTests<Projection extends { dispose:
     await stopped;
     expect(unregisterConfigWriteListenerMock).toHaveBeenCalledOnce();
     expect(sessionProjection.dispose).toHaveBeenCalledOnce();
-    await expect(backend.listSessions()).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
+    await unavailable(backend.listSessions());
   });
 
   it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
@@ -145,7 +142,6 @@ export function registerEmbeddedSessionReaderTests<Projection extends { dispose:
 
     const backend = createBackend();
     backend.start();
-
     const listed = backend.listSessions({ agentId: "work" });
     await flushMicrotasks();
     expect(createSessionRowProjectionMock).not.toHaveBeenCalled();
@@ -171,9 +167,7 @@ export function registerEmbeddedSessionReaderTests<Projection extends { dispose:
     const backend = createBackend();
     backend.start();
     const description = backend.describeSession({ sessionKey: "agent:work:notes" });
-    const rejected = expect(description).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
+    const rejected = unavailable(description);
     try {
       await vi.waitFor(() => expect(listProjectedSessionsMock).toHaveBeenCalledOnce());
       await backend.stop();

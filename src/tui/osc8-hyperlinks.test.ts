@@ -4,29 +4,37 @@ import { addOsc8Hyperlinks, extractUrls } from "./osc8-hyperlinks.js";
 
 const link = (url: string, text = url) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 
+const pathUrl = "https://example.com/path";
+const ipv6 = "http://[::1]:8080/path";
+const wikipedia = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
+const query = "https://example.com/v1.0/URL_(disambiguation)?a=1&b=2#section";
+
 describe("extractUrls", () => {
-  it.each([".", ".?!"])("excludes trailing GFM punctuation %s from bare URLs", (punctuation) => {
-    expect([...extractUrls(`Visit https://example.com/path${punctuation}`)]).toEqual([
-      "https://example.com/path",
-    ]);
+  it.each([
+    ["sentence punctuation", `Visit ${pathUrl}.`, [pathUrl]],
+    ["GFM punctuation", `Visit ${pathUrl}.?!`, [pathUrl]],
+    ["bidi isolate", `مرحبا ${pathUrl}\u2069`, [pathUrl]],
+    ["bidi mark", `مرحبا ${pathUrl}\u200f`, [pathUrl]],
+    ["markdown", `[Click here](${pathUrl})`, [pathUrl]],
+    ["authored suffix", `[Click here](${pathUrl}.)`, [`${pathUrl}.`]],
+    ["angle brackets and title", `[Click here](<${pathUrl}> "Example Title")`, [pathUrl]],
+    [
+      "rejected destination label",
+      "[https://label.test](https://.) https://bare.test",
+      ["https://bare.test"],
+    ],
+    ["no URLs", "No links here", []],
+    ["IPv6", ipv6, [ipv6]],
+    ["markdown parentheses", `[Wikipedia](${wikipedia})`, [wikipedia]],
+    ["balanced parentheses and query", `Visit ${query}.`, [query]],
+    ["incomplete destination", "[broken](https://)", []],
+    ["invalid markdown authority", "[broken](https://.)", []],
+    ["invalid bare authority", "https://.", []],
+    ["missing authority", "https:///path", []],
+    ["unmatched parenthesis", `(see ${pathUrl}).`, [pathUrl]],
+  ] satisfies [string, string, string[]][])("extracts %s", (_name, markdown, expected) => {
+    expect([...extractUrls(markdown)]).toStrictEqual(expected);
   });
-
-  it("stops bare URLs before bidi formatting controls", () => {
-    const url = "https://example.com/path";
-    expect([...extractUrls(`مرحبا ${url}\u2069`)]).toEqual([url]);
-    expect([...extractUrls(`مرحبا ${url}\u200f`)]).toEqual([url]);
-  });
-
-  it.each(["", "."])("preserves authored markdown href suffix %s", (suffix) => {
-    const url = `https://example.com/path${suffix}`;
-    expect([...extractUrls(`[Click here](${url})`)]).toEqual([url]);
-  });
-
-  it("extracts markdown links with angle brackets and title text", () => {
-    const urls = extractUrls('[Click here](<https://example.com/path> "Example Title")');
-    expect([...urls]).toEqual(["https://example.com/path"]);
-  });
-
   it("keeps authored destinations before bare URLs in first-seen order", () => {
     const md =
       "https://api.example.com [Docs](https://docs.example.com) " +
@@ -36,46 +44,6 @@ describe("extractUrls", () => {
       "https://guide.example.com",
       "https://api.example.com",
     ]);
-  });
-
-  it("does not extract URL-shaped labels from rejected markdown destinations", () => {
-    const md = "[https://label.test](https://.) https://bare.test";
-    expect([...extractUrls(md)]).toEqual(["https://bare.test"]);
-  });
-
-  it("returns no URLs for text without URLs", () => {
-    expect([...extractUrls("No links here")]).toStrictEqual([]);
-  });
-
-  it("extracts a bare URL with a bracketed IPv6 authority", () => {
-    const url = "http://[::1]:8080/path";
-    expect([...extractUrls(url)]).toEqual([url]);
-  });
-
-  it("extracts markdown link hrefs with parentheses in the URL", () => {
-    const url = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
-    expect([...extractUrls(`[Wikipedia](${url})`)]).toEqual([url]);
-  });
-
-  it("keeps balanced URL parentheses and internal query punctuation", () => {
-    const url = "https://example.com/v1.0/URL_(disambiguation)?a=1&b=2#section";
-    expect([...extractUrls(`Visit ${url}.`)]).toEqual([url]);
-  });
-
-  it("does not extract an incomplete markdown link destination", () => {
-    expect([...extractUrls("[broken](https://)")]).toEqual([]);
-  });
-
-  it.each(["[broken](https://.)", "https://.", "https:///path"])(
-    "does not extract a URL without a real authority from %s",
-    (text) => {
-      expect([...extractUrls(text)]).toEqual([]);
-    },
-  );
-
-  it("drops punctuation after an unmatched closing paren", () => {
-    const urls = extractUrls("(see https://example.com/path).");
-    expect([...urls]).toEqual(["https://example.com/path"]);
   });
 });
 
@@ -101,9 +69,14 @@ describe("addOsc8Hyperlinks", () => {
     );
   });
 
-  it("returns lines unchanged when no URLs", () => {
-    const lines = ["Hello world", "No links here"];
-    expect(addOsc8Hyperlinks(lines, new Set<string>())).toEqual(lines);
+  it.each([
+    ["empty URL set", ["Hello world", "No links here"], []],
+    ["no URL text", ["Just some text", "No URLs here"], ["https://example.com"]],
+    ["partial domain", ["https://", "example.org"], ["https://example.com"]],
+    ["longer token", ["https://", "example.com/pathology"], [pathUrl]],
+    ["punctuation-only body", ["https://."], ["https://."]],
+  ] satisfies [string, string[], string[]][])("leaves %s unchanged", (_name, lines, urls) => {
+    expect(addOsc8Hyperlinks(lines, new Set(urls))).toEqual(lines);
   });
 
   it.each([
@@ -178,25 +151,6 @@ describe("addOsc8Hyperlinks", () => {
     expect(result).toEqual([link(fullUrl, "https://"), link(fullUrl, "example.com/path")]);
   });
 
-  it("does not cross-link a scheme-only fragment to a partial domain match", () => {
-    const result = addOsc8Hyperlinks(["https://", "example.org"], new Set(["https://example.com"]));
-
-    expect(result).toEqual(["https://", "example.org"]);
-  });
-
-  it("does not cross-link a scheme-only fragment to a longer URL token", () => {
-    const result = addOsc8Hyperlinks(
-      ["https://", "example.com/pathology"],
-      new Set(["https://example.com/path"]),
-    );
-
-    expect(result).toEqual(["https://", "example.com/pathology"]);
-  });
-
-  it("does not wrap a punctuation-only URL body", () => {
-    expect(addOsc8Hyperlinks(["https://."], new Set(["https://."]))).toEqual(["https://."]);
-  });
-
   it("handles URL with ANSI styling codes", () => {
     const url = "https://example.com";
     const styledLine = `\x1b[32m${url}\x1b[0m`;
@@ -206,14 +160,6 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain("\x1b[0m");
     expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
     expect(result[0]).toContain(`\x1b]8;;\x07`);
-  });
-
-  it("does not modify lines without URL text", () => {
-    const url = "https://example.com";
-    const lines = ["Just some text", "No URLs here"];
-    const result = addOsc8Hyperlinks(lines, new Set([url]));
-
-    expect(result).toEqual(lines);
   });
 
   it.each([

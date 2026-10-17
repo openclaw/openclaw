@@ -48,23 +48,18 @@ it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CL
   const originalArgv = [...process.argv];
   try {
     const cliEntry = path.resolve("openclaw.mjs");
+    const loaderArgs = ["--import", "/repo/node_modules/tsx/dist/loader.mjs"];
     process.argv[1] = cliEntry;
 
     expect(
       resolveTuiLocalAuthCliInvocation({
         provider: "test-provider",
-        execArgv: [
-          "--import",
-          "/repo/node_modules/tsx/dist/loader.mjs",
-          "--inspect-brk=0",
-          "--trace-warnings",
-        ],
+        execArgv: [...loaderArgs, "--inspect-brk=0", "--trace-warnings"],
       }),
     ).toStrictEqual({
       command: process.execPath,
       args: [
-        "--import",
-        "/repo/node_modules/tsx/dist/loader.mjs",
+        ...loaderArgs,
         "--trace-warnings",
         cliEntry,
         "models",
@@ -84,13 +79,11 @@ it("isTuiBusyActivityStatus treats post-connect initialization as visibly busy",
   expect(isTuiBusyActivityStatus("starting up")).toBe(true);
 });
 
-describe("resolveTuiToolsToggleActivityStatus", () => {
-  it.each([
-    { currentStatus: "streaming", toolsExpanded: true, expected: "streaming" },
-    { currentStatus: "idle", toolsExpanded: false, expected: "tools collapsed" },
-  ])("resolves the tool toggle while $currentStatus", ({ expected, ...input }) => {
-    expect(resolveTuiToolsToggleActivityStatus(input)).toBe(expected);
-  });
+it.each([
+  ["streaming", true, "streaming"],
+  ["idle", false, "tools collapsed"],
+] as const)("resolves the tool toggle while %s", (currentStatus, toolsExpanded, expected) => {
+  expect(resolveTuiToolsToggleActivityStatus({ currentStatus, toolsExpanded })).toBe(expected);
 });
 
 it("resolveTuiSessionKey uses global only as the default when scope is global", () => {
@@ -117,21 +110,13 @@ describe("resolveInitialTuiAgentId", () => {
   };
 
   it.each([
-    { initialSessionInput: "", cwd: "/tmp/openclaw/projects/ops/src", expected: "ops" },
-    {
-      initialSessionInput: "agent:main:incident",
-      agentId: "ops",
-      cwd: "/tmp/openclaw/projects/ops/src",
-      expected: "main",
-    },
-    {
-      initialSessionInput: "global",
-      agentId: "ops",
-      cwd: "/tmp/openclaw",
-      expected: "ops",
-    },
-  ])("resolves initial owner for '$initialSessionInput' in $cwd", ({ expected, ...input }) => {
-    expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main", ...input })).toBe(expected);
+    ["", undefined, "/tmp/openclaw/projects/ops/src", "ops"],
+    ["agent:main:incident", "ops", "/tmp/openclaw/projects/ops/src", "main"],
+    ["global", "ops", "/tmp/openclaw", "ops"],
+  ])("resolves initial owner for %s", (initialSessionInput, agentId, cwd, expected) => {
+    expect(
+      resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main", initialSessionInput, agentId, cwd }),
+    ).toBe(expected);
   });
 
   it("falls back when the working directory was deleted", () => {
@@ -163,48 +148,33 @@ describe("resolveInitialTuiAgentId", () => {
       },
     };
 
-    expect(
-      resolveInitialTuiAgentId({
-        cfg: restartConfig,
-        initialSessionInput: "global",
-        cwd: "/tmp/openclaw",
-      }),
-    ).toBe("ops");
-    expect(resolveInitialTuiAgentId({ cfg: restartConfig, cwd: "/tmp/openclaw" })).toBe("ops");
+    for (const initialSessionInput of ["global", undefined]) {
+      expect(
+        resolveInitialTuiAgentId({ cfg: restartConfig, initialSessionInput, cwd: "/tmp/openclaw" }),
+      ).toBe("ops");
+    }
   });
 });
 
-describe("resolveTuiSessionSelection", () => {
-  it.each([
-    {
-      raw: "incident-42",
-      cfg: {
-        session: { store: "/tmp/shared.sqlite" },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      },
-    },
-    {
-      raw: "agent:ops:global",
-      cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
-    },
-  ] satisfies { raw: string; cfg: OpenClawConfig }[])(
-    "keeps the owner and key for $raw",
-    ({ raw, cfg }) => {
-      expect(
-        resolveTuiSessionSelection({
-          raw,
-          cfg,
-          sessionScope: "per-sender",
-          currentAgentId: "research",
-          sessionMainKey: "main",
-        }),
-      ).toEqual({ key: raw, agentId: "ops" });
-    },
-  );
+it.each(["incident-42", "agent:ops:global"])("keeps the owner and key for %s", (raw) => {
+  const agents: NonNullable<OpenClawConfig["agents"]> = {
+    ownership: "explicit",
+    entries: { ops: {}, research: {} },
+  };
+  const cfg: OpenClawConfig = { agents };
+  if (raw === "incident-42") {
+    cfg.session = { store: "/tmp/shared.sqlite" };
+    agents.defaults = { sessionStore: { agentId: "ops" } };
+  }
+  expect(
+    resolveTuiSessionSelection({
+      raw,
+      cfg,
+      sessionScope: "per-sender",
+      currentAgentId: "research",
+      sessionMainKey: "main",
+    }),
+  ).toEqual({ key: raw, agentId: "ops" });
 });
 
 describe("resolveGatewayDisconnectState", () => {
@@ -269,93 +239,58 @@ describe("resolveGatewayDisconnectState", () => {
   });
 });
 
-describe("createBackspaceDeduper", () => {
-  function withBackspaceEnv<T>(fn: () => T, windowsTerminal?: string): T {
-    return withEnv(
-      {
-        WT_SESSION: windowsTerminal,
-        SSH_CONNECTION: undefined,
-        SSH_CLIENT: undefined,
-        SSH_TTY: undefined,
-      },
-      fn,
-    );
-  }
-
-  function createTimedDedupe(start = 1000) {
-    let now = start;
-    const dedupe = createBackspaceDeduper({
-      dedupeWindowMs: 8,
-      now: () => now,
-    });
-    return {
-      dedupe,
-      advance: (deltaMs: number) => {
-        now += deltaMs;
-      },
-    };
-  }
-
-  it.each([
-    ["ASCII BS first", ["\x08", "\x7f"], ["\x08", ""], 1],
-    ["outside the dedupe window", ["\x7f", "\x08"], ["\x7f", "\x08"], 10],
-    ["consecutive DEL", ["\x7f", "\x7f"], ["\x7f", "\x7f"], 0],
-    ["intervening printable key", ["\x7f", "a", "\x08"], ["\x7f", "a", "\x08"], 0],
-    ["repeated pairs", ["\x7f", "\x08", "\x7f", "\x08"], ["\x7f", "", "\x7f", ""], 0],
-  ] as const)("handles %s", (_name, input, expected, interval) => {
-    withBackspaceEnv(() => {
-      const { dedupe, advance } = createTimedDedupe();
-      expect(
-        input.map((data) => {
-          const result = dedupe(data);
-          advance(interval);
-          return result;
-        }),
-      ).toEqual(expected);
-    });
-  });
-
-  it("preserves Ctrl+Backspace in Windows Terminal", () => {
-    withBackspaceEnv(() => {
-      const { dedupe } = createTimedDedupe();
-      expect(["\x7f", "\x08", "\x7f"].map(dedupe)).toEqual(["\x7f", "\x08", "\x7f"]);
-    }, "openclaw-tui-test");
-  });
-});
-
-describe("resolveCtrlCAction", () => {
-  it.each([
-    { now: 2800, action: "exit", nextLastCtrlCAt: 2000 },
-    { now: 3501, action: "warn", nextLastCtrlCAt: 3501 },
-  ])("returns $action at $now", ({ now, action, nextLastCtrlCAt }) => {
-    expect(resolveCtrlCAction({ hasInput: false, now, lastCtrlCAt: 2000 })).toEqual({
-      action,
-      nextLastCtrlCAt,
-    });
-  });
-});
-
-describe("resolveTuiCtrlCAction", () => {
-  it.each([
-    { hasInput: false, lastCtrlCAt: 0, wasDisconnected: true, action: "exit", nextLastCtrlCAt: 0 },
+function dedupeKeys(input: readonly string[], interval: number, windowsTerminal = false) {
+  return withEnv(
     {
-      hasInput: true,
-      lastCtrlCAt: 0,
-      wasDisconnected: true,
-      action: "clear",
-      nextLastCtrlCAt: 2000,
+      WT_SESSION: windowsTerminal ? "openclaw-tui-test" : undefined,
+      SSH_CONNECTION: undefined,
+      SSH_CLIENT: undefined,
+      SSH_TTY: undefined,
     },
-    {
-      hasInput: true,
-      lastCtrlCAt: 1000,
-      exitRequested: true,
-      action: "closing",
-      nextLastCtrlCAt: 1000,
+    () => {
+      let now = 1000;
+      const dedupe = createBackspaceDeduper({ dedupeWindowMs: 8, now: () => now });
+      return input.map((data) => {
+        const result = dedupe(data);
+        now += interval;
+        return result;
+      });
     },
-  ])("returns $action for interrupted TUI state", ({ action, nextLastCtrlCAt, ...input }) => {
-    expect(resolveTuiCtrlCAction({ now: 2000, ...input })).toEqual({ action, nextLastCtrlCAt });
+  );
+}
+it.each([
+  ["ASCII BS first", ["\x08", "\x7f"], ["\x08", ""], 1, false],
+  ["outside the dedupe window", ["\x7f", "\x08"], ["\x7f", "\x08"], 10, false],
+  ["consecutive DEL", ["\x7f", "\x7f"], ["\x7f", "\x7f"], 0, false],
+  ["intervening printable key", ["\x7f", "a", "\x08"], ["\x7f", "a", "\x08"], 0, false],
+  ["repeated pairs", ["\x7f", "\x08", "\x7f", "\x08"], ["\x7f", "", "\x7f", ""], 0, false],
+  ["Windows Ctrl+Backspace", ["\x7f", "\x08", "\x7f"], ["\x7f", "\x08", "\x7f"], 0, true],
+] as const)("deduplicates %s", (_name, input, expected, interval, windowsTerminal) => {
+  expect(dedupeKeys(input, interval, windowsTerminal)).toEqual(expected);
+});
+
+it.each([
+  [2800, "exit", 2000],
+  [3501, "warn", 3501],
+] as const)("resolves Ctrl-C at %s", (now, action, nextLastCtrlCAt) => {
+  expect(resolveCtrlCAction({ hasInput: false, now, lastCtrlCAt: 2000 })).toEqual({
+    action,
+    nextLastCtrlCAt,
   });
 });
+
+it.each([
+  [false, 0, true, undefined, "exit", 0],
+  [true, 0, true, undefined, "clear", 2000],
+  [true, 1000, undefined, true, "closing", 1000],
+] as const)(
+  "resolves interrupted Ctrl-C (input=%s, prior=%s)",
+  (hasInput, lastCtrlCAt, wasDisconnected, exitRequested, action, nextLastCtrlCAt) => {
+    expect(
+      resolveTuiCtrlCAction({ now: 2000, hasInput, lastCtrlCAt, wasDisconnected, exitRequested }),
+    ).toEqual({ action, nextLastCtrlCAt });
+  },
+);
 
 it("createTuiConnectionLineage keeps a startup retry before the first hello out of reconnect recovery", () => {
   const lineage = createTuiConnectionLineage();
@@ -379,6 +314,28 @@ describe("TUI shutdown safety", () => {
       onError: vi.fn(),
       ...overrides,
     });
+  const reject = (error: Error) => async () => {
+    throw error;
+  };
+  function shutdownFixture() {
+    const calls: string[] = [];
+    const record = (name: string) =>
+      vi.fn(() => {
+        calls.push(name);
+      });
+    const stopTui = record("tui");
+    const requestFinish = record("finish");
+    const onError = vi.fn<(error: unknown) => void>();
+    return {
+      calls,
+      record,
+      stopTui,
+      requestFinish,
+      onError,
+      begin: (overrides: Partial<Parameters<typeof beginTuiShutdown>[0]> = {}) =>
+        beginTestShutdown({ stopTui, requestFinish, onError, ...overrides }),
+    };
+  }
 
   afterEach(() => {
     vi.useRealTimers();
@@ -440,22 +397,13 @@ describe("TUI shutdown safety", () => {
   });
 
   it.each([
-    {
-      errors: [new Error("setRawMode EBADF"), { code: "EBADF", syscall: "setRawMode" }],
-      ignorable: true,
-    },
-    {
-      errors: [new Error("something else failed"), { code: "EIO", syscall: "write" }],
-      ignorable: false,
-    },
-  ])(
-    "classifies message and structured stop errors (ignorable=$ignorable)",
-    ({ errors, ignorable }) => {
-      for (const error of errors) {
-        expect(isIgnorableTuiStopError(error)).toBe(ignorable);
-      }
-    },
-  );
+    [new Error("setRawMode EBADF"), true],
+    [{ code: "EBADF", syscall: "setRawMode" }, true],
+    [new Error("something else failed"), false],
+    [{ code: "EIO", syscall: "write" }, false],
+  ] as const)("classifies stop error %j", (error, ignorable) => {
+    expect(isIgnorableTuiStopError(error)).toBe(ignorable);
+  });
 
   it("swallows only ignorable stop errors", () => {
     expect(
@@ -499,20 +447,11 @@ describe("TUI shutdown safety", () => {
 
   it("completes shutdown after resources and terminal settle", async () => {
     vi.useFakeTimers();
-    const calls: string[] = [];
-    const recordPhase = (phase: string) => async () => {
-      calls.push(phase);
-    };
-    await beginTestShutdown({
-      stopCommandScopes: recordPhase("scopes"),
-      stopClient: recordPhase("client"),
-      stopTui: recordPhase("tui"),
-      disposeStatus: () => {
-        calls.push("status");
-      },
-      requestFinish: () => {
-        calls.push("finish");
-      },
+    const { calls, record, begin } = shutdownFixture();
+    await begin({
+      stopCommandScopes: record("scopes"),
+      stopClient: record("client"),
+      disposeStatus: record("status"),
     });
 
     expect(calls).toEqual(["status", "scopes", "client", "tui", "status", "finish"]);
@@ -520,27 +459,23 @@ describe("TUI shutdown safety", () => {
 
   it("attempts terminal shutdown after transport teardown rejects", async () => {
     vi.useFakeTimers();
-    const calls: string[] = [];
+    const { calls, stopTui, requestFinish, onError, begin } = shutdownFixture();
     const transportError = new Error("transport stop failed");
     const terminal = createDeferredCore();
-    const stopTui = vi.fn(() => {
+    stopTui.mockImplementation(() => {
       calls.push("tui");
       return terminal.promise;
     });
-    const requestFinish = vi.fn(() => calls.push("finish"));
-    const onError = vi.fn((error: unknown) => {
+    onError.mockImplementation((error) => {
       calls.push("error");
       expect(error).toBe(transportError);
     });
 
-    const shutdown = beginTestShutdown({
+    const shutdown = begin({
       stopClient: async () => {
         calls.push("client");
         throw transportError;
       },
-      stopTui,
-      requestFinish,
-      onError,
     });
 
     await vi.advanceTimersByTimeAsync(0);
@@ -562,21 +497,11 @@ describe("TUI shutdown safety", () => {
     const scopeError = new Error("command scope stop failed");
     const transportError = new Error("transport stop failed");
     const terminalError = new Error("terminal stop failed");
-    const onError = vi.fn();
-    const requestFinish = vi.fn();
-
-    await beginTestShutdown({
-      stopCommandScopes: async () => {
-        throw scopeError;
-      },
-      stopClient: async () => {
-        throw transportError;
-      },
-      stopTui: async () => {
-        throw terminalError;
-      },
-      onError,
-      requestFinish,
+    const { onError, requestFinish, begin } = shutdownFixture();
+    await begin({
+      stopCommandScopes: reject(scopeError),
+      stopClient: reject(transportError),
+      stopTui: reject(terminalError),
     });
 
     expect(onError).toHaveBeenCalledOnce();
@@ -589,13 +514,10 @@ describe("TUI shutdown safety", () => {
   it("does not finish or release the terminal before owned cleanup settles", async () => {
     const scopes = createDeferredCore();
     const client = createDeferredCore();
-    const stopTui = vi.fn();
-    const requestFinish = vi.fn();
-    const shutdown = beginTestShutdown({
+    const { stopTui, requestFinish, begin } = shutdownFixture();
+    const shutdown = begin({
       stopCommandScopes: () => scopes.promise,
       stopClient: () => client.promise,
-      stopTui,
-      requestFinish,
     });
     scopes.resolve();
     await scopes.promise;
@@ -642,21 +564,15 @@ describe("formatTuiAuthCommandArgv", () => {
   });
 });
 
-it("resolveLocalAuthSpawnInvocation keeps direct execution for non-wrapper commands", () => {
-  expect(
-    resolveLocalAuthSpawnInvocation({
-      command: "/usr/local/bin/codex",
-      args: ["login"],
-      platform: "linux",
-    }),
-  ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
-  expect(
-    resolveLocalAuthSpawnInvocation({
-      command: "C:\\tools\\codex.exe",
-      args: ["login"],
-      platform: "win32",
-    }),
-  ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
+it.each([
+  ["linux", "/usr/local/bin/codex"],
+  ["win32", "C:\\tools\\codex.exe"],
+] as const)("directly executes non-wrapper commands on %s", (platform, command) => {
+  expect(resolveLocalAuthSpawnInvocation({ command, args: ["login"], platform })).toStrictEqual({
+    command,
+    args: ["login"],
+    options: {},
+  });
 });
 
 function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
