@@ -22,7 +22,7 @@ const routeState = existingSessionRouteState;
 const mcp = vi.hoisted(() => ({
   ChromeMcpDocumentUnavailableError: class ChromeMcpDocumentUnavailableError extends Error {},
   clickChromeMcpCoords: vi.fn(async (_params: unknown) => {}),
-  clickChromeMcpElement: vi.fn(async () => {}),
+  clickChromeMcpElement: vi.fn(async (_params: unknown) => {}),
   evaluateChromeMcpScript: vi.fn(
     async (
       _params: Parameters<typeof import("../chrome-mcp.js").evaluateChromeMcpScript>[0],
@@ -268,7 +268,7 @@ describe("existing-session browser routes", () => {
   });
 
   it("omits deltas for existing-session snapshots without stable document identity", async () => {
-    chromeMcpMocks.takeChromeMcpSnapshot
+    mcp.takeChromeMcpSnapshot
       .mockResolvedValueOnce({
         id: "root-1",
         role: "document",
@@ -284,7 +284,7 @@ describe("existing-session browser routes", () => {
           { id: "alert-2", role: "alert", name: "Required" },
         ],
       });
-    const handler = getSnapshotGetHandler();
+    const handler = route("snapshot");
     await runRoute(handler, { query: { format: "ai" } });
     const second = await runRoute(handler, { query: { format: "ai" } });
 
@@ -490,19 +490,14 @@ describe("existing-session browser routes", () => {
 
   it("forwards click timeoutMs to the existing-session click executor", async () => {
     const ctrl = new AbortController();
-    const response = await runRoute(getActPostHandler(), {
+    const response = await runRoute(route("act"), {
       body: { kind: "click", ref: "btn-1", timeoutMs: 1234 },
       signal: ctrl.signal,
     });
 
     expect(response.statusCode).toBe(200);
-    const clickParams = requireRecord(
-      callArg(chromeMcpMocks.clickChromeMcpElement, 0, 0, "click params"),
-      "click params",
-    );
-    expect(clickParams.profileName).toBe("chrome-live");
-    expectExistingSessionProfile(clickParams.profile);
-    expect(clickParams.targetId).toBe("7");
+    const clickParams = requireRecord(mcp.clickChromeMcpElement.mock.calls[0]?.[0], "click params");
+    expect(clickParams).toMatchObject(existingTarget);
     expect(clickParams.uid).toBe("btn-1");
     expect(clickParams.doubleClick).toBe(false);
     expect(clickParams.timeoutMs).toBe(1234);
