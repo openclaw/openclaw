@@ -1009,7 +1009,7 @@ export function createAgentsPageState(
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
-      // Selection intent and owner receipts synchronously retire work before the next read.
+      // Selection receipts transfer draft custody and retire prior-agent work synchronously.
       selection.subscribe(() => {
         const explicitSelection = selection.intentRevision !== intentRevision;
         intentRevision = selection.intentRevision;
@@ -1031,16 +1031,19 @@ export function createAgentsPageState(
         loadActivePanelData();
         publish();
       }),
+      // Roster and file publications adopt metadata before dependent file reads can settle.
       context.agents.subscribe(() => {
         syncAgentState();
         ensureAgentIdentities();
         loadActivePanelData();
         publish();
       }),
+      // Config receipts retire obsolete GitHub authorization before the next tool action.
       context.runtimeConfig.subscribe(() => {
         syncGitHubIdentity(state.agentsSelectedId);
         publish();
       }),
+      // Session model receipts replace the tools.effective request key before older results settle.
       context.sessions.subscribe(() => {
         void refreshVisibleToolsEffectiveForCurrentSession(state);
         publish();

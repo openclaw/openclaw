@@ -252,9 +252,7 @@ export function createSystems(context: ApplicationContext) {
   const telemetryHistory = (id: string) => (current() ? (telemetry.get(id) ?? []) : []);
 
   function notify(): void {
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.forEach((listener) => listener());
   }
 
   function projectRows(): void {
@@ -327,16 +325,14 @@ export function createSystems(context: ApplicationContext) {
     }
     active = presented;
     if (!presented) {
-      for (const unsubscribe of subscriptions) {
-        unsubscribe();
-      }
-      subscriptions = [];
+      subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
       cancelRefresh();
       cancelBackups();
       resetDesktopSetup();
       return;
     }
     subscriptions = [
+      // Gateway receipts cancel stale inventory, backup, and desktop work before connection or access changes settle.
       context.gateway.subscribe((snapshot) => {
         const changed = lifecycle.transition(snapshot);
         if (!current()) {
@@ -376,11 +372,11 @@ export function createSystems(context: ApplicationContext) {
           void refreshTelemetry();
         }
       }),
+      // Rebuild session-to-machine bindings synchronously for selection, telemetry, and shared inventory readers.
       context.sessions.subscribe(() => {
         projectRows();
         notify();
       }),
-      context.runtimeConfig.subscribe(() => notify()),
     ];
     if (lifecycle.transition(context.gateway.snapshot)) {
       telemetry.clear();

@@ -17,10 +17,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "./openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -365,12 +363,13 @@ it.each([
           const prepared = await prepare(...args);
           preparedLocation = prepared.location;
           if (failure === "quarantine") {
-            failurePublished = recordOpenClawDatabaseQuarantine({
+            seedOpenClawDatabaseQuarantine({
               env: options.env,
               kind: "state",
               path: options.path,
               reason: "synthetic readonly quarantine",
             });
+            failurePublished = true;
           }
           return prepared;
         },

@@ -53,9 +53,11 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
-  // Main 098173f9f5d4 with facade optimization measured chat/new at 31/32 requests.
-  // Allow 3 above the maximum while catching the roughly 19-request facade regression.
-  routeBootJsRequests: 35,
+  // Optimized chat/new captures use 30/27 requests; retain two above the larger route.
+  routeBootJsRequests: 32,
+  // d649dbab56a measured 1,587,382 / 1,284,658 B; retain under 1.2% headroom.
+  chatBootJsGzipBytes: 1_600_000,
+  newBootJsGzipBytes: 1_300_000,
   startupCssRequests: 1,
   startupJsGzipBytes: 342_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
@@ -302,12 +304,20 @@ export function evaluateControlUiPerformanceBudgets(
   ];
   if (metrics.routeBoot) {
     for (const route of ["chat", "new"] as const) {
-      checks.push([
-        `${route} boot JS requests`,
-        metrics.routeBoot[route].js.requests,
-        budgets.routeBootJsRequests,
-        "count",
-      ]);
+      checks.push(
+        [
+          `${route} boot JS requests`,
+          metrics.routeBoot[route].js.requests,
+          budgets.routeBootJsRequests,
+          "count",
+        ],
+        [
+          `${route} boot JS gzip`,
+          metrics.routeBoot[route].js.gzipBytes,
+          budgets[`${route}BootJsGzipBytes`],
+          "bytes",
+        ],
+      );
     }
   }
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
@@ -448,7 +458,7 @@ export function formatControlUiPerformanceReport(
     for (const route of ["chat", "new"] as const) {
       const boot = metrics.routeBoot[route];
       lines.push(
-        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limit: ${formatRequestCount(budgets.routeBootJsRequests)})`,
+        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limits: ${formatRequestCount(budgets.routeBootJsRequests)}, ${budgets[`${route}BootJsGzipBytes`]} B gzip)`,
         `  ${route} boot CSS: ${formatAssetSummary(boot.css)}`,
       );
       if (baseMetrics) {
@@ -711,6 +721,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
     const artifactContractMetrics = new Set([
       "chat boot JS requests",
       "new boot JS requests",
+      "chat boot JS gzip",
+      "new boot JS gzip",
       "isolated Mermaid JS assets",
       "startup Mermaid JS assets",
       "locale catalog base JS assets per locale",

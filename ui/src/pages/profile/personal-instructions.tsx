@@ -210,10 +210,12 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
     return state;
   };
   const sync = () => state.syncContext();
-  // Each change transfers draft custody and retires requests before another action can run.
   const stops = [
+    // Connection changes retire personal-file requests and isolate drafts by person and Gateway.
     context.gateway.subscribe(sync),
+    // Roster changes reconcile the personal-file target before another read or save.
     context.agents.subscribe(sync),
+    // Selection receipts preserve the old agent's draft and retire its pending file work.
     context.settingsAgentSelection.subscribe(sync),
   ];
   state.syncContext();

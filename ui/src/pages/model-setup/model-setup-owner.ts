@@ -735,8 +735,8 @@ export function createModelSetup(
   createEffect(
     () => [props.routeData, agentSelection()],
     ([, selection]) => {
-      // Reconcile current request authority without subscribing the imperative work.
       return untrack(() => {
+        // Selection receipts retire wizard ownership before another setup action can run.
         const stop = selection.subscribe(() => {
           synchronizeGateway(context.gateway.snapshot);
           notify();
@@ -751,10 +751,12 @@ export function createModelSetup(
   createEffect(view, () => untrack(afterRender));
   onSettled(() => {
     connected = true;
+    // Connection authority changes synchronously suspend or retire the admitted wizard.
     const stopGateway = context.gateway.subscribe(() => {
       synchronizeGateway(context.gateway.snapshot);
       notify();
     });
+    // Receipt-clear events retire restored wizard work before another activation can start.
     const stopFirstRun = firstRun.subscribe(notify);
     synchronizeGateway(context.gateway.snapshot);
     notify();

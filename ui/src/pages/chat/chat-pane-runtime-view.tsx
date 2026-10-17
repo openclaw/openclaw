@@ -12,6 +12,7 @@ import {
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
@@ -115,6 +116,20 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
+    const boardProvider = createMemo(() => {
+      revision();
+      return runtime.subscribedBoardProvider;
+    });
+    const board = createMemo(() => {
+      const provider = boardProvider();
+      return provider
+        ? [
+            projectOwner(provider.snapshot$, (source) => source.value),
+            projectOwner(provider.loadError$, (source) => source.value),
+          ]
+        : [];
+    });
     const presented = () => {
       revision();
       return runtime.presented;
@@ -165,6 +180,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       read: () => {
         revision();
         progress.read();
+        projects.read();
+        board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
         prepareRender();

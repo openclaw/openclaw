@@ -2621,6 +2621,7 @@ openclaw-session-menu[popover] {
    letters and digits share one rail. Identity-menu chords use the system UI face
    below because theme body fonts are not guaranteed to cover modifier glyphs. */
 .session-menu__shortcut,
+.side-panel-type-option__shortcut,
 .chat-controls__model-option-action kbd {
   flex: 0 0 auto;
   min-width: 12px;
@@ -2631,7 +2632,13 @@ openclaw-session-menu[popover] {
   text-align: center;
 }
 
-.sidebar-identity-menu .session-menu__shortcut {
+.session-menu__shortcut,
+.side-panel-type-option__shortcut {
+  text-align: end;
+}
+
+.sidebar-identity-menu .session-menu__shortcut,
+.side-panel-type-option__shortcut {
   font-family: var(--font-shortcut);
 }
 

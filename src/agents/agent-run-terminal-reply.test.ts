@@ -26,4 +26,12 @@ describe("prepareAgentRunTerminalReply", () => {
       terminalReply: { disposition: "silent" },
     });
   });
+
+  it("keeps full prepared text separate from bounded, sanitized terminal evidence", () => {
+    const text = `[Mon 2026-01-01 12:00 UTC] ${"A".repeat(5_000)}`;
+    expect(prepareAgentRunTerminalReply({ rawText: `NO_REPLY\n${text}` })).toEqual({
+      text,
+      terminalReply: { disposition: "visible", text: `${"A".repeat(4_095)}…` },
+    });
+  });
 });
