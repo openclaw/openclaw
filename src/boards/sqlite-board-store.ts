@@ -75,17 +75,15 @@ type PreparedBoardSession = ResolvedBoardSession & { env: NodeJS.ProcessEnv };
 export class SqliteBoardStore implements BoardStore {
   constructor(private readonly options: SqliteBoardStoreOptions) {}
 
-  private async prepareSession(target: BoardSessionTarget): Promise<PreparedBoardSession> {
+  private async withSession<T>(
+    target: BoardSessionTarget,
+    memoryConsumer: (store: BoardStore) => Promise<T>,
+    durableConsumer: (resolved: PreparedBoardSession) => Promise<T>,
+    missing?: () => T | Promise<T>,
+  ): Promise<T> {
     const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    return { ...(await this.options.resolveSession({ ...target })), env };
-  }
-
-  private useMemory<T>(
-    resolved: PreparedBoardSession,
-    consume: (store: BoardStore) => Promise<T>,
-    missing?: () => T | Promise<T>,
-  ): Promise<{ value: T }> | undefined {
+    const resolved = { ...(await this.options.resolveSession({ ...target })), env };
     const assertCurrent = () => resolved.assertCurrent?.();
     const authority = { assertCurrent, authorize: assertCurrent };
     const scope = {
@@ -95,28 +93,26 @@ export class SqliteBoardStore implements BoardStore {
     };
     const memory = captureSessionActorStorageOwner(scope, authority);
     if (!memory) {
-      return undefined;
+      return durableConsumer(resolved);
     }
-    return withSessionActorStorage(
+    const result = await withSessionActorStorage(
       scope,
       {
         authority: memory.authority,
         lifetime: { assertCurrent, assertReadable: assertCurrent },
       },
-      async (binding) => ({ value: await consume(createSessionActorBoardStore(() => binding)) }),
-    ).then(async (result) => {
-      if (result) {
-        return result;
-      }
-      assertCurrent();
-      if (missing) {
-        return { value: await missing() };
-      }
-      throw new BoardValidationError(
-        "not_found",
-        `board session not found: ${resolved.sessionKey}`,
-      );
-    });
+      async (binding) => ({
+        value: await memoryConsumer(createSessionActorBoardStore(() => binding)),
+      }),
+    );
+    if (result) {
+      return result.value;
+    }
+    assertCurrent();
+    if (missing) {
+      return missing();
+    }
+    throw new BoardValidationError("not_found", `board session not found: ${resolved.sessionKey}`);
   }
 
   private write<T>(
@@ -257,19 +253,15 @@ export class SqliteBoardStore implements BoardStore {
   async getSnapshotWithHtmlViewMetadata(
     target: BoardSessionTarget,
   ): Promise<BoardSnapshotWithHtmlViewMetadata> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory<BoardSnapshotWithHtmlViewMetadata>(
-      resolved,
+    return this.withSession<BoardSnapshotWithHtmlViewMetadata>(
+      target,
       (store) => store.getSnapshotWithHtmlViewMetadata(target),
+      (resolved) => this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot),
       () => ({
         snapshot: { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
         htmlViewMetadata: new Map(),
       }),
     );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot);
   }
 
   private async consumeRead<Value, T>(
@@ -337,18 +329,13 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     consume: (snapshot: BoardSnapshot) => T,
   ): Promise<Awaited<T>> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(
-      resolved,
+    return await this.withSession(
+      target,
       (store) => store.useSnapshot(target, consume),
+      (resolved) =>
+        this.consumeSnapshotWithHtmlViewMetadata(resolved, ({ snapshot }) => consume(snapshot)),
       async () => consume({ sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] }),
     );
-    if (memory) {
-      return await (
-        await memory
-      ).value;
-    }
-    return this.consumeSnapshotWithHtmlViewMetadata(resolved, ({ snapshot }) => consume(snapshot));
   }
 
   async useWidgetDocument<T>(
@@ -356,18 +343,12 @@ export class SqliteBoardStore implements BoardStore {
     name: string,
     consume: (document: BoardWidgetDocument | undefined) => T,
   ): Promise<Awaited<T>> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(
-      resolved,
+    return await this.withSession(
+      target,
       (store) => store.useWidgetDocument(target, name, consume),
+      (resolved) => this.consumeWidgetDocument(resolved, name, consume),
       async () => consume(undefined),
     );
-    if (memory) {
-      return await (
-        await memory
-      ).value;
-    }
-    return this.consumeWidgetDocument(resolved, name, consume);
   }
 
   private consumeSnapshotWithHtmlViewMetadata<T>(
@@ -397,52 +378,51 @@ export class SqliteBoardStore implements BoardStore {
       return this.getSnapshot(target);
     }
     const capturedOps = structuredClone(ops);
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(resolved, (store) =>
-      store.applyOps(target, capturedOps, options),
-    );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.write(resolved, options, (scope, sessionKey) =>
-      scope.execute({
-        type: "boards.applyOps",
-        input: { sessionKey, ops: capturedOps },
-      }),
+    return this.withSession(
+      target,
+      (store) => store.applyOps(target, capturedOps, options),
+      (resolved) =>
+        this.write(resolved, options, (scope, sessionKey) =>
+          scope.execute({
+            type: "boards.applyOps",
+            input: { sessionKey, ops: capturedOps },
+          }),
+        ),
     );
   }
 
   async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWidgetWriteOptions) {
     let preparedParams = structuredClone(params);
-    const resolved = await this.prepareSession(params);
-    const memory = this.useMemory(resolved, (store) => store.putWidget(preparedParams, options));
-    if (memory) {
-      return (await memory).value;
-    }
-    const viewGeneration = randomBytes(16).toString("hex");
-    const content = preparedParams.content;
-    const resolveInteraction = options?.resolveMcpAppInteraction;
-    const prepare =
-      content.kind === "mcp-app" && content.interactive && resolveInteraction
-        ? async () => {
-            if (!(await resolveInteraction())) {
-              preparedParams = {
-                ...preparedParams,
-                content: { ...content, interactive: false },
-                declared: undefined,
-              };
-            }
-          }
-        : undefined;
-    return this.write(
-      resolved,
-      options,
-      (scope, sessionKey) =>
-        scope.execute({
-          type: "boards.putWidget",
-          input: { sessionKey, params: preparedParams, viewGeneration },
-        }),
-      prepare,
+    return this.withSession(
+      params,
+      (store) => store.putWidget(preparedParams, options),
+      (resolved) => {
+        const viewGeneration = randomBytes(16).toString("hex");
+        const content = preparedParams.content;
+        const resolveInteraction = options?.resolveMcpAppInteraction;
+        const prepare =
+          content.kind === "mcp-app" && content.interactive && resolveInteraction
+            ? async () => {
+                if (!(await resolveInteraction())) {
+                  preparedParams = {
+                    ...preparedParams,
+                    content: { ...content, interactive: false },
+                    declared: undefined,
+                  };
+                }
+              }
+            : undefined;
+        return this.write(
+          resolved,
+          options,
+          (scope, sessionKey) =>
+            scope.execute({
+              type: "boards.putWidget",
+              input: { sessionKey, params: preparedParams, viewGeneration },
+            }),
+          prepare,
+        );
+      },
     );
   }
 
@@ -454,18 +434,16 @@ export class SqliteBoardStore implements BoardStore {
     instanceId?: string,
     options?: BoardWriteOptions,
   ): Promise<BoardSnapshot> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(resolved, (store) =>
-      store.grant(target, name, decision, revision, instanceId, options),
-    );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.write(resolved, options, (scope, sessionKey) =>
-      scope.execute({
-        type: "boards.grant",
-        input: { sessionKey, name, decision, revision, instanceId },
-      }),
+    return this.withSession(
+      target,
+      (store) => store.grant(target, name, decision, revision, instanceId, options),
+      (resolved) =>
+        this.write(resolved, options, (scope, sessionKey) =>
+          scope.execute({
+            type: "boards.grant",
+            input: { sessionKey, name, decision, revision, instanceId },
+          }),
+        ),
     );
   }
 
@@ -487,20 +465,17 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     name: string,
   ): Promise<BoardWidgetMcpAppDocument | undefined> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(
-      resolved,
+    return this.withSession(
+      target,
       (store) => store.readWidgetMcpApp(target, name),
+      (resolved) =>
+        this.consumeWidgetDocument(
+          resolved,
+          name,
+          (document) => (document && "descriptor" in document ? document : undefined),
+          "mcp-app",
+        ),
       () => undefined,
-    );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.consumeWidgetDocument(
-      resolved,
-      name,
-      (document) => (document && "descriptor" in document ? document : undefined),
-      "mcp-app",
     );
   }
 }

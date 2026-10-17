@@ -2897,10 +2897,11 @@ phases, including those still waiting for foreground admission. Schemas, stored
 bytes, retention, SDK signatures, and update behavior are unchanged.
 
 Transcript preparation carries that selected physical owner into history reads.
-Admitted delta, watermark, and anchor reads borrow the same prepared execution
-as exact-path reads. Inside a matching transcript write lock, they join its
-settlement queue and read through its existing worker, retaining generation and
-physical-file checks without waiting on independent history-reader custody.
+Ordinary delta, watermark, and anchor reads use the retained history reader's WAL
+snapshots without borrowing an unrelated executor generation. Inside a matching
+transcript write lock, they join its settlement queue and read through its existing
+worker, retaining generation and physical-file checks without waiting on
+independent history-reader custody.
 Anchor reads with synchronous acceptance use the reserved discovery lane when
 their sequence selection requires a history reader, so eviction and failure
 cleanup remain safe while writer admission is held.
@@ -5613,20 +5614,20 @@ so reset sessions remain untouched. Durable delivery and transcript append
 retain their own effect-time generation checks. Delivery errors record a warning
 without rereading the generation solely to classify the log message.
 
-Raw and visible transcript deltas, watermarks, pre-reset Memory capture, and final context
-validation borrow an already-prepared agent executor when one exists for the
-captured physical store. The reader captures its generation before yielding and
-joins the existing writer FIFO; replacement or retirement refuses the read instead
-of selecting a successor. Sources without an eligible prepared executor retain
-their read-only history owner, including offline inspection.
+Raw and visible transcript deltas, watermarks, pre-reset Memory capture, and final
+context validation retain their captured physical history source and read-only
+worker, including offline inspection. An unrelated executor retiring does not
+discard that source's completed snapshot or select a successor. Native reads still
+carry the expected physical identity, and current authority stays with the
+disclosure or mutation effect that consumes the result.
 Touched-file scans retain one physical source through all pages; each next
 snapshot reads current committed rows and keeps the existing cursor reset behavior.
 Admission and projection consume one deferred snapshot, reusing admitted facts
 across unchanged transactions. Pre-reset Memory capture preserves reset windows,
 raw fallback, and the existing byte and message limits. Codex history keeps lazy
 evidence projection in its plugin worker and validates the resulting version or
-admitted input through the retained source before disclosure. Alias revocation
-remains registered until borrowed execution and cleanup settle.
+admitted input through the retained source before disclosure. Physical source
+authority and cleanup remain with the retained history owner.
 Inside a transcript write lock, matching reads use that lock's retained worker
 and settlement queue. Asynchronous append preparation drains its own reads before
 committing; cancelled or closed read scopes cannot dispatch later work.
@@ -6700,14 +6701,11 @@ admission refusals after awaiting. Optional provenance-table absence keeps the
 legacy identity; reads do not create it.
 
 Final OAuth device-code token polling and publication, credential subprocess,
-repository transfer, and provider consumption guards retain a synchronous current
-read because native and SDK writers can revoke the agent outside
-host publication. That guard
-uses the same indexed journal/provenance projection without a transaction envelope
-or journal payload scan; it never treats prepared facts as current authority.
-Retire this native guard at the next Plugin SDK major after synchronous writers
-are removed and the lifecycle owner publishes complete revocation facts. The
-accepted GitHub config draft mutation retains its synchronous incarnation check; the preparation cutover adds no new final config-publication contract.
+repository transfer, and provider consumption guards consume the lifecycle owner's
+prepared provenance and deletion facts. Committed native and worker receipts update
+those facts; unknown settlement or retired admission refuses the effect. The final
+incarnation comparison remains synchronous without querying the database. The
+accepted GitHub config draft mutation uses that same current authority check.
 Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
 
 The serving Claw monitor handler prepares its deletion journal through the shared
@@ -6718,17 +6716,12 @@ handoffs likewise retain their current deletion checks immediately before the ef
 an awaited preparation reply cannot replace these final guards.
 
 Agent retirement also retains an owner-minted synchronous final-effect guard for
-filesystem and config mutation callbacks. The original host lease lifetime is
-checked before and after one indexed current SELECT covering the deletion
-journal, lease ownership and expiry, and the expected Claw installation when
-present. The guard reads current rows without a freshness probe, opens no write
-transaction, and sends no worker request.
-Worker transaction grants continue to use SQL-free host checks and authoritative
-worker predicates. Removing this final guard requires the next Plugin SDK major's
-removal of synchronous writers and complete lifecycle revocation publication;
-prepared worker replies cannot replace it. The GitHub identity draft mutation
-likewise keeps its single current incarnation query at its original accepted
-mutation checkpoint.
+filesystem and config mutation callbacks. It consumes the original host lease and
+current journal publication without querying the database. Begin validates the
+expected Claw installation, whose writers refuse mutation while its journal is
+pending. Worker cleanup retains authoritative journal, lease, and installation
+predicates inside its shared-state transaction and holds that guard through the
+agent commit. Lease loss still aborts destructive work.
 
 Package cleanup during deletion also retains its artifact-scoped package lease
 guard before filesystem apply and rollback. It checks the live package owner and
@@ -6825,11 +6818,21 @@ The native accessor kernels remain shared with released synchronous
 `SessionManager` methods and opaque transcript transaction callbacks.
 Bundled callers use the asynchronous replacements; incognito uses memory actor
 operations without native kernels.
+Hook-blocked worker turns carry their existing prepared transcript-source authority
+through persistence, so the append worker checks the source in its committing
+transaction. Run, cancellation, and hook checks retain their existing boundaries;
+the redacted user message is unchanged.
 Unbound harness deletion callbacks are deprecated in favor of the native binding
 lifecycle or commit-finalizer helpers; their native transaction behavior remains
 until the next Plugin SDK major. Initialization rollback and offline maintenance
 also retain their existing native transaction. These mixed kernels are not
 classified as worker-only. The native incognito owner is removed.
+
+Session-event capture and admission prepare agent-deletion status through the
+shared-state reader. Their final host guards consume the journal owner's published
+status, including transaction-local staged facts for native writes; an unknown
+status refuses admission. Journal completion, rollback, and recreation publish
+through the same owner. Destructive cleanup retains its lease and journal checks.
 
 ### Anchor read watermark facts
 

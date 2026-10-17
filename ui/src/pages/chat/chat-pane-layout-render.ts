@@ -163,6 +163,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onOpenWorkspace: () => openPanelSlot("workspace"),
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
+      onOpenProcesses: ownsSubagentsPanel
+        ? () => this.requestBackgroundPanel("processes", "open")
+        : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {

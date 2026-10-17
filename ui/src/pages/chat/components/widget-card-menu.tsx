@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createUniqueId } from "solid-js";
+import { createMemo, createSignal, createUniqueId, mapArray } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -18,40 +18,45 @@ export function WidgetCardMenu(props: {
   const [rawDetailsLabel, setRawDetailsLabel] = createSignal<WidgetRawDetailsLabel>(
     "chat.toolCards.showRawDetails",
   );
-  const items = createMemo<MenuItem[]>(() => {
-    const values: WidgetAction[] = [
-      ...(props.canExportImage ? ["copy" as const, "download" as const] : []),
-      ...(props.hasRawDetails ? ["raw-details" as const] : []),
-    ];
-    return values.map((value) => {
-      const options = {
-        copy: { icon: "copyImage", labelKey: "chat.toolCards.copyAsImage" },
-        download: { icon: "download", labelKey: "chat.toolCards.downloadAsImage" },
-        "raw-details": { icon: "fileText", labelKey: "chat.toolCards.showRawDetails" },
-      } as const;
-      const option = options[value];
-      const label = t(value === "raw-details" ? rawDetailsLabel() : option.labelKey);
-      return {
-        id: value,
-        label,
-        class: "session-menu__item",
-        attributes: { value },
-        icon: (
-          <span class="session-menu__icon" aria-hidden="true">
-            <Icon name={option.icon} />
-          </span>
-        ),
-        content: (
-          <span
-            class="session-menu__text"
-            data-raw-label={value === "raw-details" ? "" : undefined}
-          >
-            {label}
-          </span>
-        ),
-      };
-    });
-  });
+  const values = (): WidgetAction[] => [
+    ...(props.canExportImage ? ["copy" as const, "download" as const] : []),
+    ...(props.hasRawDetails ? ["raw-details" as const] : []),
+  ];
+  const entries = createMemo(
+    () =>
+      mapArray(values, (value): MenuItem => {
+        const options = {
+          copy: { icon: "copyImage", labelKey: "chat.toolCards.copyAsImage" },
+          download: { icon: "download", labelKey: "chat.toolCards.downloadAsImage" },
+          "raw-details": { icon: "fileText", labelKey: "chat.toolCards.showRawDetails" },
+        } as const;
+        const option = options[value];
+        const label = () => t(value === "raw-details" ? rawDetailsLabel() : option.labelKey);
+        return {
+          id: value,
+          get label() {
+            return label();
+          },
+          class: "session-menu__item",
+          attributes: { value },
+          icon: (
+            <span class="session-menu__icon" aria-hidden="true">
+              <Icon name={option.icon} />
+            </span>
+          ),
+          content: (
+            <span
+              class="session-menu__text"
+              data-raw-label={value === "raw-details" ? "" : undefined}
+            >
+              {label()}
+            </span>
+          ),
+        };
+      }),
+    { lazy: true },
+  );
+  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy="while-open"

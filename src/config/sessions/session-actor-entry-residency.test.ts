@@ -32,6 +32,7 @@ import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -39,6 +40,97 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
+
+it("persists run adoption and its reducers once, then skips an unchanged hydrated row", async () => {
+  await withActor(async (f) => {
+    const initial = f.read();
+    const command: Mutation = {
+      type: "session.actor.adoptRun",
+      input: {
+        target: f.target,
+        expected: initial.version,
+        commandId: "adopt-with-activity",
+        phaseId: "adoption",
+        sessionId: f.scope.sessionId,
+        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        runId: "current-run",
+        lifecycle: { startedAt: 2 },
+        reducers: [{ kind: "activity", updatedAt: 20 }],
+      },
+    };
+    await f.prepare(command);
+    const writes = trackSqliteStatementExecutions(f.database.db, ["nodes", "windows"], (sql) => {
+      const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(sql)?.[1];
+      return table === "session_nodes" ? "nodes" : table === "session_windows" ? "windows" : null;
+    });
+    try {
+      expect(f.mutate(command)).toMatchObject({
+        kind: "committed",
+        receipt: {
+          postimage: { entry: { activeWriterRunId: "current-run", startedAt: 2, updatedAt: 20 } },
+        },
+      });
+      expect(writes.counts).toEqual({ nodes: 1, windows: 1 });
+      writes.counts.nodes = 0;
+      writes.counts.windows = 0;
+      f.restartActor();
+      const hydrated = f.read();
+      expect(hydrated.entry).toMatchObject({
+        activeWriterRunId: "current-run",
+        startedAt: 2,
+        updatedAt: 20,
+      });
+      expect(
+        f.mutate({
+          ...command,
+          input: {
+            ...command.input,
+            expected: hydrated.version,
+            commandId: "unchanged-after-hydration",
+            expectedState: buildRestartRecoveryExpectedState(hydrated.entry!),
+            // Clearing an absent optional field changes the in-memory shape, not the stored row.
+            lifecycle: { endedAt: undefined },
+            reducers: [],
+          },
+        }),
+      ).toMatchObject({ kind: "committed" });
+      expect(writes.counts).toEqual({ nodes: 0, windows: 0 });
+      expect(f.nativeEntry()).toEqual(hydrated.entry);
+
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        f.database.db
+          .prepare("UPDATE session_nodes SET label = ? WHERE session_key = ?")
+          .run("stale-derived-label", f.target.sessionKey),
+      );
+      f.restartActor();
+      const repair = f.read();
+      expect(repair.entry?.label).toBe("initial");
+      writes.counts.nodes = 0;
+      writes.counts.windows = 0;
+      expect(
+        f.mutate({
+          ...command,
+          input: {
+            ...command.input,
+            expected: repair.version,
+            commandId: "repair-hydrated-column",
+            expectedState: buildRestartRecoveryExpectedState(repair.entry!),
+            lifecycle: { endedAt: undefined },
+            reducers: [],
+          },
+        }),
+      ).toMatchObject({ kind: "committed" });
+      expect(writes.counts).toEqual({ nodes: 1, windows: 0 });
+      expect(
+        f.database.db
+          .prepare("SELECT label FROM session_nodes WHERE session_key = ?")
+          .get(f.target.sessionKey),
+      ).toMatchObject({ label: "initial" });
+    } finally {
+      writes.restore();
+    }
+  });
+});
 
 it("reads committed participant counts and ordering in the same and next turn without SQL", async () => {
   await withActor((f) => {

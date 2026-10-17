@@ -343,7 +343,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         session.agent.state.messages = dedupedValidated;
         // "Original" compaction metrics should describe the validated transcript that enters
         // limiting/compaction, not the raw on-disk session snapshot.
-        const originalMessages = session.messages.slice();
+        const originalMessages = session.messages;
         const truncated = preserveCompactionReplayWindow(
           originalMessages,
           limitHistoryTurns(

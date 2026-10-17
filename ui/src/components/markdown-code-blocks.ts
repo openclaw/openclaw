@@ -1,18 +1,4 @@
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import cpp from "highlight.js/lib/languages/cpp";
-import css from "highlight.js/lib/languages/css";
-import diff from "highlight.js/lib/languages/diff";
-import go from "highlight.js/lib/languages/go";
-import java from "highlight.js/lib/languages/java";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import markdown from "highlight.js/lib/languages/markdown";
-import python from "highlight.js/lib/languages/python";
-import rust from "highlight.js/lib/languages/rust";
-import typescript from "highlight.js/lib/languages/typescript";
-import xml from "highlight.js/lib/languages/xml";
-import yaml from "highlight.js/lib/languages/yaml";
+import { createSignal } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
 import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
@@ -32,25 +18,32 @@ const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const CODE_PREVIEW_LINE_COUNT = 7;
 
-for (const [language, definition] of Object.entries({
-  bash,
-  cpp,
-  css,
-  diff,
-  go,
-  java,
-  javascript,
-  json,
-  markdown,
-  python,
-  rust,
-  typescript,
-  xml,
-  yaml,
-})) {
-  hljs.registerLanguage(language, definition);
+type Highlighter = typeof import("./markdown-highlight-runtime.ts").highlightCodeHtml;
+const [readHighlighter, setHighlighter] = createSignal<Highlighter | null | undefined>(undefined);
+let highlighterLoad: Promise<void> | undefined;
+
+/** Shared by code renderers; a failed optional chunk leaves escaped, copyable text. */
+export function loadMarkdownHighlighter(): Promise<void> {
+  highlighterLoad ??= import("./markdown-highlight-runtime.ts").then(
+    (runtime) => {
+      setHighlighter(() => runtime.highlightCodeHtml);
+    },
+    () => {
+      setHighlighter(null);
+      console.warn("[markdown] Syntax highlighting could not be loaded; showing plain code.");
+    },
+  );
+  return highlighterLoad;
 }
-hljs.registerAliases("shell", { languageName: "bash" });
+
+// Cached Markdown must subscribe even when a previous render already filled its cache.
+export function markdownHighlightingReady(): boolean {
+  return typeof readHighlighter() === "function";
+}
+
+export function markdownHighlightingPending(): boolean {
+  return highlighterLoad !== undefined && readHighlighter() === undefined;
+}
 
 function encodeCodeBlockCopyPayload(value: string): string {
   // DOMPurify removes attributes containing XML comment ends or closing tags.
@@ -152,21 +145,14 @@ export function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
   wrapper.classList.toggle("has-horizontal-overflow", overflowing);
 }
 
-/** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+/** Highlight when available; plain escaped code remains readable while the chunk loads. */
 export function highlightCodeHtml(text: string, lang: string): string {
-  const language = lang.trim().toLowerCase();
-  try {
-    if (language && hljs.getLanguage(language)) {
-      return hljs.highlight(text, { language, ignoreIllegals: true }).value;
-    }
-    if (!language && text.trim()) {
-      const result = hljs.highlightAuto(text);
-      if (result.relevance >= 2) {
-        return result.value;
-      }
-    }
-  } catch {
-    // Fall back to escaped plaintext; malformed input should not break chat rendering.
+  const highlighter = readHighlighter();
+  if (highlighter) {
+    return highlighter(text, lang);
+  }
+  if (text.trim()) {
+    void loadMarkdownHighlighter();
   }
   return escapeHtml(text);
 }

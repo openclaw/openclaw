@@ -34,10 +34,14 @@ the entry assets and the route's measured immediate dynamic imports, counting
 each asset once even when both preload lists reference it. Moving an existing
 boot import into the first request wave therefore remains visible in the byte
 accounting. Initial-entry JavaScript is capped at 339,000 B gzip with one startup
-CSS request. Complete boot JavaScript is capped at 1,580,000 B gzip for chat and
+CSS request. Complete boot JavaScript is capped at 1,550,000 B gzip for chat and
 1,130,000 B gzip for New Session, including the initial-entry assets.
 JSON5 remains in its own lazy chunk so snapshot validation cannot pull the raw
-configuration parser into chat boot. `--base-dist` on
+configuration parser into chat boot. Syntax highlighting and its language grammars
+load on the first code block; code stays escaped and copyable while they load or
+if the optional chunk fails. MarkdownIt owns rendered HTML, while the separate
+CommonMark source parser preserves exact code and reasoning offsets. Every HTML
+render still passes through its sanitizer. `--base-dist` on
 `scripts/check-control-ui-performance.mts` compares route bytes and requests when
 both builds contain route preload templates. Older builds report that comparison
 as unavailable, so use a cold-load network capture to compare their complete boot

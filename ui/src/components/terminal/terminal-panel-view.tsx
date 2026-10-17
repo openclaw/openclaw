@@ -15,7 +15,7 @@ import {
   terminalPanelTabIcon,
   terminalPanelHostedTabs,
   type TerminalPanelTab,
-} from "./terminal-panel-tabs.ts";
+} from "./terminal-panel-tabs.tsx";
 import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { createTerminalSessionPicker } from "./terminal-session-picker.ts";
 

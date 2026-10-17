@@ -22,7 +22,7 @@ import {
   backgroundImageReadIdentity,
   readBackgroundImage,
 } from "../../components/session-background-image.ts";
-import type { SessionBackground } from "../../components/session-background.ts";
+import type { SessionBackground } from "../../components/session-background.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
