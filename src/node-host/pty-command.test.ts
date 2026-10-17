@@ -34,13 +34,13 @@ function createPtyFixture() {
       onExit = callback;
     },
   } satisfies TerminalPtyHandle;
-  const io: OpenClawPluginNodeHostCommandIo = {
+  const io = {
     signal: controller.signal,
     emitChunk: vi.fn(async () => {}),
     onInput: (callback) => {
       onInput = callback;
     },
-  };
+  } satisfies OpenClawPluginNodeHostCommandIo;
   return {
     pty,
     io,

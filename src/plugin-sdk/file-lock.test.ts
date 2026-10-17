@@ -248,7 +248,7 @@ describe("acquireFileLock", () => {
 
   it("reclaims a definitely stale retired lock sidecar", async () => {
     const retiredPath = path.join(tempDir, "embed.lock.lock");
-    await writeLock(retiredPath);
+    await writeLock(retiredPath, deadPid, new Date().toISOString());
 
     await expect(reclaimDefinitelyStaleFileLock(retiredPath)).resolves.toBe("removed");
     await expect(fs.access(retiredPath)).rejects.toMatchObject({ code: "ENOENT" });

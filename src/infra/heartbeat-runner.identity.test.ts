@@ -9,10 +9,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
+import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   seedSessionStore,
+  seedMainSessionStore,
   readSessionStoreForTest,
   withTempHeartbeatSandbox,
   type HeartbeatReplySpy,
@@ -26,55 +27,63 @@ import {
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
-function runIdentity(
-  cfg: OpenClawConfig,
-  replySpy: HeartbeatReplySpy,
-  options: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {},
-  deps: Partial<HeartbeatDeps> = {},
-) {
-  return runHeartbeatOnce({
-    cfg,
-    ...options,
-    deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0, ...deps },
+function mockReplyWithSystemEvents(replySpy: HeartbeatReplySpy, cfg: OpenClawConfig) {
+  const blocks: Array<string | undefined> = [];
+  replySpy.mockImplementation(async (ctx, opts) => {
+    const eventContext = getReplySystemEventContext(opts);
+    const sessionKey = eventContext?.sessionKey ?? ctx.SessionKey;
+    if (!ctx.AgentId || !sessionKey) {
+      throw new Error("Expected heartbeat agent and session context");
+    }
+    blocks.push(
+      await drainFormattedSystemEvents({
+        cfg,
+        agentId: ctx.AgentId,
+        sessionKey,
+        isMainSession: false,
+        isNewSession: false,
+        events: eventContext?.events ?? [],
+      }),
+    );
+    return { text: "HEARTBEAT_OK" };
   });
-}
-
-function identityConfig(
-  workspace: string,
-  store: string,
-  heartbeat?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"],
-  session: OpenClawConfig["session"] = {},
-): OpenClawConfig {
-  return { agents: { defaults: { workspace, heartbeat } }, session: { store, ...session } };
+  return blocks;
 }
 
 describe("runHeartbeatOnce identity", () => {
   afterEach(() => resetSystemEventsForTest());
 
-  it("keeps isolated global delivery and identity in the selected agent store", () =>
-    withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+  it("keeps isolated global delivery and identity in the selected agent store", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
-      const cfg = identityConfig(
-        tmpDir,
-        storeTemplate,
-        { every: "5m", target: "last", isolatedSession: true },
-        { scope: "global", dmScope: "per-channel-peer" },
-      );
-      cfg.agents!.entries = {
-        main: {},
-        historian2: { identity: { name: "Pulse", emoji: "📟" } },
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "last", isolatedSession: true },
+          },
+          entries: {
+            main: {},
+            historian2: { identity: { name: "Pulse", emoji: "📟" } },
+          },
+        },
+        session: { scope: "global", dmScope: "per-channel-peer", store: storeTemplate },
       };
-      const scope = (agentId: string) => ({
-        agentId,
-        storePath: resolveSessionStorePathCore(storeTemplate, { agentId }),
-      });
-      const mainStorePath = scope("main").storePath;
+      const mainStorePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main" });
+      const historianScope = {
+        agentId: "historian2",
+        storePath: resolveSessionStorePathCore(storeTemplate, { agentId: "historian2" }),
+      };
       for (const [agentId, channel] of [
         ["main", "MAIN"],
         ["historian2", "HISTORIAN"],
       ] as const) {
         await replaceSessionEntry(
-          { ...scope(agentId), sessionKey: "global" },
+          {
+            agentId,
+            storePath: resolveSessionStorePathCore(storeTemplate, { agentId }),
+            sessionKey: "global",
+          },
           {
             sessionId: `${agentId}-session`,
             updatedAt: Date.now(),
@@ -88,9 +97,17 @@ describe("runHeartbeatOnce identity", () => {
       replySpy.mockResolvedValue({ text: "needs attention" });
       const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "HISTORIAN" });
 
-      await expect(
-        runIdentity(cfg, replySpy, { agentId: "historian2" }, { slack: sendSlack }),
-      ).resolves.toMatchObject({ status: "ran" });
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "historian2",
+        deps: {
+          getReplyFromConfig: replySpy,
+          slack: sendSlack,
+          getQueueSize: () => 0,
+        },
+      });
+
+      expect(result.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledTimes(1);
       expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
         AgentId: "historian2",
@@ -105,29 +122,39 @@ describe("runHeartbeatOnce identity", () => {
         expect.objectContaining({ identity: { name: "Pulse", emoji: "📟" } }),
       );
       expect(readSessionStoreForTest(mainStorePath)).toEqual(mainStoreBefore);
-      expect(listSessionEntriesReadOnly(scope("historian2"))).toEqual(
-        expect.arrayContaining(
-          ["global", "agent:historian2:global:heartbeat"].map((sessionKey) =>
-            expect.objectContaining({ sessionKey, entry: expect.anything() }),
-          ),
-        ),
+      const historianStore = Object.fromEntries(
+        listSessionEntriesReadOnly(historianScope).map(({ sessionKey, entry }) => [
+          sessionKey,
+          entry,
+        ]),
       );
+      expect(historianStore.global).toBeDefined();
+      expect(historianStore["agent:historian2:global:heartbeat"]).toBeDefined();
       expect(sendSlack).toHaveBeenCalledOnce();
-    }));
+    });
+  });
 
   it.each([false, true])(
     "preserves the queue of a session named heartbeat with isolation %s",
-    (isolatedSession) =>
-      withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-        const cfg = identityConfig(tmpDir, storePath, {
-          every: "5m",
-          target: "none",
-          session: "heartbeat",
-          isolatedSession,
-        });
+    async (isolatedSession) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: { every: "5m", target: "none", session: "heartbeat", isolatedSession },
+            },
+          },
+          session: { store: storePath },
+        };
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 
-        await expect(runIdentity(cfg, replySpy)).resolves.toMatchObject({ status: "ran" });
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
+        });
+
+        expect(result.status).toBe("ran");
         expect(replySpy).toHaveBeenCalledOnce();
         const [context, options] = replySpy.mock.calls[0]!;
         expect(context.SessionKey).toBe(
@@ -136,14 +163,20 @@ describe("runHeartbeatOnce identity", () => {
         expect(getReplySystemEventContext(options)).toMatchObject({
           heartbeatEventQueueSessionKey: "agent:main:heartbeat",
         });
-      }),
+      });
+    },
   );
 
-  it("keeps a global hook event owned by another agent queued for its owner", () =>
-    withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+  it("keeps a global hook event owned by another agent queued for its owner", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
-      const cfg = identityConfig(tmpDir, storeTemplate, undefined, { scope: "global" });
-      cfg.agents!.entries = { main: {}, alpha: {}, beta: {} };
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: tmpDir },
+          entries: { main: {}, alpha: {}, beta: {} },
+        },
+        session: { scope: "global", store: storeTemplate },
+      };
       for (const agentId of ["alpha", "beta"]) {
         await seedSessionStore(
           resolveSessionStorePathCore(storeTemplate, { agentId }),
@@ -155,32 +188,16 @@ describe("runHeartbeatOnce identity", () => {
           withSystemEventOwner({ sessionKey: "global" }, agentId),
         );
       }
-      const systemEventBlocks: Array<string | undefined> = [];
-      replySpy.mockImplementation(async (ctx, opts) => {
-        const eventContext = getReplySystemEventContext(opts);
-        const sessionKey = eventContext?.sessionKey ?? ctx.SessionKey;
-        if (!ctx.AgentId || !sessionKey) {
-          throw new Error("Expected heartbeat agent and session context");
-        }
-        systemEventBlocks.push(
-          await drainFormattedSystemEvents({
-            cfg,
-            agentId: ctx.AgentId,
-            sessionKey,
-            isMainSession: false,
-            isNewSession: false,
-            events: eventContext?.events ?? [],
-          }),
-        );
-        return { text: "HEARTBEAT_OK" };
-      });
+      const systemEventBlocks = mockReplyWithSystemEvents(replySpy, cfg);
 
       const run = (agentId: string) =>
-        runIdentity(cfg, replySpy, {
+        runHeartbeatOnce({
+          cfg,
           agentId,
           source: "hook",
           intent: "immediate",
           reason: "hook:wake",
+          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
         });
       for (const [index, agentId] of ["alpha", "beta"].entries()) {
         expect((await run(agentId)).status).toBe("ran");
@@ -200,5 +217,58 @@ describe("runHeartbeatOnce identity", () => {
           ]);
         }
       }
-    }));
+    });
+  });
+});
+
+describe("runHeartbeatOnce", () => {
+  it("uses the delivery target as sender when lastTo differs", async () => {
+    await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "slack",
+                to: "C0A9P2N8QHY",
+              },
+            },
+          },
+          session: { store: storePath },
+        };
+
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "1644620762",
+        });
+
+        replySpy.mockImplementation(async (ctx: { To?: string; From?: string }) => {
+          expect(ctx.To).toBe("C0A9P2N8QHY");
+          expect(ctx.From).toBe("C0A9P2N8QHY");
+          return { text: "ok" };
+        });
+
+        const sendSlack = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          channelId: "C0A9P2N8QHY",
+        });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            getReplyFromConfig: replySpy,
+            slack: sendSlack,
+            getQueueSize: () => 0,
+            nowMs: () => 0,
+          },
+        });
+
+        expect(sendSlack).toHaveBeenCalled();
+      },
+      { prefix: "openclaw-hb-" },
+    );
+  });
 });
