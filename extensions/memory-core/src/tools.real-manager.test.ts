@@ -147,13 +147,9 @@ describe("memory_search real manager", () => {
         const { results } = found.details as {
           results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
         };
-        expect(results).toHaveLength(1);
-        expect(results[0]).toMatchObject({
-          path: "USER.md",
-          startLine: 1,
-          endLine: 1,
-          snippet: marker,
-        });
+        expect(results).toEqual([
+          expect.objectContaining({ path: "USER.md", startLine: 1, endLine: 1, snippet: marker }),
+        ]);
         const hit = results[0]!;
         const excerpt = await get.execute("workspace-get", {
           path: hit.path,
@@ -177,8 +173,7 @@ describe("memory_search real manager", () => {
       ...cfg.plugins,
       entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
     };
-    const manager = await indexedManager(cfg, "cli");
-    await manager.close();
+    await (await indexedManager(cfg, "cli")).close();
 
     const tool = searchTool(cfg, {
       agentSessionKey: "agent:main:main",
@@ -207,8 +202,7 @@ describe("memory_search real manager", () => {
       .soft(JSON.parse(content.text), "model-visible JSON preserves snippet layout")
       .toMatchObject(expected);
     expect(await fs.readFile(filePath, "utf8")).toBe(text);
-    expect(provider.embedBatchCalls).toBe(0);
-    expect(provider.embedQueryCalls).toBe(0);
+    expect(provider).toMatchObject({ embedBatchCalls: 0, embedQueryCalls: 0 });
   });
 
   it("rejects a real session search hit as an unsupported file without disabling memory", async () => {
@@ -226,11 +220,9 @@ describe("memory_search real manager", () => {
     const { results } = found.details as {
       results: Array<{ path: string; startLine: number; source: string }>;
     };
-    expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      source: "sessions",
-      path: "sessions/main/excerpt-proof.jsonl",
-    });
+    expect(results).toEqual([
+      expect.objectContaining({ source: "sessions", path: "sessions/main/excerpt-proof.jsonl" }),
+    ]);
     const excerpt = await get.execute("session-excerpt", {
       path: results[0]!.path,
       from: results[0]!.startLine,
@@ -287,8 +279,7 @@ describe("memory_search real manager", () => {
     });
     expect(combined.details).not.toHaveProperty("disabled");
     expect(combined.details).not.toHaveProperty("unavailable");
-    expect(provider.embedBatchCalls).toBe(embeddingCalls);
-    expect(provider.embedQueryCalls).toBe(0);
+    expect(provider).toMatchObject({ embedBatchCalls: embeddingCalls, embedQueryCalls: 0 });
   });
 
   it("serves memory_search without flushing pending transcript changes", async () => {
@@ -397,104 +388,88 @@ describe("memory_search real manager", () => {
       debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 200 },
     });
     expect(result.details).toHaveProperty("results.length", 2);
-    expect(provider.embedQueryCalls).toBe(1);
-    expect(provider.embeddedQueryTexts).toEqual(["alpha"]);
+    expect(provider).toMatchObject({ embedQueryCalls: 1, embeddedQueryTexts: ["alpha"] });
   });
 
-  it("returns memory-file keyword matches at the deadline without cooling down healthy recall", async () => {
-    const cfg = createConfig({ minScore: 0, vectorEnabled: false });
-    const manager = await indexedManager(cfg, undefined, "baseline");
-    const queryEntered = createDeferred<void>();
-    const partialStatusReady = createDeferred<void>();
-    const releaseQuery = createDeferred<void>();
-    let embeddingStarted = false;
-    const statusAsync = manager.statusAsync.bind(manager);
-    vi.spyOn(manager, "statusAsync").mockImplementation(async (...args) => {
-      const status = await statusAsync(...args);
-      if (embeddingStarted) {
-        partialStatusReady.resolve();
+  it.each(["keyword deadline", "managed cold start"] as const)(
+    "keeps recall usable after a %s",
+    async (mode) => {
+      const managed = mode === "managed cold start";
+      const cfg = createConfig({ minScore: 0, ...(!managed ? { vectorEnabled: false } : {}) });
+      const manager = await indexedManager(cfg, undefined, "baseline");
+      const entered = createDeferred<void>();
+      const ready = createDeferred<void>();
+      const release = createDeferred<void>();
+      let embeddingStarted = false;
+      if (!managed) {
+        const statusAsync = manager.statusAsync.bind(manager);
+        vi.spyOn(manager, "statusAsync").mockImplementation(async (...args) => {
+          const status = await statusAsync(...args);
+          if (embeddingStarted) {
+            ready.resolve();
+          }
+          return status;
+        });
       }
-      return status;
-    });
-    provider.beforeEmbedQuery = async () => {
-      embeddingStarted = true;
-      queryEntered.resolve();
-      await releaseQuery.promise;
-    };
-    const tool = searchTool(cfg);
-    vi.useFakeTimers();
-    const execution = tool.execute("keyword-deadline", zebraQuery);
-    try {
-      await queryEntered.promise;
-      await partialStatusReady.promise;
-      await vi.advanceTimersByTimeAsync(30_000);
-      const result = await execution;
-      expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ path: memoryPath, source: "memory" })],
-        partial: true,
-        timedOut: true,
-        timeoutMs: 30_000,
-        mode: "keyword-only",
-        warning: expect.stringContaining("Only memory-file keyword matches"),
-        error: "memory_search timed out after 30s",
-        corpora: [{ corpus: "memory", outcome: "partial" }],
-        debug: { searchMs: 30_000 },
-      });
-      expect(result.details).not.toHaveProperty("unavailable");
-    } finally {
-      releaseQuery.resolve();
-      provider.beforeEmbedQuery = null;
-      vi.useRealTimers();
-    }
-    const retried = await tool.execute("partial-results-retry", zebraQuery);
-    expect(retried.details).not.toHaveProperty("unavailable");
-    expect(provider.embedQueryCalls).toBe(2);
-  });
-
-  it("survives a managed local-service cold start longer than the search deadline", async () => {
-    const cfg = createConfig({ minScore: 0 });
-    await indexedManager(cfg, undefined, "baseline");
-    const acquisitionStarted = createDeferred<void>();
-    const acquisitionReady = createDeferred<void>();
-    provider.beforeEmbedQuery = async (options) => {
-      const control = options?.[MEMORY_SEARCH_DEADLINE_CONTROL];
-      control?.report("pause");
+      provider.beforeEmbedQuery = async (options) => {
+        const control = managed ? options?.[MEMORY_SEARCH_DEADLINE_CONTROL] : undefined;
+        control?.report("pause");
+        try {
+          embeddingStarted = true;
+          entered.resolve();
+          await release.promise;
+        } finally {
+          control?.report("resume");
+        }
+      };
+      const tool = searchTool(cfg);
+      vi.useFakeTimers();
+      const execution = tool.execute(mode, zebraQuery);
       try {
-        acquisitionStarted.resolve();
-        await acquisitionReady.promise;
+        await entered.promise;
+        if (!managed) {
+          await ready.promise;
+        }
+        await vi.advanceTimersByTimeAsync(managed ? 70_000 : 30_000);
+        if (managed) {
+          release.resolve();
+        }
+        const result = await execution;
+        expect(result.details).toMatchObject({
+          results: [expect.objectContaining({ path: memoryPath, source: "memory" })],
+        });
+        if (managed) {
+          expect(result.details).not.toHaveProperty("error");
+          expect(result.details).not.toHaveProperty("partial");
+        } else {
+          expect(result.details).toMatchObject({
+            partial: true,
+            timedOut: true,
+            timeoutMs: 30_000,
+            mode: "keyword-only",
+            warning: expect.stringContaining("Only memory-file keyword matches"),
+            error: "memory_search timed out after 30s",
+            corpora: [{ corpus: "memory", outcome: "partial" }],
+            debug: { searchMs: 30_000 },
+          });
+          expect(result.details).not.toHaveProperty("unavailable");
+        }
       } finally {
-        control?.report("resume");
+        release.resolve();
+        provider.beforeEmbedQuery = null;
+        vi.useRealTimers();
       }
-    };
-    const tool = searchTool(cfg);
-    vi.useFakeTimers();
-    const execution = tool.execute("cold-start-readiness", zebraQuery);
-    try {
-      await acquisitionStarted.promise;
-      await vi.advanceTimersByTimeAsync(70_000);
-      acquisitionReady.resolve();
-      const result = await execution;
-      expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ path: memoryPath, source: "memory" })],
-      });
-      expect(result.details).not.toHaveProperty("error");
-      expect(result.details).not.toHaveProperty("partial");
-    } finally {
-      acquisitionReady.resolve();
-      provider.beforeEmbedQuery = null;
-      vi.useRealTimers();
-    }
-    const retried = await tool.execute("cold-start-retry", zebraQuery);
-    expect(retried.details).not.toHaveProperty("unavailable");
-    expect(provider.embedQueryCalls).toBe(2);
-  });
+      const retried = await tool.execute("recall-retry", zebraQuery);
+      expect(retried.details).not.toHaveProperty("unavailable");
+      expect(provider.embedQueryCalls).toBe(2);
+    },
+  );
 
   it("preserves canonical-session migration recovery through cooldown", async () => {
     const cfg = keywordConfig(["sessions"]);
     cfg.memory = { ...cfg.memory, citations: "off" };
     await session("recovery-source", "Operator recovery instructions.");
-    const initializedManager = await indexedManager(cfg);
-    await initializedManager.close();
+    await (await indexedManager(cfg)).close();
     await closeAllMemorySearchManagers();
 
     openOpenClawAgentDatabase({ agentId: "main" })

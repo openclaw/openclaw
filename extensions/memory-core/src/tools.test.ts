@@ -65,25 +65,18 @@ const recall = (corpus: "sessions" | "configured") => ({
 
 describe("memory tool schemas", () => {
   it.each([
-    { query: "X", min_score: 0.3, max_results: 3 },
-    { query: "X", minScore: 0.3, maxResults: 3 },
-    { query: "X", minScore: 0.3, limit: 3 },
-  ])("normalizes supported search argument spellings: %j", (args) => {
+    [{ min_score: 0.3, max_results: 3 }, true],
+    [{ minScore: 0.3, maxResults: 3 }, true],
+    [{ minScore: 0.3, limit: 3 }, true],
+    [{ maxResults: 3, limit: 10 }, false],
+    [{ max_results: 3, limit: 10 }, false],
+    [{ limit: 10, max_results: 5, maxResults: 3 }, false],
+  ] as const)("normalizes aliases and prioritizes explicit caps: %j", (args, scored) => {
     const tool = createMemorySearchToolOrThrow();
-    const prepared = tool.prepareArguments?.(args) ?? args;
+    const input = { query: "X", ...args };
+    const prepared = tool.prepareArguments?.(input) ?? input;
     expect(Value.Check(tool.parameters, prepared)).toBe(true);
-    expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
-  });
-
-  it.each([
-    { maxResults: 3, limit: 10 },
-    { max_results: 3, limit: 10 },
-    { limit: 10, max_results: 5, maxResults: 3 },
-  ])("keeps explicit result caps over limit: %j", (caps) => {
-    const tool = createMemorySearchToolOrThrow();
-    const prepared = tool.prepareArguments?.({ query: "X", ...caps });
-    expect(Value.Check(tool.parameters, prepared)).toBe(true);
-    expect(prepared).toEqual({ query: "X", maxResults: 3 });
+    expect(prepared).toEqual({ query: "X", maxResults: 3, ...(scored ? { minScore: 0.3 } : {}) });
   });
 
   it.each([0, -1, 1.5, "3", null])("rejects invalid result caps: %j", (value) => {
@@ -184,9 +177,7 @@ describe("memory_search unavailable payloads", () => {
           searchSignal?.addEventListener(
             "abort",
             () => reject(new Error("embedding query aborted")),
-            {
-              once: true,
-            },
+            { once: true },
           );
         });
       });
@@ -341,10 +332,8 @@ describe("memory_search corpus labels", () => {
       query: "favorite food",
       corpus: "all",
     });
-    const details = result.details as { results: Array<{ source: string }> };
-
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ sources: ["memory"] }));
-    expect(details.results).toEqual([]);
+    expect(result.details).toHaveProperty("results", []);
   });
 
   it("does not expose recall-only sessions to ordinary search", async () => {
@@ -395,10 +384,10 @@ describe("memory_search corpus labels", () => {
         query: "pre-reset conversation",
         corpus: "sessions",
       });
-      const details = result.details as { results: Array<{ corpus: string; snippet: string }> };
 
       expect(search).toHaveBeenCalledWith(expect.objectContaining({ sources: ["sessions"] }));
-      expect(details.results).toEqual(
+      expect(result.details).toHaveProperty(
+        "results",
         visible
           ? [
               expect.objectContaining({
@@ -411,7 +400,10 @@ describe("memory_search corpus labels", () => {
     },
   );
 
-  it("forces trusted conversation recall onto its authorized transcript corpus", async () => {
+  it.each([
+    { corpus: "sessions" as const, path: "sessions/past-thread.jsonl" },
+    { corpus: "configured" as const, path: "MEMORY.md" },
+  ])("restricts trusted $corpus recall to its authorized source", async ({ corpus, path }) => {
     const search = searchHits([
       hit("MEMORY.md", "memory", "Shared memory note", 0.95),
       hit("sessions/past-thread.jsonl", "sessions", "Prior private conversation", 0.9),
@@ -419,42 +411,20 @@ describe("memory_search corpus labels", () => {
     const tool = corpusTool(
       {},
       {
-        conversationRecall: recall("sessions"),
-        agentSessionKey: "agent:main:main:active-memory:abcdef123456",
+        conversationRecall: recall(corpus),
+        ...(corpus === "sessions"
+          ? { agentSessionKey: "agent:main:main:active-memory:abcdef123456" }
+          : {}),
       },
     );
-
     const result = await tool.execute("trusted-recall", {
       query: "favorite food",
       corpus: "memory",
     });
-    const details = result.details as { results: Array<{ corpus: string; path: string }> };
-
-    expect(search).toHaveBeenCalledWith(expect.objectContaining({ sources: ["sessions"] }));
-    expect(details.results).toEqual([
-      expect.objectContaining({
-        corpus: "sessions",
-        path: "sessions/past-thread.jsonl",
-      }),
-    ]);
-  });
-
-  it("retains configured sources for advanced trusted recall", async () => {
-    const search = searchHits([
-      hit("MEMORY.md", "memory", "Shared memory note", 0.95),
-      hit("sessions/past-thread.jsonl", "sessions", "Prior private conversation", 0.9),
-    ]);
-    const tool = corpusTool({}, { conversationRecall: recall("configured") });
-
-    const result = await tool.execute("advanced-recall", {
-      query: "favorite food",
-      corpus: "memory",
-    });
-    const details = result.details as { results: Array<{ corpus: string; path: string }> };
-
-    expect(search).toHaveBeenCalledWith(expect.objectContaining({ sources: ["memory"] }));
-    expect(details.results).toEqual([
-      expect.objectContaining({ corpus: "memory", path: "MEMORY.md" }),
+    const source = corpus === "configured" ? "memory" : corpus;
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ sources: [source] }));
+    expect(result.details).toHaveProperty("results", [
+      expect.objectContaining({ corpus: source, path }),
     ]);
   });
 });

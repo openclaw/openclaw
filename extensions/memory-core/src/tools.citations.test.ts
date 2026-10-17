@@ -43,6 +43,19 @@ function withWiki(search: Parameters<typeof registerMemoryCorpusSupplement>[1]["
   registerMemoryCorpusSupplement("memory-wiki", { search, get: async () => null });
 }
 
+function dreamingConfig(enabled: boolean) {
+  return asOpenClawConfig({
+    memory: { citations: enabled ? "on" : "off" },
+    ...(enabled ? { agents: { entries: { main: {} } } } : {}),
+    plugins: { entries: { "memory-core": { config: { dreaming: { enabled } } } } },
+  });
+}
+
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 beforeEach(() => {
   clearMemoryPluginState();
   memoryToolsTesting.resetMemorySearchToolCooldowns();
@@ -113,11 +126,7 @@ describe("memory tools", () => {
     withWiki(async () => [wiki]);
 
     const tool = createMemorySearchToolOrThrow({
-      config: asOpenClawConfig({
-        memory: { citations: "on" },
-        agents: { entries: { main: {} } },
-        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
-      }),
+      config: dreamingConfig(true),
     });
     const result = await tool.execute("call_recall_persist", {
       query: "glacier backup",
@@ -197,13 +206,8 @@ describe("memory tools", () => {
       maxResults: 5,
     });
     const details = result.details as { results: Array<{ corpus: string; path: string }> };
-    expect(details.results.map((entry) => entry.path)).toEqual([
-      "w1.md",
-      "w2.md",
-      "w3.md",
-      "w4.md",
-      "memory/note-a.md",
-    ]);
+    const paths = details.results.map((entry) => entry.path);
+    expect(paths).toEqual(["w1.md", "w2.md", "w3.md", "w4.md", "memory/note-a.md"]);
     expect(details.results.filter((entry) => entry.corpus === "memory")).toHaveLength(1);
     expect(details.results.filter((entry) => entry.corpus === "wiki")).toHaveLength(4);
   });
@@ -234,43 +238,37 @@ describe("memory tools", () => {
         stalled === "wiki" ? await new Promise<never>(() => {}) : [wikiHit("entities/alpha.md")],
       );
       const tool = createMemorySearchToolOrThrow();
-      try {
-        const pending = tool.execute("stalled-corpus", { query: "alpha", corpus: "all" });
-        await vi.advanceTimersByTimeAsync(30_000);
-        const result = await pending;
-        const healthy = stalled === "memory" ? "wiki" : "memory";
-        const path = stalled === "memory" ? "entities/alpha.md" : "MEMORY.md";
-        const corpora = ["memory", "wiki"].map((corpus) =>
-          corpus === stalled
-            ? { corpus, outcome: "unavailable", error: "memory_search timed out after 30s" }
-            : { corpus, outcome: "ok" },
+      const pending = tool.execute("stalled-corpus", { query: "alpha", corpus: "all" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await pending;
+      const healthy = stalled === "memory" ? "wiki" : "memory";
+      const path = stalled === "memory" ? "entities/alpha.md" : "MEMORY.md";
+      const corpora = ["memory", "wiki"].map((corpus) =>
+        corpus === stalled
+          ? { corpus, outcome: "unavailable", error: "memory_search timed out after 30s" }
+          : { corpus, outcome: "ok" },
+      );
+      const results = [{ corpus: healthy, path }];
+      const expected = {
+        results,
+        corpora,
+        warning: expect.stringContaining(
+          stalled === "memory" ? "Memory corpus unavailable" : "Wiki corpus unavailable",
+        ),
+      };
+      expect(result.details).toMatchObject(expected);
+      const retry = await tool.execute("after-stall", {
+        query: "alpha",
+        ...(stalled === "memory" ? { corpus: "all" } : {}),
+      });
+      expect(retry.details).toMatchObject(stalled === "memory" ? expected : { results });
+      if (stalled === "memory") {
+        expect(retry.details).toHaveProperty(
+          "warning",
+          expect.stringContaining("memory_search timed out after 30s"),
         );
-        expect(result.details).toMatchObject({
-          results: [{ corpus: healthy, path }],
-          corpora,
-          warning: expect.stringContaining(
-            stalled === "memory" ? "Memory corpus unavailable" : "Wiki corpus unavailable",
-          ),
-        });
-        const retry = await tool.execute("after-stall", {
-          query: "alpha",
-          ...(stalled === "memory" ? { corpus: "all" } : {}),
-        });
-        expect(retry.details).toMatchObject({ results: [{ corpus: healthy, path }] });
-        if (stalled === "memory") {
-          expect(retry.details).toMatchObject({
-            corpora,
-            warning: expect.stringContaining("Memory corpus unavailable"),
-          });
-          expect(retry.details).toHaveProperty(
-            "warning",
-            expect.stringContaining("memory_search timed out after 30s"),
-          );
-        }
-        expect(search).toHaveBeenCalledTimes(stalled === "memory" ? 1 : 2);
-      } finally {
-        vi.useRealTimers();
       }
+      expect(search).toHaveBeenCalledTimes(stalled === "memory" ? 1 : 2);
     },
   );
 });
@@ -283,32 +281,19 @@ it("keeps the wiki deadline independent of managed memory readiness", async () =
     ...memoryHit("memory/observatory.md", 1, "The observatory access phrase is copper heron."),
     endLine: 1,
   };
-  const supplementHit = {
-    corpus: "wiki",
-    path: "entities/greenhouse.md",
-    score: 0.5,
-    snippet: "Water the greenhouse plants on Tuesdays.",
-  };
   setMemorySearchImpl(async (options) => {
     const control = options?.[MEMORY_SEARCH_DEADLINE_CONTROL];
     control?.report("pause");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 70_000);
-    });
+    await delay(70_000);
     control?.report("resume");
     return [primaryHit];
   });
   withWiki(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 40_000);
-    });
-    return [supplementHit];
+    await delay(40_000);
+    return [wikiHit("entities/greenhouse.md", 0.5)];
   });
   const tool = createMemorySearchToolOrThrow({
-    config: {
-      memory: { citations: "off" },
-      plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
-    },
+    config: dreamingConfig(false),
   });
   const pending = tool.execute("independent-deadlines", { query: "credentials", corpus: "all" });
   await vi.advanceTimersByTimeAsync(70_000);

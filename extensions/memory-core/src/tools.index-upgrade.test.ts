@@ -14,7 +14,7 @@ import type { MemoryIndexDatabase } from "./memory/manager-database-context.js";
 import { readMemoryDatabaseRevision } from "./memory/manager-db-kernel.js";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION } from "./memory/manager-reindex-state.js";
-import { createMemorySearchTool, testing } from "./tools.js";
+import { testing } from "./tools.js";
 import { createMemorySearchToolOrThrow } from "./tools.test-helpers.js";
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
 const { MemoryIndexManager } = await import("./memory/manager.js");
@@ -37,6 +37,23 @@ describe("memory_search index versions", () => {
     return cfg;
   }
 
+  const indexHit = expect.objectContaining({ path: "memory/2026-01-12.md" });
+  const providerCost = expect.stringContaining("provider cost");
+  const toolFor = (config: Parameters<typeof fixture.getFreshManager>[0], oneShotCliRun = false) =>
+    createMemorySearchToolOrThrow({ config, agentId: "main", oneShotCliRun });
+
+  function setVersions(db: DatabaseSync, versions: Record<string, number | undefined>) {
+    const key = "memory_index_meta_v1";
+    const row = db.prepare("SELECT value FROM memory_index_meta WHERE key = ?").get(key);
+    if (typeof row?.value !== "string") {
+      throw new Error("fixture index metadata is missing");
+    }
+    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
+      JSON.stringify({ ...JSON.parse(row.value), ...versions }),
+      key,
+    );
+  }
+
   async function seedIndex(
     storedVersions: Record<string, number | undefined>,
     provider = "openai",
@@ -47,12 +64,7 @@ describe("memory_search index versions", () => {
     await manager.close();
     await closeAllMemorySearchManagers();
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
-    const row = db
-      .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-      .get() as { value: string };
-    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-      JSON.stringify({ ...JSON.parse(row.value), ...storedVersions }),
-    );
+    setVersions(db, storedVersions);
     return {
       cfg,
       db,
@@ -72,7 +84,7 @@ describe("memory_search index versions", () => {
     },
   ])("handles index versions %j without unwanted rebuilds", async ({ stored, newer }) => {
     const { cfg, db, before, embedded } = await seedIndex(stored);
-    const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
+    const tool = toolFor(cfg);
     const responses = await Promise.all(
       ["first", "concurrent"].map((id) => tool.execute(id, query)),
     );
@@ -82,22 +94,21 @@ describe("memory_search index versions", () => {
         results: [],
         unavailable: true,
         warning: expect.stringContaining("newer OpenClaw"),
-        action: expect.stringContaining("provider cost"),
+        action: providerCost,
       });
       expect(readMemoryDatabaseRevision(db)).toBe(before);
-      expect(fixture.provider.embedBatchCalls).toBe(embedded);
-      expect(fixture.provider.embedQueryCalls).toBe(0);
+      expect(fixture.provider).toMatchObject({ embedBatchCalls: embedded, embedQueryCalls: 0 });
       return;
     }
     expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
+      results: [indexHit],
     });
     expect(result.details).not.toHaveProperty("unavailable");
     const after = readMemoryDatabaseRevision(db);
     expect(after).toBeGreaterThan(before);
     expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
     for (const response of responses) {
-      expect(response.details).toHaveProperty("warning", expect.stringContaining("provider cost"));
+      expect(response.details).toHaveProperty("warning", providerCost);
     }
 
     const repeat = await tool.execute("provenance-current", query);
@@ -110,12 +121,12 @@ describe("memory_search index versions", () => {
     fixture.provider.beforeEmbedQuery = async () => {
       throw new Error("synthetic query failure");
     };
-    const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
+    const tool = toolFor(cfg);
     const result = await tool.execute("query-failure", query);
     expect(result.details).toMatchObject({
       unavailable: true,
       error: expect.stringContaining("synthetic query failure"),
-      warning: expect.stringContaining("provider cost"),
+      warning: providerCost,
     });
     expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
   });
@@ -126,11 +137,11 @@ describe("memory_search index versions", () => {
     const { cfg, db, embedded } = await seedIndex({ provenanceVersion: 0 });
     expect(db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()?.count).toBe(0);
     await fs.writeFile(file, "Alpha memory added after the old empty index.");
-    const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
+    const tool = toolFor(cfg);
     const result = await tool.execute("empty-index-upgrade", query);
     expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
-      warning: expect.stringContaining("provider cost"),
+      results: [indexHit],
+      warning: providerCost,
     });
     expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
   });
@@ -169,11 +180,11 @@ describe("memory_search index versions", () => {
       clock.mockReturnValue(now + 30_000);
       holdSync = true;
       const embedded = fixture.provider.embedBatchCalls;
-      const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
+      const tool = toolFor(cfg);
       const result = await tool.execute("detached-rebuild", query);
       expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
-        warning: expect.stringContaining("provider cost"),
+        results: [indexHit],
+        warning: providerCost,
       });
       // The next search starts after the request notice but before the detached writer admits it.
       const queryEntered = createDeferred<void>();
@@ -185,10 +196,7 @@ describe("memory_search index versions", () => {
       await queryEntered.promise;
       acquire.resolve();
       const concurrentResult = await concurrent;
-      expect(concurrentResult.details).toHaveProperty(
-        "warning",
-        expect.stringContaining("provider cost"),
-      );
+      expect(concurrentResult.details).toHaveProperty("warning", providerCost);
       expect(fixture.provider.embedBatchCalls).toBe(embedded);
       release.resolve();
       await manager.close();
@@ -210,7 +218,7 @@ describe("memory_search index versions", () => {
     const release = createDeferred<void>();
     fixture.provider.providerRuntimeBatchGate = release.promise;
     fixture.provider.providerRuntimeBatchEntered = () => entered.resolve();
-    const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
+    const tool = toolFor(cfg);
     vi.useFakeTimers();
     const execution = tool.execute("rebuild-deadline", query);
     try {
@@ -219,9 +227,9 @@ describe("memory_search index versions", () => {
       const result = await execution;
       expect(result.details).toMatchObject({
         unavailable: true,
-        warning: expect.stringContaining("provider cost"),
+        warning: providerCost,
+        error: expect.stringContaining("timed out"),
       });
-      expect(result.details).toHaveProperty("error", expect.stringContaining("timed out"));
     } finally {
       release.resolve();
       fixture.provider.providerRuntimeBatchGate = null;
@@ -256,7 +264,7 @@ describe("memory_search index versions", () => {
       const before = readMemoryDatabaseRevision(db);
       const chunks = db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all();
       const priorCalls = calls;
-      const tool = createMemorySearchToolOrThrow({ config: cfg, agentId: "main" });
+      const tool = toolFor(cfg);
       const result = await tool.execute("newer-after-sync-failure", query);
       expect(result.details).toMatchObject({
         results: [],
@@ -289,20 +297,9 @@ describe("memory_search index versions", () => {
     await closeAllMemorySearchManagers();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const db = new DatabaseSync(dbPath);
-    try {
-      const row = db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-        .get();
-      if (typeof row?.value !== "string") {
-        throw new Error("fixture index metadata is missing");
-      }
-      const meta = JSON.parse(row.value) as Record<string, unknown>;
-      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-        JSON.stringify({ ...meta, chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }),
-      );
-    } finally {
-      db.close();
+    {
+      using db = new DatabaseSync(dbPath);
+      setVersions(db, { chunkingVersion: MEMORY_CHUNKING_VERSION - 1 });
     }
     return dbPath;
   }
@@ -324,22 +321,15 @@ describe("memory_search index versions", () => {
       // A changed file prevents the embedding cache from satisfying the rebuild.
       await fs.writeFile(filePath, "UpgradeKeywordFallback changed after publication.");
       if (scenario === "missing FTS") {
-        const db = new DatabaseSync(dbPath);
-        try {
-          db.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
-          db.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
-        } finally {
-          db.close();
-        }
+        using db = new DatabaseSync(dbPath);
+        db.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
+        db.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
       }
       fixture.provider.embedBatchPermanentFailure = Object.assign(
         new Error("openai embeddings failed: 429 insufficient_quota"),
         { status: 429, code: "insufficient_quota" },
       );
-      const tool = createMemorySearchTool({ config: cfg, agentId: "main", oneShotCliRun: true });
-      if (!tool) {
-        throw new Error("memory_search tool missing");
-      }
+      const tool = toolFor(cfg, true);
       try {
         const result = await tool.execute("upgrade", {
           query: "UpgradeKeywordFallback",

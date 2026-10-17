@@ -121,24 +121,24 @@ export function resetMemoryCoreDreamingStateForTests(): void {
   });
 }
 
-async function writeRawShortTermStore(params: {
-  workspaceDir: string;
-  raw: unknown;
-  namespace: string;
-  metaKey: "recall" | "phase";
-}): Promise<void> {
-  const record = asOptionalRecord(params.raw);
+async function writeRawShortTermStore(
+  workspaceDir: string,
+  raw: unknown,
+  metaKey: "recall" | "phase",
+): Promise<void> {
+  const record = asOptionalRecord(raw);
   const entries = asOptionalRecord(record?.entries);
   await Promise.all([
     writeMemoryCoreWorkspaceEntries({
-      namespace: params.namespace,
-      workspaceDir: params.workspaceDir,
+      namespace:
+        metaKey === "recall" ? SHORT_TERM_RECALL_NAMESPACE : SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+      workspaceDir,
       entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
     }),
     writeMemoryCoreWorkspaceEntry({
       namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir: params.workspaceDir,
-      key: params.metaKey,
+      workspaceDir,
+      key: metaKey,
       value: {
         updatedAt:
           typeof record?.updatedAt === "string" && record.updatedAt.trim()
@@ -148,6 +148,12 @@ async function writeRawShortTermStore(params: {
     }),
   ]);
 }
+
+const shortTermLocks = () =>
+  openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
 
 export const shortTermTestState = {
   SHORT_TERM_RECALL_MAX_ENTRIES: 512,
@@ -160,30 +166,14 @@ export const shortTermTestState = {
   },
   readPhaseSignalStore,
   writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStore({
-      workspaceDir,
-      raw,
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      metaKey: "recall",
-    }),
+    writeRawShortTermStore(workspaceDir, raw, "recall"),
   writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStore({
-      workspaceDir,
-      raw,
-      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-      metaKey: "phase",
-    }),
+    writeRawShortTermStore(workspaceDir, raw, "phase"),
   async writeShortTermLock(workspaceDir: string, entry: ShortTermLockEntry) {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
+    await shortTermLocks().register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
   },
   async deleteShortTermLock(workspaceDir: string) {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).delete(memoryCoreWorkspaceStateKey(workspaceDir));
+    await shortTermLocks().delete(memoryCoreWorkspaceStateKey(workspaceDir));
   },
 };
 
@@ -216,13 +206,11 @@ export function createMemoryCoreTestHarness() {
     resetMemoryCoreDreamingStateForTests();
   });
 
-  async function createTempWorkspace(prefix: string): Promise<string> {
-    const workspaceDir = path.join(fixtureRoot, `${prefix}${caseId++}`);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    return workspaceDir;
-  }
-
   return {
-    createTempWorkspace,
+    async createTempWorkspace(prefix: string): Promise<string> {
+      const workspaceDir = path.join(fixtureRoot, `${prefix}${caseId++}`);
+      await fs.mkdir(workspaceDir, { recursive: true });
+      return workspaceDir;
+    },
   };
 }
