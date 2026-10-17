@@ -344,6 +344,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
+  // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;
   setChatHistoryLoad(state, { phase: "idle" });
   state.chatLoading = false;
