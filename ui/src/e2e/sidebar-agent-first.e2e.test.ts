@@ -305,7 +305,7 @@ suite.define(() => {
               })),
             ).toEqual({ width: 12, animation: "none" });
           }
-          const add = group.locator(".sidebar-agent-roster__new");
+          expect(await group.locator(".sidebar-agent-roster__header a").count()).toBe(1);
           const actions = group.locator(".sidebar-agent-roster__actions");
           await page.mouse.move(1000, 800);
           await page.locator("body").click({ position: { x: 1000, y: 800 } });
@@ -315,7 +315,6 @@ suite.define(() => {
           await group.locator(".sidebar-agent-roster__row").focus();
           expect(await actions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
           expect(await geometry()).toEqual(beforeFocus);
-          expect(await add.getAttribute("href")).toBe("/new?agent=main");
           await captureSidebarUiProof(
             suite,
             page,

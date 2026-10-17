@@ -4,10 +4,15 @@ import { en } from "./en.ts";
 const enAgentsHome = {
   agentsHome: {
     manage: "Manage agents",
+    pinnedAgents: "Pinned agents",
+    noAssistantMessage: "No assistant reply yet",
     create: "New agent",
     openChat: "Open chat",
-    openMainChat: "Open main chat",
-    allSessions: "All sessions",
+    createNewSession: "Create new session",
+    viewSessions: "View sessions",
+    deleteAgentConfirm: "Delete {agent}?",
+    deleteAgentDetails:
+      "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
     collapseOthers: "Collapse others",
     agentOptions: "Options for {agent}",
     expandAgent: "Expand {agent}",
