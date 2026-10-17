@@ -598,4 +598,3 @@ export function cancelCronEdit(state: CronState, agentId: string | null) {
   clearCronEditState(state);
   resetCronFormToDefaults(state, agentId);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
