@@ -60,6 +60,47 @@ beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
 });
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
+type BoundParent = Awaited<ReturnType<typeof createBoundParent>>;
+const caller = { agentId: "main", sessionKey: parentSessionKey };
+const spawnOptions = {
+  agentSessionKey: parentSessionKey,
+  requesterRunId: parentRunId,
+  requesterTurnRunId: parentRunId,
+};
+const attachment = { name: "synthetic.txt", content: "synthetic attachment" };
+
+function prepareInvocation(
+  bound: BoundParent,
+  tools: AnyAgentTool[],
+  host?: ReturnType<typeof createAgentHarnessHostCapabilities>,
+) {
+  const [tool] = host
+    ? finalizeAgentToolAvailability(host.capabilities.bindToolSurface(tools))
+    : finalizeAgentTools({
+        tools,
+        hookContext: { ...caller, config: bound.cfg, runId: parentRunId },
+        abortSignal: bound.parent.controller.signal,
+      });
+  const identity = createAdmittedGatewayToolCallerIdentity({
+    ...caller,
+    admittedRunContext: bound.admitted,
+  });
+  return (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) =>
+    withPluginRuntimeGatewayRequestScope(
+      { context: bound.context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
+      () => withGatewayToolCallerIdentity(identity, () => tool!.execute!(...args)),
+    );
+}
+
+function parentHeader() {
+  return {
+    type: "session" as const,
+    version: 3,
+    id: "parent-session",
+    timestamp: "2026-09-05T00:00:00Z",
+    cwd: fixture.stateDir,
+  };
+}
 
 function createPreparationGateway(
   context: Awaited<ReturnType<typeof createBoundParent>>["context"],
@@ -104,6 +145,25 @@ function createPreparationGateway(
   recovery.dispatchSessionMethod = dispatchSessionMethod;
   return {
     dispatchSessionMethod,
+    dispatch(agent: (params: Record<string, unknown>) => unknown, allowAbort = false) {
+      return async <T>(
+        method: string,
+        params: Record<string, unknown>,
+        options?: DispatchGatewayMethodInProcessOptions,
+      ) => {
+        if (method === "agent") {
+          return agent(params) as T;
+        }
+        if (method !== "sessions.delete" && !(allowAbort && method === "chat.abort")) {
+          throw new Error(`Unexpected spawn RPC ${method}`);
+        }
+        return await dispatchSessionMethod<T>(method, params, {
+          timeoutMs: options?.timeoutMs,
+          signal: options?.signal,
+          assertCurrent: options?.sessionMutationCommitGuard,
+        });
+      };
+    },
     async close() {
       try {
         await AsyncWorkScope.runWhenAllIdle(
@@ -130,17 +190,12 @@ describe("pending spawn preparation authority", () => {
     "checks parent authority after queued fork preparation: %s",
     async (closure) => {
       const bindingFixture = installSpawnThreadBindingFixture();
-      const { cfg, storePath, context, admission, parent, admitted } = await createBoundParent();
+      const bound = await createBoundParent();
+      const { cfg, storePath, context, admission, parent, admitted } = bound;
       await replaceTranscriptEvents(
         { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
         [
-          {
-            type: "session",
-            version: 3,
-            id: "parent-session",
-            timestamp: "2026-09-05T00:00:00Z",
-            cwd: fixture.stateDir,
-          },
+          parentHeader(),
           {
             type: "message",
             id: "parent-message",
@@ -202,65 +257,28 @@ describe("pending spawn preparation authority", () => {
           }
         },
         resolveContextEngine: async () => new LegacyContextEngine(),
-        dispatchGatewayMethodInProcess: async <T>(
-          method: string,
-          params: Record<string, unknown>,
-          options?: DispatchGatewayMethodInProcessOptions,
-        ) => {
-          if (method === "agent") {
-            dispatch(params);
-            return { runId: params.idempotencyKey, status: "accepted" } as T;
-          }
-          if (method !== "sessions.delete") {
-            throw new Error(`Unexpected spawn RPC ${method}`);
-          }
-          return await gateway.dispatchSessionMethod<T>(method, params, {
-            timeoutMs: options?.timeoutMs,
-            signal: options?.signal,
-            assertCurrent: options?.sessionMutationCommitGuard,
-          });
-        },
+        dispatchGatewayMethodInProcess: gateway.dispatch((params) => {
+          dispatch(params);
+          return { runId: params.idempotencyKey, status: "accepted" };
+        }),
       });
-      const [tool] = finalizeAgentTools({
-        tools: [
-          createSessionsSpawnTool({
-            config: cfg,
-            agentSessionKey: parentSessionKey,
-            requesterRunId: parentRunId,
-            requesterTurnRunId: parentRunId,
-            agentChannel: "matrix",
-            agentAccountId: "default",
-            agentTo: "room:parent",
-          }),
-        ],
-        hookContext: {
+      const invoke = prepareInvocation(bound, [
+        createSessionsSpawnTool({
+          ...spawnOptions,
           config: cfg,
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          runId: parentRunId,
-        },
-        abortSignal: parent.controller.signal,
-      });
-      const pending = withPluginRuntimeGatewayRequestScope(
-        { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-        () =>
-          withGatewayToolCallerIdentity(
-            createAdmittedGatewayToolCallerIdentity({
-              admittedRunContext: admitted,
-              agentId: "main",
-              sessionKey: parentSessionKey,
-            }),
-            () =>
-              tool!.execute!("spawn-fork-queued", {
-                task: "bounded fork",
-                context: "fork",
-                thread: true,
-                mode: "run",
-                attachments: [{ name: "synthetic.txt", content: "synthetic attachment" }],
-                expectsCompletionMessage: false,
-              }),
-          ),
-      ).then(
+          agentChannel: "matrix",
+          agentAccountId: "default",
+          agentTo: "room:parent",
+        }),
+      ]);
+      const pending = invoke("spawn-fork-queued", {
+        task: "bounded fork",
+        context: "fork",
+        thread: true,
+        mode: "run",
+        attachments: [attachment],
+        expectsCompletionMessage: false,
+      }).then(
         (value) => value,
         (error: unknown) => error,
       );
@@ -379,21 +397,14 @@ describe("pending spawn preparation authority", () => {
           }
         })
       : undefined;
-    const { cfg, storePath, context, admission, parent, admitted } = await createBoundParent(
+    const bound = await createBoundParent(
       closure.startsWith("projected") ? "plugin-harness" : "embedded",
     );
+    const { cfg, storePath, context, admission, parent, admitted } = bound;
     if (closure === "native thread binding") {
       await replaceTranscriptEvents(
         { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
-        [
-          {
-            type: "session",
-            version: 3,
-            id: "parent-session",
-            timestamp: "2026-09-05T00:00:00Z",
-            cwd: fixture.stateDir,
-          },
-        ],
+        [parentHeader()],
       );
     }
     const readChildKey = async () =>
@@ -441,38 +452,24 @@ describe("pending spawn preparation authority", () => {
         }
         return Object.assign(new LegacyContextEngine(), { prepareSubagentSpawn: prepare });
       },
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-        options?: DispatchGatewayMethodInProcessOptions,
-      ) => {
-        if (method === "agent") {
-          agentDispatch(params);
-          if (closure === "native acceptance") {
-            const childSessionKey = params.sessionKey as string;
-            const child = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
-            childController = registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
-              runId: params.idempotencyKey as string,
-              sessionKey: childSessionKey,
-              sessionId: child.sessionId,
-              agentId: "main",
-              timeoutMs: 60_000,
-            });
-            acceptedEntered.resolve();
-            await acceptedGate.promise;
-          }
-          return { runId: params.idempotencyKey, status: "accepted" } as T;
+      dispatchGatewayMethodInProcess: gateway.dispatch(async (params) => {
+        agentDispatch(params);
+        if (closure === "native acceptance") {
+          const childSessionKey = params.sessionKey as string;
+          const child = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
+          childController = registerChatAbortController({
+            chatAbortControllers: context.chatAbortControllers,
+            runId: params.idempotencyKey as string,
+            sessionKey: childSessionKey,
+            sessionId: child.sessionId,
+            agentId: "main",
+            timeoutMs: 60_000,
+          });
+          acceptedEntered.resolve();
+          await acceptedGate.promise;
         }
-        if (method !== "chat.abort" && method !== "sessions.delete") {
-          throw new Error(`Unexpected spawn RPC ${method}`);
-        }
-        return await gateway.dispatchSessionMethod<T>(method, params, {
-          timeoutMs: options?.timeoutMs,
-          signal: options?.signal,
-          assertCurrent: options?.sessionMutationCommitGuard,
-        });
-      },
+        return { runId: params.idempotencyKey, status: "accepted" };
+      }, true),
     });
     const invocationAbort = new AbortController();
     const host = closure.startsWith("projected")
@@ -489,10 +486,8 @@ describe("pending spawn preparation authority", () => {
         })
       : undefined;
     const source = createSessionsSpawnTool({
+      ...spawnOptions,
       config: cfg,
-      agentSessionKey: parentSessionKey,
-      requesterRunId: parentRunId,
-      requesterTurnRunId: parentRunId,
       agentChannel: hasThread ? "matrix" : undefined,
       agentAccountId: hasThread ? "default" : undefined,
       agentTo: hasThread ? "room:parent" : undefined,
@@ -516,43 +511,18 @@ describe("pending spawn preparation authority", () => {
       agentSessionKey: parentSessionKey,
       agentId: "main",
     });
-    const tools = [observed, wait];
-    const [tool] = host
-      ? finalizeAgentToolAvailability(host.capabilities.bindToolSurface(tools))
-      : finalizeAgentTools({
-          tools,
-          hookContext: {
-            config: cfg,
-            agentId: "main",
-            sessionKey: parentSessionKey,
-            runId: parentRunId,
-          },
-          abortSignal: parent.controller.signal,
-        });
-    const caller = createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext: admitted,
-      agentId: "main",
-      sessionKey: parentSessionKey,
-    });
-    const wrapped = withPluginRuntimeGatewayRequestScope(
-      { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-      () =>
-        withGatewayToolCallerIdentity(caller, () =>
-          tool!.execute!(
-            "spawn-pending",
-            {
-              task: "bounded child",
-              collect: closure !== "native acceptance" && !hasThread,
-              thread: hasThread,
-              context: closure === "native thread binding" ? "fork" : "isolated",
-              attachments: hasAttachments
-                ? [{ name: "synthetic.txt", content: "synthetic attachment" }]
-                : undefined,
-              groupId: closure === "native acceptance" || hasThread ? undefined : groupId,
-            },
-            closure === "native call signal" ? invocationAbort.signal : undefined,
-          ),
-        ),
+    const invoke = prepareInvocation(bound, [observed, wait], host);
+    const wrapped = invoke(
+      "spawn-pending",
+      {
+        task: "bounded child",
+        collect: closure !== "native acceptance" && !hasThread,
+        thread: hasThread,
+        context: closure === "native thread binding" ? "fork" : "isolated",
+        attachments: hasAttachments ? [attachment] : undefined,
+        groupId: closure === "native acceptance" || hasThread ? undefined : groupId,
+      },
+      closure === "native call signal" ? invocationAbort.signal : undefined,
     );
     const wrappedOutcome = wrapped.then(
       (result) => result,

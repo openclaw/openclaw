@@ -241,10 +241,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         if (launchCount === 1) {
           await firstLaunchGate.promise;
         }
-        return {
-          runId: params.idempotencyKey as string,
-          status: "accepted",
-        } as T;
+        return { runId: params.idempotencyKey as string, status: "accepted" } as T;
       },
     });
 
@@ -402,135 +399,126 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     }
   });
 
-  it("consumes the exact private parent token in the child Gateway identity", async () => {
-    const { parentToken, operationalRunInstance, authority } = parentAuthority();
-    const childIdentity = captureChildIdentity();
-
-    try {
-      const result = await inGateway(() =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            operationalRunInstance,
-            executionIdentityToken: parentToken,
-            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-          },
-          () =>
-            spawnSubagentDirect(
-              { task: "inspect lineage", context: "isolated", lightContext: true },
-              withParentExecutionIdentity({ agentSessionKey: "agent:main:main" }, parentToken),
-            ),
-        ),
-      );
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe("accepted");
-      const childSessionKey = expectDefined(result.childSessionKey, "accepted child session");
-      const events = (await listSessionStateEventsSince(childSessionKey, "main", 0)).events;
-      expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
-      const spawned = expectDefined(events[1], "spawned signal");
-      expect(spawned).toMatchObject({ actorId: "agent:main:main", runId: result.runId });
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare(
-            `SELECT last_seen_sequence, notified_sequence, material_sequence
-           FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
-          )
-          .get("agent:main:main", childSessionKey),
-      ).toEqual({
-        last_seen_sequence: spawned.sequence,
-        notified_sequence: spawned.sequence,
-        material_sequence: spawned.sequence,
-      });
-      expect(childIdentity()?.executionIdentity).toBe(parentToken);
-      expect(readAgentRuntimeExecutionLineage(childIdentity()?.sessionSpawnContext)).toMatchObject({
-        relation: "sessions_spawn",
-        requesterRef: "agent:main:main",
-        controllerRef: "agent:main:main",
-        depth: 1,
-        applicableGrantRefs: ["tool:sessions_spawn"],
-        externalNativeActions: "observable",
-      });
-    } finally {
-      releaseAgentRunDelegatedAuthority(authority);
-    }
-  });
-
-  it("revalidates the worker capability at the child Gateway admission boundary", async () => {
-    const { parentToken, operationalRunInstance, authority } = parentAuthority();
-    const turnClaim = {
-      sessionId: "parent-session-id",
-      runId: "parent-run",
-      claimId: "parent-claim",
-      placementGeneration: 4,
-      owner: { kind: "worker", environmentId: "worker-env", ownerEpoch: 7 },
-    } satisfies WorkerSessionTurnClaim;
-    const identity: WorkerTurnExecutionIdentity = {
-      agentId: "main",
-      delegatedAuthority: authority,
-      executionIdentityToken: parentToken,
-      operationalRunInstance,
-      receiptAuthority: () => {
-        if (!validateAgentRunDelegatedAuthority(authority)) {
-          throw new Error("worker execution authority is no longer active");
-        }
-      },
-      sessionKey: "agent:main:main",
-      sessionTarget: captureSessionTranscriptTargetBinding({
+  it.each(["native", "worker"] as const)(
+    "carries and revalidates the %s parent identity",
+    async (kind) => {
+      const { parentToken, operationalRunInstance, authority } = parentAuthority();
+      const caller = {
         agentId: "main",
-        sessionId: turnClaim.sessionId,
         sessionKey: "agent:main:main",
-        storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-      }),
-      turnClaim,
-    };
-    let validations = 0;
-    const capability: WorkerTurnExecutionIdentityCapability = {
-      sessionTarget: identity.sessionTarget,
-      receiptAuthority: identity.receiptAuthority,
-      async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T) {
-        validations += 1;
-        return await callback(identity);
-      },
-    };
-    const childIdentity = captureChildIdentity();
-
-    try {
-      const result = await inGateway(() =>
-        capability.run((current) =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: current.agentId,
-              sessionKey: current.sessionKey,
-              operationalRunInstance: current.operationalRunInstance,
-              executionIdentityToken: current.executionIdentityToken,
-              receiptAuthority: current.receiptAuthority,
-              workerTurnClaim: current.turnClaim,
-              workerTurnExecutionIdentityCapability: capability,
-            },
-            () =>
-              spawnSubagentDirect(
-                { task: "inspect worker lineage", context: "isolated", lightContext: true },
-                withParentExecutionIdentity(
-                  { agentSessionKey: current.sessionKey },
-                  current.executionIdentityToken,
-                ),
-              ),
+        operationalRunInstance,
+        executionIdentityToken: parentToken,
+        receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+      };
+      let validations = 0;
+      let capability: WorkerTurnExecutionIdentityCapability | undefined;
+      let turnClaim: WorkerSessionTurnClaim | undefined;
+      if (kind === "worker") {
+        turnClaim = {
+          sessionId: "parent-session-id",
+          runId: "parent-run",
+          claimId: "parent-claim",
+          placementGeneration: 4,
+          owner: { kind: "worker", environmentId: "worker-env", ownerEpoch: 7 },
+        };
+        const identity: WorkerTurnExecutionIdentity = {
+          ...caller,
+          delegatedAuthority: authority,
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("worker execution authority is no longer active");
+            }
+          },
+          sessionTarget: captureSessionTranscriptTargetBinding({
+            agentId: "main",
+            sessionId: turnClaim.sessionId,
+            sessionKey: caller.sessionKey,
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+          }),
+          turnClaim,
+        };
+        capability = {
+          sessionTarget: identity.sessionTarget,
+          receiptAuthority: identity.receiptAuthority,
+          async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T) {
+            validations += 1;
+            return await callback(identity);
+          },
+        };
+      }
+      const childIdentity = captureChildIdentity();
+      const dispatch = (
+        current: Parameters<typeof withGatewayToolCallerIdentity>[0],
+        task: string,
+      ) =>
+        withGatewayToolCallerIdentity(current, () =>
+          spawnSubagentDirect(
+            { task, context: "isolated", lightContext: true },
+            withParentExecutionIdentity(
+              { agentSessionKey: current.sessionKey },
+              current.executionIdentityToken,
+            ),
           ),
-        ),
-      );
-
-      expect(result.status).toBe("accepted");
-      expect(validations).toBe(2);
-      expect(childIdentity()?.delegatedAuthority).toMatchObject({
-        kind: "worker",
-        turnClaim,
-      });
-    } finally {
-      releaseAgentRunDelegatedAuthority(authority);
-    }
-  });
+        );
+      try {
+        const result = await inGateway(() =>
+          capability
+            ? capability.run((current) =>
+                dispatch(
+                  {
+                    agentId: current.agentId,
+                    sessionKey: current.sessionKey,
+                    operationalRunInstance: current.operationalRunInstance,
+                    executionIdentityToken: current.executionIdentityToken,
+                    receiptAuthority: current.receiptAuthority,
+                    workerTurnClaim: current.turnClaim,
+                    workerTurnExecutionIdentityCapability: capability,
+                  },
+                  "inspect worker lineage",
+                ),
+              )
+            : dispatch(caller, "inspect lineage"),
+        );
+        expect(result.status).toBe("accepted");
+        if (kind === "worker") {
+          expect(validations).toBe(2);
+          expect(childIdentity()?.delegatedAuthority).toMatchObject({ kind: "worker", turnClaim });
+        } else {
+          expect(result.error).toBeUndefined();
+          const childSessionKey = expectDefined(result.childSessionKey, "accepted child session");
+          const events = (await listSessionStateEventsSince(childSessionKey, "main", 0)).events;
+          expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
+          const spawned = expectDefined(events[1], "spawned signal");
+          expect(spawned).toMatchObject({ actorId: "agent:main:main", runId: result.runId });
+          expect(
+            openOpenClawStateDatabase()
+              .db.prepare(
+                `SELECT last_seen_sequence, notified_sequence, material_sequence
+           FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
+              )
+              .get("agent:main:main", childSessionKey),
+          ).toEqual({
+            last_seen_sequence: spawned.sequence,
+            notified_sequence: spawned.sequence,
+            material_sequence: spawned.sequence,
+          });
+          expect(childIdentity()?.executionIdentity).toBe(parentToken);
+          expect(
+            readAgentRuntimeExecutionLineage(childIdentity()?.sessionSpawnContext),
+          ).toMatchObject({
+            relation: "sessions_spawn",
+            requesterRef: "agent:main:main",
+            controllerRef: "agent:main:main",
+            depth: 1,
+            applicableGrantRefs: ["tool:sessions_spawn"],
+            externalNativeActions: "observable",
+          });
+        }
+      } finally {
+        releaseAgentRunDelegatedAuthority(authority);
+      }
+    },
+  );
 
   it("aborts a collector cancelled while Gateway acceptance is in flight", async () => {
     const gatewayContext = makeGatewayContext();

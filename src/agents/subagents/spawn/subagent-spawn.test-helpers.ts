@@ -1,9 +1,7 @@
-// Subagent spawn test helpers install mocked runtime seams so sessions_spawn
-// tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import "../../../test-utils/prepare-compiled-subprocesses.js";
-import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-launch-record.js";
@@ -19,8 +17,6 @@ export function expectFailedAcpSpawn(
 ): Extract<SpawnAcpResult, { status: "error" | "forbidden" }> {
   if (status) {
     expect(result.status).toBe(status);
-  } else {
-    expect(result.status).not.toBe("accepted");
   }
   if (result.status === "accepted") {
     throw new Error("Expected ACP spawn to fail");
@@ -84,19 +80,11 @@ export function createSubagentRegistrationScopeForTest(
 }
 
 export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
+  return expectDefined(mock.mock.calls[0], `Expected ${label} to be called`);
 }
 
 export function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[mock.mock.calls.length - 1];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
+  return expectDefined(mock.mock.calls.at(-1), `Expected ${label} to be called`);
 }
 
 export function expectRegisteredSubagentRun(
@@ -152,7 +140,6 @@ export async function supportedSpawnModelChoice(
   };
 }
 
-/** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
@@ -184,7 +171,6 @@ export function createConfigOverride(overrides?: Record<string, unknown>) {
   });
 }
 
-/** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
     if (opts.method === "sessions.patch" || opts.method === "sessions.delete") {
@@ -197,11 +183,6 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
-function identityDeliveryContext(value: unknown) {
-  return value;
-}
-
-/** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
     mockImplementation: (
@@ -224,7 +205,6 @@ export function installSessionStoreCaptureMock(
   );
 }
 
-/** Assert the persisted session entry captured the expected runtime model. */
 export function expectPersistedRuntimeModel(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
@@ -247,7 +227,6 @@ export function expectPersistedRuntimeModel(params: {
   }
 }
 
-/** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   dispatchGatewayMethodInProcessMock?: MockFn;
@@ -334,10 +313,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
             sessionFile: fork.sessionFile,
             forkedFromParent: true,
           },
-          decision: {
-            status: "fork",
-            maxTokens: 100_000,
-          },
+          decision: { status: "fork", maxTokens: 100_000 },
         };
       }),
     getGlobalHookRunner: () => params.hookRunner ?? { hasHooks: () => false },
@@ -380,11 +356,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSessionBindingService:
       params.getSessionBindingService ??
       (() => ({
-        getCapabilities: () => ({
-          adapterAvailable: false,
-          bindSupported: false,
-          placements: [],
-        }),
+        getCapabilities: () => ({ adapterAvailable: false, bindSupported: false, placements: [] }),
         bind: async () => {
           throw new Error("session binding adapter unavailable");
         },
@@ -404,7 +376,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       storeKeys: [targetParams.key],
       store: params.loadSessionStoreMock?.(params.sessionStorePath) ?? {},
     }),
-    normalizeDeliveryContext: identityDeliveryContext,
+    normalizeDeliveryContext: (value: unknown) => value,
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
@@ -454,99 +426,5 @@ export async function loadSubagentSpawnModuleForTest(params: {
     startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(async () => true),
   }));
 
-  const subagentSpawnModule = await import("./subagent-spawn.js");
-  return {
-    ...subagentSpawnModule,
-    resetSubagentRegistryForTests,
-  };
+  return { ...(await import("./subagent-spawn.js")), resetSubagentRegistryForTests };
 }
-
-type InheritedSpawnPreferenceCase = {
-  name: string;
-  task: string;
-  requesterState: Readonly<Record<string, unknown>>;
-  preferenceKey: "thinkingLevel" | "fastMode";
-  expected: string | boolean;
-  agentDefaults?: Readonly<Record<string, unknown>>;
-  requesterAgent?: Readonly<Record<string, unknown>>;
-  collect?: boolean;
-  requesterRunId?: string;
-  requesterThinkingLevel?: ThinkLevel;
-  thinkingOverride?: string;
-};
-
-const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
-  {
-    name: "inherits active-turn Ultra instead of the stored session thinking level",
-    task: "inherit active thinking",
-    requesterState: { thinkingLevel: "medium" },
-    requesterThinkingLevel: "ultra",
-    preferenceKey: "thinkingLevel",
-    expected: "ultra",
-  },
-  {
-    name: "inherits active-turn off instead of a stored Ultra override",
-    task: "inherit active thinking off",
-    requesterState: { thinkingLevel: "ultra" },
-    requesterThinkingLevel: "off",
-    preferenceKey: "thinkingLevel",
-    expected: "off",
-  },
-  {
-    name: "keeps explicit child thinking ahead of active-turn Ultra",
-    task: "override active thinking",
-    requesterState: { thinkingLevel: "medium" },
-    requesterThinkingLevel: "ultra",
-    thinkingOverride: "low",
-    preferenceKey: "thinkingLevel",
-    expected: "low",
-  },
-  {
-    name: "inherits requester fast mode for collector children",
-    task: "inherit fast mode",
-    requesterState: { fastMode: "auto" },
-    preferenceKey: "fastMode",
-    expected: "auto",
-    collect: true,
-    requesterRunId: "parent-run",
-  },
-  {
-    name: "inherits requester fast mode for ordinary children with default Swarm config",
-    task: "inherit ordinary fast mode",
-    requesterState: { fastMode: true },
-    preferenceKey: "fastMode",
-    expected: true,
-  },
-  {
-    name: "persists inherited requester thinking off",
-    task: "inherit thinking off",
-    requesterState: { thinkingLevel: "off" },
-    preferenceKey: "thinkingLevel",
-    expected: "off",
-  },
-  {
-    name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
-    task: "inherit global thinking default",
-    requesterState: {},
-    agentDefaults: { thinkingDefault: "medium" },
-    preferenceKey: "thinkingLevel",
-    expected: "medium",
-  },
-  {
-    name: "applies requester-agent subagent thinking before active-turn thinking",
-    task: "requester policy thinking",
-    requesterState: { thinkingLevel: "high" },
-    requesterAgent: { subagents: { thinking: "medium" } },
-    requesterThinkingLevel: "ultra",
-    preferenceKey: "thinkingLevel",
-    expected: "medium",
-  },
-];
-
-export const inheritedSpawnCases = {
-  preferences: inheritedSpawnPreferenceCases,
-  permissionModes: [
-    { label: "default", mode: undefined },
-    { label: "guarded", mode: "guarded" },
-  ] as const,
-};

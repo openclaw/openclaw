@@ -15,7 +15,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-fork-cleanup-");
   const parentKey = "agent:main:main";
   const parentId = "parent-session";
-  let tempDir: string;
   let storePath: string;
   let config: OpenClawConfig;
   let threadBindingAvailable: boolean;
@@ -33,8 +32,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let forkedEntry: SessionEntry | undefined;
   const registerSubagentRun = vi.fn();
   const startQueuedSubagentRun = vi.fn();
-  const settleFailedQueuedSubagentLaunch = vi.fn();
-  const completeCollectorLaunchCleanup = vi.fn();
   const prepareSubagentSpawn = vi.fn();
   const dispatch = vi.fn();
   const scope = (sessionKey = parentKey) => ({
@@ -75,8 +72,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       expect(await loadHistory(parentKey, parentId)).toEqual(history);
     };
   }
-  const fork = vi.fn(async (input: unknown) => {
-    const params = input as Parameters<ForkSession>[0];
+  const fork = vi.fn<ForkSession>(async (params) => {
     const result = await forkSession(params);
     if (result.status === "forked") {
       forkedEntry = result.sessionEntry;
@@ -102,8 +98,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       forkSessionEntryFromParentMock: fork,
       registerSubagentRunMock: registerSubagentRun,
       startQueuedSubagentRunMock: startQueuedSubagentRun,
-      settleFailedQueuedSubagentLaunchMock: settleFailedQueuedSubagentLaunch,
-      completeCollectorLaunchCleanupMock: completeCollectorLaunchCleanup,
       resolveContextEngineMock: async () => ({ prepareSubagentSpawn }),
       getRuntimeConfig: () => config,
       getSessionBindingService: () => ({
@@ -148,7 +142,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   beforeEach(async () => {
-    tempDir = sessionDirs.make();
+    const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     config = {
       session: { store: storePath, mainKey: "main", scope: "per-sender" },
@@ -163,8 +157,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     resetScheduler();
     registerSubagentRun.mockReset().mockResolvedValue(undefined);
     startQueuedSubagentRun.mockReset().mockResolvedValue(false);
-    settleFailedQueuedSubagentLaunch.mockReset().mockResolvedValue(true);
-    completeCollectorLaunchCleanup.mockReset().mockResolvedValue(undefined);
     prepareSubagentSpawn.mockReset();
     dispatch
       .mockReset()
@@ -219,9 +211,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     }
   });
 
-  afterEach(() => {
-    resetScheduler();
-  });
+  afterEach(() => resetScheduler());
 
   afterAll(() => {
     restoreUpsert();
@@ -269,8 +259,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       totalTokensVersion: 1,
     });
     let childSessionKey: string | undefined;
-    fork.mockImplementationOnce(async (input: unknown) => {
-      const params = input as Parameters<ForkSession>[0];
+    fork.mockImplementationOnce(async (params) => {
       childSessionKey = params.sessionKey;
       const child = expectDefined(
         loadEntry(childSessionKey),
@@ -302,7 +291,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   it.each(["fork", "isolated"] as const)(
     "protects locked parent transcript ownership with context=%s",
     async (context) => {
-      prepareSubagentSpawn.mockResolvedValue(undefined);
       await sessions.upsertSessionEntryCore(parentScope(), {
         modelSelectionLocked: true,
       });
@@ -356,7 +344,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   ] as const)(
     "records the committed context when $scenario",
     async ({ args, parentTokens, preparedMode, operation }) => {
-      prepareSubagentSpawn.mockResolvedValue(undefined);
       startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
       config.logging = { audit: { enabled: true, executionIdentity: true } };

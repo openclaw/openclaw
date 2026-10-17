@@ -24,7 +24,6 @@ import { expectSharedPendingSpawnCapacity } from "./subagent-spawn.pending-capac
 import {
   createConfigOverride,
   createSubagentRegistrationScopeForTest,
-  inheritedSpawnCases,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   supportedSpawnModelChoice,
@@ -629,64 +628,59 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reconciles a transport-ambiguous dispatch so an accepted run is surfaced instead of misreported as an error", async () => {
-    let dispatchAttempts = 0;
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: { method?: string; timeoutMs?: number }) => {
-        if (request.method === "agent") {
-          dispatchAttempts += 1;
-          if (dispatchAttempts === 1) {
-            throw new Error("gateway timeout after 60000ms");
+  it.each(["in_flight", "timeout"] as const)(
+    "reconciles an ambiguous dispatch to %s",
+    async (status) => {
+      let dispatchAttempts = 0;
+      hoisted.callGatewayMock.mockImplementation(
+        async (request: { method?: string; timeoutMs?: number }) => {
+          if (request.method === "agent") {
+            dispatchAttempts += 1;
+            if (dispatchAttempts === 1) {
+              throw new Error("gateway timeout after 60000ms");
+            }
+            if (status === "timeout") {
+              return { runId: "stopped-run", status };
+            }
+            if (dispatchAttempts === 2) {
+              return { runId: "accepted-ambig-run", status: "in_flight", admissionPending: true };
+            }
+            return { runId: "accepted-ambig-run", status: "in_flight" };
           }
-          if (dispatchAttempts === 2) {
-            return {
-              runId: "accepted-ambig-run",
-              status: "in_flight",
-              admissionPending: true,
-            };
-          }
-          return { runId: "accepted-ambig-run", status: "in_flight" };
-        }
-        return request.method?.startsWith("sessions.") ? { ok: true } : {};
-      },
-    );
-    const context = { agentSessionKey: "agent:main:main" };
+          return status === "timeout" || request.method?.startsWith("sessions.")
+            ? { ok: true }
+            : {};
+        },
+      );
+      const context = { agentSessionKey: "agent:main:main" };
 
-    const result = await spawn({ task: "ambiguous child" }, context);
+      const result = await spawn(
+        { task: status === "timeout" ? "ambiguous terminal child" : "ambiguous child" },
+        context,
+      );
 
-    expect(dispatchAttempts).toBe(3);
-    const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
-    expect(agentRequests.map((request) => request.params)).toEqual([
-      agentRequests[0]?.params,
-      agentRequests[0]?.params,
-      agentRequests[0]?.params,
-    ]);
-    expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
-    expect(result).toMatchObject({
-      status: "accepted",
-      runId: "accepted-ambig-run",
-      childSessionKey: expect.any(String),
-    });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not register a child when reconciliation finds a terminal run", async () => {
-    let dispatchAttempts = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent" && ++dispatchAttempts === 1) {
-        throw new Error("gateway timeout after 60000ms");
+      if (status === "timeout") {
+        expect(dispatchAttempts).toBe(2);
+        expectRejection(result, "error", "no active subagent run (status: timeout)");
+        expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+        return;
       }
-      return request.method === "agent"
-        ? { runId: "stopped-run", status: "timeout" }
-        : { ok: true };
-    });
-
-    const result = await spawn({ task: "ambiguous terminal child" });
-
-    expect(dispatchAttempts).toBe(2);
-    expectRejection(result, "error", "no active subagent run (status: timeout)");
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
-  });
+      expect(dispatchAttempts).toBe(3);
+      const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
+      expect(agentRequests.map((request) => request.params)).toEqual([
+        agentRequests[0]?.params,
+        agentRequests[0]?.params,
+        agentRequests[0]?.params,
+      ]);
+      expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
+      expect(result).toMatchObject({
+        status: "accepted",
+        runId: "accepted-ambig-run",
+        childSessionKey: expect.any(String),
+      });
+      expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("shares pending child capacity between native and visible spawn paths", async ({ signal }) => {
     configOverride = createConfigOverride({
@@ -848,16 +842,13 @@ describe("spawnSubagentDirect seam flow", () => {
     expectNoChildSpawnSideEffects();
   });
 
-  it.each(inheritedSpawnCases.preferences.filter((entry) => entry.collect))(
-    "$name",
-    async ({ task, requesterState, expected }) => {
-      hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
-      const readStore = captureStore();
-      const result = await collect(task);
-      expect(result.status).toBe("accepted");
-      expect(readStore()[result.childSessionKey!]?.fastMode).toBe(expected);
-    },
-  );
+  it("inherits requester fast mode for collector children", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": { fastMode: "auto" } });
+    const readStore = captureStore();
+    const result = await collect("inherit fast mode");
+    expect(result.status).toBe("accepted");
+    expect(readStore()[result.childSessionKey!]?.fastMode).toBe("auto");
+  });
 
   it("inherits requester selected-model thinking without a session or agent default", async () => {
     configOverride = createConfigOverride({
