@@ -88,6 +88,45 @@ function claimFixture() {
   };
 }
 
+function callbackFixture(f: ReturnType<typeof claimFixture>, failure?: Error) {
+  const launch = vi.fn(async () => {
+    if (failure) {
+      throw failure;
+    }
+    return { response: { runId: "original", status: "accepted" } };
+  });
+  const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
+  const callbacks = createCallbacks({
+    childRunId: "original",
+    childSessionKey: "agent:main:subagent:original",
+    requesterSessionKey: "agent:main:main",
+    registrationScope: f.scope,
+    preparation: { rollback: f.rollback, dispose: f.dispose },
+    provisionalSessionIdentity: {},
+    launchChildRun: launch,
+    recordParticipant: vi.fn(),
+    emitSpawnLifecycleHooks: async () => {},
+    cleanupFailedSpawn: cleanup,
+  });
+  return { launch, cleanup, callbacks };
+}
+
+function registerOwnedEngine(f: ReturnType<typeof claimFixture>, registered = () => {}) {
+  registerRun.mockImplementation(
+    async (
+      _record: unknown,
+      options: { retainOwnership: (scope: SubagentRegistrationScope) => void },
+    ) => {
+      options.retainOwnership(f.scope);
+      registered();
+    },
+  );
+  resolveEngine.mockResolvedValue({
+    prepareSubagentSpawn: async () => ({ rollback: f.rollback }),
+    dispose: f.dispose,
+  });
+}
+
 async function nextTurn() {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
@@ -102,20 +141,7 @@ it("keeps one collector launch pending through reversible Gateway suspension", a
     throw new Error("Expected a fresh suspension admission");
   }
   expect(suspension.commit()).toBe(true);
-  const launch = vi.fn(async () => ({ response: { runId: "original", status: "accepted" } }));
-  const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
-  const callbacks = createCallbacks({
-    childRunId: "original",
-    childSessionKey: "agent:main:subagent:original",
-    requesterSessionKey: "agent:main:main",
-    registrationScope: f.scope,
-    preparation: { rollback: f.rollback, dispose: f.dispose },
-    provisionalSessionIdentity: {},
-    launchChildRun: launch,
-    recordParticipant: vi.fn(),
-    emitSpawnLifecycleHooks: async () => {},
-    cleanupFailedSpawn: cleanup,
-  });
+  const { launch, cleanup, callbacks } = callbackFixture(f);
   const first = outsideRoot(() => callbacks.start());
   let settled = false;
   const observed = Promise.allSettled([first]).then(() => {
@@ -146,22 +172,7 @@ it.each([false, true])(
     const f = claimFixture();
     f.release();
     const failure = new Error("transport refused");
-    const launch = vi.fn(async () => {
-      throw failure;
-    });
-    const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
-    const callbacks = createCallbacks({
-      childRunId: "original",
-      childSessionKey: "agent:main:subagent:original",
-      requesterSessionKey: "agent:main:main",
-      registrationScope: f.scope,
-      preparation: { rollback: f.rollback, dispose: f.dispose },
-      provisionalSessionIdentity: {},
-      launchChildRun: launch,
-      recordParticipant: vi.fn(),
-      emitSpawnLifecycleHooks: async () => {},
-      cleanupFailedSpawn: cleanup,
-    });
+    const { launch, cleanup, callbacks } = callbackFixture(f, failure);
     if (attempted) {
       await expect(callbacks.start()).rejects.toBe(failure);
     }
@@ -190,18 +201,7 @@ it("settles a stopped activation through its retained scope before retiring the 
     await settled.promise;
     retired = true;
   });
-  registerRun.mockImplementation(
-    async (
-      _record: unknown,
-      options: { retainOwnership: (scope: SubagentRegistrationScope) => void },
-    ) => {
-      options.retainOwnership(f.scope);
-    },
-  );
-  resolveEngine.mockResolvedValue({
-    prepareSubagentSpawn: async () => ({ rollback: f.rollback }),
-    dispose: f.dispose,
-  });
+  registerOwnedEngine(f);
   const result = await spawn(
     { task: "superseded original collector", collect: true },
     { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
@@ -228,19 +228,7 @@ it("settles a stopped activation through its retained scope before retiring the 
 it("retains the actual spawn activation handoff through a provisional claim", async () => {
   const f = claimFixture();
   const registered = createDeferred();
-  registerRun.mockImplementation(
-    async (
-      _record: unknown,
-      options: { retainOwnership: (scope: SubagentRegistrationScope) => void },
-    ) => {
-      options.retainOwnership(f.scope);
-      registered.resolve();
-    },
-  );
-  resolveEngine.mockResolvedValue({
-    prepareSubagentSpawn: async () => ({ rollback: f.rollback }),
-    dispose: f.dispose,
-  });
+  registerOwnedEngine(f, () => registered.resolve());
   let completed = false;
   const pending = spawn(
     { task: "preserve prepared collector", collect: true },
@@ -268,20 +256,7 @@ it("retains the actual spawn activation handoff through a provisional claim", as
 
 it("retains collector failure cleanup through a provisional claim", async () => {
   const f = claimFixture();
-  const launch = vi.fn(async () => ({ response: { runId: "original", status: "accepted" } }));
-  const cleanup = vi.fn(async () => ({ attachmentsRemoved: true, sessionDeleted: true }));
-  const callbacks = createCallbacks({
-    childRunId: "original",
-    childSessionKey: "agent:main:subagent:original",
-    requesterSessionKey: "agent:main:main",
-    registrationScope: f.scope,
-    preparation: { rollback: f.rollback, dispose: f.dispose },
-    provisionalSessionIdentity: {},
-    launchChildRun: launch,
-    recordParticipant: vi.fn(),
-    emitSpawnLifecycleHooks: async () => {},
-    cleanupFailedSpawn: cleanup,
-  });
+  const { launch, cleanup, callbacks } = callbackFixture(f);
   let completed = false;
   const pending = Promise.resolve(callbacks.onStartFailure(new Error("launch refused")));
   const observed = pending.then(

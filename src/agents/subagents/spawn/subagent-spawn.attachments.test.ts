@@ -1,5 +1,3 @@
-// Subagent spawn attachment tests cover strict base64 decoding, attachment name
-// validation, materialization paths, and cleanup after spawn failures.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +9,7 @@ import {
 } from "./subagent-attachments.js";
 import {
   createSubagentSpawnTestConfig,
+  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
@@ -18,12 +17,12 @@ import {
 const callGatewayMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 
-let configOverride: Record<string, unknown> = {
-  ...createSubagentSpawnTestConfig(),
-};
+let configOverride: Record<string, unknown> = createSubagentSpawnTestConfig();
 let workspaceDirOverride = "";
 let stateDirOverride = "";
 let subagentSpawnModule: Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
+const tempDir = (label: string) =>
+  fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-subagent-${label}-`));
 
 beforeAll(async () => {
   subagentSpawnModule = await loadSubagentSpawnModuleForTest({
@@ -36,37 +35,24 @@ beforeAll(async () => {
 
 describe("spawnSubagentDirect filename validation", () => {
   beforeEach(async () => {
-    workspaceDirOverride = fs.mkdtempSync(
-      path.join(os.tmpdir(), `openclaw-subagent-attachments-${process.pid}-${Date.now()}-`),
-    );
-    stateDirOverride = fs.mkdtempSync(
-      path.join(os.tmpdir(), `openclaw-subagent-attachment-state-${process.pid}-${Date.now()}-`),
-    );
+    workspaceDirOverride = tempDir("attachments");
+    stateDirOverride = tempDir("attachment-state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDirOverride);
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride);
     await subagentSpawnModule.resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
     updateSessionStoreMock.mockReset();
-    const store: Record<string, Record<string, unknown>> = {};
-    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
-      if (typeof mutator !== "function") {
-        throw new Error("missing session store mutator");
-      }
-      await mutator(store);
-      return store;
-    });
+    installSessionStoreCaptureMock(updateSessionStoreMock);
     setupAcceptedSubagentGatewayMock(callGatewayMock);
   });
 
   afterEach(() => {
-    if (workspaceDirOverride) {
-      fs.rmSync(workspaceDirOverride, { recursive: true, force: true });
-      workspaceDirOverride = "";
+    for (const dir of [workspaceDirOverride, stateDirOverride]) {
+      if (dir) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     }
-    if (stateDirOverride) {
-      fs.rmSync(stateDirOverride, { recursive: true, force: true });
-      stateDirOverride = "";
-    }
+    workspaceDirOverride = stateDirOverride = "";
     vi.unstubAllEnvs();
   });
 
@@ -78,17 +64,33 @@ describe("spawnSubagentDirect filename validation", () => {
   };
 
   const validContent = Buffer.from("hello").toString("base64");
+  const attachment = (name: string, content = validContent) => ({
+    name,
+    content,
+    encoding: "base64" as const,
+  });
+  const spawn = (attachments: ReturnType<typeof attachment>[], attachMountPath?: string) =>
+    subagentSpawnModule.spawnSubagentDirect({ task: "test", attachments, attachMountPath }, ctx);
 
   async function spawnWithName(name: string, attachMountPath?: string) {
-    const { spawnSubagentDirect } = subagentSpawnModule;
-    return spawnSubagentDirect(
-      {
-        task: "test",
-        attachments: [{ name, content: validContent, encoding: "base64" }],
-        attachMountPath,
+    return spawn([attachment(name)], attachMountPath);
+  }
+
+  function materialize(backend: "docker" | "ssh", childSessionKey: string) {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", backend, scope: "session", workspaceAccess: "rw" },
+        },
       },
-      ctx,
-    );
+    });
+    return materializeSubagentAttachments({
+      config: configOverride,
+      childSessionKey,
+      targetAgentId: "main",
+      sandboxed: true,
+      attachments: [attachment("receipt.jpg")],
+    });
   }
 
   function getChildSystemPrompt(): string {
@@ -128,36 +130,23 @@ describe("spawnSubagentDirect filename validation", () => {
         },
       },
     });
-    const result = await subagentSpawnModule.spawnSubagentDirect(
-      {
-        task: "test",
-        attachments: [{ name: "file.bin", content, encoding: "base64" }],
-      },
-      ctx,
-    );
+    const result = await spawn([attachment("file.bin", content)]);
     expect(result).toMatchObject({
       status: "error",
       error: expect.stringContaining("attachments_invalid_base64_or_too_large"),
     });
   });
 
-  it("name with / returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("foo/bar");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
-  it("name '..' returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("..");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
-  it("name '.manifest.json' returns attachments_invalid_name", async () => {
-    const result = await spawnWithName(".manifest.json");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
+  it.each(["foo/bar", "..", ".manifest.json", "receipt<final>.jpg", ""])(
+    "rejects invalid attachment name %j",
+    async (name) => {
+      const result = await spawnWithName(name);
+      expect(result).toMatchObject({
+        status: "error",
+        error: expect.stringMatching(/attachments_invalid_name/),
+      });
+    },
+  );
 
   it("name with newline returns attachments_invalid_name", async () => {
     const name = "foo\nbar";
@@ -177,52 +166,14 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toContain("maxChars=4096");
   });
 
-  it.each(["receipt<final>.jpg"])(
-    "native name %s cannot be rendered losslessly and is rejected",
-    async (name) => {
-      const result = await spawnWithName(name);
-      expect(result.status).toBe("error");
-      expect(result.error).toMatch(/attachments_invalid_name/);
-    },
-  );
-
   it("duplicate name returns attachments_duplicate_name", async () => {
-    const { spawnSubagentDirect } = subagentSpawnModule;
-    const result = await spawnSubagentDirect(
-      {
-        task: "test",
-        attachments: [
-          { name: "file.txt", content: validContent, encoding: "base64" },
-          { name: "file.txt", content: validContent, encoding: "base64" },
-        ],
-      },
-      ctx,
-    );
+    const result = await spawn([attachment("file.txt"), attachment("file.txt")]);
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_duplicate_name/);
   });
 
-  it("empty name returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
   it("renders sandbox paths from the reserved read-only mount", async () => {
-    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", backend: "docker", scope: "session", workspaceAccess: "rw" },
-        },
-      },
-    });
-    const result = await materializeSubagentAttachments({
-      config: configOverride,
-      childSessionKey: "agent:main:subagent:attachment-sandbox-path",
-      targetAgentId: "main",
-      sandboxed: true,
-      attachments: [{ name: "receipt.jpg", content: validContent, encoding: "base64" }],
-    });
+    const result = await materialize("docker", "agent:main:subagent:attachment-sandbox-path");
     expect(result?.status).toBe("ok");
     if (!result || result.status !== "ok") {
       throw new Error("attachment materialization failed");
@@ -234,21 +185,8 @@ describe("spawnSubagentDirect filename validation", () => {
   });
 
   it("fails before staging when the sandbox backend lacks read-only projection", async () => {
-    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", backend: "ssh", scope: "session", workspaceAccess: "rw" },
-        },
-      },
-    });
     await expect(
-      materializeSubagentAttachments({
-        config: configOverride,
-        childSessionKey: "agent:main:subagent:attachment-unsupported-backend",
-        targetAgentId: "main",
-        sandboxed: true,
-        attachments: [{ name: "receipt.jpg", content: validContent, encoding: "base64" }],
-      }),
+      materialize("ssh", "agent:main:subagent:attachment-unsupported-backend"),
     ).resolves.toMatchObject({
       status: "forbidden",
       error: expect.stringContaining('"ssh" sandbox backend'),
@@ -257,14 +195,7 @@ describe("spawnSubagentDirect filename validation", () => {
   });
 
   it("removes populated staged attachments by host-owned identity", async () => {
-    const { spawnSubagentDirect } = subagentSpawnModule;
-    const result = await spawnSubagentDirect(
-      {
-        task: "inspect the receipt",
-        attachments: [{ name: "receipt.jpg", content: validContent, encoding: "base64" }],
-      },
-      ctx,
-    );
+    const result = await spawnWithName("receipt.jpg");
 
     expect(result.status).toBe("accepted");
     const relDir = result.attachments?.relDir ?? "";
@@ -306,22 +237,14 @@ describe("spawnSubagentDirect filename validation", () => {
   });
 
   it("ignores a symlinked workspace attachment parent", async () => {
-    const escapedDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), `openclaw-subagent-attachment-escape-${process.pid}-${Date.now()}-`),
-    );
+    const escapedDir = tempDir("attachment-escape");
     const attachmentParent = path.join(workspaceDirOverride, ".openclaw");
     fs.mkdirSync(attachmentParent, { recursive: true });
     fs.symlinkSync(escapedDir, path.join(attachmentParent, "attachments"));
     fs.writeFileSync(path.join(escapedDir, "sentinel.txt"), "must-survive");
 
     try {
-      const result = await subagentSpawnModule.spawnSubagentDirect(
-        {
-          task: "test",
-          attachments: [{ name: "marker.txt", content: validContent, encoding: "base64" }],
-        },
-        ctx,
-      );
+      const result = await spawnWithName("marker.txt");
 
       expect(result).toMatchObject({ status: "accepted" });
       expect(

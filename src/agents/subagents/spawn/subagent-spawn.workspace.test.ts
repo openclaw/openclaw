@@ -154,8 +154,10 @@ describe("spawnSubagentDirect child session preparation", () => {
       context,
     );
     expect(result.status).toBe("accepted");
-    expect(registerSubagentRunMock.mock.calls[0]?.[0].childAgentId).toBe("ops");
-    expect(registerSubagentRunMock.mock.calls[0]?.[0].workspaceDir).toBe("/tmp/workspace-ops");
+    expect(registerSubagentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      childAgentId: "ops",
+      workspaceDir: "/tmp/workspace-ops",
+    });
     expect(store[result.childSessionKey!]).toMatchObject({
       spawnedWorkspaceDir: "/tmp/workspace-ops",
       spawnedCwd: "/tmp/task-repo",
@@ -273,47 +275,33 @@ describe("spawnSubagentDirect child session preparation", () => {
     );
   });
 
-  it("names usable alternatives before a thread retry", async () => {
-    const result = await spawnSubagentDirect(
-      {
-        task: "persistent planning session",
-        mode: "session",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "webchat",
-      },
-    );
+  it.each([
+    { thread: undefined, guidance: "thread: true" },
+    { thread: true, guidance: "not running on a channel" },
+  ])(
+    "names usable alternatives for session mode with thread=$thread",
+    async ({ thread, guidance }) => {
+      const result = await spawnSubagentDirect(
+        {
+          task: "persistent planning session",
+          mode: "session",
+          thread,
+          context: "isolated",
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          agentChannel: "webchat",
+        },
+      );
 
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.error).toContain("thread: true");
-      expect(result.error).toContain('mode="run"');
-      expect(result.error).not.toContain("sessions_send");
-    }
-  });
-
-  it("rejects thread=true with actionable guidance when no hook is registered", async () => {
-    const result = await spawnSubagentDirect(
-      {
-        task: "persistent planning session",
-        mode: "session",
-        thread: true,
-        context: "isolated",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "webchat",
-      },
-    );
-
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.error).toContain("not running on a channel");
-      expect(result.error).toContain('mode="run"');
-      expect(result.error).not.toContain("sessions_send");
-    }
-  });
+      expect(result.status).toBe("error");
+      if (result.status === "error") {
+        expect(result.error).toContain(guidance);
+        expect(result.error).toContain('mode="run"');
+        expect(result.error).not.toContain("sessions_send");
+      }
+    },
+  );
 
   it.each([
     {

@@ -52,6 +52,11 @@ function createEngineFixture(
     read,
     retired,
     engineDisposal,
+    expectClosed() {
+      expect(retired).toHaveBeenCalledOnce();
+      expect(engineDisposal).toHaveBeenCalledOnce();
+      expect(database.isOpen).toBe(false);
+    },
     async resolve() {
       engine = await withPluginRuntimeRegistryScope(registry, () => resolveContextEngine());
       // The spawn now owns the only remaining physical claim.
@@ -78,6 +83,12 @@ describe("spawn context-engine resource custody", () => {
   let scheduler: typeof import("../swarm/swarm-scheduler.js");
   let resetScheduler: () => void;
   let GatewayDrainingError: typeof import("../../../process/gateway-work-admission.js").GatewayDrainingError;
+  type Request = { method?: string; params?: Record<string, unknown> };
+  function handleAgent(handle: (request: Request) => Promise<unknown>) {
+    callGateway.mockImplementation(async (request: Request) =>
+      request.method === "agent" ? handle(request) : { ok: true },
+    );
+  }
 
   beforeAll(async () => {
     ({ spawnSubagentDirect: spawn } = await loadSubagentSpawnModuleForTest({
@@ -189,8 +200,7 @@ describe("spawn context-engine resource custody", () => {
         expect(fixture.retired).not.toHaveBeenCalled();
         disposalGate.resolve();
         expect(await settlement).toBe(true);
-        expect(fixture.database.isOpen).toBe(false);
-        expect(fixture.retired).toHaveBeenCalledOnce();
+        fixture.expectClosed();
         expect(rollback).toHaveBeenCalledOnce();
         expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
       } finally {
@@ -232,15 +242,12 @@ describe("spawn context-engine resource custody", () => {
         }
         return engine;
       });
-      callGateway.mockImplementation(async (request: { method?: string }) => {
-        if (request.method === "agent") {
-          fixture.read();
-          if (mode === "rollback-failure") {
-            throw new Error("launch failed");
-          }
-          return { runId: "child", status: "accepted" };
+      handleAgent(async () => {
+        fixture.read();
+        if (mode === "rollback-failure") {
+          throw new Error("launch failed");
         }
-        return { ok: true };
+        return { runId: "child", status: "accepted" };
       });
       const operation = spawn(
         { task: "synthetic child" },
@@ -265,9 +272,7 @@ describe("spawn context-engine resource custody", () => {
           expect(result.error).toBe("launch failed");
           expect(rollback).toHaveBeenCalledTimes(1);
         }
-        expect(fixture.retired).toHaveBeenCalledTimes(1);
-        expect(fixture.engineDisposal).toHaveBeenCalledTimes(1);
-        expect(fixture.database.isOpen).toBe(false);
+        fixture.expectClosed();
       } finally {
         resolutionGate.resolve();
         await operation;
@@ -285,11 +290,8 @@ describe("spawn context-engine resource custody", () => {
       throw new Error("cleanup failed");
     });
     resolveEngine.mockImplementation(() => fixture.resolve());
-    callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        throw new Error("launch failed");
-      }
-      return { ok: true };
+    handleAgent(async () => {
+      throw new Error("launch failed");
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     let settled = false;
@@ -334,11 +336,8 @@ describe("spawn context-engine resource custody", () => {
       );
       resolveEngine.mockImplementation(() => fixture.resolve());
       if (outcome === "failure") {
-        callGateway.mockImplementation(async (request: { method?: string }) => {
-          if (request.method === "agent") {
-            throw new Error("launch failed");
-          }
-          return { ok: true };
+        handleAgent(async () => {
+          throw new Error("launch failed");
         });
       }
       try {
@@ -420,25 +419,20 @@ describe("spawn context-engine resource custody", () => {
     );
     resolveEngine.mockImplementation(() => fixture.resolve());
     let launches = 0;
-    callGateway.mockImplementation(
-      async (request: { method?: string; params?: Record<string, unknown> }) => {
-        if (request.method !== "agent") {
-          return { ok: true };
-        }
+    handleAgent(async (request) => {
+      fixture.read();
+      launches++;
+      if (mode === "rollback-failure" || mode === "disposal-failure") {
+        throw new Error("launch failed");
+      }
+      if (mode === "retired-draining" || mode === "shutdown-draining") {
+        retryStarted.resolve();
+        await retryGate.promise;
         fixture.read();
-        launches++;
-        if (mode === "rollback-failure" || mode === "disposal-failure") {
-          throw new Error("launch failed");
-        }
-        if (mode === "retired-draining" || mode === "shutdown-draining") {
-          retryStarted.resolve();
-          await retryGate.promise;
-          fixture.read();
-          throw new GatewayDrainingError();
-        }
-        return { runId: request.params?.idempotencyKey, status: "accepted" };
-      },
-    );
+        throw new GatewayDrainingError();
+      }
+      return { runId: request.params?.idempotencyKey, status: "accepted" };
+    });
     scheduler.enqueueSwarmRun({
       groupId: JSON.stringify(["main", "main", "resource-group"]),
       runId: "blocker",
@@ -504,8 +498,7 @@ describe("spawn context-engine resource custody", () => {
         }
         await vi.waitFor(() => expect(fixture.retired).toHaveBeenCalledTimes(1));
       }
-      expect(fixture.retired).toHaveBeenCalledTimes(1);
-      expect(fixture.engineDisposal).toHaveBeenCalledTimes(1);
+      fixture.expectClosed();
       if (mode === "rollback-failure" || mode === "disposal-failure") {
         await vi.waitFor(() => expect(settleLaunchFailure).toHaveBeenCalledTimes(1));
         await new Promise<void>((resolve) => {

@@ -48,6 +48,26 @@ import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
 const backendId = "requester-incarnation-fixture";
+const writeSession = (
+  sessionKey: string,
+  defaultSessionId: string,
+  agentId = "main",
+  lifecycleRevision?: string,
+) =>
+  writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId,
+    sessionKey,
+    defaultSessionId,
+    lifecycleRevision,
+  });
+
+async function configure(config: ReturnType<typeof getRuntimeConfig>) {
+  await writeFile(path.join(fixture.stateDir, "openclaw.json"), JSON.stringify(config));
+  clearConfigCache();
+  clearRuntimeConfigSnapshot();
+  await captureRuntimeConfigAsyncReader()();
+}
 
 it.each([false, true])(
   "plans children without host reads and sees committed requester preferences (proxied completion=%s)",
@@ -106,12 +126,7 @@ it.each([false, true])(
 );
 
 it("rejects a spawn cancelled during requester acquisition before starting effects", async () => {
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: fixture.parentSessionKey,
-    defaultSessionId: "cancelled-requester",
-  });
+  await writeSession(fixture.parentSessionKey, "cancelled-requester");
   const abort = new AbortController();
   const effectsStarted = vi.fn();
   const pending = spawnSubagentDirect(
@@ -148,59 +163,31 @@ it.each([
     const replacementLifecycleRevision = "replacement-requester-lifecycle";
     if (globalRequester) {
       const cfg = getRuntimeConfig();
-      await writeFile(
-        path.join(fixture.stateDir, "openclaw.json"),
-        JSON.stringify({
-          ...cfg,
-          session: { ...cfg.session, scope: "global" },
-          agents: {
-            ...cfg.agents,
-            ownership: "explicit",
-            entries: { main: { subagents: { allowAgents: ["worker"] } }, worker: {} },
-          },
-        }),
-      );
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      await captureRuntimeConfigAsyncReader()();
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "worker",
-        sessionKey: "global",
-        defaultSessionId: "foreign-child-owner",
+      await configure({
+        ...cfg,
+        session: { ...cfg.session, scope: "global" },
+        agents: {
+          ...cfg.agents,
+          ownership: "explicit",
+          entries: { main: { subagents: { allowAgents: ["worker"] } }, worker: {} },
+        },
       });
+      await writeSession("global", "foreign-child-owner", "worker");
     }
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: controllerSessionKey,
-      defaultSessionId: "controller-session",
-    });
+    await writeSession(controllerSessionKey, "controller-session");
     if (originalSessionId) {
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: requesterSessionKey,
-        defaultSessionId: originalSessionId,
-        lifecycleRevision: originalLifecycleRevision,
-      });
+      await writeSession(requesterSessionKey, originalSessionId, "main", originalLifecycleRevision);
     }
     if (backend === "acp") {
       const cfg = getRuntimeConfig();
-      await writeFile(
-        path.join(fixture.stateDir, "openclaw.json"),
-        JSON.stringify({
-          ...cfg,
-          acp: { enabled: true, backend: backendId, allowedAgents: ["main"] },
-          agents: {
-            ...cfg.agents,
-            defaults: { ...cfg.agents?.defaults, model: undefined },
-          },
-        }),
-      );
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      await captureRuntimeConfigAsyncReader()();
+      await configure({
+        ...cfg,
+        acp: { enabled: true, backend: backendId, allowedAgents: ["main"] },
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents?.defaults, model: undefined },
+        },
+      });
       managerTesting.resetAcpSessionManagerForTests();
       const runtime: AcpRuntime = {
         ownerAwareSessions: 1,
@@ -275,12 +262,7 @@ it.each([
                     }
                     const childAgentId = globalRequester ? "worker" : "main";
                     const childSessionKey = `agent:${childAgentId}:dashboard:window-child`;
-                    await writeSubagentSessionEntry({
-                      stateDir: fixture.stateDir,
-                      agentId: childAgentId,
-                      sessionKey: childSessionKey,
-                      defaultSessionId: "visible-child-session",
-                    });
+                    await writeSession(childSessionKey, "visible-child-session", childAgentId);
                     return {
                       key: childSessionKey,
                       sessionId: "visible-child-session",
@@ -304,9 +286,9 @@ it.each([
         requesterSessionKey,
         controllerSessionKey,
         expectsCompletionMessage: true,
+        completionRequesterSessionId: originalSessionId,
+        completionRequesterLifecycleRevision: originalLifecycleRevision,
       });
-      expect(restored?.completionRequesterSessionId).toBe(originalSessionId);
-      expect(restored?.completionRequesterLifecycleRevision).toBe(originalLifecycleRevision);
       expect(
         loadSessionEntryReadOnly({ sessionKey: requesterSessionKey, agentId: "main" }),
       ).toMatchObject({

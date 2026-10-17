@@ -65,6 +65,83 @@ vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 
 const fixture = installSpawnAuthorityFixture();
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
+type Bound = Awaited<ReturnType<typeof createBoundParent>>;
+
+function inGateway<T>(context: Bound["context"], work: () => T) {
+  return withPluginRuntimeGatewayRequestScope(
+    { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
+    work,
+  );
+}
+
+function asCaller<T>(
+  context: Bound["context"],
+  admitted: Bound["admitted"],
+  sessionKey: string,
+  work: () => T,
+) {
+  return inGateway(context, () =>
+    withGatewayToolCallerIdentity(
+      createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "main",
+        sessionKey,
+      }),
+      work,
+    ),
+  );
+}
+
+async function blockSpawn(sessionKey: string, runId: string) {
+  const started = createDeferred();
+  enqueueSwarmRun({
+    groupId: JSON.stringify(["main", sessionKey, groupId]),
+    runId,
+    maxConcurrent: 1,
+    activeRunIds: [],
+    start: async () => started.resolve(),
+    onStartFailure: () => true,
+  });
+  await started.promise;
+}
+
+function spawnTool(
+  cfg: Bound["cfg"],
+  sessionKey: string,
+  runId: string,
+  abortSignal: AbortSignal,
+  observe: (source: AnyAgentTool) => AnyAgentTool = (source) => source,
+) {
+  const source = createSessionsSpawnTool({
+    config: cfg,
+    agentSessionKey: sessionKey,
+    requesterRunId: runId,
+    requesterTurnRunId: runId,
+  });
+  return finalizeAgentTools({
+    tools: [
+      observe(source),
+      createAgentsWaitTool({ config: cfg, agentSessionKey: sessionKey, agentId: "main" }),
+    ],
+    hookContext: { config: cfg, agentId: "main", sessionKey, runId },
+    abortSignal,
+  })[0]!;
+}
+
+function installDispatch(dispatch: ReturnType<typeof vi.fn>, rollback?: () => Promise<void>) {
+  spawnTesting.setDepsForTest({
+    resolveContextEngine: async () =>
+      Object.assign(
+        new LegacyContextEngine(),
+        rollback ? { prepareSubagentSpawn: async () => ({ rollback }) } : {},
+      ),
+    dispatchGatewayMethodInProcess: async <T>(method: string, params: Record<string, unknown>) => {
+      expect(method).toBe("agent");
+      dispatch(params.idempotencyKey);
+      return { runId: params.idempotencyKey, status: "accepted" } as T;
+    },
+  });
+}
 
 describe("pending spawn invocation authority", () => {
   it.each(["sibling", "nested sibling"] as const)(
@@ -216,59 +293,17 @@ describe("pending spawn invocation authority", () => {
             fresh?.release();
           },
         });
-        const blockerStarted = createDeferred();
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", key("b"), groupId]),
-          runId: "late-spawn-blocker",
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: async () => blockerStarted.resolve(),
-          onStartFailure: () => true,
-        });
-        await blockerStarted.promise;
-        spawnTesting.setDepsForTest({
-          resolveContextEngine: async () => new LegacyContextEngine(),
-          dispatchGatewayMethodInProcess: async <T>(
-            method: string,
-            params: Record<string, unknown>,
-          ) => {
-            expect(method).toBe("agent");
-            dispatch(params.idempotencyKey);
-            return { runId: params.idempotencyKey, status: "accepted" } as T;
-          },
-        });
-        const source = createSessionsSpawnTool({
-          config: cfg,
-          agentSessionKey: key("b"),
-          requesterRunId: "fresh-b",
-          requesterTurnRunId: "fresh-b",
-        });
-        const [tool] = finalizeAgentTools({
-          tools: [
-            source,
-            createAgentsWaitTool({ config: cfg, agentSessionKey: key("b"), agentId: "main" }),
-          ],
-          hookContext: { config: cfg, agentId: "main", sessionKey: key("b"), runId: "fresh-b" },
-          abortSignal: new AbortController().signal,
-        });
+        await blockSpawn(key("b"), "late-spawn-blocker");
+        installDispatch(dispatch);
+        const tool = spawnTool(cfg, key("b"), "fresh-b", new AbortController().signal);
         const spawned = await fresh.run(() =>
-          withPluginRuntimeGatewayRequestScope(
-            { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-            () =>
-              withGatewayToolCallerIdentity(
-                createAdmittedGatewayToolCallerIdentity({
-                  admittedRunContext: admitted,
-                  agentId: "main",
-                  sessionKey: key("b"),
-                }),
-                () =>
-                  tool!.execute!("late-spawn", {
-                    task: "late child",
-                    collect: true,
-                    context: "isolated",
-                    groupId,
-                  }),
-              ),
+          asCaller(context, admitted, key("b"), () =>
+            tool.execute!("late-spawn", {
+              task: "late child",
+              collect: true,
+              context: "isolated",
+              groupId,
+            }),
           ),
         );
         expect(spawned).toMatchObject({ details: { status: "accepted" } });
@@ -318,18 +353,7 @@ describe("pending spawn invocation authority", () => {
 
   it("settles child ownership when the parent aborts during registration", async () => {
     const { cfg, context, admission, parent, admitted } = await createBoundParent();
-    const blockerStarted = createDeferred();
-    enqueueSwarmRun({
-      groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-      runId: "handoff-blocker",
-      maxConcurrent: 1,
-      activeRunIds: [],
-      start: async () => {
-        blockerStarted.resolve();
-      },
-      onStartFailure: () => true,
-    });
-    await blockerStarted.promise;
+    await blockSpawn(parentSessionKey, "handoff-blocker");
     let cancellation: ReturnType<typeof invokeChatAbortHandler> | undefined;
     const abortParent = () =>
       invokeChatAbortHandler({
@@ -355,70 +379,28 @@ describe("pending spawn invocation authority", () => {
     });
     const rollback = vi.fn(async () => {});
     const dispatch = vi.fn();
-    spawnTesting.setDepsForTest({
-      resolveContextEngine: async () =>
-        Object.assign(new LegacyContextEngine(), {
-          prepareSubagentSpawn: async () => ({ rollback }),
-        }),
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        expect(method).toBe("agent");
-        dispatch(params.idempotencyKey);
-        return { runId: params.idempotencyKey, status: "accepted" } as T;
-      },
-    });
-    const source = createSessionsSpawnTool({
-      config: cfg,
-      agentSessionKey: parentSessionKey,
-      requesterRunId: parentRunId,
-      requesterTurnRunId: parentRunId,
-    });
+    installDispatch(dispatch, rollback);
     let forwarded: Promise<unknown> | undefined;
-    const observed: AnyAgentTool = copyAgentToolMetadata(source, {
-      ...source,
-      execute: (...args) => {
-        const pending = source.execute!(...args);
-        forwarded = pending.then(
-          (value) => value,
-          (error: unknown) => error,
-        );
-        return pending;
-      },
-    });
-    const wait = createAgentsWaitTool({
-      config: cfg,
-      agentSessionKey: parentSessionKey,
-      agentId: "main",
-    });
-    const [tool] = finalizeAgentTools({
-      tools: [observed, wait],
-      hookContext: {
-        config: cfg,
-        agentId: "main",
-        sessionKey: parentSessionKey,
-        runId: parentRunId,
-      },
-      abortSignal: parent.controller.signal,
-    });
-    const pending = withPluginRuntimeGatewayRequestScope(
-      { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-      () =>
-        withGatewayToolCallerIdentity(
-          createAdmittedGatewayToolCallerIdentity({
-            admittedRunContext: admitted,
-            agentId: "main",
-            sessionKey: parentSessionKey,
-          }),
-          () =>
-            tool!.execute!("spawn-handoff", {
-              task: "independent after handoff",
-              collect: true,
-              context: "isolated",
-              groupId,
-            }),
-        ),
+    const tool = spawnTool(cfg, parentSessionKey, parentRunId, parent.controller.signal, (source) =>
+      copyAgentToolMetadata(source, {
+        ...source,
+        execute: (...args) => {
+          const pending = source.execute!(...args);
+          forwarded = pending.then(
+            (value) => value,
+            (error: unknown) => error,
+          );
+          return pending;
+        },
+      }),
+    );
+    const pending = asCaller(context, admitted, parentSessionKey, () =>
+      tool.execute!("spawn-handoff", {
+        task: "independent after handoff",
+        collect: true,
+        context: "isolated",
+        groupId,
+      }),
     ).then(
       (value) => value,
       (error: unknown) => error,
@@ -441,10 +423,7 @@ describe("pending spawn invocation authority", () => {
       });
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
       // Capacity is released by Gateway-owned work, outside the completed parent's caller.
-      withPluginRuntimeGatewayRequestScope(
-        { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-        () => releaseSwarmRun("handoff-blocker"),
-      );
+      inGateway(context, () => releaseSwarmRun("handoff-blocker"));
       expect(dispatch).not.toHaveBeenCalled();
       expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
       expect(subagentRuns.get(runId)).toMatchObject({
@@ -476,19 +455,17 @@ describe("pending spawn invocation authority", () => {
     let lease: ReturnType<typeof consumeSessionWorkAdmissionHandoff>;
     let cancellation: ReturnType<typeof killSubagentRunAdmin> | undefined;
     try {
-      const spawned = await withPluginRuntimeGatewayRequestScope(
-        { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-        () =>
-          spawnSubagentDirect(
-            {
-              task: "acceptance rekey",
-              collect: true,
-              context: "isolated",
-              lightContext: true,
-              groupId,
-            },
-            { agentSessionKey: parentSessionKey, requesterRunId: parentRunId },
-          ),
+      const spawned = await inGateway(context, () =>
+        spawnSubagentDirect(
+          {
+            task: "acceptance rekey",
+            collect: true,
+            context: "isolated",
+            lightContext: true,
+            groupId,
+          },
+          { agentSessionKey: parentSessionKey, requesterRunId: parentRunId },
+        ),
       );
       expect(spawned.status).toBe("accepted");
       await dispatchEntered.promise;
