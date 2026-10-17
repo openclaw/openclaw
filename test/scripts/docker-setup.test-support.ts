@@ -160,8 +160,6 @@ export const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/
 
 export const resetDockerLog = (sandbox: DockerSetupSandbox) => writeFile(sandbox.logPath, "");
 export const readDockerLog = (sandbox: DockerSetupSandbox) => readFile(sandbox.logPath, "utf8");
-export const readDockerLogLines = async (sandbox: DockerSetupSandbox) =>
-  (await readDockerLog(sandbox)).split("\n").filter(Boolean);
 export const isGatewayStartLine = (line: string) =>
   line.includes("compose") && line.includes(" up -d") && line.includes("openclaw-gateway");
 

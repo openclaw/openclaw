@@ -1,12 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import fs from "node:fs";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,16 +8,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const workflow = parse(readFileSync(".github/workflows/docs-agent.yml", "utf8"));
+const workflow = parse(fs.readFileSync(".github/workflows/docs-agent.yml", "utf8"));
 const writerJob = workflow.jobs["update-docs"];
 function workflowScript(key: "id" | "name", value: string): string {
-  const step = writerJob.steps.find(
-    (candidate: { id?: string; name?: string; run?: string }) => candidate[key] === value,
-  );
-  if (!step?.run) {
-    throw new Error(`Docs Agent script is missing: ${value}`);
-  }
-  return step.run;
+  return writerJob.steps.find((step: { id?: string; name?: string }) => step[key] === value).run;
 }
 function runShell(root: string, script: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
@@ -40,8 +27,12 @@ function runShell(root: string, script: string, env: NodeJS.ProcessEnv = {}) {
     },
   });
 }
-const runNode = (script: string, ...args: string[]) =>
-  execFileSync(process.execPath, [resolve(`scripts/${script}.mjs`), ...args]);
+const runNode = (script: string, options: Record<string, string>, ...args: string[]) =>
+  execFileSync(process.execPath, [
+    resolve(`scripts/${script}.mjs`),
+    ...args,
+    ...Object.entries(options).flatMap(([key, value]) => [`--${key}`, value]),
+  ]);
 const mainSha = "a".repeat(40);
 const parentSha = "b".repeat(40);
 const previousSha = "c".repeat(40);
@@ -62,10 +53,10 @@ function runGate(runs: WorkflowRun[], options: { event?: string; workflowHeadSha
   const root = tempDirs.make("docs-agent-gate-");
   const bin = join(root, "bin");
   const output = join(root, "output");
-  mkdirSync(bin);
-  writeFileSync(output, "");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(output, "");
   const owner = join(root, "owner.py");
-  copyFileSync(".github/actions/git-owner/owner.py", owner);
+  fs.copyFileSync(".github/actions/git-owner/owner.py", owner);
   // Only the gate runs. Git/network and the clock are fixtures; jq executes the real filters.
   const commands = {
     git: `if [ "$1" = "-C" ]; then shift 2; fi
@@ -85,7 +76,7 @@ esac`,
     date: `printf '%s\\n' '2026-08-28T22:30:00Z'`,
   };
   for (const [name, script] of Object.entries(commands)) {
-    writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    fs.writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
   }
 
   const jobs = runs.map((run) => {
@@ -114,7 +105,7 @@ esac`,
     DOCS_AGENT_JOBS_FIXTURE: JSON.stringify(Object.fromEntries(jobs)),
   });
   expect(result.status, result.stderr || result.error?.message).toBe(0);
-  return { stdout: result.stdout, output: readFileSync(output, "utf8") };
+  return { stdout: result.stdout, output: fs.readFileSync(output, "utf8") };
 }
 
 function admittedOutput(reviewBase: string) {
@@ -143,57 +134,52 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
         execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
       const mirrorPath = join(root, "CHANGELOG/2026.9.4.md");
       const docsPath = join(root, "docs/releases/2026.9.4.md");
-      mkdirSync(join(root, "docs/releases"), { recursive: true });
-      mkdirSync(join(root, "src"));
+      fs.mkdirSync(join(root, "docs/releases"), { recursive: true });
+      fs.mkdirSync(join(root, "src"));
       const sourcePath = join(root, "src/example.js");
       const originalSource = "export const value = 1;\n";
-      writeFileSync(sourcePath, originalSource);
-      symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
-      writeFileSync(
+      fs.writeFileSync(sourcePath, originalSource);
+      fs.symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
+      fs.writeFileSync(
         join(root, "CHANGELOG.md"),
         "# Changelog\n\n## 2026.9.4\n\nReleased notes.\n\n### Complete contribution record\n\n- Original accounting.\n\n## 2026.8.1\n\nHistorical notes.\n",
       );
-      runNode("release-changelog", "split", "--root", root);
-      writeFileSync(docsPath, "# Release notes\n\nApproved source prose.\n");
+      runNode("release-changelog", { root }, "split");
+      fs.writeFileSync(docsPath, "# Release notes\n\nApproved source prose.\n");
       const regenerate = () =>
-        runNode(
-          "render-release-changelog",
-          "--root",
+        runNode("render-release-changelog", {
           root,
-          "--version",
-          "2026.9.4",
-          "--source",
-          "docs/releases/2026.9.4.md",
-          "--output",
-          mirrorPath,
-        );
+          version: "2026.9.4",
+          source: "docs/releases/2026.9.4.md",
+          output: mirrorPath,
+        });
       regenerate();
       const recordPath = join(root, "CHANGELOG/records/2026.9.4.md");
-      const originalRecord = readFileSync(recordPath, "utf8");
+      const originalRecord = fs.readFileSync(recordPath, "utf8");
       git("init", "-q");
       git("add", ".");
       git("config", "user.name", "Fixture");
       git("config", "user.email", "fixture@example.invalid");
       git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
       if (change === "mirror") {
-        appendFileSync(docsPath, "\nCorrected source detail.\n");
+        fs.appendFileSync(docsPath, "\nCorrected source detail.\n");
         regenerate();
       } else if (change === "initial") {
-        appendFileSync(join(root, "CHANGELOG/2026.8.1.md"), "Changed history.\n");
+        fs.appendFileSync(join(root, "CHANGELOG/2026.8.1.md"), "Changed history.\n");
       } else if (change === "record" || change === "index-only record") {
-        appendFileSync(recordPath, "Changed accounting.\n");
+        fs.appendFileSync(recordPath, "Changed accounting.\n");
       } else if (change === "index-only source") {
-        writeFileSync(sourcePath, "export const value = 2;\n");
+        fs.writeFileSync(sourcePath, "export const value = 2;\n");
       } else {
-        appendFileSync(mirrorPath, "Unapproved independent prose.\n");
+        fs.appendFileSync(mirrorPath, "Unapproved independent prose.\n");
       }
       if (staged) {
         git("add", ".");
       }
       if (change === "index-only record") {
-        writeFileSync(recordPath, originalRecord);
+        fs.writeFileSync(recordPath, originalRecord);
       } else if (change === "index-only source") {
-        writeFileSync(sourcePath, originalSource);
+        fs.writeFileSync(sourcePath, originalSource);
       }
       const result = runShell(root, workflowScript("name", "Enforce existing-docs-only patch"));
       expect(result.status, result.stdout + result.stderr).toBe(change === "mirror" ? 0 : 1);
@@ -235,6 +221,11 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     created_at: "2026-08-28T21:00:00Z",
     head_sha: previousSha,
   });
+  const history = (changes: Partial<WorkflowRun>, reviewed = reviewedRun): WorkflowRun[] => [
+    currentRun,
+    completedRun(changes),
+    reviewed,
+  ];
   const writers: NonNullable<WorkflowRun["writer"]>[] = ["denied", "gated"];
   it.each([
     {
@@ -250,25 +241,20 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
       ["cancelled", "2026-08-28T22:29:59Z"],
     ].map(([conclusion, created_at]) => ({
       name: `${conclusion} history from ${created_at}`,
-      runs: [
-        currentRun,
-        completedRun({ conclusion, created_at }),
+      runs: history(
+        { conclusion, created_at },
         { ...reviewedRun, created_at: "2026-08-28T22:29:58Z" },
-      ],
+      ),
     })),
     ...writers.flatMap((writer) =>
       [currentRun.created_at, "2026-08-28T22:29:59Z"].map((created_at) => ({
         name: `${writer} hourly attempt from ${created_at}`,
-        runs: [currentRun, completedRun({ run_attempt: 2, created_at, writer }), reviewedRun],
+        runs: history({ run_attempt: 2, created_at, writer }),
       })),
     ),
     {
       name: "an unsuccessful agent attempt",
-      runs: [
-        currentRun,
-        completedRun({ created_at: "2026-08-28T22:29:59Z", conclusion: "failure" }),
-        reviewedRun,
-      ],
+      runs: history({ created_at: "2026-08-28T22:29:59Z", conclusion: "failure" }),
     },
   ])("does not let $name throttle admission or advance the review base", ({ runs }) => {
     expect(runGate(runs).output).toBe(admittedOutput(previousSha));
@@ -290,6 +276,8 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
 
 describe("Docs Agent full-CI admission", () => {
   const verify = workflow.jobs["verify-ci"];
+  const repo = { owner: "openclaw", repo: "openclaw" };
+  const confirmedStep = "Confirm validated workflow revision";
   const source = {
     id: 456,
     run_attempt: 2,
@@ -308,7 +296,7 @@ describe("Docs Agent full-CI admission", () => {
     name: "openclaw/ci-gate",
     head_sha: mainSha,
     conclusion: "success",
-    steps: [{ name: "Confirm validated workflow revision", conclusion: "success" }],
+    steps: [{ name: confirmedStep, conclusion: "success" }],
   };
   const evaluate = (value: string, context: Parameters<typeof evaluateWorkflowExpression>[1]) =>
     evaluateWorkflowExpression(value.startsWith("${{") ? value : "${{ " + value + " }}", context);
@@ -336,33 +324,22 @@ describe("Docs Agent full-CI admission", () => {
       githubEvent: { workflow_run: event },
       ciOnPush: options.ciOnPush ?? "",
     };
-    let runReads = 0;
-    const getWorkflowRun = vi.fn(async () => {
-      if (options.apiFails) {
-        throw new Error("GitHub unavailable");
-      }
-      runReads++;
-      return { data: runReads > 1 ? { ...run, ...options.latestRun } : run };
-    });
-    const getBranch = vi.fn(async () => ({
-      data: { commit: { sha: options.currentMain ?? mainSha } },
-    }));
+    const getWorkflowRun = vi
+      .fn<() => Promise<{ data: typeof run }>>()
+      .mockResolvedValueOnce({ data: run })
+      .mockResolvedValue({ data: { ...run, ...options.latestRun } });
+    if (options.apiFails) {
+      getWorkflowRun.mockReset().mockRejectedValue(new Error("GitHub unavailable"));
+    }
+    const getBranch = async () => ({ data: { commit: { sha: options.currentMain ?? mainSha } } });
     const listJobsForWorkflowRunAttempt = vi.fn();
     const paginate = vi.fn(async () => options.jobs ?? [confirmedGate]);
+    const actions = { getWorkflowRun, listJobsForWorkflowRunAttempt };
+    const rest = { actions, repos: { getBranch } };
     if (evaluate(verify.if, context)) {
       await runInNewContext("(async () => {" + verify.steps[0].with.script + "})()", {
-        context: {
-          eventName: context.eventName,
-          repo: { owner: "openclaw", repo: "openclaw" },
-          payload: { workflow_run: event },
-        },
-        github: {
-          rest: {
-            actions: { getWorkflowRun, listJobsForWorkflowRunAttempt },
-            repos: { getBranch },
-          },
-          paginate,
-        },
+        context: { eventName: context.eventName, repo, payload: { workflow_run: event } },
+        github: { rest, paginate },
         core: {
           setOutput: (key: string, value: string) => {
             outputs[key] = value;
@@ -375,7 +352,7 @@ describe("Docs Agent full-CI admission", () => {
       ...context,
       additionalNeeds: { "verify-ci": { outputs } },
     });
-    return { allowed, getWorkflowRun, getBranch, paginate, listJobsForWorkflowRunAttempt };
+    return { allowed, getWorkflowRun, paginate, listJobsForWorkflowRunAttempt };
   }
 
   const fullPush: AdmissionOptions = {
@@ -423,12 +400,13 @@ describe("Docs Agent full-CI admission", () => {
     });
     expect(result.allowed).toBe(false);
     expect(result.getWorkflowRun).not.toHaveBeenCalled();
-    expect(workflow.concurrency).toBeUndefined();
-    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
-    expect(writerJob.needs).toBe("verify-ci");
-    expect(writerJob.concurrency).toEqual({
-      group: "docs-agent-main",
-      "cancel-in-progress": false,
+    expect({ concurrency: workflow.concurrency, permissions: workflow.permissions }).toEqual({
+      concurrency: undefined,
+      permissions: { actions: "read", contents: "read" },
+    });
+    expect({ needs: writerJob.needs, concurrency: writerJob.concurrency }).toEqual({
+      needs: "verify-ci",
+      concurrency: { group: "docs-agent-main", "cancel-in-progress": false },
     });
   });
 
@@ -458,7 +436,7 @@ describe("Docs Agent full-CI admission", () => {
       [
         {
           ...confirmedGate,
-          steps: [{ name: "Confirm validated workflow revision", conclusion: "skipped" }],
+          steps: [{ name: confirmedStep, conclusion: "skipped" }],
         },
       ],
     ].map((jobs) => ({ jobs })),
@@ -478,7 +456,7 @@ describe("Docs Agent full-CI admission", () => {
 
   it("confirms only a successful CI aggregate for the validated workflow revision", () => {
     const producer = readCiWorkflow().jobs["ci-gate"].steps.find(
-      (step: { name?: string }) => step.name === "Confirm validated workflow revision",
+      (step: { name?: string }) => step.name === confirmedStep,
     );
     const context = {
       repository: "openclaw/openclaw",
