@@ -508,20 +508,17 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       syncCanonicalLocation();
     },
   );
-  // Owner notifications are synchronous: a disconnect/reconnect pair must retire
-  // pending reads even when Solid batches both publications into one render.
   onSettled(() => {
     const unsubscribe = [
+      // Retire pending reads on every connection transition, even within one render.
       gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
-      // A config event samples the current probe state; it must not subscribe its publisher.
+      // Config receipts retire obsolete support probes before their results can settle.
       runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))),
     ];
     syncRouteAgent();
     syncGateway(gateway.read().snapshot);
     return () => {
-      for (const stop of unsubscribe) {
-        stop();
-      }
+      unsubscribe.forEach((stop) => stop());
     };
   });
   onCleanup(() => {
@@ -571,18 +568,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   function subscribeOverviewSettings(listener: () => void) {
     settingsListeners.add(listener);
-    const stops = [
-      agentSelection.subscribe(listener),
-      gateway.subscribe(listener),
-      runtime.subscribe(listener),
-      agents.subscribe(listener),
-      i18n.subscribe(listener),
-    ];
+    // The plugin bridge must retire its request scope synchronously, before a batched render.
+    const stops = [agentSelection, gateway, runtime, agents, i18n].map((source) =>
+      source.subscribe(listener),
+    );
     return () => {
       settingsListeners.delete(listener);
-      for (const stop of stops) {
-        stop();
-      }
+      stops.forEach((stop) => stop());
     };
   }
 

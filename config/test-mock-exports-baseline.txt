@@ -1213,7 +1213,6 @@
 ["extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-shared.test.ts","../substrate/e2ee-client.js","5890861436d9b195de1154f0993ae27447e6def3213e55148ca442abc710bddb",1]
 ["extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.test.ts","../substrate/client.js","71b79f8f676933dff017ebf420b0065f8a9d24724edb461473dee78cc55b4666",1]
 ["extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.test.ts","./scenario-runtime-e2ee-room.js","d6a99948481bfcbc5a34fcf30791c3b6be3388557c76680661edebbb6012b575",1]
-["extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.test.ts","openclaw/plugin-sdk/qa-runner-runtime","7c0b1ad0633ef09bcaa0b8e1a588254ddcf98430f905670220c2c03b81747ab7",1]
 ["extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.test.ts","../../gateway-child.js","894d2e8ba4ad60b429be7a88faa54fb0f7be71e56880c3633f05a5e0933ecd29",1]
 ["extensions/qa-lab/src/live-transports/shared/live-gateway.runtime.test.ts","../../providers/server-runtime.js","f942fc8d5895638287985b2d4e2ccda82071f565e98d8f61c5531a35a240ee13",1]
 ["extensions/qa-lab/src/live-transports/shared/live-transport-suite.runtime.test.ts","../../cli.runtime.js","c4cf831f214f0d3102b04c0c1256fa30f92e2bb61d8e009317b44962ff1f7e56",1]

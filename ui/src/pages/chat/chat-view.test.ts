@@ -2237,9 +2237,27 @@ describe("chat voice controls", () => {
       const initialScale = centerBar?.style.getPropertyValue("--talk-bar-scale");
 
       inputLevel.set(0.8);
+      flush();
 
       expect(visualizer?.getAttribute("data-level")).toBe("0.8");
       expect(centerBar?.style.getPropertyValue("--talk-bar-scale")).not.toBe(initialScale);
+
+      const replacement = new RealtimeTalkLevelSignal();
+      replacement.set(0.35);
+      renderChatInto(container, {
+        realtimeTalkActive: true,
+        realtimeTalkStatus: "listening",
+        realtimeTalkInputLevel: replacement,
+      });
+      expect(container.querySelector(".agent-chat__voice-activity")).toBe(visualizer);
+      inputLevel.set(0.1);
+      flush();
+      expect(visualizer?.getAttribute("data-level")).toBe("0.35");
+
+      disposeChatView(container);
+      replacement.set(0.9);
+      flush();
+      expect(visualizer?.getAttribute("data-level")).toBe("0.35");
     } finally {
       container.remove();
     }

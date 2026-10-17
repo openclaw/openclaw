@@ -355,8 +355,8 @@ suite.define(() => {
     // File rows put the workspace link inside the row, so toggle from the icon
     // edge instead of the row centre to avoid opening the linked file.
     await rows.first().click({ position: { x: 4, y: 4 } });
-    expect(await page.getByText("offset:", { exact: true }).count()).toBe(1);
-    expect(await page.getByText("limit:", { exact: true }).count()).toBe(1);
+    await expect.poll(() => page.getByText("offset:", { exact: true }).count()).toBe(1);
+    await expect.poll(() => page.getByText("limit:", { exact: true }).count()).toBe(1);
     const patchRow = rows.filter({ hasText: "2 files" });
     await patchRow.click();
     await expect.poll(() => patchRow.getAttribute("aria-expanded")).toBe("true");

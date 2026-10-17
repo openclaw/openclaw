@@ -49,8 +49,8 @@ vi.mock("./update-command-schema.js", () => ({
   preflightUpdateCommandSchemas: async () => ({ preflightNotes: [], preflightFailures: [] }),
   captureUpdateActivationSchemas: async () => ({}),
 }));
-// mock-isolation: Keep database context reads inert while testing native stop authority.
-vi.mock("./update-command-database-context.js", () => ({
+vi.mock("./update-command-database-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-database-context.js")>()),
   inspectUpdateDatabaseContexts: async (): ReturnType<
     typeof import("./update-command-database-context.js").inspectUpdateDatabaseContexts
   > => ({ services: new Map(), contexts: [], service: undefined, managedEnv: undefined }),
