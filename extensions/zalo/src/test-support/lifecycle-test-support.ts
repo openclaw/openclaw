@@ -87,6 +87,25 @@ export function createTextUpdate(params: {
   };
 }
 
+export function createUnsupportedUpdate(params: {
+  messageId: string;
+  userId: string;
+  userName: string;
+  chatId: string;
+  text?: string;
+}) {
+  return {
+    event_name: "message.unsupported.received",
+    message: {
+      from: { id: params.userId, name: params.userName },
+      chat: { id: params.chatId, chat_type: "PRIVATE" as const },
+      message_id: params.messageId,
+      date: Math.floor(Date.now() / 1000),
+      ...(params.text === undefined ? {} : { text: params.text }),
+    },
+  };
+}
+
 export function createImageUpdate(params?: {
   messageId?: string;
   userId?: string;
