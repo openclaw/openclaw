@@ -104,7 +104,7 @@ describe("ACP session bridge", () => {
     const { agent, sessionStore } = harness();
     const result = await agent.newSession(createNewSessionRequest());
     const key = sessionStore.getSession(result.sessionId)?.sessionKey;
-    expect(key).toMatch(/^acp-bridge:/);
+    expect(key).toBe(`agent:main:acp-bridge:${result.sessionId}`);
     expect(isAcpSessionKey(key)).toBe(false);
     expect(result.modes?.currentModeId).toBe("adaptive");
     expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual([

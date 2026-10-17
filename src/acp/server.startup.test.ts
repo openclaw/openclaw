@@ -416,142 +416,127 @@ describe("serveAcpGateway startup", () => {
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
     });
-  });
 
-  it("injects the server-owned SQLite event ledger into the ACP agent", async () => {
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
-
-    try {
+    it("injects the server-owned SQLite event ledger into the ACP agent", async () => {
       const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
 
-      expect(mockState.sqliteEventLedgers).toHaveLength(1);
-      expect((mockState.agentOptions[0] as { eventLedger?: unknown }).eventLedger).toBe(
-        mockState.sqliteEventLedgers[0],
-      );
+      try {
+        await emitHelloAndWaitForAgentSideConnection();
 
-      await stopServeWithSigint(signalHandlers, servePromise);
-    } finally {
-      onceSpy.mockRestore();
-    }
-  });
+        expect(mockState.sqliteEventLedgers).toHaveLength(1);
+        expect((mockState.agentOptions[0] as { eventLedger?: unknown }).eventLedger).toBe(
+          mockState.sqliteEventLedgers[0],
+        );
+      } finally {
+        await stopServeWithSigint(signalHandlers, servePromise);
+      }
+    });
 
-  it("normalizes the selected bridge agent and passes runtime config to the translator", async () => {
-    mockState.runtimeConfig = {
-      gateway: { mode: "local" },
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-      },
-    };
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
-
-    try {
-      const servePromise = serveAcpGateway({ agentId: " Ops " });
-      await emitHelloAndWaitForAgentSideConnection();
-
-      expect(mockState.agentOptions[0]).toMatchObject({
-        agentId: "ops",
-        config: mockState.runtimeConfig,
-      });
-
-      await stopServeWithSigint(signalHandlers, servePromise);
-    } finally {
-      onceSpy.mockRestore();
-    }
-  });
-
-  it("defers unknown --agent roster validation to the generated-session path", async () => {
-    mockState.runtimeConfig = {
-      gateway: { mode: "local" },
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-      },
-    };
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
-
-    try {
-      const servePromise = serveAcpGateway({ agentId: "not-in-roster" });
-      await emitHelloAndWaitForAgentSideConnection();
-
-      expect(mockState.agentOptions[0]).toMatchObject({
-        agentId: "not-in-roster",
-      });
-      expect(mockState.agentOptions[0]).not.toHaveProperty("skipAgentOwnerRosterValidation");
-
-      await stopServeWithSigint(signalHandlers, servePromise);
-    } finally {
-      onceSpy.mockRestore();
-    }
-  });
-
-  it("rejects an unrepresentable --agent id instead of selecting main", async () => {
-    mockState.runtimeConfig = {
-      gateway: { mode: "local" },
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-      },
-    };
-
-    await expect(serveAcpGateway({ agentId: "!!!" })).rejects.toThrow(/no valid id characters/i);
-  });
-
-  it.each(["cli", "env", "config"] as const)(
-    "defers agent ownership to the remote Gateway selected by %s",
-    async (source) => {
+    it("normalizes the selected bridge agent and passes runtime config to the translator", async () => {
       mockState.runtimeConfig = {
-        gateway: { mode: source === "config" ? "remote" : "local" },
+        gateway: { mode: "local" },
         agents: {
           ownership: "explicit",
           entries: { ops: {}, research: {} },
         },
       };
-      const url = "wss://gateway-host:18789";
-      const urlSource =
-        source === "cli" ? "cli --url" : source === "env" ? "env OPENCLAW_GATEWAY_URL" : "config";
-      mockState.resolveGatewayClientBootstrap.mockResolvedValue({
-        url,
-        urlSource,
-        connectionDetails: { url, urlSource, message: `Gateway target: ${url}` },
-        ...(source !== "config" ? { urlOverrideSource: source } : {}),
-        auth: {},
-      });
-      const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
-      const servePromise = serveAcpGateway({
-        agentId: "not-in-roster",
-        ...(source === "cli" ? { gatewayUrl: url } : {}),
-      });
+      const servePromise = serveAcpGateway({ agentId: " Ops " });
 
       try {
         await emitHelloAndWaitForAgentSideConnection();
-        expect(mockState.gatewayOptions[0]?.url).toBe(url);
+
         expect(mockState.agentOptions[0]).toMatchObject({
-          agentId: "not-in-roster",
-          skipAgentOwnerRosterValidation: true,
+          agentId: "ops",
+          config: mockState.runtimeConfig,
         });
       } finally {
         await stopServeWithSigint(signalHandlers, servePromise);
-        onceSpy.mockRestore();
       }
-    },
-  );
+    });
 
-  it("advertises approval handling and subscribes to run-scoped tool events", async () => {
-    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    it("defers unknown --agent roster validation to the generated-session path", async () => {
+      mockState.runtimeConfig = {
+        gateway: { mode: "local" },
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
+      };
+      const servePromise = serveAcpGateway({ agentId: "not-in-roster" });
 
-    try {
+      try {
+        await emitHelloAndWaitForAgentSideConnection();
+
+        expect(mockState.agentOptions[0]).toMatchObject({
+          agentId: "not-in-roster",
+        });
+        expect(mockState.agentOptions[0]).not.toHaveProperty("skipAgentOwnerRosterValidation");
+      } finally {
+        await stopServeWithSigint(signalHandlers, servePromise);
+      }
+    });
+
+    it("rejects an unrepresentable --agent id instead of selecting main", async () => {
+      mockState.runtimeConfig = {
+        gateway: { mode: "local" },
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
+      };
+
+      await expect(serveAcpGateway({ agentId: "!!!" })).rejects.toThrow(/no valid id characters/i);
+    });
+
+    it.each(["cli", "env", "config"] as const)(
+      "defers agent ownership to the remote Gateway selected by %s",
+      async (source) => {
+        mockState.runtimeConfig = {
+          gateway: { mode: source === "config" ? "remote" : "local" },
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        };
+        const url = "wss://gateway-host:18789";
+        const urlSource =
+          source === "cli" ? "cli --url" : source === "env" ? "env OPENCLAW_GATEWAY_URL" : "config";
+        mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+          url,
+          urlSource,
+          connectionDetails: { url, urlSource, message: `Gateway target: ${url}` },
+          ...(source !== "config" ? { urlOverrideSource: source } : {}),
+          auth: {},
+        });
+        const servePromise = serveAcpGateway({
+          agentId: "not-in-roster",
+          ...(source === "cli" ? { gatewayUrl: url } : {}),
+        });
+
+        try {
+          await emitHelloAndWaitForAgentSideConnection();
+          expect(mockState.gatewayOptions[0]?.url).toBe(url);
+          expect(mockState.agentOptions[0]).toMatchObject({
+            agentId: "not-in-roster",
+            skipAgentOwnerRosterValidation: true,
+          });
+        } finally {
+          await stopServeWithSigint(signalHandlers, servePromise);
+        }
+      },
+    );
+
+    it("advertises approval handling and subscribes to run-scoped tool events", async () => {
       const servePromise = serveAcpGateway({});
-      await emitHelloAndWaitForAgentSideConnection();
 
-      expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
+      try {
+        await emitHelloAndWaitForAgentSideConnection();
 
-      await stopServeWithSigint(signalHandlers, servePromise);
-    } finally {
-      onceSpy.mockRestore();
-    }
-  });
+        expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
+      } finally {
+        await stopServeWithSigint(signalHandlers, servePromise);
+      }
+    });
 
     it("passes the resolved TLS fingerprint into the ACP gateway client", async () => {
       mockState.resolveGatewayClientBootstrap.mockResolvedValue({
