@@ -24,6 +24,7 @@ import {
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { importClientCredentialLegacy } from "./client-credential-legacy.js";
 import {
   prepareClientCredentialMigration,
   bindFreshClientCredentialStore,
@@ -40,6 +41,7 @@ import {
   openClientCredentialCustody,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
+import { createLegacyNodeAuthFixture } from "./client-credential-store.test-support.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
@@ -508,6 +510,12 @@ describe("local client credential extraction", () => {
 
   it("leaves copied on source rollback and rebuilds an orphan without merging newer cached tokens", async () => {
     const f = await fixture();
+    const legacyPath = path.join(f.env.OPENCLAW_STATE_DIR, "identity", "node-device-auth.json");
+    const {
+      token: legacyToken,
+      raw: legacyJson,
+      legacyImport,
+    } = createLegacyNodeAuthFixture(f.identity.deviceId);
     try {
       expect(() =>
         f.maintenance.run(() =>
@@ -533,12 +541,25 @@ describe("local client credential extraction", () => {
             "UPDATE device_auth_tokens SET token='orphan-token'; UPDATE client_credential_migration SET phase='complete';",
           ),
         );
+        fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+        fs.writeFileSync(legacyPath, legacyJson);
+        expect(importClientCredentialLegacy(target, legacyImport)).toBe(true);
+        expect(
+          target.run({
+            kind: "token.remove",
+            key: legacyToken,
+            observedToken: legacyToken.token,
+          }),
+        ).toEqual({ kind: "changed", changed: true });
       } finally {
         target.close();
       }
       expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
         token: "token-original",
       });
+      expect(f.source.prepare("SELECT identity_key FROM device_identities").all()).toEqual([
+        { identity_key: "primary" },
+      ]);
       f.maintenance.run(() =>
         runSqliteImmediateTransactionSync(f.source, () =>
           prepareClientCredentialMigration(f.source, {
@@ -557,6 +578,13 @@ describe("local client credential extraction", () => {
         expect(current.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
           token: "token-original",
         });
+        const imported = importClientCredentialLegacy(current, legacyImport);
+        expect(current.run({ kind: "token.read", key: legacyToken })).toEqual({
+          kind: "token",
+          token: null,
+        });
+        expect(imported).toBe(false);
+        expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacyJson);
       } finally {
         current.close();
       }

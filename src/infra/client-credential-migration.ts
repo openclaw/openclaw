@@ -302,7 +302,7 @@ export function prepareClientCredentialMigration(
     runSqliteImmediateTransactionSync(target.database, () => {
       const database = target.database;
       const previous = readClientCredentialReceipt(database);
-      if (nativeBootstrap && previous?.receipt.source?.kind === "independent") {
+      if (previous) {
         // Rebuilding derived rows never makes a consumed legacy input eligible again.
         receipt.legacyImports = { ...receipt.legacyImports, ...previous.receipt.legacyImports };
       }
