@@ -157,7 +157,7 @@ export function findLiveRegistryWorktreeByOwnerInDatabase(
   return row ? rowToRecord(row) : undefined;
 }
 
-export function findLiveRegistryWorktreeByPathInDatabase(
+function findLiveRegistryWorktreeByPathInDatabase(
   db: EngineConnection,
   worktreePath: string,
 ): ManagedWorktreeRecord | undefined {
@@ -189,7 +189,7 @@ export function listRegistryWorktreesInDatabase(
   return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
 }
 
-export function listLiveRegistryWorktreeIdsInDatabase(db: EngineConnection): string[] {
+function listLiveRegistryWorktreeIdsInDatabase(db: EngineConnection): string[] {
   const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
     .selectFrom("worktrees")
     .select("id")
@@ -236,7 +236,7 @@ function readProvisionedData(db: EngineConnection, id: string) {
   return parseProvisionedData(row?.provisioned_paths_json ?? null);
 }
 
-export function getRegistryWorktreeProvisionedPathsInDatabase(
+function getRegistryWorktreeProvisionedPathsInDatabase(
   db: EngineConnection,
   id: string,
 ): string[] | undefined {
@@ -245,7 +245,7 @@ export function getRegistryWorktreeProvisionedPathsInDatabase(
   );
 }
 
-export function getRegistryWorktreeProvisionedStateInDatabase(
+function getRegistryWorktreeProvisionedStateInDatabase(
   db: EngineConnection,
   id: string,
 ): ProvisionedFileState[] | undefined {
