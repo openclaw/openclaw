@@ -20,6 +20,7 @@ import { mergeSkillRecords } from "../loading/skill-precedence.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSource } from "../loading/workspace-skill-sources.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import type { SkillEntry } from "../types.js";
 import {
   captureSkillsDiscoveryEnvironment,
   type SkillsDiscoveryInput,
@@ -27,14 +28,13 @@ import {
 } from "./discovery-worker-contract.js";
 import { captureSkillsSourcePlanInput } from "./discovery-worker-input.js";
 
-const worker = vi.hoisted(() => ({
-  handle: vi.fn<(input: unknown) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>>(),
-}));
+const worker = vi.hoisted(() =>
+  vi.fn<(input: unknown) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>>(),
+);
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
-  serveWorkerTasks: (handler: (input: unknown) => SkillsDiscoveryOutput) => {
-    worker.handle.mockImplementation(handler);
-  },
+  serveWorkerTasks: (handler: (input: unknown) => SkillsDiscoveryOutput) =>
+    worker.mockImplementation(handler),
 }));
 import "./discovery.worker.js";
 
@@ -46,14 +46,15 @@ const request = (key: string, selection: ScanRequest["selection"]): ScanRequest 
 });
 const write = (dir: string, name: string, description: string) =>
   writeSkill({ dir: path.join(dir, name), name, description });
+const localFact = (index: number) => [`local-${index}`, `Workspace ${index}`];
 async function scan(requests: ScanRequest[]) {
-  const result = await worker.handle({ kind: "scan", path: process.env.PATH, requests });
-  expect(result.kind).toBe("scan");
+  const result = await worker({ kind: "scan", path: process.env.PATH, requests });
   if (result.kind !== "scan") {
     throw new Error("Expected scan results");
   }
   return result.results;
 }
+const facts = ({ skill }: SkillEntry) => [skill.name, skill.description];
 function selected(
   workspaceDir: string,
   roots: WorkspaceSkillSource[],
@@ -133,20 +134,14 @@ it.each(["standalone", "gateway"])(
           }),
         );
         const results = await scan(structuredClone(requests));
+        const expected = dirs.map((_, index) =>
+          [localFact(index), [pluginName, description]].toSorted(),
+        );
         expect(
           results.map(({ key, sources }) =>
-            mergeSkillRecords(sources.entries, key)
-              .map(({ skill }) => [skill.name, skill.description])
-              .toSorted(),
+            mergeSkillRecords(sources.entries, key).map(facts).toSorted(),
           ),
-        ).toEqual(
-          dirs.map((_, index) =>
-            [
-              [`local-${index}`, `Workspace ${index}`],
-              [pluginName, description],
-            ].toSorted(),
-          ),
-        );
+        ).toEqual(expected);
         expect(
           observed.queries.filter((sql) =>
             /^select "state_key", "value_json" from "config_machine_state"/i.test(sql),
@@ -181,20 +176,15 @@ it("reads shared skill roots once per scan while retaining workspace entries and
     await write(sharedDir, "guide", description);
     opened.mockClear();
     const results = await scan(requests);
+    const expected = dirs.map((_, index) => [
+      ["guide", description, index + 1],
+      [...localFact(index), undefined],
+    ]);
     expect(
       results.map(({ sources }) =>
-        sources.entries.map(({ skill, sourceOrder: order }) => [
-          skill.name,
-          skill.description,
-          order,
-        ]),
+        sources.entries.map((entry) => [...facts(entry), entry.sourceOrder]),
       ),
-    ).toEqual(
-      dirs.map((_, index) => [
-        ["guide", description, index + 1],
-        [`local-${index}`, `Workspace ${index}`, undefined],
-      ]),
-    );
+    ).toEqual(expected);
     expect(opened.mock.calls.filter(([params]) => params.absolutePath === sharedFile)).toHaveLength(
       1,
     );
@@ -205,9 +195,8 @@ it("keeps shared-root file limits and hardlink policies separate within a scan",
   const root = temporary.make("skills-scan-root-policy-");
   const sharedDir = path.join(root, "shared");
   await write(sharedDir, "guide", "Guide");
-  const linkedDir = path.join(sharedDir, "linked");
   await write(sharedDir, "linked", "Linked");
-  await fs.link(path.join(linkedDir, "SKILL.md"), path.join(root, "other-link.md"));
+  await fs.link(path.join(sharedDir, "linked", "SKILL.md"), path.join(root, "other-link.md"));
   const policies = [
     [false, 256_000],
     [false, 1],

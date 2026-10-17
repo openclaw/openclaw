@@ -67,6 +67,19 @@ function trackSettlement(promise: Promise<unknown>) {
   void promise.then(settled, settled);
   return settled;
 }
+function pauseAfter<T extends unknown[]>(operation: (...args: T) => Promise<void>) {
+  const entered = createDeferred();
+  const released = createDeferred();
+  return {
+    entered: entered.promise,
+    release: released.resolve,
+    run: async (...args: T) => {
+      await operation(...args);
+      entered.resolve();
+      await released.promise;
+    },
+  };
+}
 const discoveryPools = () =>
   getTrackedWorkerPoolSnapshot().workerPools.filter(
     (entry) => entry.script === "discovery.worker.js",
@@ -76,26 +89,24 @@ const agentConfig = (entries: Record<string, { workspace: string }>) => ({
   plugins: { enabled: false },
 });
 async function plannedSource(dir: string, options: Parameters<typeof prepareSkillSourcePlan>[1]) {
-  const prepared = await prepareSkillSourcePlan(dir, options);
-  const source = {
-    ...request(dir),
-    sourcePlan: prepared.plan,
-    limits: resolveSkillDiscoveryLimits(options?.config),
+  const { plan, input } = await prepareSkillSourcePlan(dir, options);
+  return {
+    plan,
+    read: () =>
+      prepareLocalSkillSources(
+        { ...request(dir), sourcePlan: plan, limits: resolveSkillDiscoveryLimits(options?.config) },
+        { plan: { input } },
+      ),
   };
-  const read = () => prepareLocalSkillSources(source, { plan: { input: prepared.input } });
-  return { plan: prepared.plan, read };
 }
 
 it("publishes explicit additions, edits, and removals before refresh resolves", async () => {
   expect(await descriptions()).toEqual([]);
-  for (const text of ["Added", "Edited"]) {
-    await write(text);
+  for (const text of ["Added", "Edited", undefined]) {
+    await (text ? write(text) : fs.rm(path.join(workspace, "skills"), { recursive: true }));
     await refreshSkillsDiscovery({ workspaceDir: workspace });
-    expect(await descriptions()).toEqual([text]);
+    expect(await descriptions()).toEqual(text ? [text] : []);
   }
-  await fs.rm(path.join(workspace, "skills"), { recursive: true });
-  await refreshSkillsDiscovery({ workspaceDir: workspace });
-  expect(await descriptions()).toEqual([]);
 });
 
 it("serves published skills while discovery is scanning another workspace", async () => {
@@ -104,8 +115,7 @@ it("serves published skills while discovery is scanning another workspace", asyn
   expect(await descriptions(source)).toEqual(["Published instructions"]);
   const other = temporary.make("skills-pending-discovery-");
   await write("New workspace", other);
-  const entered = createDeferred();
-  const release = createDeferred();
+  const blocked = pauseAfter(() => Promise.resolve());
   // The wrapper below forwards the original receiver with apply.
   // oxlint-disable-next-line typescript/unbound-method
   const run = WorkerTaskPool.prototype.run;
@@ -113,15 +123,14 @@ it("serves published skills while discovery is scanning another workspace", asyn
     this: WorkerTaskPool<unknown, unknown>,
     ...args
   ) {
-    entered.resolve();
-    await release.promise;
+    await blocked.run();
     return run.apply(this, args);
   });
   const cold = descriptions(request(other));
   const coldSettled = trackSettlement(cold);
   let warm: Promise<string[]> | undefined;
   try {
-    await entered.promise;
+    await blocked.entered;
     warm = descriptions(source);
     const warmSettled = trackSettlement(warm);
     await nextImmediate();
@@ -129,7 +138,7 @@ it("serves published skills while discovery is scanning another workspace", asyn
     expect(coldSettled).not.toHaveBeenCalled();
     expect(await warm).toEqual(["Published instructions"]);
   } finally {
-    release.resolve();
+    blocked.release();
     await Promise.allSettled([warm, cold]);
   }
   expect(await cold).toEqual(["New workspace"]);
@@ -179,8 +188,7 @@ it("batches fresh agent discovery without separate root-planning passes", async 
   const other = temporary.make("skills-batch-agent-");
   vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", temporary.make("skills-batch-bundled-"));
   const config = agentConfig({ main: { workspace }, second: { workspace: other } });
-  await write("Original");
-  await write("Other", other);
+  await Promise.all([write("Original"), write("Other", other)]);
   const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   const instructions = async (workspaceDir: string, agentId: string) => {
     const prepared = await plannedSource(workspaceDir, { config, agentId });
@@ -206,24 +214,10 @@ it.each([false, true])(
   "joins a concurrent reset before source registration (selected: %s)",
   async (selected) => {
     await write("Current instructions");
-    const disposalEntered = createDeferred();
-    const disposalReleased = createDeferred();
-    const resetEntered = createDeferred();
-    const resetReleased = createDeferred();
-    const dispose = remoteRefresh.disposeRemoteSkillsWatcher;
-    const close = remoteRefresh.closeRemoteSkillsWatchers;
-    vi.spyOn(remoteRefresh, "disposeRemoteSkillsWatcher").mockImplementationOnce(
-      async (...args) => {
-        await dispose(...args);
-        disposalEntered.resolve();
-        await disposalReleased.promise;
-      },
-    );
-    vi.spyOn(remoteRefresh, "closeRemoteSkillsWatchers").mockImplementationOnce(async () => {
-      await close();
-      resetEntered.resolve();
-      await resetReleased.promise;
-    });
+    const disposal = pauseAfter(remoteRefresh.disposeRemoteSkillsWatcher);
+    const closing = pauseAfter(remoteRefresh.closeRemoteSkillsWatchers);
+    vi.spyOn(remoteRefresh, "disposeRemoteSkillsWatcher").mockImplementationOnce(disposal.run);
+    vi.spyOn(remoteRefresh, "closeRemoteSkillsWatchers").mockImplementationOnce(closing.run);
     const read = ensureSkillsWatcher({
       workspaceDir: workspace,
       ...(selected ? { sourcePlan: request().sourcePlan } : {}),
@@ -231,18 +225,18 @@ it.each([false, true])(
     const settled = trackSettlement(read);
     let reset: Promise<void> | undefined;
     try {
-      await disposalEntered.promise;
+      await disposal.entered;
       reset = refreshSkillsDiscovery({ reason: "config-change" });
-      await resetEntered.promise;
-      disposalReleased.resolve();
+      await closing.entered;
+      disposal.release();
       await nextImmediate();
       expect(settled).not.toHaveBeenCalled();
-      resetReleased.resolve();
+      closing.release();
       await Promise.all([read, reset]);
       expect(await descriptions()).toEqual(["Current instructions"]);
     } finally {
-      disposalReleased.resolve();
-      resetReleased.resolve();
+      disposal.release();
+      closing.release();
       await Promise.allSettled([read, reset]);
     }
   },
@@ -251,20 +245,16 @@ it.each([false, true])(
 it("keeps each source environment while refreshing a reused worker's plans and prompt paths", async () => {
   const firstHome = temporary.make("skills-first-home-");
   const secondHome = temporary.make("skills-second-home-");
-  const setEnvironment = (home: string) => {
+  const writeManaged = (home: string, text: string) => write(text, home, ".openclaw/skills/guide");
+  const config = { plugins: { enabled: false }, skills: { load: { extraDirs: ["~/extra"] } } };
+  const prepare = async (home: string, description: string) => {
+    await writeManaged(home, description);
     vi.stubEnv("HOME", home);
     vi.stubEnv("USERPROFILE", home);
     vi.stubEnv("OPENCLAW_HOME", path.join(home, "effective-home"));
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
     vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(home, "bundled"));
-  };
-  const writeManaged = (home: string, text: string) => write(text, home, ".openclaw/skills/guide");
-  await writeManaged(firstHome, "First namespace");
-  await writeManaged(secondHome, "Second namespace");
-  const config = { plugins: { enabled: false }, skills: { load: { extraDirs: ["~/extra"] } } };
-  const prepare = async (home: string) => {
-    setEnvironment(home);
     const planned = await plannedSource(workspace, { config });
     expect(planned.plan).toMatchObject({
       userHomeDir: home,
@@ -276,12 +266,11 @@ it("keeps each source environment while refreshing a reused worker's plans and p
       ]),
     });
     const read = async () => (await planned.read()).entries.map(({ skill }) => skill.description);
-    return { read, descriptions: await read() };
+    expect(await read()).toEqual([description]);
+    return read;
   };
-  const first = await prepare(firstHome);
-  expect(first.descriptions).toEqual(["First namespace"]);
-  const second = await prepare(secondHome);
-  expect(second.descriptions).toEqual(["Second namespace"]);
+  const first = await prepare(firstHome, "First namespace");
+  const second = await prepare(secondHome, "Second namespace");
   await write("Second workspace", secondHome);
   const workspaceSources = await prepareLocalSkillSources(request(secondHome));
   const snapshot = await projectSkillSnapshot({
@@ -293,8 +282,8 @@ it("keeps each source environment while refreshing a reused worker's plans and p
 
   await writeManaged(firstHome, "First namespace updated");
   await completePassiveScan();
-  expect(await first.read()).toEqual(["First namespace updated"]);
-  expect(await second.read()).toEqual(["Second namespace"]);
+  expect(await first()).toEqual(["First namespace updated"]);
+  expect(await second()).toEqual(["Second namespace"]);
 });
 
 it("keeps watch=false passive state fixed while explicit refresh remains immediate", async () => {
@@ -310,15 +299,13 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
   await write("Original");
   expect(await descriptions()).toEqual(["Original"]);
   await fs.rename(workspace, path.join(temporary.make("skills-retired-"), "workspace"));
-  await write("Replacement");
-  await completePassiveScan();
-  expect(await descriptions()).toEqual(["Replacement"]);
-  await fs.rm(path.join(workspace, "skills"), { recursive: true });
-  await completePassiveScan();
-  expect(await descriptions()).toEqual([]);
-  await write("Recreated");
-  await completePassiveScan();
-  expect(await descriptions()).toEqual(["Recreated"]);
+  for (const description of ["Replacement", undefined, "Recreated"]) {
+    await (description
+      ? write(description)
+      : fs.rm(path.join(workspace, "skills"), { recursive: true }));
+    await completePassiveScan();
+    expect(await descriptions()).toEqual(description ? [description] : []);
+  }
 });
 
 it("refreshes supporting resources without publishing an unchanged catalog", async () => {
@@ -339,16 +326,14 @@ it("invalidates an evicted workspace before accepting its next snapshot", async 
   expect(await descriptions(input)).toEqual(["Original"]);
   const version = getSkillsSnapshotVersion(workspace);
   await Promise.all(
-    Array.from({ length: 128 }, (_, index) =>
-      prepareLocalSkillSources({
-        ...input,
-        sourcePlan: {
-          ...input.sourcePlan,
-          workspaceDir: path.join(workspace, String(index)),
-          roots: [],
-        },
-      }),
-    ),
+    Array.from({ length: 128 }, (_, index) => {
+      const sourcePlan = {
+        ...input.sourcePlan,
+        workspaceDir: path.join(workspace, String(index)),
+        roots: [],
+      };
+      return prepareLocalSkillSources({ ...input, sourcePlan });
+    }),
   );
   expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(version);
   await write("Changed while evicted");
@@ -360,31 +345,28 @@ it("discovers new agent-plugin children during the passive worker pass", async (
   const skillRoot = path.join(pluginRoot, "skills");
   await write("First", skillRoot, "first");
   const input = request();
-  const prepared = await prepareSkillSourcePlan(workspace, { workspaceOnly: true });
-  const options = {
-    plan: {
-      input: {
-        ...prepared.input,
-        options: {
-          config: { plugins: { enabled: false } },
-          managedSkillsDir: path.join(workspace, "managed"),
-          bundledSkillsDir: "",
-          pluginSkillsDir: path.join(workspace, "plugin-links"),
+  const prepared = await prepareSkillSourcePlan(workspace, {
+    config: { plugins: { enabled: false } },
+    managedSkillsDir: path.join(workspace, "managed"),
+    bundledSkillsDir: "",
+    pluginSkillsDir: path.join(workspace, "plugin-links"),
+  });
+  const plan = {
+    input: {
+      ...prepared.input,
+      pluginContributions: [
+        {
+          id: "fixture",
+          origin: "workspace" as const,
+          rootDir: pluginRoot,
+          bundleFormat: "agent" as const,
+          roots: ["skills"],
         },
-        pluginContributions: [
-          {
-            id: "fixture",
-            origin: "workspace" as const,
-            rootDir: pluginRoot,
-            bundleFormat: "agent" as const,
-            roots: ["skills"],
-          },
-        ],
-      },
+      ],
     },
   };
   const names = async () =>
-    (await prepareLocalSkillSources(input, options)).entries.map((entry) => entry.skill.name);
+    (await prepareLocalSkillSources(input, { plan })).entries.map((entry) => entry.skill.name);
   expect(await names()).toContain("first");
   await write("Second", skillRoot, "second");
   expect(await names()).not.toContain("second");

@@ -54,6 +54,10 @@ function remoteFixture() {
   const bin = `bin-${randomUUID()}`;
   return { nodeId, bin, ...workspaceForBin(bin) };
 }
+const probeTimeout = () => ({
+  ok: false as const,
+  error: { code: "TIMEOUT", message: "node invoke timed out" },
+});
 const probe = (
   nodeId: string,
   cfg: Parameters<typeof refreshRemoteNodeBins>[0]["cfg"],
@@ -204,10 +208,7 @@ describe("skills-remote", () => {
           if (failure === "throw") {
             throw new Error("node invoke timed out");
           }
-          return {
-            ok: false,
-            error: { code: "TIMEOUT", message: "node invoke timed out" },
-          };
+          return probeTimeout();
         },
       } as unknown as NodeRegistry);
       recordRemoteMacWithSystemWhich(nodeId);
@@ -234,10 +235,7 @@ describe("skills-remote", () => {
       }),
       invoke: async (params: { command: string }) => {
         invokeCalls.push(params.command);
-        return {
-          ok: true,
-          payloadJSON: JSON.stringify({ bins: [bin] }),
-        };
+        return { ok: true, payloadJSON: JSON.stringify({ bins: [bin] }) };
       },
     } as unknown as NodeRegistry);
     recordMac(nodeId, {
@@ -277,10 +275,7 @@ describe("skills-remote", () => {
       },
       invoke: async (params: { command: string }) => {
         invokeCalls.push(params.command);
-        return {
-          ok: true,
-          payloadJSON: JSON.stringify({ bins: [bin] }),
-        };
+        return { ok: true, payloadJSON: JSON.stringify({ bins: [bin] }) };
       },
     } as unknown as NodeRegistry);
     recordRemoteNodeInfo(testRemoteSession(nodeId, { connId, displayName: "Remote Mac" }));
@@ -307,7 +302,7 @@ describe("skills-remote", () => {
     const invoke = vi.fn(async () => {
       probeStarted.resolve();
       await releaseProbe.promise;
-      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+      return probeTimeout();
     });
     try {
       setTestSkillsRemoteRegistry(nodeId, {
@@ -373,10 +368,7 @@ describe("skills-remote", () => {
     const { cfg } = workspaceForBin(firstBin);
     const { cfg: changedCfg } = workspaceForBin(secondBin);
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
-    const invoke = vi.fn(async () => ({
-      ok: false,
-      error: { code: "TIMEOUT", message: "node invoke timed out" },
-    }));
+    const invoke = vi.fn(async () => probeTimeout());
     setTestSkillsRemoteRegistry(nodeId, {
       get: () => testRemoteSession(nodeId),
       invoke,
@@ -528,10 +520,7 @@ describe("skills-remote", () => {
     recordRemoteNodeInfo(testRemoteSession(nodeId, { connId }));
     const reconnectRefresh = refresh();
     const overlappingReconnectRefresh = refresh();
-    firstInvoke.resolve({
-      ok: false,
-      error: { code: "TIMEOUT", message: "node invoke timed out" },
-    });
+    firstInvoke.resolve(probeTimeout());
     await Promise.all([failedRefresh, reconnectRefresh, overlappingReconnectRefresh]);
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
@@ -600,22 +589,15 @@ describe("skills-remote", () => {
     const { nodeId, bin, cfg } = remoteFixture();
     let commands: string[] = [];
     let pairingGeneration = "generation-before-approval";
+    const session = () =>
+      testRemoteSession(nodeId, { connId: "conn-current", pairingGeneration, commands });
     const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
     setTestSkillsRemoteRegistry(nodeId, {
-      get: () =>
-        testRemoteSession(nodeId, {
-          connId: "conn-current",
-          pairingGeneration,
-          commands,
-        }),
+      get: session,
       checkConnectivity: async () => ({ ok: true }),
       invoke,
     } as unknown as NodeRegistry);
-    recordMac(nodeId, {
-      connId: "conn-current",
-      pairingGeneration,
-      commands: [],
-    });
+    recordRemoteNodeInfo(session());
 
     const connectRefresh = probe(nodeId, cfg, {
       commands: [],
@@ -625,11 +607,7 @@ describe("skills-remote", () => {
     expect(invoke).not.toHaveBeenCalled();
     commands = ["system.run", "system.which"];
     pairingGeneration = TEST_PAIRING_GENERATION;
-    recordMac(nodeId, {
-      connId: "conn-current",
-      pairingGeneration,
-      commands,
-    });
+    recordRemoteNodeInfo(session());
     const approvalRefresh = probe(nodeId, cfg, { commands });
 
     await vi.advanceTimersByTimeAsync(1);
@@ -709,10 +687,7 @@ describe("skills-remote", () => {
     const { cfg } = workspaceForBin(bin);
     const staleSession = testRemoteSession(staleNodeId, { connId: "conn-stale" });
     const currentSession = testRemoteSession(currentNodeId, { connId: "conn-current" });
-    const invoke = vi.fn(async () => ({
-      ok: false as const,
-      error: { code: "TIMEOUT", message: "node invoke timed out" },
-    }));
+    const invoke = vi.fn(async () => probeTimeout());
     const listCurrentConnected = vi.fn(async () => [currentSession]);
     setSkillsRemoteRegistry({
       listConnected: () => [staleSession, currentSession],

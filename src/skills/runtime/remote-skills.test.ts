@@ -50,9 +50,7 @@ function localEntry(name: string): SkillEntry {
   };
 }
 
-beforeEach(() => {
-  resetRemoteNodeSkillsForTests();
-});
+beforeEach(resetRemoteNodeSkillsForTests);
 
 afterEach(() => {
   setLoggerOverride(null);
