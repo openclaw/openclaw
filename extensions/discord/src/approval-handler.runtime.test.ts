@@ -1,28 +1,44 @@
 import assert from "node:assert/strict";
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { createChannelApprovalHandlerFromCapability } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import { parseCustomId } from "./internal/components.base.js";
 import { Container } from "./internal/components.message.js";
 
+const handlerContext = {
+  cfg: {},
+  accountId: "main",
+  context: { token: "discord-token", config: {} },
+};
+type ApprovalRequest = Parameters<
+  typeof discordApprovalNativeRuntime.presentation.buildPendingPayload
+>[0]["request"];
+function request<T extends ApprovalRequest["request"]>(id: string, data: T, expiresAtMs = 1_000) {
+  return { id, request: data, createdAtMs: 0, expiresAtMs };
+}
+function approvalAction(
+  approvalKind: "exec" | "plugin",
+  approvalId: string,
+  decision: "allow-once" | "deny",
+  label: string,
+  style: "success" | "danger",
+): ExecApprovalActionDescriptor {
+  return {
+    label,
+    decision,
+    style,
+    command: `/approve ${approvalId} ${decision}`,
+    action: { type: "approval", approvalId, approvalKind, decision },
+  };
+}
+
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
   const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
-    cfg: {} as never,
-    accountId: "main",
-    context: {
-      token: "discord-token",
-      config: {} as never,
-    },
-    request: {
-      id: "approval-1",
-      request: {
-        command: commandText,
-      },
-      createdAtMs: 0,
-      expiresAtMs: 1_000,
-    },
+    ...handlerContext,
+    request: request("approval-1", { command: commandText }),
     approvalKind: "exec",
     nowMs: 0,
     view: {
@@ -34,20 +50,7 @@ async function buildExecApprovalPayloadText(commandText: string): Promise<string
       commandPreview: null,
       expiresAtMs: 1_000,
       metadata: [],
-      actions: [
-        {
-          label: "Allow",
-          decision: "allow-once",
-          style: "success",
-          command: "/approve approval-1 allow-once",
-          action: {
-            type: "approval",
-            approvalId: "approval-1",
-            approvalKind: "exec",
-            decision: "allow-once",
-          },
-        },
-      ],
+      actions: [approvalAction("exec", "approval-1", "allow-once", "Allow", "success")],
     },
   });
   expect(pending.body).not.toHaveProperty("nonce");
@@ -61,21 +64,12 @@ async function buildPluginApprovalPayloadText(params?: {
 }): Promise<string> {
   const expiresAtMs = params?.expiresAtMs ?? 1_000;
   const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
-    cfg: {} as never,
-    accountId: "main",
-    context: {
-      token: "discord-token",
-      config: {} as never,
-    },
-    request: {
-      id: "plain-plugin-id",
-      request: {
-        title: "Install plugin",
-        description: "Approve the requested plugin",
-      },
-      createdAtMs: 0,
+    ...handlerContext,
+    request: request(
+      "plain-plugin-id",
+      { title: "Install plugin", description: "Approve the requested plugin" },
       expiresAtMs,
-    },
+    ),
     approvalKind: "plugin",
     nowMs: 0,
     view: {
@@ -88,20 +82,7 @@ async function buildPluginApprovalPayloadText(params?: {
       pluginId: "example-plugin",
       toolName: "plugin.install",
       metadata: [],
-      actions: [
-        {
-          label: "Deny",
-          decision: "deny",
-          style: "danger",
-          command: "/approve plain-plugin-id deny",
-          action: {
-            type: "approval",
-            approvalId: "plain-plugin-id",
-            approvalKind: "plugin",
-            decision: "deny",
-          },
-        },
-      ],
+      actions: [approvalAction("plugin", "plain-plugin-id", "deny", "Deny", "danger")],
       expiresAtMs,
     },
   } as never);
@@ -127,9 +108,7 @@ describe("discordApprovalNativeRuntime", () => {
       clientDisplayName: "Discord approval test",
       channel: "discord",
       channelLabel: "Discord",
-      cfg: {},
-      accountId: "main",
-      context: { token: "discord-token", config: {} },
+      ...handlerContext,
       nowMs: () => 0,
       capability: {
         nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
@@ -146,19 +125,16 @@ describe("discordApprovalNativeRuntime", () => {
     });
     assert(handler);
     try {
-      await handler.handleRequested({
-        id: "change-1",
-        request: {
+      await handler.handleRequested(
+        request("change-1", {
           title: "Apply proposed change",
           description: "Rewrite the scheduler.",
           command: "rewrite scheduler",
           proposalHash: "hash-1",
           sessionId: "session-1",
           allowedDecisions: ["allow-once", "deny"],
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1_000,
-      });
+        }),
+      );
       expect(buildPendingPayload).toHaveBeenCalledOnce();
       const pending = await buildPendingPayload.mock.results[0]?.value;
       const customIds: string[] = [];
@@ -243,9 +219,7 @@ describe("discordApprovalNativeRuntime", () => {
           : {}),
       };
       const args = {
-        cfg: {} as never,
-        accountId: "main",
-        context: { token: "discord-token", config: {} as never },
+        ...handlerContext,
         view,
       };
       const result =
@@ -253,37 +227,23 @@ describe("discordApprovalNativeRuntime", () => {
           ? await discordApprovalNativeRuntime.presentation.buildResolvedResult(args as never)
           : await discordApprovalNativeRuntime.presentation.buildExpiredResult(args as never);
 
-      expect(result.kind).toBe("update");
-      if (result.kind !== "update") {
-        return;
-      }
+      assert(result.kind === "update");
       assert(result.payload instanceof Container);
       const container = result.payload.serialize();
       expect(container).toMatchObject({
         accent_color: scenario.accentColor,
-        components: expect.arrayContaining([
-          {
-            content: `## ${systemAgent ? "OpenClaw Change" : "Exec"} Approval: ${scenario.label}`,
-            type: 10,
-          },
-          {
-            content: `### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${"x".repeat(commandLimit)}...\n\`\`\``,
-            type: 10,
-          },
-          {
-            content: `### Shell Preview\n\`\`\`\n${"y".repeat(secondaryLimit)}...\n\`\`\``,
-            type: 10,
-          },
-          { content: "- agent: crew", type: 10 },
-          { content: "-# ID: approval\\-\\<@123\\>", type: 10 },
-          {
-            content:
-              scenario.phase === "resolved"
-                ? "Resolved by \\<@456\\>"
-                : "This approval request has expired.",
-            type: 10,
-          },
-        ]),
+        components: expect.arrayContaining(
+          [
+            `## ${systemAgent ? "OpenClaw Change" : "Exec"} Approval: ${scenario.label}`,
+            `### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${"x".repeat(commandLimit)}...\n\`\`\``,
+            `### Shell Preview\n\`\`\`\n${"y".repeat(secondaryLimit)}...\n\`\`\``,
+            "- agent: crew",
+            "-# ID: approval\\-\\<@123\\>",
+            scenario.phase === "resolved"
+              ? "Resolved by \\<@456\\>"
+              : "This approval request has expired.",
+          ].map((content) => ({ content, type: 10 })),
+        ),
       });
       expect(JSON.stringify(container)).not.toContain("custom_id");
     },
@@ -298,12 +258,7 @@ describe("discordApprovalNativeRuntime", () => {
 
   it("routes origin approval updates to the Discord thread channel when threadId is present", async () => {
     const prepared = await discordApprovalNativeRuntime.transport.prepareTarget({
-      cfg: {} as never,
-      accountId: "main",
-      context: {
-        token: "discord-token",
-        config: {} as never,
-      },
+      ...handlerContext,
       plannedTarget: {
         surface: "origin",
         reason: "preferred",
@@ -312,14 +267,7 @@ describe("discordApprovalNativeRuntime", () => {
           threadId: "777888999",
         },
       },
-      request: {
-        id: "req-1",
-        request: {
-          command: "hostname",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1_000,
-      },
+      request: request("req-1", { command: "hostname" }),
       approvalKind: "exec",
       view: {} as never,
       pendingPayload: {} as never,

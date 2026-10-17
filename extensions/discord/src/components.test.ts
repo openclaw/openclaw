@@ -1,4 +1,4 @@
-// Discord tests cover components plugin behavior.
+import assert from "node:assert/strict";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,33 @@ const { clearRuntime: clearDiscordRuntime } = createPluginRuntimeStore<DiscordRu
   errorMessage: "Discord runtime not initialized",
 });
 
+function requireSpec(raw: Parameters<typeof readDiscordComponentSpec>[0]) {
+  const spec = readDiscordComponentSpec(raw);
+  assert(spec, "Expected component spec to be parsed");
+  return spec;
+}
+
+const modalSpec = (field: Record<string, unknown>) => ({
+  modal: { title: "Details", fields: [field] },
+});
+const selectSpec = (limits: Record<string, number>) => ({
+  blocks: [
+    {
+      type: "actions",
+      select: { type: "string", ...limits, options: [{ label: "One", value: "one" }] },
+    },
+  ],
+});
+function expectInvalidModal(field: Record<string, unknown>, property: string) {
+  expect(() => readDiscordComponentSpec(modalSpec(field))).toThrow(
+    `components.modal.fields[0].${property}`,
+  );
+}
+const linkAccessory = {
+  type: "button",
+  button: { label: " Read ", style: "link", url: "https://example.com" },
+};
+
 describe("discord components", () => {
   it("round-trips custom id values that contain separators", () => {
     const componentId = "button=a;two space%3B";
@@ -55,7 +82,7 @@ describe("discord components", () => {
   });
 
   it("builds v2 containers with modal trigger", () => {
-    const spec = readDiscordComponentSpec({
+    const spec = requireSpec({
       text: "Choose a path",
       blocks: [
         {
@@ -70,10 +97,6 @@ describe("discord components", () => {
         fields: [{ type: "text", label: "Requester" }],
       },
     });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
     const result = buildDiscordComponentMessage({ spec });
     expect(result.components).toHaveLength(1);
     expect(result.components[0]?.isV2).toBe(true);
@@ -95,14 +118,10 @@ describe("discord components", () => {
     { label: "fractional", accentColor: 1.5, expected: undefined },
     { label: "above maximum", accentColor: 0x1000000, expected: undefined },
   ])("serializes $label numeric container accent colors safely", ({ accentColor, expected }) => {
-    const spec = readDiscordComponentSpec({
+    const spec = requireSpec({
       text: "Status",
       container: { accentColor },
     });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
     const serialized = buildDiscordComponentMessage({ spec }).components[0]?.serialize() as
       | { accent_color?: unknown }
       | undefined;
@@ -115,7 +134,7 @@ describe("discord components", () => {
   });
 
   it("serializes disabled link buttons", () => {
-    const spec = readDiscordComponentSpec({
+    const spec = requireSpec({
       blocks: [
         {
           type: "actions",
@@ -130,10 +149,6 @@ describe("discord components", () => {
         },
       ],
     });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
     const result = buildDiscordComponentMessage({ spec });
     const serialized = result.components[0]?.serialize() as
       | { components?: Array<{ components?: Array<Record<string, unknown>> }> }
@@ -151,102 +166,31 @@ describe("discord components", () => {
 
   it("requires options for modal select fields", () => {
     expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [{ type: "select", label: "Priority" }],
-        },
-      }),
+      readDiscordComponentSpec(modalSpec({ type: "select", label: "Priority" })),
     ).toThrow("options");
   });
 
   it("rejects malformed component count and length limits", () => {
-    expect(() =>
-      readDiscordComponentSpec({
-        blocks: [
-          {
-            type: "actions",
-            select: {
-              type: "string",
-              minValues: -1,
-              options: [{ label: "One", value: "one" }],
-            },
-          },
-        ],
-      }),
-    ).toThrow("components.blocks[0].select.minValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [{ type: "text", label: "Name", maxLength: 0 }],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].maxLength");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [
-            {
-              type: "select",
-              label: "Priority",
-              minValues: 0,
-              options: [{ label: "High", value: "high" }],
-            },
-          ],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].minValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [
-            {
-              type: "checkbox",
-              label: "Choices",
-              maxValues: 25,
-              options: [{ label: "One", value: "one" }],
-            },
-          ],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].maxValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        blocks: [
-          {
-            type: "actions",
-            select: {
-              type: "string",
-              maxValues: 0,
-              options: [{ label: "One", value: "one" }],
-            },
-          },
-        ],
-      }),
-    ).toThrow("components.blocks[0].select.maxValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [
-            {
-              type: "radio",
-              label: "Choice",
-              minValues: 1,
-              options: [{ label: "One", value: "one" }],
-            },
-          ],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].minValues/maxValues");
+    const invalid = (raw: Parameters<typeof readDiscordComponentSpec>[0], error: string) =>
+      expect(() => readDiscordComponentSpec(raw)).toThrow(error);
+    const options = [{ label: "One", value: "one" }];
+    invalid(selectSpec({ minValues: -1 }), "components.blocks[0].select.minValues");
+    expectInvalidModal({ type: "text", label: "Name", maxLength: 0 }, "maxLength");
+    expectInvalidModal(
+      {
+        type: "select",
+        label: "Priority",
+        minValues: 0,
+        options: [{ label: "High", value: "high" }],
+      },
+      "minValues",
+    );
+    expectInvalidModal({ type: "checkbox", label: "Choices", maxValues: 25, options }, "maxValues");
+    invalid(selectSpec({ maxValues: 0 }), "components.blocks[0].select.maxValues");
+    expectInvalidModal(
+      { type: "radio", label: "Choice", minValues: 1, options },
+      "minValues/maxValues",
+    );
   });
 
   it.each([
@@ -267,10 +211,7 @@ describe("discord components", () => {
           {
             type: "section",
             text: "    body  ",
-            accessory: {
-              type: "button",
-              button: { label: " Read ", style: "link", url: "https://example.com" },
-            },
+            accessory: linkAccessory,
           },
         ],
       },
@@ -289,10 +230,7 @@ describe("discord components", () => {
           {
             type: "section",
             texts: ["    first  ", "    second  "],
-            accessory: {
-              type: "button",
-              button: { label: " Read ", style: "link", url: "https://example.com" },
-            },
+            accessory: linkAccessory,
           },
         ],
       },
@@ -308,10 +246,7 @@ describe("discord components", () => {
       ],
     },
   ])("preserves $label whitespace through parsing and serialization", ({ raw, expected }) => {
-    const spec = readDiscordComponentSpec(raw);
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
+    const spec = requireSpec(raw);
     expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
       type: 17,
       components: expected,
@@ -415,7 +350,7 @@ describe("discord component registry", () => {
         callbackData: "refresh",
         ...(buttonReusable === undefined ? {} : { reusable: buttonReusable }),
       };
-      const spec = readDiscordComponentSpec({
+      const spec = requireSpec({
         ...(cardReusable === undefined ? {} : { reusable: cardReusable }),
         blocks: [
           placement === "row"
@@ -423,10 +358,6 @@ describe("discord component registry", () => {
             : { type: "section", text: "Actions", accessory: { type: "button", button } },
         ],
       });
-      if (!spec) {
-        throw new Error("Expected component spec to be parsed");
-      }
-
       const requests: Array<{ method: string | undefined; path: string; body: unknown }> = [];
       const rest = new RequestClient("fixture-token", {
         queueRequests: false,
@@ -465,13 +396,9 @@ describe("discord component registry", () => {
       };
       const block = sentBody.components?.[0]?.components?.[0];
       const customId = block?.components?.[0]?.custom_id ?? block?.accessory?.custom_id;
-      if (!customId) {
-        throw new Error("Expected a delivered Discord button custom id");
-      }
+      assert(customId, "Expected a delivered Discord button custom id");
       const componentId = parseDiscordComponentCustomId(customId)?.componentId;
-      if (!componentId) {
-        throw new Error("Expected a registered Discord component id");
-      }
+      assert(componentId, "Expected a registered Discord component id");
 
       const registered = await resolveDiscordComponentEntryWithPersistence({
         id: componentId,
@@ -554,21 +481,19 @@ describe("discord component registry", () => {
     const { componentStore, modalStore, openKeyedStore } = installPersistentRegistryStores();
     const { register: componentRegister, lookup: componentLookup } = componentStore;
     const { register: modalRegister, lookup: modalLookup } = modalStore;
-    componentLookup.mockResolvedValue({
-      version: 1,
-      entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
-    });
-    modalLookup.mockResolvedValue({
-      version: 1,
-      entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
-    });
+    const persistedButton = { id: "btn_persisted", kind: "button", label: "Persisted" };
+    const persistedModal = { id: "mdl_persisted", title: "Persisted", fields: [] };
+    componentLookup.mockResolvedValue({ version: 1, entry: persistedButton });
+    modalLookup.mockResolvedValue({ version: 1, entry: persistedModal });
+    const button = { id: "btn_1", kind: "button" as const, label: "Confirm" };
+    const modal = { id: "mdl_1", title: "Details", fields: [] };
 
     const now = 1_700_000_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       await registerDiscordComponentEntries({
-        entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
-        modals: [{ id: "mdl_1", title: "Details", fields: [] }],
+        entries: [button],
+        modals: [modal],
         ttlMs: 1000,
       });
     } finally {
@@ -576,42 +501,28 @@ describe("discord component registry", () => {
     }
 
     expect(componentRegister).toHaveBeenCalledTimes(1);
-    expect(componentRegister).toHaveBeenCalledWith(
-      "btn_1",
-      {
-        version: 1,
-        entry: {
-          id: "btn_1",
-          kind: "button",
-          label: "Confirm",
-          createdAt: now,
-          expiresAt: now + 1000,
+    const expectRegistration = (
+      register: typeof componentRegister,
+      entry: DiscordComponentEntry | DiscordModalEntry,
+    ) =>
+      expect(register).toHaveBeenCalledWith(
+        entry.id,
+        {
+          version: 1,
+          entry: { ...entry, createdAt: now, expiresAt: now + 1000 },
         },
-      },
-      { ttlMs: 1000 },
-    );
-    expect(modalRegister).toHaveBeenCalledWith(
-      "mdl_1",
-      {
-        version: 1,
-        entry: {
-          id: "mdl_1",
-          title: "Details",
-          fields: [],
-          createdAt: now,
-          expiresAt: now + 1000,
-        },
-      },
-      { ttlMs: 1000 },
-    );
+        { ttlMs: 1000 },
+      );
+    expectRegistration(componentRegister, button);
+    expectRegistration(modalRegister, modal);
 
     clearDiscordComponentEntriesForTest();
     await expect(
       resolveDiscordComponentEntryWithPersistence({ id: "btn_persisted", consume: false }),
-    ).resolves.toStrictEqual({ id: "btn_persisted", kind: "button", label: "Persisted" });
+    ).resolves.toStrictEqual(persistedButton);
     await expect(
       resolveDiscordModalEntryWithPersistence({ id: "mdl_persisted", consume: false }),
-    ).resolves.toStrictEqual({ id: "mdl_persisted", title: "Persisted", fields: [] });
+    ).resolves.toStrictEqual(persistedModal);
     expect(componentLookup).toHaveBeenCalledWith("btn_persisted");
     expect(modalLookup).toHaveBeenCalledWith("mdl_persisted");
     expect(openKeyedStore).toHaveBeenCalledTimes(4);
@@ -685,18 +596,19 @@ describe("discord component registry", () => {
 
   it("deletes sibling persistent component entries when a group entry is consumed", async () => {
     const componentDelete = vi.fn().mockResolvedValue(true);
+    const entry = {
+      id: "btn_confirm",
+      kind: "button",
+      label: "Confirm",
+      consumptionGroupId: "grp_1",
+      consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
+    };
     const componentStore = {
       register: vi.fn(),
       lookup: vi.fn(),
       consume: vi.fn().mockResolvedValue({
         version: 1,
-        entry: {
-          id: "btn_confirm",
-          kind: "button",
-          label: "Confirm",
-          consumptionGroupId: "grp_1",
-          consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
-        },
+        entry,
       }),
       delete: componentDelete,
     };
@@ -717,13 +629,7 @@ describe("discord component registry", () => {
     clearDiscordComponentEntriesForTest();
     await expect(
       resolveDiscordComponentEntryWithPersistence({ id: "btn_confirm" }),
-    ).resolves.toStrictEqual({
-      id: "btn_confirm",
-      kind: "button",
-      label: "Confirm",
-      consumptionGroupId: "grp_1",
-      consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
-    });
+    ).resolves.toStrictEqual(entry);
 
     await vi.waitFor(() => expect(componentDelete).toHaveBeenCalledWith("btn_cancel"));
     expect(componentDelete).toHaveBeenCalledWith("btn_confirm");

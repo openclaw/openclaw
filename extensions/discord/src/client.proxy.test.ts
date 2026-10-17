@@ -1,12 +1,19 @@
 import http from "node:http";
 import net from "node:net";
 import type { Duplex } from "node:stream";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscordRestClient } from "./client.js";
 import { RequestClient } from "./internal/rest.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
+function restForProxy(proxy?: string) {
+  return createDiscordRestClient({
+    cfg: {
+      channels: { discord: { token: "Bot test-token", ...(proxy === undefined ? {} : { proxy }) } },
+    },
+  }).rest;
+}
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
     "openclaw/plugin-sdk/fetch-runtime",
@@ -39,10 +46,7 @@ describe("createDiscordRestClient proxy support", () => {
     "http://10.0.0.10:8080",
     "http://[::1]:8080",
   ])("uses the configured proxy fetch for %s", (proxy) => {
-    const cfg: OpenClawConfig = {
-      channels: { discord: { token: "Bot test-token", proxy } },
-    };
-    const { rest } = createDiscordRestClient({ cfg });
+    const rest = restForProxy(proxy);
     const requestClient = rest as unknown as {
       customFetch?: typeof fetch;
       options?: { fetch?: typeof fetch };
@@ -54,51 +58,24 @@ describe("createDiscordRestClient proxy support", () => {
   });
 
   it("does not inject fetch when no proxy is configured", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(requestClient.options?.fetch).toBeUndefined();
+    expect(restForProxy().options.fetch).toBeUndefined();
   });
 
   it("falls back to direct fetch when the Discord proxy URL is invalid", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "bad-proxy",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
+    const rest = restForProxy("bad-proxy");
     expect(makeProxyFetchMock).not.toHaveBeenCalledWith("bad-proxy");
-    expect(requestClient.options?.fetch).toBeUndefined();
+    expect(rest.options.fetch).toBeUndefined();
   });
 
   it("serializes multipart media with undici-compatible FormData for proxy fetches", async () => {
-    let resolveReceived!: (value: { contentType: string | undefined; body: string }) => void;
-    let rejectReceived!: (reason?: unknown) => void;
-    const receivedPromise = new Promise<{
+    const {
+      promise: receivedPromise,
+      resolve: resolveReceived,
+      reject: rejectReceived,
+    } = createDeferred<{
       contentType: string | undefined;
       body: string;
-    }>((resolve, reject) => {
-      resolveReceived = resolve;
-      rejectReceived = reject;
-    });
+    }>();
     const target = http.createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -143,18 +120,7 @@ describe("createDiscordRestClient proxy support", () => {
     try {
       const targetPort = await listenOnLoopback(target, "target");
       const proxyPort = await listenOnLoopback(proxy, "proxy");
-      const cfg = {
-        channels: {
-          discord: {
-            token: "Bot test-token",
-            proxy: `http://127.0.0.1:${proxyPort}`,
-          },
-        },
-      } as OpenClawConfig;
-      const proxyRest = createDiscordRestClient({ cfg }).rest as unknown as {
-        options?: { fetch?: typeof fetch };
-      };
-      const proxyFetch = proxyRest.options?.fetch;
+      const proxyFetch = restForProxy(`http://127.0.0.1:${proxyPort}`).options.fetch;
       if (!proxyFetch) {
         throw new Error("expected Discord proxy fetch");
       }

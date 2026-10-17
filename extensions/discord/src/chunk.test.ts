@@ -42,24 +42,21 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
-  it.each([{ ending: "closed", suffix: "\n```\n\nDone." }])(
-    "keeps $ending fenced code blocks balanced across chunks",
-    ({ suffix }) => {
-      const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
-      const text = `Here is code:\n\n\`\`\`js\n${body}${suffix}`;
+  it("keeps closed fenced code blocks balanced across chunks", () => {
+    const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
+    const text = `Here is code:\n\n\`\`\`js\n${body}\n\`\`\`\n\nDone.`;
 
-      const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 10 });
-      expect(chunks.length).toBeGreaterThan(1);
+    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 10 });
+    expect(chunks.length).toBeGreaterThan(1);
 
-      for (const chunk of chunks) {
-        expect(hasBalancedFences(chunk)).toBe(true);
-        expect(chunk.length).toBeLessThanOrEqual(2000);
-      }
+    for (const chunk of chunks) {
+      expect(hasBalancedFences(chunk)).toBe(true);
+      expect(chunk.length).toBeLessThanOrEqual(2000);
+    }
 
-      expect(chunks[0]).toContain("```js");
-      expect(chunks.at(-1)).toContain(suffix ? "Done." : "console.log(29);");
-    },
-  );
+    expect(chunks[0]).toContain("```js");
+    expect(chunks.at(-1)).toContain("Done.");
+  });
 
   it("uses default newline chunk limits for non-finite max chars", () => {
     const text = "x".repeat(2500);
@@ -127,13 +124,13 @@ describe("chunkDiscordText", () => {
     expect(chunks[0]).not.toContain("\u200D");
   });
 
-  it.each([1])("never exceeds a %i-character reasoning chunk limit", (maxChars) => {
+  it("never exceeds a 1-character reasoning chunk limit", () => {
     const text = `Reasoning:\n_${"abcdef".repeat(8)}_`;
 
-    const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
+    const chunks = chunkDiscordText(text, { maxChars: 1, maxLines: 50 });
 
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 1)).toBe(true);
   });
 
   it.each([
@@ -185,17 +182,12 @@ function inlineCodeValue(text: string): string | undefined {
 }
 
 describe("Discord inline-code chunk boundaries", () => {
-  it.each([
-    {
-      name: "newline mode",
-      text: "`command " + "--argument=value ".repeat(160) + "`",
-      maxChars: 2000,
-      maxLines: 17,
-      chunkMode: "newline" as const,
-    },
-  ])("preserves code content across $name", ({ text, maxChars, maxLines, chunkMode }) => {
+  it("preserves code content across newline mode", () => {
+    const text = "`command " + "--argument=value ".repeat(160) + "`";
+    const maxChars = 2000;
+    const maxLines = 17;
     const expected = inlineCodeValue(text);
-    const chunks = chunkDiscordTextWithMode(text, { maxChars, maxLines, chunkMode });
+    const chunks = chunkDiscordTextWithMode(text, { maxChars, maxLines, chunkMode: "newline" });
     const values = chunks.map(inlineCodeValue);
     expect(expected).toBeDefined();
     expect(chunks.length).toBeGreaterThan(1);
@@ -240,7 +232,8 @@ describe("Discord inline-code chunk boundaries", () => {
     expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
     expect(chunks.join("")).toBe(source);
   });
-  it.each(["> - item\n>\n>   "])("retains inline ownership after container prefix %j", (prefix) => {
+  it("retains inline ownership after blockquote list prefixes", () => {
+    const prefix = "> - item\n>\n>   ";
     for (const ending of ["\n", "\r\n"]) {
       const source =
         "Intro" + ending + prefix.replaceAll("\n", ending) + "`" + "a".repeat(2400) + "`";
