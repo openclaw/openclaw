@@ -22,6 +22,10 @@ function inspect(extra: Record<string, string>, source = legacy) {
   );
 }
 
+function inspectKernel(extra: Record<string, string>) {
+  return inspect({ [kernelFile]: kernel, ...extra });
+}
+
 it("retains deprecated-only operations through pure reexports and type-only references", () => {
   const result = inspect({
     "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
@@ -161,8 +165,7 @@ it.each([
   ["direct call", "service.listLinks();"],
   ["escaped member", "register(service.listLinks);"],
 ])("rejects a bundled %s to a reviewed deprecated member", (_label, use) => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver,
     "src/consumer.ts": `import { createModelAccountConnectService } from './gateway/model-account-connect.js';
       const service = createModelAccountConnectService(); ${use}`,
@@ -173,8 +176,7 @@ it.each([
 });
 
 it("requires the reviewed member itself to remain deprecated", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver.replace("@deprecated", "Legacy:"),
   });
   expect(result.operations.has(kernelFile)).toBe(false);
@@ -184,8 +186,7 @@ it("requires the reviewed member itself to remain deprecated", () => {
 });
 
 it("keeps a local legacy helper live when an async sibling calls it", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver.replace(
       "async listLinksAsync() { return executeSqliteQuerySync(query); }",
       "async listLinksAsync() { return readLegacy(); }",
@@ -198,8 +199,7 @@ it("keeps a local legacy helper live when an async sibling calls it", () => {
 });
 
 it("isolates reviewed members when a legacy wrapper and live factory share their receiver", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver,
     [secondFile]: `
       import { createModelAccountConnectService } from '../gateway/model-account-connect.js';
@@ -235,8 +235,7 @@ const bindingService = `
 `;
 
 it("isolates a typed singleton's deprecated member while its async API stays live", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [bindingServiceFile]: bindingService,
     "src/consumer.ts": `
       import { getService } from './infra/outbound/session-binding-service.js';
@@ -279,8 +278,7 @@ it.each([
   ["runtime contract", "runtime.openSyncKeyedStore<number>()"],
 ])("guards every legacy store member through the %s", (_label, factory) => {
   for (const escape of [false, true]) {
-    const result = inspect({
-      [kernelFile]: kernel,
+    const result = inspectKernel({
       [pluginStateLegacyFile]: legacyStore,
       "src/consumer.ts": `
         import { createSyncKeyedStore, runtime } from './plugin-state/plugin-state-store.legacy.js';
@@ -299,8 +297,7 @@ it.each([
 });
 
 it("rejects shorthand method escapes from typed receivers and parameters", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [pluginStateLegacyFile]: legacyStore,
     "src/consumer.ts": `
       import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
@@ -317,8 +314,7 @@ it("rejects shorthand method escapes from typed receivers and parameters", () =>
 });
 
 it("keeps scalar authority and unguarded projection reads independent of guarded store members", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [pluginStateLegacyFile]: legacyStore,
     "src/consumer.ts": `
       import { createSyncKeyedStore } from './plugin-state/plugin-state-store.legacy.js';
@@ -336,8 +332,7 @@ it("keeps scalar authority and unguarded projection reads independent of guarded
 });
 
 it("does not trust a same-named deprecated member on another factory", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: `${mixedReceiver}
       export function createOtherService() {
         return {
@@ -453,13 +448,12 @@ it.each([
   ["deprecated callback", "register(() => readKernel())", true],
   ["returned registration", "return register(() => readKernel())", true],
 ])("keeps an escaped %s live", (_label, registration, deprecated) => {
-  const result = inspect({
+  const result = inspectKernel({
     [secondFile]: deprecated
       ? `import { readKernel } from '../session-kernel.js';
       /** @deprecated Use workers. */
       export function ${second}() { ${registration}; }`
       : sharedOwner,
-    [kernelFile]: kernel,
     ...(deprecated
       ? {}
       : {
@@ -477,12 +471,11 @@ it.each([
   ["returned arrow", "() => readKernel()"],
   ["returned function", "function () { return readKernel(); }"],
 ])("proves kernels reached only through a deprecated factory's %s", (_label, value) => {
-  const result = inspect({
+  const result = inspectKernel({
     [secondFile]: `
       import { readKernel } from '../session-kernel.js';
       /** @deprecated Use workers. */
       export function ${second}() { return ${value}; }`,
-    [kernelFile]: kernel,
   });
   expect(result.violations).toEqual([]);
   expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
@@ -519,9 +512,8 @@ it.each([
     `import { ${second} } from './sessions/session-upstream-links.js'; register(${second}());`,
   ],
 ])("keeps a receiver family live after a bundled %s", (_label, consumer) => {
-  const result = inspect({
+  const result = inspectKernel({
     [secondFile]: receiverOwner,
-    [kernelFile]: kernel,
     "src/plugin-sdk/receivers.ts": `export { ${second} as create } from '../sessions/session-upstream-links.js';`,
     "src/consumer.ts": consumer,
   });
@@ -575,21 +567,20 @@ it.each<{ name: string; file: string; sources: Record<string, string> }>([
     },
   },
 ])("keeps the $name live without inventing a factory caller", ({ file, sources }) => {
-  const result = inspect({ ...sources, [kernelFile]: kernel });
+  const result = inspectKernel(sources);
   expect(result.operations.has(kernelFile)).toBe(false);
   expect(result.operations.has(file)).toBe(false);
   expect(result.violations).toEqual([]);
 });
 
 it("proves kernels reached only through a deprecated class receiver", () => {
-  const result = inspect({
+  const result = inspectKernel({
     [secondFile]: `import { readKernel } from '../session-kernel.js';
       /** @deprecated Use workers. */
       export class ${second} {
         constructor() { readKernel(); }
         read() { return readKernel(); }
       }`,
-    [kernelFile]: kernel,
   });
   expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
   expect(result.operations.get(secondFile)?.has(second)).toBe(true);
@@ -600,11 +591,10 @@ it.each([
   ["construction", "new Receiver().read();"],
   ["inheritance", "export class ActiveReceiver extends Receiver {}"],
 ])("rejects bundled %s of a deprecated class receiver", (_label, consumer) => {
-  const result = inspect({
+  const result = inspectKernel({
     [secondFile]: `import { readKernel } from '../session-kernel.js';
       /** @deprecated Use workers. */
       export class ${second} { read() { return readKernel(); } }`,
-    [kernelFile]: kernel,
     "src/consumer.ts": `import { ${second} as Receiver } from './sessions/session-upstream-links.js';
       ${consumer}`,
   });
@@ -625,12 +615,11 @@ it.each([
     "constructor(@decorate value: unknown) {} read() { return readKernel(); }",
   ],
 ])("keeps deprecated classes with %s live", (_label, heritage, member) => {
-  const result = inspect({
+  const result = inspectKernel({
     [secondFile]: `import { readKernel } from '../session-kernel.js';
       class Base {}
       /** @deprecated Use workers. */
       export class ${second} ${heritage} { ${member} }`,
-    [kernelFile]: kernel,
   });
   expect(result.operations.has(kernelFile)).toBe(false);
   expect(result.operations.has(secondFile)).toBe(false);
@@ -638,11 +627,10 @@ it.each([
 });
 
 it("rejects a deprecated factory reached through a live receiver method", () => {
-  const result = inspect({
+  const result = inspectKernel({
     [secondFile]: `import { createReceiver } from '../receiver.js';
       /** @deprecated Use workers. */
       export function ${second}() { return createReceiver(); }`,
-    [kernelFile]: kernel,
     "src/receiver.ts": `import { readKernel } from './session-kernel.js';
       import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js';
       export function createReceiver() {

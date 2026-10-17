@@ -185,6 +185,21 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
+function fixture(subdirectory = "") {
+  const app = makeValidApp();
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+  tempDirs.push(root);
+  const outputDir = path.join(root, subdirectory);
+  const output = path.join(outputDir, "OpenClaw.dmg");
+  const tools = makeFakeDmgTools();
+  return {
+    outputDir,
+    output,
+    tools,
+    run: (env: NodeJS.ProcessEnv = {}) => runScript([app, output], { ...tools.env, ...env }),
+  };
+}
+
 function expectPrivateDmgMount(log: string): string {
   const attach = log.match(/^attach (.+)\/image-rw\.dmg -mountpoint (.+) -nobrowse$/m);
   const runRoot = attach?.[1];
@@ -262,16 +277,12 @@ describe("create-dmg plist validation", () => {
 
 describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries", () => {
   it("uses private intermediate paths without deleting caller-owned siblings", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
+    const { outputDir, output, tools, run } = fixture();
     const sibling = path.join(outputDir, "OpenClaw-rw.dmg");
     writeFileSync(output, "previous output", "utf8");
     writeFileSync(sibling, "caller owned", "utf8");
-    const tools = makeFakeDmgTools();
 
-    const result = runScript([app, output], tools.env);
+    const result = run();
 
     expect(result.status).toBe(0);
     expect(readFileSync(output, "utf8")).toBe("converted");
@@ -290,14 +301,9 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   });
 
   it("creates a caller-provided output directory before finalizing the DMG", () => {
-    const app = makeValidApp();
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(root);
-    const outputDir = path.join(root, "nested", "artifacts");
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    const tools = makeFakeDmgTools();
+    const { outputDir, output, tools, run } = fixture("nested/artifacts");
 
-    const result = runScript([app, output], tools.env);
+    const result = run();
 
     expect(result.status).toBe(0);
     expect(existsSync(outputDir)).toBe(true);
@@ -306,51 +312,23 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
   });
 
-  it("fails before image creation when Finder layout values are malformed", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    const tools = makeFakeDmgTools();
-
-    const result = runScript([app, output], {
-      ...tools.env,
-      DMG_WINDOW_BOUNDS: "400 nope 900 420",
-    });
-
+  it.each([
+    ["malformed", "400 nope 900 420", "must contain only integer values"],
+    ["multiline", "400 100 900 420\nnope", "must be a single line"],
+  ])("fails before image creation with %s Finder bounds", (_name, bounds, error) => {
+    const { output, tools, run } = fixture();
+    const result = run({ DMG_WINDOW_BOUNDS: bounds });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("DMG_WINDOW_BOUNDS must contain only integer values");
-    expect(existsSync(output)).toBe(false);
-    expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
-  });
-
-  it("fails before image creation when Finder layout values span multiple lines", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    const tools = makeFakeDmgTools();
-
-    const result = runScript([app, output], {
-      ...tools.env,
-      DMG_WINDOW_BOUNDS: "400 100 900 420\nnope",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("DMG_WINDOW_BOUNDS must be a single line");
+    expect(result.stderr).toContain(`DMG_WINDOW_BOUNDS ${error}`);
     expect(existsSync(output)).toBe(false);
     expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
   });
 
   it("preserves an existing output when verification fails", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
+    const { output, tools, run } = fixture();
     writeFileSync(output, "previous output", "utf8");
-    const tools = makeFakeDmgTools();
 
-    const result = runScript([app, output], { ...tools.env, HDIUTIL_FAIL_ON: "verify" });
+    const result = run({ HDIUTIL_FAIL_ON: "verify" });
 
     expect(result.status).not.toBe(0);
     expect(readFileSync(output, "utf8")).toBe("previous output");
@@ -360,14 +338,9 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   });
 
   it("fails before resize and conversion when its private mount cannot detach", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    const tools = makeFakeDmgTools();
+    const { tools, run } = fixture();
 
-    const result = runScript([app, output], {
-      ...tools.env,
+    const result = run({
       HDIUTIL_ATTACH_MARKER: "1",
       HDIUTIL_DETACH_FAIL: "1",
     });
@@ -391,14 +364,9 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   it.each([false, true])(
     "detaches an RW image that a failed attach left without a mount (detach fails: %s)",
     (detachFails) => {
-      const app = makeValidApp();
-      const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-      tempDirs.push(outputDir);
-      const output = path.join(outputDir, "OpenClaw.dmg");
-      const tools = makeFakeDmgTools();
+      const { output, tools, run } = fixture();
 
-      const result = runScript([app, output], {
-        ...tools.env,
+      const result = run({
         HDIUTIL_ATTACH_EAGAIN: "1",
         HDIUTIL_DETACH_FAIL: detachFails ? "1" : "0",
       });
@@ -443,14 +411,9 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   ])(
     "treats a busy volume that vanished at detach attempt $vanishAt as detached",
     ({ vanishAt, detaches, forced }) => {
-      const app = makeValidApp();
-      const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-      tempDirs.push(outputDir);
-      const output = path.join(outputDir, "OpenClaw.dmg");
-      const tools = makeFakeDmgTools();
+      const { output, tools, run } = fixture();
 
-      const result = runScript([app, output], {
-        ...tools.env,
+      const result = run({
         HDIUTIL_DETACH_FAIL_COUNT: "9",
         HDIUTIL_DETACH_VANISH_AT: String(vanishAt),
       });
@@ -473,14 +436,9 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   );
 
   it.each([6, 9])("retries %i failed DMG detaches before finalizing the artifact", (failures) => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    const tools = makeFakeDmgTools();
+    const { output, tools, run } = fixture();
 
-    const result = runScript([app, output], {
-      ...tools.env,
+    const result = run({
       HDIUTIL_DETACH_FAIL_COUNT: String(failures),
     });
 
@@ -501,13 +459,9 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   });
 
   it("styles the private mount without closing unrelated Finder windows", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    const tools = makeFakeDmgTools();
+    const { tools, run } = fixture();
 
-    const result = runScript([app, output], { ...tools.env, SKIP_DMG_STYLE: "0" });
+    const result = run({ SKIP_DMG_STYLE: "0" });
 
     expect(result.status).toBe(0);
     const applescript = readFileSync(tools.osascriptLog, "utf8");

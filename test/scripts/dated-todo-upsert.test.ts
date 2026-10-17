@@ -5,25 +5,20 @@ import {
 } from "../../scripts/github/dated-todo-upsert.mjs";
 
 const MARKER = "<!-- dated-todo-sweep -->";
+const TODO_ITEM = "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)";
 const REPORT = [
   "# Dated TODO sweep",
-  "",
   "Generated for 2026-07-25 UTC.",
-  "",
   "## OVERDUE",
-  "",
-  "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-  "",
+  TODO_ITEM,
   "## DUE within 30 days",
-  "",
   "_None._",
-  "",
   "## FUTURE",
-  "",
   "_None._",
-  "",
   "Dropped as noise: 2",
-].join("\n");
+].join("\n\n");
+
+const EMPTY_TRACKER = `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`;
 
 function issue(number: number, options: { trusted: boolean; body?: string }) {
   return {
@@ -34,6 +29,8 @@ function issue(number: number, options: { trusted: boolean; body?: string }) {
     labels: options.trusted ? [{ name: "dated-todo-sweep" }] : [],
   };
 }
+
+const emptyTracker = () => issue(10, { trusted: true, body: EMPTY_TRACKER });
 
 function harness(
   searchItems: ReturnType<typeof issue>[],
@@ -95,24 +92,35 @@ function harness(
     info: () => {},
     warning: (message: string) => calls.warnings.push(message),
   };
-  return { calls, core, github };
+  const run = () =>
+    runDatedTodoUpsert({
+      github,
+      core,
+      context: { repo: { owner: "openclaw", repo: "openclaw" } },
+      report: REPORT,
+    });
+  return { calls, run };
+}
+
+async function notificationRetry(appId?: number) {
+  const tracker = emptyTracker();
+  const first = harness([tracker]);
+  await first.run();
+  const { body } = first.calls.comment[0] as { body: string };
+  return harness([tracker], {
+    comments: [
+      { body, ...(appId === undefined ? {} : { performed_via_github_app: { id: appId } }) },
+    ],
+  });
 }
 
 describe("dated TODO issue upsert", () => {
   it("ignores a public marker spoof and updates only the bot-and-label tracker", async () => {
     const spoof = issue(99, { trusted: false });
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const { calls, core, github } = harness([spoof, tracker]);
+    const tracker = emptyTracker();
+    const { calls, run } = harness([spoof, tracker]);
 
-    await runDatedTodoUpsert({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      report: REPORT,
-    });
+    await run();
 
     expect(calls.create).toHaveLength(0);
     expect(calls.update).toEqual([
@@ -130,104 +138,46 @@ describe("dated TODO issue upsert", () => {
 
   it("updates the canonical tracker when diagnostics-only search fails", async () => {
     const tracker = issue(10, { trusted: true });
-    const { calls, core, github } = harness([tracker], {
+    const { calls, run } = harness([tracker], {
       searchError: new Error("secondary rate limit"),
     });
 
-    await runDatedTodoUpsert({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      report: REPORT,
-    });
+    await run();
 
     expect(calls.update).toEqual([expect.objectContaining({ issue_number: tracker.number })]);
     expect(calls.warnings).toEqual([expect.stringContaining("Skipping diagnostics-only")]);
   });
 
   it("does not advance the issue body when an urgent notification fails", async () => {
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const { calls, core, github } = harness([tracker], {
+    const tracker = emptyTracker();
+    const { calls, run } = harness([tracker], {
       commentError: new Error("comment failed"),
     });
 
-    await expect(
-      runDatedTodoUpsert({
-        github,
-        context: { repo: { owner: "openclaw", repo: "openclaw" } },
-        core,
-        report: REPORT,
-      }),
-    ).rejects.toThrow("comment failed");
+    await expect(run()).rejects.toThrow("comment failed");
 
     expect(calls.update).toHaveLength(0);
   });
 
   it("does not duplicate an urgent comment when retrying a failed body update", async () => {
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const first = harness([tracker]);
-    await runDatedTodoUpsert({
-      github: first.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: first.core,
-      report: REPORT,
-    });
-    const firstComment = first.calls.comment[0] as { body: string };
-    const retry = harness([tracker], {
-      comments: [{ body: firstComment.body, performed_via_github_app: { id: 2729701 } }],
-    });
-
-    await runDatedTodoUpsert({
-      github: retry.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: retry.core,
-      report: REPORT,
-    });
+    const retry = await notificationRetry(2729701);
+    await retry.run();
 
     expect(retry.calls.comment).toHaveLength(0);
     expect(retry.calls.update).toHaveLength(1);
   });
 
   it("ignores a notification marker copied by an ordinary commenter", async () => {
-    const tracker = issue(10, {
-      trusted: true,
-      body: `${MARKER}\n\n## OVERDUE\n\n## DUE within 30 days\n\n## FUTURE\n`,
-    });
-    const first = harness([tracker]);
-    await runDatedTodoUpsert({
-      github: first.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: first.core,
-      report: REPORT,
-    });
-    const firstComment = first.calls.comment[0] as { body: string };
-    const spoofed = harness([tracker], { comments: [{ body: firstComment.body }] });
-
-    await runDatedTodoUpsert({
-      github: spoofed.github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core: spoofed.core,
-      report: REPORT,
-    });
+    const spoofed = await notificationRetry();
+    await spoofed.run();
 
     expect(spoofed.calls.comment).toHaveLength(1);
   });
 
   it("creates a labeled tracker instead of overwriting an untrusted marker issue", async () => {
-    const { calls, core, github } = harness([issue(99, { trusted: false })]);
+    const { calls, run } = harness([issue(99, { trusted: false })]);
 
-    await runDatedTodoUpsert({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      report: REPORT,
-    });
+    await run();
 
     expect(calls.update).toHaveLength(0);
     expect(calls.create).toEqual([
@@ -237,17 +187,11 @@ describe("dated TODO issue upsert", () => {
 });
 
 describe("dated TODO report validation", () => {
+  const validateItem = (item: string) => validateDatedTodoReport(REPORT.replace(TODO_ITEM, item));
   it.each([["invalid date", "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-99-01)"]])(
     "rejects a malformed %s",
     (_name, malformed) => {
-      expect(() =>
-        validateDatedTodoReport(
-          REPORT.replace(
-            "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-            malformed,
-          ),
-        ),
-      ).toThrow(/Invalid dated TODO checklist item/u);
+      expect(() => validateItem(malformed)).toThrow(/Invalid dated TODO checklist item/u);
     },
   );
 
@@ -294,12 +238,7 @@ describe("dated TODO report validation", () => {
     ["URL", "- [ ] src/urgent.ts:7 — see https://example.com (2026-07-01)"],
     ["GH reference", "- [ ] src/urgent.ts:7 — follow up in GH-123 (2026-07-01)"],
   ])("rejects non-plain-text summaries containing a %s", (_name, item) => {
-    const report = REPORT.replace(
-      "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-      item,
-    );
-
-    expect(() => validateDatedTodoReport(report)).toThrow(/Non-plain-text summary/u);
+    expect(() => validateItem(item)).toThrow(/Non-plain-text summary/u);
   });
 
   it("allows underscores only inside plain identifiers", () => {

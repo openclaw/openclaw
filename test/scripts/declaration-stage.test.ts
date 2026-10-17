@@ -27,28 +27,38 @@ function fixture() {
     ],
     options: { stdio: ["ignore", "pipe", "pipe"], shell: false, env: process.env },
   });
-  return { staging, dist, invocation };
+  const publish = (
+    invocations: NonNullable<Parameters<typeof publishStagedDeclarations>[0]>["invocations"],
+    required = ["plugin-sdk/core.d.ts"],
+    sources: Parameters<typeof publishStagedDeclarations>[1] = [],
+    seal?: () => void,
+    concurrency: 1 | 2 = 1,
+    previous = ["plugin-sdk/obsolete.d.ts"],
+  ) =>
+    publishStagedDeclarations(
+      { env: process.env, maxOldSpaceMb: 8192, heapShortfall: null, invocations },
+      sources,
+      staging,
+      dist,
+      required,
+      previous,
+      seal,
+      concurrency,
+    );
+  return { staging, dist, invocation, publish };
 }
 
 describe("canonical declaration stage", () => {
   it("retains a sibling failure and stops queued work when another compiler cannot start", async () => {
-    const { staging, dist, invocation } = fixture();
+    const { staging, dist, invocation, publish } = fixture();
     const missing = invocation({});
     missing.command = path.join(staging, "missing-compiler");
     const failed = invocation({}, 17);
     const seal = vi.fn();
-    const result = await publishStagedDeclarations(
-      {
-        env: process.env,
-        maxOldSpaceMb: 8192,
-        heapShortfall: null,
-        invocations: [missing, failed, invocation({ "queued.d.ts": "export {};" })],
-      },
-      [],
-      staging,
-      dist,
+    const result = await publish(
+      [missing, failed, invocation({ "queued.d.ts": "export {};" })],
       ["plugin-sdk/core.d.ts"],
-      ["plugin-sdk/obsolete.d.ts"],
+      [],
       seal,
       2,
     ).catch((error: unknown) => error);
@@ -67,7 +77,7 @@ describe("canonical declaration stage", () => {
   it.each(["success", "diagnostic"])(
     "joins every private compiler stage before %s publication",
     async (outcome) => {
-      const { staging, dist, invocation } = fixture();
+      const { staging, dist, invocation, publish } = fixture();
       const root = path.dirname(staging);
       const names = outcome === "success" ? ["public", "private", "queued"] : ["public", "private"];
       const sources = names.map((name) => ({
@@ -115,13 +125,10 @@ describe("canonical declaration stage", () => {
         }
         expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
       });
-      const publication = publishStagedDeclarations(
-        { env: process.env, maxOldSpaceMb: 8192, heapShortfall: null, invocations },
-        sources,
-        staging,
-        dist,
+      const publication = publish(
+        invocations,
         sources.flatMap((source) => source.required),
-        ["plugin-sdk/obsolete.d.ts"],
+        sources,
         seal,
         2,
       );
@@ -143,116 +150,60 @@ describe("canonical declaration stage", () => {
     },
   );
 
-  it.each([".d.ts"])(
-    "strips undeclared __exportAll from staged %s declaration exports",
-    async (extension) => {
-      const { staging, dist, invocation } = fixture();
-      await publishStagedDeclarations(
-        {
-          env: process.env,
-          maxOldSpaceMb: 8192,
-          heapShortfall: null,
-          invocations: [
-            invocation({
-              [`plugin-sdk/core${extension}`]:
-                "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
-            }),
-          ],
-        },
-        [],
-        staging,
-        dist,
-        [`plugin-sdk/core${extension}`],
-        ["plugin-sdk/obsolete.d.ts"],
-      );
-      const published = fs.readFileSync(path.join(dist, `plugin-sdk/core${extension}`), "utf8");
-      expect(published).toContain("keep as k");
-      expect(published).not.toContain("__exportAll");
-    },
-  );
+  it("strips undeclared __exportAll from staged declaration exports", async () => {
+    const { dist, invocation, publish } = fixture();
+    await publish([
+      invocation({
+        "plugin-sdk/core.d.ts":
+          "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
+      }),
+    ]);
+    const published = fs.readFileSync(path.join(dist, "plugin-sdk/core.d.ts"), "utf8");
+    expect(published).toContain("keep as k");
+    expect(published).not.toContain("__exportAll");
+  });
 
-  it.each([".d.ts"])(
-    "also strips undeclared __exportAll left in live dist outside staging (%s)",
-    async (extension) => {
-      const { staging, dist, invocation } = fixture();
-      fs.writeFileSync(
-        path.join(dist, `leftover-chunk${extension}`),
-        "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
-      );
-      await publishStagedDeclarations(
-        {
-          env: process.env,
-          maxOldSpaceMb: 8192,
-          heapShortfall: null,
-          invocations: [
-            invocation({
-              "plugin-sdk/core.d.ts": "export declare const ok: true;\n",
-            }),
-          ],
-        },
-        [],
-        staging,
-        dist,
-        ["plugin-sdk/core.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
-      );
-      const leftover = fs.readFileSync(path.join(dist, `leftover-chunk${extension}`), "utf8");
-      expect(leftover).toContain("keep as k");
-      expect(leftover).not.toContain("__exportAll");
-    },
-  );
+  it("also strips undeclared __exportAll left in live dist outside staging", async () => {
+    const { dist, invocation, publish } = fixture();
+    fs.writeFileSync(
+      path.join(dist, "leftover-chunk.d.ts"),
+      "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
+    );
+    await publish([
+      invocation({
+        "plugin-sdk/core.d.ts": "export declare const ok: true;\n",
+      }),
+    ]);
+    const leftover = fs.readFileSync(path.join(dist, "leftover-chunk.d.ts"), "utf8");
+    expect(leftover).toContain("keep as k");
+    expect(leftover).not.toContain("__exportAll");
+  });
 
   it("rejects absolute reference paths even when a staged relative namesake exists", async () => {
-    const { staging, dist, invocation } = fixture();
+    const { dist, invocation, publish } = fixture();
     await expect(
-      publishStagedDeclarations(
-        {
-          env: process.env,
-          maxOldSpaceMb: 8192,
-          heapShortfall: null,
-          invocations: [
-            invocation({
-              "plugin-sdk/core.d.ts": '/// <reference path="/shared.d.ts" />\nexport {};',
-              "plugin-sdk/shared.d.ts": "export {};",
-            }),
-          ],
-        },
-        [],
-        staging,
-        dist,
-        ["plugin-sdk/core.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
-      ),
+      publish([
+        invocation({
+          "plugin-sdk/core.d.ts": '/// <reference path="/shared.d.ts" />\nexport {};',
+          "plugin-sdk/shared.d.ts": "export {};",
+        }),
+      ]),
     ).rejects.toThrow("Incomplete declaration closure");
     expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
   });
-  it.each(['import Type = require("./missing.cjs"); export { Type };'])(
-    "rejects a missing relative dependency in %s",
-    async (declaration) => {
-      const { staging, dist, invocation } = fixture();
-      await expect(
-        publishStagedDeclarations(
-          {
-            env: process.env,
-            maxOldSpaceMb: 8192,
-            heapShortfall: null,
-            invocations: [invocation({ "plugin-sdk/core.d.ts": declaration })],
-          },
-          [],
-          staging,
-          dist,
-          ["plugin-sdk/core.d.ts"],
-          ["plugin-sdk/obsolete.d.ts"],
-        ),
-      ).rejects.toThrow("Incomplete declaration closure");
-      expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
-    },
-  );
+  it("rejects a missing relative import-equals dependency", async () => {
+    const declaration = 'import Type = require("./missing.cjs"); export { Type };';
+    const { dist, invocation, publish } = fixture();
+    await expect(publish([invocation({ "plugin-sdk/core.d.ts": declaration })])).rejects.toThrow(
+      "Incomplete declaration closure",
+    );
+    expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+  });
 
   it.skipIf(process.platform === "win32")(
     "does not mask a timeout when the child exits zero on SIGTERM",
     async () => {
-      const { staging, dist, invocation } = fixture();
+      const { staging, dist, invocation, publish } = fixture();
       vi.stubEnv("OPENCLAW_TSDOWN_TIMEOUT_MS", "1500");
       vi.stubEnv("OPENCLAW_TSDOWN_HEARTBEAT_MS", "0");
       const first = invocation({});
@@ -261,19 +212,7 @@ describe("canonical declaration stage", () => {
         `const fs=require('node:fs');process.on('SIGTERM',()=>process.exit(0));fs.mkdirSync(${JSON.stringify(staging)},{recursive:true});fs.writeFileSync(${JSON.stringify(path.join(staging, "ready"))},'ready');setInterval(()=>{},1000);`,
       ];
       await expect(
-        publishStagedDeclarations(
-          {
-            env: process.env,
-            maxOldSpaceMb: 8192,
-            heapShortfall: null,
-            invocations: [first, invocation({ "later.d.ts": "export {};" })],
-          },
-          [],
-          staging,
-          dist,
-          [],
-          ["plugin-sdk/obsolete.d.ts"],
-        ),
+        publish([first, invocation({ "later.d.ts": "export {};" })], []),
       ).rejects.toMatchObject({ exitCode: 124 });
       expect(fs.existsSync(path.join(staging, "ready"))).toBe(true);
       expect(fs.existsSync(path.join(staging, "later.d.ts"))).toBe(false);
@@ -281,33 +220,21 @@ describe("canonical declaration stage", () => {
     },
   );
   it("does not publish on missing entry", async () => {
-    const { staging, dist, invocation } = fixture();
-    const plan = {
-      env: process.env,
-      maxOldSpaceMb: 8192,
-      heapShortfall: null,
-      invocations: [
-        invocation({ "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";' }),
-        invocation({ "shared.d.ts": "export type Shared = string;" }),
-      ],
-    };
+    const { dist, invocation, publish } = fixture();
+    const invocations = [
+      invocation({ "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";' }),
+      invocation({ "shared.d.ts": "export type Shared = string;" }),
+    ];
     const before = fs.readdirSync(dist, { recursive: true }).map(String).toSorted();
     await expect(
-      publishStagedDeclarations(
-        plan,
-        [],
-        staging,
-        dist,
-        ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
-      ),
+      publish(invocations, ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"]),
     ).rejects.toThrow();
     expect(fs.readdirSync(dist, { recursive: true }).map(String).toSorted()).toEqual(before);
     expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
   });
 
   it("publishes both groups with root chunks, preserves unrelated files, and prunes only owned entries", async () => {
-    const { staging, dist, invocation } = fixture();
+    const { staging, dist, invocation, publish } = fixture();
     const first = path.join(staging, "..", "first");
     const second = path.join(staging, "..", "second");
     const publicFile = {
@@ -315,22 +242,17 @@ describe("canonical declaration stage", () => {
       "shared.d.ts": 'export type Shared = import("./z-leaf.js").Leaf;',
       "z-leaf.d.ts": "export type Leaf = string;",
     };
-    const plan = {
-      env: process.env,
-      maxOldSpaceMb: 8192,
-      heapShortfall: null,
-      invocations: [
-        invocation(publicFile, 0, first),
-        invocation(
-          {
-            "plugin-sdk/private.d.ts": 'export type { Shared } from "../shared.js";',
-            "shared.d.ts": publicFile["shared.d.ts"],
-          },
-          0,
-          second,
-        ),
-      ],
-    };
+    const invocations = [
+      invocation(publicFile, 0, first),
+      invocation(
+        {
+          "plugin-sdk/private.d.ts": 'export type { Shared } from "../shared.js";',
+          "shared.d.ts": publicFile["shared.d.ts"],
+        },
+        0,
+        second,
+      ),
+    ];
     const rename = fs.renameSync;
     const observed: string[] = [];
     const publication = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
@@ -350,16 +272,13 @@ describe("canonical declaration stage", () => {
       rename(source, target);
     });
     try {
-      await publishStagedDeclarations(
-        plan,
+      await publish(
+        invocations,
+        ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
         [
           { output: first, required: ["plugin-sdk/public.d.ts"] },
           { output: second, required: ["plugin-sdk/private.d.ts"] },
         ],
-        staging,
-        dist,
-        ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
       );
     } finally {
       publication.mockRestore();
@@ -376,14 +295,10 @@ describe("canonical declaration stage", () => {
     }
     const unchanged = fs.statSync(path.join(dist, "plugin-sdk/public.d.ts")).mtimeMs;
     fs.rmSync(staging, { recursive: true });
-    await publishStagedDeclarations(
-      { ...plan, invocations: [invocation(publicFile)] },
-      [],
-      staging,
-      dist,
-      ["plugin-sdk/public.d.ts"],
-      ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-    );
+    await publish([invocation(publicFile)], ["plugin-sdk/public.d.ts"], [], undefined, 1, [
+      "plugin-sdk/public.d.ts",
+      "plugin-sdk/private.d.ts",
+    ]);
     expect(fs.existsSync(path.join(dist, "plugin-sdk/private.d.ts"))).toBe(false);
     expect(fs.statSync(path.join(dist, "plugin-sdk/public.d.ts")).mtimeMs).toBe(unchanged);
   });
@@ -391,47 +306,39 @@ describe("canonical declaration stage", () => {
   it.each(["conflicting shared bytes", "misassigned entry"])(
     "rejects canonical group ownership with %s before publishing",
     async (failure) => {
-      const { staging, dist, invocation } = fixture();
+      const { staging, dist, invocation, publish } = fixture();
       const first = path.join(staging, "..", "first");
       const second = path.join(staging, "..", "second");
       const publicFile = { "plugin-sdk/public.d.ts": "export {};" };
       await expect(
-        publishStagedDeclarations(
-          {
-            env: process.env,
-            maxOldSpaceMb: 8192,
-            heapShortfall: null,
-            invocations: [
-              invocation(
-                {
-                  ...(failure === "misassigned entry" ? {} : publicFile),
-                  "shared.d.ts": "export type Shared = string;",
-                },
-                0,
-                first,
-              ),
-              invocation(
-                {
-                  ...(failure === "misassigned entry" ? publicFile : {}),
-                  "plugin-sdk/private.d.ts": "export {};",
-                  "shared.d.ts":
-                    failure === "conflicting shared bytes"
-                      ? "export type Shared = number;"
-                      : "export type Shared = string;",
-                },
-                0,
-                second,
-              ),
-            ],
-          },
+        publish(
+          [
+            invocation(
+              {
+                ...(failure === "misassigned entry" ? {} : publicFile),
+                "shared.d.ts": "export type Shared = string;",
+              },
+              0,
+              first,
+            ),
+            invocation(
+              {
+                ...(failure === "misassigned entry" ? publicFile : {}),
+                "plugin-sdk/private.d.ts": "export {};",
+                "shared.d.ts":
+                  failure === "conflicting shared bytes"
+                    ? "export type Shared = number;"
+                    : "export type Shared = string;",
+              },
+              0,
+              second,
+            ),
+          ],
+          ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
           [
             { output: first, required: ["plugin-sdk/public.d.ts"] },
             { output: second, required: ["plugin-sdk/private.d.ts"] },
           ],
-          staging,
-          dist,
-          ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-          ["plugin-sdk/obsolete.d.ts"],
         ),
       ).rejects.toThrow(
         failure === "conflicting shared bytes"
