@@ -49,11 +49,12 @@ function createSettleFixture({
   subscription,
   ...overrides
 }: SettleOverrides = {}): SettleInput {
+  const sessionId = "sess-settle-1";
   const runAbortDeadlineAtMs = Date.now() + 600_000;
   return {
     attempt: {
       runId: "run-settle-1",
-      sessionId: "sess-settle-1",
+      sessionId,
       sessionKey: "agent:main:test",
       provider: "openai",
       modelId: "gpt-5.6-luna",
@@ -61,12 +62,7 @@ function createSettleFixture({
       config: {},
       ...attempt,
     },
-    activeSession: {
-      sessionId: "sess-settle-1",
-      isCompacting: false,
-      isStreaming: false,
-      messages: [],
-    },
+    activeSession: { sessionId, isCompacting: false, isStreaming: false, messages: [] },
     sessionManager: SessionManager.inMemory(),
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
