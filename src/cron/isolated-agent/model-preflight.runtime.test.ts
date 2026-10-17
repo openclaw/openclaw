@@ -1,5 +1,5 @@
 import net from "node:net";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import {
   preflightCronModelProvider as preflight,
@@ -24,32 +24,24 @@ function makeLocalPreflightParams(provider: "ollama" | "vllm", baseUrl?: string)
 const ollama = makeLocalPreflightParams("ollama");
 const vllm = makeLocalPreflightParams("vllm");
 
-function socketResult(error?: Error) {
-  const socket = new net.Socket();
-  queueMicrotask(() => (error ? socket.destroy(error) : socket.emit("connect")));
-  return socket;
-}
-
 function mockEndpoint(error?: Error) {
-  connectMock.mockImplementationOnce(() => socketResult(error));
+  connectMock.mockImplementationOnce(() => {
+    const socket = new net.Socket();
+    queueMicrotask(() => (error ? socket.destroy(error) : socket.emit("connect")));
+    return socket;
+  });
 }
 
-type PreflightParams = Parameters<typeof preflight>[0];
-async function expectAvailable(params: PreflightParams) {
+async function expectAvailable(params: Parameters<typeof preflight>[0]) {
   expect(await preflight(params)).toEqual({ status: "available" });
-}
-function expectUnavailable(result: Awaited<ReturnType<typeof preflight>>) {
-  expect(result.status).toBe("unavailable");
-  if (result.status !== "unavailable") {
-    throw new Error(`expected preflight unavailable, got ${result.status}`);
-  }
-  return result.reason;
 }
 const deadline = expect.stringContaining("preflight exceeded its configured 2500ms deadline");
 
 async function failureReason(error: Error) {
   mockEndpoint(error);
-  return expectUnavailable(await preflight(ollama));
+  const result = await preflight(ollama);
+  assert(result.status === "unavailable", `expected preflight unavailable, got ${result.status}`);
+  return result.reason;
 }
 
 describe("preflightCronModelProvider", () => {
@@ -72,24 +64,25 @@ describe("preflightCronModelProvider", () => {
     expect(connectMock).not.toHaveBeenCalled();
   });
 
-  it.each(["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.0.222", "[::1]", "[::ffff:7f00:1]"])(
-    "checks local endpoint host %s without retaining its socket or timer",
-    async (host) => {
+  it.each([
+    ["http://127.0.0.1:8000/v1", 8000],
+    ["http://10.0.0.1:8000/v1", 8000],
+    ["http://172.16.0.1:8000/v1", 8000],
+    ["http://192.168.0.222:8000/v1", 8000],
+    ["http://[::1]:8000/v1", 8000],
+    ["http://[::ffff:7f00:1]:8000/v1", 8000],
+    ["http://127.0.0.1/v1", 80],
+    ["https://127.0.0.1/v1", 443],
+  ] as const)(
+    "checks local endpoint %s on port %s and disposes its socket and timer",
+    async (baseUrl, port) => {
       mockEndpoint();
-      await expectAvailable(makeLocalPreflightParams("vllm", `http://${host}:8000/v1`));
+      await expectAvailable(makeLocalPreflightParams("vllm", baseUrl));
+      expect(connectMock).toHaveBeenCalledWith(expect.objectContaining({ port }));
       expect(connectMock.mock.results[0]?.value.destroyed).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
-
-  it.each([
-    ["http://127.0.0.1/v1", 80],
-    ["https://127.0.0.1/v1", 443],
-  ] as const)("uses the protocol's default port for %s", async (baseUrl, port) => {
-    mockEndpoint();
-    await expectAvailable(makeLocalPreflightParams("vllm", baseUrl));
-    expect(connectMock).toHaveBeenCalledWith(expect.objectContaining({ port }));
-  });
 
   it("rejects non-HTTP provider protocols before connecting", async () => {
     const params = makeLocalPreflightParams("vllm", "ftp://127.0.0.1:8000");
@@ -191,7 +184,6 @@ describe("preflightCronModelProvider", () => {
       Object.assign(new Error(`failure-${index}`), {
         name: `NestedError${index}`,
         code: `ELOOP${index}`,
-        cause: undefined as unknown,
       }),
     );
     for (let index = 0; index < errors.length - 1; index += 1) {

@@ -11,7 +11,7 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 
 const runAgent = await h.loadRunCronIsolatedAgentTurn();
 
-function runJob(job: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+function runJob(job: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) {
   return runAgent(makeJobParams(job, overrides));
 }
 
@@ -36,11 +36,7 @@ function setStoredSession(sessionKey: string, entry: ReturnType<typeof h.makeCro
   );
 }
 
-function sessionTarget(
-  sessionId: string,
-  sessionKey: string | undefined,
-  storePath = "/tmp/store.json",
-) {
+function sessionTarget(sessionId: string, sessionKey?: string, storePath = "/tmp/store.json") {
   return { agentId: "default", sessionId, sessionKey, storePath };
 }
 
@@ -220,7 +216,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       throw new Error("turn/start rejected before result metadata");
     });
 
-    const result = await runAgent(makeIsolatedAgentParamsFixture({ agentId: "main" }));
+    const result = await runJob({}, { agentId: "main" });
 
     expect(result).toMatchObject({
       status: "error",
@@ -251,30 +247,22 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       }),
     );
 
-    expect(
-      await runAgent(
-        makeIsolatedAgentParamsFixture({
-          cfg: { agents: { entries: { "weather-bot": { skills: ["weather", "meme-factory"] } } } },
-          agentId: "weather-bot",
-        }),
-      ),
-    ).toMatchObject({ status: "ok" });
+    expect(await runJob()).toMatchObject({ status: "ok" });
     expect(h.buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      model: "anthropic/claude-sonnet-4-6",
-      error: "model not allowed: anthropic/claude-sonnet-4-6",
-      expected:
-        "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [openai/gpt-5.4]",
-    },
-    {
-      model: "openai/",
-      error: "invalid model: openai/",
-      expected: "automation model override 'openai/' rejected: invalid model: openai/",
-    },
-  ])("rejects payload model $model before execution", async ({ model, error, expected }) => {
+    [
+      "anthropic/claude-sonnet-4-6",
+      "model not allowed: anthropic/claude-sonnet-4-6",
+      "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [openai/gpt-5.4]",
+    ],
+    [
+      "openai/",
+      "invalid model: openai/",
+      "automation model override 'openai/' rejected: invalid model: openai/",
+    ],
+  ])("rejects payload model %s before execution", async (model, error, expected) => {
     h.resolveAllowedModelRefMock.mockReturnValueOnce({ error });
     const result = await runJob(
       { payload: { kind: "agentTurn", message: "test", model } },
@@ -311,9 +299,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       attempts: [],
     }));
 
-    const runPromise = runAgent(
-      makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
-    );
+    const runPromise = runJob({}, { abortSignal: abortController.signal });
     await cliStarted.promise;
     abortController.abort("cron: job execution timed out");
 
@@ -352,7 +338,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           },
         },
       });
-      expect((await runAgent(makeIsolatedAgentParamsFixture())).status).toBe("ok");
+      expect((await runJob()).status).toBe("ok");
       expect(session.sessionEntry).toMatchObject({
         agentHarnessId: "codex",
         contextTokens: expected,

@@ -37,16 +37,16 @@ function setSession(
 }
 
 function runTurn(overrides?: Record<string, unknown>) {
-  return runAgent(makeParams(overrides));
+  return runAgent(
+    makeIsolatedAgentParamsFixture({ job: makeJob(), sessionKey: "cron:model-fwd", ...overrides }),
+  );
 }
 
-function setupModelSuite() {
-  setupRunCronIsolatedAgentTurnSuite();
-  beforeEach(() => {
-    h.mockRunCronFallbackPassthrough();
-    h.resolveConfiguredModelRefMock.mockReturnValue(opus);
-  });
-}
+setupRunCronIsolatedAgentTurnSuite();
+beforeEach(() => {
+  h.mockRunCronFallbackPassthrough();
+  h.resolveConfiguredModelRefMock.mockReturnValue(opus);
+});
 
 function resolveRawModel({ raw }: { raw: string }) {
   const [provider, model] = raw.split("/");
@@ -69,14 +69,6 @@ function makeJob(overrides?: Record<string, unknown>) {
   return makeIsolatedAgentJobFixture({
     id: "model-fwd-job",
     payload: { kind: "agentTurn", message: "summarize", model: "google/gemini-2.0-flash" },
-    ...overrides,
-  });
-}
-
-function makeParams(overrides?: Record<string, unknown>) {
-  return makeIsolatedAgentParamsFixture({
-    job: makeJob(),
-    sessionKey: "cron:model-fwd",
     ...overrides,
   });
 }
@@ -109,8 +101,20 @@ function modelJob(model: string, message = "summarize", overrides: Record<string
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
-function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  return requireRecord(mock.mock.calls[0]?.[0]);
+function mockArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
+  return requireRecord(mock.mock.calls[index]?.[0]);
+}
+
+function cliBinding(sessionId: string, localSessionId = "openclaw-session") {
+  return {
+    sessionId,
+    reseedReceipt: {
+      version: 1 as const,
+      promptHash: "a".repeat(64),
+      localSessionId,
+      userTurnDisposition: "persisted" as const,
+    },
+  };
 }
 
 function recordWrites(
@@ -133,15 +137,10 @@ function recordWrites(
 }
 
 describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)", () => {
-  setupModelSuite();
-
   beforeEach(() => {
-    h.resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
-      if (raw.includes("gemini")) {
-        return { ref: gemini };
-      }
-      return { ref: opus };
-    });
+    h.resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => ({
+      ref: raw.includes("gemini") ? gemini : opus,
+    }));
   });
 
   it("builds cron context from the published replacement owner", async () => {
@@ -224,20 +223,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       expect.arrayContaining([expect.objectContaining({ phase: "model_call_started" })]),
     );
 
-    const cliSessionBinding = {
-      sessionId: "previous-cli-session",
-      reseedReceipt: {
-        version: 1 as const,
-        promptHash: "a".repeat(64),
-        localSessionId: "openclaw-session",
-        userTurnDisposition: "persisted" as const,
-      },
-    };
+    const cliSessionBinding = cliBinding("previous-cli-session");
     releaseCliSessionLookup.resolve(cliSessionBinding);
     const result = await runPromise;
 
     expect(result.status).toBe("ok");
-    const cliCall = firstMockArg(h.runCliAgentMock);
+    const cliCall = mockArg(h.runCliAgentMock);
     expect(cliCall.cliSessionId).toBe("previous-cli-session");
     expect(cliCall.cliSessionBinding).toEqual(cliSessionBinding);
     expect(typeof cliCall.onExecutionPhase).toBe("function");
@@ -248,28 +239,16 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
   it("does not replay accepted CLI work when continuity saving fails", async () => {
     h.isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    h.resolveAllowedModelRefMock.mockReturnValue({
-      ref: cli,
-    });
+    h.resolveAllowedModelRefMock.mockReturnValue({ ref: cli });
     const cronSession = setSession(
       { cliSessionBindings: { "claude-cli": { sessionId: "previous-cli-session" } } },
       { isNewSession: false },
     );
     const localSessionId = cronSession.sessionEntry.sessionId;
-    const cliSessionBinding = {
-      sessionId: "fresh-cli-session",
-      reseedReceipt: {
-        version: 1 as const,
-        promptHash: "a".repeat(64),
-        localSessionId: cronSession.sessionEntry.sessionId,
-        userTurnDisposition: "persisted",
-      },
-    };
+    const cliSessionBinding = cliBinding("fresh-cli-session", localSessionId);
     const candidateResult = {
       payloads: [{ text: "summary done" }],
       meta: {
-        durationMs: 1,
-        executionTrace: { runner: "cli" },
         agentMeta: {
           ...cli,
           sessionId: "fresh-cli-session",
@@ -344,10 +323,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       { provider: "openai", id: "gpt-5.6-luna", reasoning: true },
       { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
     ]);
-    const cronSession = setSession(
-      { thinkingLevel: "ultra", agentRuntimeOverride: "codex" },
-      { isNewSession: true },
-    );
+    const cronSession = setSession({ thinkingLevel: "ultra", agentRuntimeOverride: "codex" });
     useFallback("openai", "gpt-5.6-sol");
 
     const result = await runTurn({
@@ -404,7 +380,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         job: makeJobWithoutModel(stored ? { sessionTarget: "session:existing-cron-session" } : {}),
         ...(stored ? { agentId, sessionKey: "existing-cron-session" } : {}),
       });
-      const request = firstMockArg(h.runWithModelFallbackMock);
+      const request = mockArg(h.runWithModelFallbackMock);
       expect(request.fallbacksOverride).toStrictEqual(stored ? [] : fallbacks);
       if (stored) {
         expect(request).toMatchObject({ provider: "openai", model: "gpt-5.4" });
@@ -423,13 +399,10 @@ function runPersist(overrides?: Record<string, unknown>) {
 }
 
 describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
-  setupModelSuite();
   let cronSession: ReturnType<typeof h.makeCronSession>;
 
   beforeEach(() => {
-    h.resolveAllowedModelRefMock.mockReturnValue({
-      ref: sonnet,
-    });
+    h.resolveAllowedModelRefMock.mockReturnValue({ ref: sonnet });
 
     cronSession = h.makeCronSession();
     h.resolveCronSessionMock.mockReturnValue(cronSession);
@@ -479,11 +452,10 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
   );
 
   it("selects the configured model auth profile separately", async () => {
-    const ref = luna;
     const modelRef = "openai/gpt-5.6-luna@openai:test-profile";
-    h.resolveConfiguredModelRefMock.mockReturnValue(ref);
+    h.resolveConfiguredModelRefMock.mockReturnValue(luna);
     h.runWithModelFallbackMock.mockResolvedValueOnce(
-      makeSuccessfulRunResult(ref.provider, ref.model),
+      makeSuccessfulRunResult(luna.provider, luna.model),
     );
     await runPersist({
       cfg: {
@@ -528,14 +500,8 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 });
 
 describe("runCronIsolatedAgentTurn runtime model thinking", () => {
-  setupModelSuite();
-
   it("skips live catalog hydration when model thinking is off", async () => {
-    h.resolveAllowedModelRefMock.mockReturnValue({
-      ref: ollama,
-    });
-    h.loadModelCatalogMock.mockResolvedValue([]);
-
+    h.resolveAllowedModelRefMock.mockReturnValue({ ref: ollama });
     await runTurn({
       cfg: modelConfig({ "ollama/minimax-m3:cloud": { params: { thinking: "off" } } }),
       job: modelJob("ollama/minimax-m3:cloud"),
@@ -543,7 +509,7 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
 
     expect(h.loadModelCatalogMock).toHaveBeenCalledTimes(1);
     expect(h.resolveThinkingDefaultMock).not.toHaveBeenCalled();
-    const embeddedCall = firstMockArg(h.runEmbeddedAgentMock);
+    const embeddedCall = mockArg(h.runEmbeddedAgentMock);
     expect(embeddedCall).toMatchObject({ ...ollama, thinkLevel: "off" });
   });
 
@@ -597,13 +563,7 @@ function runSwitch(overrides?: Record<string, unknown>) {
   });
 }
 
-function requireEmbeddedAgentCall(index: number): Record<string, unknown> {
-  return requireRecord(h.runEmbeddedAgentMock.mock.calls[index]?.[0]);
-}
-
 describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206)", () => {
-  setupModelSuite();
-
   beforeEach(() => {
     h.resolveAllowedModelRefMock.mockImplementation(resolveRawModel);
   });
@@ -614,16 +574,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
       source: "auto",
       routeRequirement: undefined,
     });
-    const cronSession = setSession(
-      {
-        model: undefined,
-        modelProvider: undefined,
-        authProfileOverride: "profile-a",
-        compactionCount: 7,
-        authProfileOverrideCompactionCount: 7,
-      },
-      { isNewSession: true },
-    );
+    const cronSession = setSession({
+      authProfileOverride: "profile-a",
+      compactionCount: 7,
+      authProfileOverrideCompactionCount: 7,
+    });
     h.runEmbeddedAgentMock
       .mockImplementationOnce(async (request) => {
         request.userTurnTranscriptRecorder?.markRuntimePersisted({
@@ -644,14 +599,18 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
 
     expect(result.status).toBe("ok");
     expect(h.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-    const retryParams = requireEmbeddedAgentCall(1);
+    const retryParams = mockArg(h.runEmbeddedAgentMock, 1);
     expect(retryParams).toMatchObject({
       ...sonnet,
       authProfileId: "profile-b",
       authProfileIdSource: "user",
+      suppressNextUserMessagePersistence: true,
     });
-    const firstParams = requireEmbeddedAgentCall(0);
-    expect(firstParams.authProfileIdSource).toBe("auto");
+    const firstParams = mockArg(h.runEmbeddedAgentMock);
+    expect(firstParams).toMatchObject({
+      authProfileIdSource: "auto",
+      suppressNextUserMessagePersistence: false,
+    });
     expect(h.runWithModelFallbackMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ userLockedAuthProfileId: undefined }),
@@ -661,8 +620,6 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
       expect.objectContaining({ userLockedAuthProfileId: "profile-b" }),
     );
     expect(retryParams.userTurnTranscriptRecorder).toBe(firstParams.userTurnTranscriptRecorder);
-    expect(firstParams.suppressNextUserMessagePersistence).toBe(false);
-    expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
     expect(cronSession.sessionEntry).toMatchObject({
       authProfileOverride: "profile-b",
       authProfileOverrideSource: "user",
@@ -730,8 +687,8 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     });
 
     expect(result.status).toBe("ok");
-    expect(requireEmbeddedAgentCall(0).agentHarnessRuntimeOverride).toBe("openclaw");
-    expect(requireEmbeddedAgentCall(1).agentHarnessRuntimeOverride).toBe("codex");
+    expect(mockArg(h.runEmbeddedAgentMock).agentHarnessRuntimeOverride).toBe("openclaw");
+    expect(mockArg(h.runEmbeddedAgentMock, 1).agentHarnessRuntimeOverride).toBe("codex");
     expect(cronSession.sessionEntry).toMatchObject({
       agentRuntimeOverride: "codex",
       contextTokens: 128_000,
@@ -743,16 +700,12 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   it("aborts after exceeding LiveSessionModelSwitchError retry limit (#58466)", async () => {
     const switchError = new LiveSessionModelSwitchError(sonnet);
 
-    let callCount = 0;
-    h.runWithModelFallbackMock.mockImplementation(async () => {
-      callCount++;
-      throw switchError;
-    });
+    h.runWithModelFallbackMock.mockRejectedValue(switchError);
 
     const result = await runSwitch();
 
     expect(result.status).toBe("error");
-    expect(callCount).toBe(3);
+    expect(h.runWithModelFallbackMock).toHaveBeenCalledTimes(3);
     expect(h.logWarnMock).toHaveBeenCalledWith(
       "[cron:cron-model-switch-job] LiveSessionModelSwitchError retry limit reached (2); aborting",
     );

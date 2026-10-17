@@ -1,4 +1,3 @@
-// Invocation ownership is independent of a persistent automation's transcript identity.
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -22,25 +21,15 @@ function expectCall(mock: unknown, fields: Record<string, unknown>) {
 const runAgent = await h.loadRunCronIsolatedAgentTurn();
 
 function runJob(job: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
-  return runAgent(makeJobParams(job, overrides));
-}
-
-function makeJobParams(job: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
-  return makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) });
+  return runAgent(
+    makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) }),
+  );
 }
 
 function makeParams(sessionTarget = "isolated") {
-  return makeJobParams(
-    {
-      id: "message-tool-policy",
-      name: "Message Tool Policy",
-      schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "agentTurn", message: "send a message" },
-      delivery: { mode: "none" },
-      sessionTarget,
-    },
-    { message: "send a message", sessionKey: "cron:message-tool-policy" },
-  );
+  return makeIsolatedAgentParamsFixture({
+    job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" }, sessionTarget }),
+  });
 }
 
 function expectCronInvocationContext(runParams: {
@@ -56,27 +45,17 @@ function expectCronInvocationContext(runParams: {
     sessionId: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    cronRunsByJobId: new Map([["message-tool-policy", { pacingEnabled: false }]]),
+    cronRunsByJobId: new Map([["test-job", { pacingEnabled: false }]]),
   });
   return runParams.runId;
 }
 
 describe("runCronIsolatedAgentTurn invocation ownership", () => {
   setupRunCronIsolatedAgentTurnSuite();
-  beforeEach(() => {
-    h.resolveDeliveryTargetMock.mockResolvedValue({
-      ok: true,
-      channel: "messagechat",
-      to: "123",
-      accountId: undefined,
-      error: undefined,
-    });
-  });
+  beforeEach(() => h.mockRunCronFallbackPassthrough());
 
   it("retains the selected owner while reusing a global session", async () => {
-    h.mockRunCronFallbackPassthrough();
-    const session = h.makeCronSession({ isNewSession: false });
-    h.resolveCronSessionMock.mockReturnValue(session);
+    h.resolveCronSessionMock.mockReturnValue(h.makeCronSession({ isNewSession: false }));
     let admittedOwner: { sessionKey?: string; agentId?: string } | undefined;
     h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
       const admitted = getAgentRunContext(runParams.runId);
@@ -96,8 +75,7 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
   });
 
   it("releases current invocation context without clearing an existing physical context", async () => {
-    h.mockRunCronFallbackPassthrough();
-    const sessionKey = "agent:default:cron:message-tool-policy";
+    const sessionKey = "agent:default:cron:test";
     const initialSessionEntry = { retained: true };
     const cronSession = h.makeCronSession({
       store: { [sessionKey]: initialSessionEntry },
@@ -136,7 +114,6 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
   });
 
   it("does not let old cron cleanup clear a newer same-id run context", async () => {
-    h.mockRunCronFallbackPassthrough();
     let invocationRunId = "";
     let newerLifecycleGeneration = "";
     h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
@@ -154,12 +131,10 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     await runAgent(makeParams());
 
     expect(invocationRunId).not.toBe("");
-    expect(getAgentRunContext(invocationRunId)).toEqual(
-      expect.objectContaining({
-        sessionId: "test-session-id",
-        lifecycleGeneration: newerLifecycleGeneration,
-      }),
-    );
+    expect(getAgentRunContext(invocationRunId)).toMatchObject({
+      sessionId: "test-session-id",
+      lifecycleGeneration: newerLifecycleGeneration,
+    });
     clearAgentRunContext(invocationRunId, newerLifecycleGeneration);
   });
 
@@ -189,31 +164,24 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     // Exercise process-local ownership without the persistent session admission
     // that serializes real turns on one key.
     process.env.OPENCLAW_TEST_FAST = "1";
-    h.mockRunCronFallbackPassthrough();
     h.resolveCronSessionMock.mockImplementation(() => h.makeCronSession());
     const invocationRunIds: string[] = [];
-    const firstStarted = createDeferred();
-    const secondStarted = createDeferred();
-    const firstBlocked = createDeferred();
-    const secondBlocked = createDeferred();
+    const first = { started: createDeferred(), blocked: createDeferred() };
+    const second = { started: createDeferred(), blocked: createDeferred() };
     h.runEmbeddedAgentMock.mockImplementation(async (runParams) => {
       invocationRunIds.push(expectCronInvocationContext(runParams));
-      if (invocationRunIds.length === 1) {
-        firstStarted.resolve();
-        await firstBlocked.promise;
-      } else {
-        secondStarted.resolve();
-        await secondBlocked.promise;
-      }
+      const turn = invocationRunIds.length === 1 ? first : second;
+      turn.started.resolve();
+      await turn.blocked.promise;
       return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
     });
     const sessionKey = "agent:default:messagechat:direct:123";
     const runParams = { ...makeParams(`session:${sessionKey}`), sessionKey };
 
     const firstRun = runAgent(runParams);
-    await firstStarted.promise;
+    await first.started.promise;
     const secondRun = runAgent(runParams);
-    await secondStarted.promise;
+    await second.started.promise;
 
     expect(invocationRunIds).toHaveLength(2);
     const [firstRunId, secondRunId] = invocationRunIds;
@@ -223,12 +191,12 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     expect(getAgentRunContext(secondRunId)).toBeDefined();
     expect(getAgentRunContext("test-session-id")).toBeUndefined();
 
-    firstBlocked.resolve();
+    first.blocked.resolve();
     expect((await firstRun).status).toBe("ok");
     expect(getAgentRunContext(firstRunId)).toBeUndefined();
     expect(getAgentRunContext(secondRunId)).toBeDefined();
 
-    secondBlocked.resolve();
+    second.blocked.resolve();
     const secondResult = await secondRun;
     expect(secondResult.status, secondResult.error).toBe("ok");
     expect(getAgentRunContext(firstRunId)).toBeUndefined();
@@ -247,7 +215,6 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
     const result = await runJob({
       deleteAfterRun: true,
       delivery: { mode: "none" },
-      payload: { kind: "agentTurn", message: "cleanup me", model: "openai/gpt-4" },
     });
 
     expect(result.status).toBe("ok");
@@ -279,7 +246,6 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
     const result = await runJob({
       deleteAfterRun: true,
       delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
-      payload: { kind: "agentTurn", message: "cleanup once", model: "openai/gpt-4" },
     });
 
     expect(result).toMatchObject({ status: "error", error: "delivery receipt store unavailable" });
@@ -316,21 +282,15 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       onError: expect.any(Function),
     });
   });
-});
-
-describe("runCronIsolatedAgentTurn — source conversation binding", () => {
-  setupRunCronIsolatedAgentTurnSuite({ fast: true });
   it.each([false, true])(
     "uses source history only for current targets (isolated=%s)",
     async (isolated) => {
       h.mockRunCronFallbackPassthrough();
-      const source = {
-        sessionKey: isolated
-          ? "agent:default:webchat:direct:creator"
-          : "agent:default:telegram:direct:42",
-        sessionId: isolated ? "original-source-session" : "source-session",
-        lifecycleRevision: isolated ? "original-source-revision" : "source-revision",
+      const sourceGeneration = {
+        sessionId: "source-session",
+        lifecycleRevision: "source-revision",
       };
+      const source = { sessionKey: "agent:default:telegram:direct:42", ...sourceGeneration };
       const sourceEntry = h.makeCronSessionEntry(
         isolated
           ? {
@@ -338,19 +298,15 @@ describe("runCronIsolatedAgentTurn — source conversation binding", () => {
               lifecycleRevision: "replacement-source-revision",
               thinkingLevel: "high",
             }
-          : { sessionId: source.sessionId, lifecycleRevision: source.lifecycleRevision },
+          : sourceGeneration,
       );
       h.resolveCronSessionMock.mockReturnValue(
         h.makeCronSession({ store: { [source.sessionKey]: sourceEntry } }),
       );
-      h.readSessionMessagesAsyncMock.mockResolvedValue(
-        isolated
-          ? [{ role: "user", content: "This conversation is private to its own turns." }]
-          : [
-              { role: "user", content: "Otters hold hands while sleeping." },
-              { role: "assistant", content: "Got it." },
-            ],
-      );
+      h.readSessionMessagesAsyncMock.mockResolvedValue([
+        { role: "user", content: "Otters hold hands while sleeping." },
+        { role: "assistant", content: "Got it." },
+      ]);
       const message = isolated ? "Reply tick in your own session." : "Summarize the animal fact.";
       const result = await runJob({
         sessionKey: source.sessionKey,
@@ -365,7 +321,7 @@ describe("runCronIsolatedAgentTurn — source conversation binding", () => {
         expect(result.sessionKey).not.toBe(source.sessionKey);
         expect(h.readSessionMessagesAsyncMock).not.toHaveBeenCalled();
         expect(prompt).toContain(message);
-        expect(prompt).not.toContain("This conversation is private");
+        expect(prompt).not.toContain("Otters hold hands while sleeping.");
         expectCall(h.resolveCronSessionMock, { sourceSessionKey: undefined, forceNew: true });
       } else {
         expect(h.readSessionMessagesAsyncMock).toHaveBeenCalledWith(
@@ -382,10 +338,7 @@ describe("runCronIsolatedAgentTurn — source conversation binding", () => {
       }
       expectCall(h.dispatchCronDeliveryMock, {
         sourceSessionKey: source.sessionKey,
-        sourceSessionGeneration: {
-          sessionId: source.sessionId,
-          lifecycleRevision: source.lifecycleRevision,
-        },
+        sourceSessionGeneration: sourceGeneration,
       });
     },
   );
