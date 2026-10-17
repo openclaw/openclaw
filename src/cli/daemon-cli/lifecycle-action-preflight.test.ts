@@ -45,7 +45,7 @@ describe("getServiceActionPreflightFailure", () => {
     },
   );
 
-  it("reports plugin migration issues for recovery diagnostics", async () => {
+  it("validates plugins only for actions that start the service", async () => {
     await withIsolatedLifecycleState(async ({ configPath }) => {
       const pluginRoot = path.join(path.dirname(configPath), "migration-fixture");
       await fs.mkdir(pluginRoot);
@@ -86,7 +86,8 @@ describe("getServiceActionPreflightFailure", () => {
       ).toBe(true);
       expect(await getServiceActionPreflightFailure("start")).not.toBeNull();
       expect(await getServiceActionPreflightFailure("restart")).not.toBeNull();
-      expect(await getServiceActionPreflightFailure("stop")).not.toBeNull();
+      expect(await getServiceActionPreflightFailure("stop")).toBeNull();
+      expect(await getServiceActionPreflightFailure("uninstall")).toBeNull();
 
       await fs.writeFile(
         configPath,
@@ -94,12 +95,12 @@ describe("getServiceActionPreflightFailure", () => {
       );
       resetConfigRuntimeState();
       expect((await getServiceActionPreflightFailure("stop"))?.message).toContain(
-        "migration-fixture",
+        "Config was last written by OpenClaw 9999.1.1",
       );
     });
   });
 
-  it.each(["start", "stop"] as const)(
+  it.each(["start", "stop", "uninstall"] as const)(
     "renders actionable invalid-config diagnostics before %s",
     async (action) => {
       await withIsolatedLifecycleState(async ({ configPath }) => {

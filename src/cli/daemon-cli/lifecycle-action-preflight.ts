@@ -21,6 +21,10 @@ export async function getServiceActionPreflightFailure(
   try {
     snapshot = await readConfigFileSnapshot({
       observe: false,
+      // Recovery diagnostics must not load plugin state after service shutdown/removal.
+      ...(action === "stop" || action === "uninstall"
+        ? { pluginValidation: "core-only" as const }
+        : {}),
     });
     if (!snapshot.valid) {
       const message =

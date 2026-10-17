@@ -22,6 +22,35 @@ const OWNED_DATABASE_SELECTION = new Set([
   "gateway usage-cost",
   "gateway stability",
   "channels status",
+  "agent remote",
+  "cron *",
+  "automations *",
+  "devices *",
+  "nodes status",
+  "nodes list",
+  "nodes describe",
+  "nodes pending",
+  "nodes approve",
+  "nodes reject",
+  "nodes remove",
+  "nodes rename",
+  "nodes invoke",
+  "nodes notify",
+  "nodes push",
+  "nodes camera",
+  "nodes screen",
+  "nodes location",
+  "secrets reload",
+  "approvals pending",
+  "exec-approvals pending",
+  // Service removal/shutdown must work when the invoking shell lacks DB credentials.
+  "gateway stop",
+  "daemon stop",
+  "gateway uninstall",
+  "daemon uninstall",
+  "node stop",
+  "node uninstall",
+  "node status",
   // Discovery and runtime-intent status inspect configuration/services without state.
   "gateway discover",
   "gateway runtime-intent",
@@ -34,6 +63,10 @@ const OWNED_DATABASE_SELECTION = new Set([
   "plugins build",
   "plugins validate",
   "plugins init",
+  "claws create",
+  "claws validate",
+  "claws build",
+  "claws dev",
   // Mutation parsing preserves DSN-only repair; other edits select under offline custody.
   "config set",
   "config patch",
@@ -65,6 +98,13 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     : resolveCliDatabaseProcessRole(argv) === "gateway"
       ? "gateway"
       : invocation.commandPath.slice(0, 2).join(" ");
+  if (
+    invocation.primary === "agent" &&
+    invocation.commandPath[1] !== "exec" &&
+    !hasFlag(argv, "--local")
+  ) {
+    command = "agent remote";
+  }
   if (
     ["gateway status", "daemon status"].includes(command) &&
     hasFlag(argv, "--runtime-intent-only")

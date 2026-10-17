@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { databaseEngineAdapters } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
@@ -7,6 +7,10 @@ import * as nodeSqlite from "../infra/node-sqlite.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCliDatabaseEngine } from "./database-engine-selection.js";
+
+beforeEach(() => {
+  resetDatabaseEngineSelectionForTest();
+});
 
 afterEach(() => {
   resetDatabaseEngineSelectionForTest();
@@ -22,6 +26,23 @@ const database = {
 };
 
 const recoveryOwnerCommands = [
+  ["agent", "--agent", "main", "--message", "hello"],
+  ["gateway", "stop", "--force"],
+  ["daemon", "stop", "--force"],
+  ["gateway", "uninstall"],
+  ["daemon", "uninstall"],
+  ["node", "stop"],
+  ["node", "uninstall"],
+  ["node", "status"],
+  ["cron", "status"],
+  ["automations", "list"],
+  ["devices", "list"],
+  ["nodes", "status"],
+  ["nodes", "camera", "snap"],
+  ["secrets", "reload"],
+  ["approvals", "pending"],
+  ["exec-approvals", "pending"],
+  ["claws", "build"],
   ["update"],
   ["update", "--dry-run"],
   ["update", "--channel", "beta"],
@@ -125,6 +146,8 @@ describe("one-shot CLI engine selection", () => {
 
   it.each(
     [
+      ["agent", "--local", "--agent", "main", "--message", "hello"],
+      ["nodes", "custom-plugin-command"],
       ["reset", "--scope", "full"],
       ["reset", "--scope=config+creds+sessions"],
       ["reset", "--scope=config", "--scope=full"],
