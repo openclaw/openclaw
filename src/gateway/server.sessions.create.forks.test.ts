@@ -8,6 +8,7 @@ import { replaceDiscoveredContextTokenCache } from "../agents/context-cache.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -48,6 +49,32 @@ const forkableClaudeCliBackend = {
 
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
 
+function createSession(
+  params: Parameters<typeof directSessionReq>[1],
+  options?: Parameters<typeof directSessionReq>[2],
+) {
+  return directSessionReq<CreatedSession>("sessions.create", params, options);
+}
+
+function expectAdminRequired(response: Awaited<ReturnType<typeof directSessionReq>>) {
+  expect(response).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+  });
+}
+
+async function readMessages(scope: Parameters<typeof loadTranscriptEvents>[0]) {
+  return (await loadTranscriptEvents(scope)).flatMap((entry) =>
+    entry &&
+    typeof entry === "object" &&
+    "type" in entry &&
+    entry.type === "message" &&
+    "message" in entry
+      ? [entry.message]
+      : [],
+  );
+}
+
 test("sessions.create parents dashboard sessions to agent main by default", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.sessionConfig = undefined;
@@ -63,11 +90,7 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
     },
   });
 
-  const created = await directSessionReq<{
-    key?: string;
-    entry?: { parentSessionKey?: string; spawnDepth?: number };
-    resolved?: { modelProvider?: string; model?: string };
-  }>("sessions.create", { agentId: "main" });
+  const created = await createSession({ agentId: "main" });
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
@@ -177,18 +200,7 @@ test("sessions.create forks the parent transcript into the new session", async (
     ],
   });
 
-  const created = await directSessionReq<{
-    key?: string;
-    sessionId?: string;
-    entry?: {
-      sessionFile?: string;
-      parentSessionKey?: string;
-      forkSource?: { sessionKey: string; sessionId: string };
-      forkedFromParent?: boolean;
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-    };
-  }>("sessions.create", {
+  const created = await createSession({
     agentId: "main",
     parentSessionKey: "main",
     key: "agent:main:dashboard:fork-publication",
@@ -196,33 +208,18 @@ test("sessions.create forks the parent transcript into the new session", async (
   });
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry).toMatchObject({
+    parentSessionKey: "agent:main:main",
+    forkedFromParent: true,
+    totalTokensFresh: false,
+  });
   expect(created.payload?.entry?.forkSource).toEqual({
     sessionKey: "agent:main:main",
     sessionId: parent.sessionId,
   });
-  expect(created.payload?.entry?.forkedFromParent).toBe(true);
   expect(created.payload?.entry?.totalTokens).toBeUndefined();
-  expect(created.payload?.entry?.totalTokensFresh).toBe(false);
   expect(created.payload?.sessionId).not.toBe(parent.sessionId);
   expect(created.payload?.entry).not.toHaveProperty("sessionFile");
-  const readMessages = async (scope: {
-    sessionFile?: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) =>
-    (await loadTranscriptEvents(scope))
-      .filter((entry): entry is { type: "message"; message: unknown } => {
-        return (
-          entry !== null &&
-          typeof entry === "object" &&
-          "type" in entry &&
-          entry.type === "message" &&
-          "message" in entry
-        );
-      })
-      .map((entry) => entry.message);
   const forkedSessionId = requireNonEmptyString(created.payload?.sessionId, "forked session id");
   expect(
     await readMessages({
@@ -474,14 +471,11 @@ test.each([undefined, "last-completed"] as const)(
     });
     embeddedRunMock.activeIds.add(parentSessionId);
     try {
-      const created = await directSessionReq<{ key: string; sessionId: string }>(
-        "sessions.create",
-        {
-          parentSessionKey: "main",
-          fork: true,
-          forkFrom,
-        },
-      );
+      const created = await createSession({
+        parentSessionKey: "main",
+        fork: true,
+        forkFrom,
+      });
 
       if (!forkFrom) {
         expect(created).toMatchObject({
@@ -494,22 +488,12 @@ test.each([undefined, "last-completed"] as const)(
         return;
       }
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      const messages = await loadTranscriptEvents({
+      const messages = await readMessages({
         sessionId: created.payload?.sessionId ?? "",
         sessionKey: created.payload?.key ?? "",
         storePath,
       });
-      expect(
-        messages.flatMap((entry) =>
-          entry &&
-          typeof entry === "object" &&
-          "type" in entry &&
-          entry.type === "message" &&
-          "message" in entry
-            ? [entry.message]
-            : [],
-        ),
-      ).toEqual([
+      expect(messages).toEqual([
         expect.objectContaining({ role: "user", content: "completed question" }),
         expect.objectContaining({ role: "assistant", stopReason: "stop" }),
       ]);
@@ -594,7 +578,7 @@ test.each(["cli", "enabled", "disabled"] as const)(
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-catalog") } });
 
     try {
-      const created = await directSessionReq<CreatedSession>("sessions.create", {
+      const created = await createSession({
         agentId: "main",
         catalogId: "claude",
         ...(harness === "cli" ? { parentSessionKey: "main", emitCommandHooks: true } : {}),
@@ -723,25 +707,7 @@ test.each<{
       outputTokens: 340,
       totalTokens: 12340,
       totalTokensFresh: false,
-      contextBudgetStatus: {
-        schemaVersion: 1,
-        source: "pre-prompt-estimate",
-        updatedAt: 1,
-        provider: "codex",
-        model: "gpt-5.5",
-        route: "compact_then_truncate",
-        shouldCompact: true,
-        estimatedPromptTokens: 250000,
-        contextTokenBudget: 128000,
-        promptBudgetBeforeReserve: 112000,
-        reserveTokens: 16000,
-        effectiveReserveTokens: 16000,
-        remainingPromptBudgetTokens: 0,
-        overflowTokens: 138000,
-        toolResultReducibleChars: 5000,
-        messageCount: 12,
-        unwindowedMessageCount: 12,
-      },
+      contextBudgetStatus: contextBudgetStatusFixture(),
       thinkingLevel: "off",
       fastMode: "auto",
       traceLevel: "debug",
@@ -803,7 +769,7 @@ test.each<{
     const { storePath } = await createSessionStoreDir();
     testState.agentConfig = { model: { primary: defaults } };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent", parent) } });
-    const created = await directSessionReq<CreatedSession>("sessions.create", {
+    const created = await createSession({
       agentId: "main",
       label: "Fresh Chat",
       parentSessionKey: "main",
@@ -819,7 +785,7 @@ test.each<{
       }
     }
     if (name === "explicit selection") {
-      const overridden = await directSessionReq<CreatedSession>("sessions.create", {
+      const overridden = await createSession({
         agentId: "main",
         fastMode: false,
         parentSessionKey: "main",
@@ -873,11 +839,9 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     },
   });
 
-  const fresh = await directSessionReq<CreatedSession>(
-    "sessions.create",
-    { key: freshKey, model: "openai/gpt-test-a", fastMode: true },
-    { client: writeClient },
-  );
+  const writeSession = (params: Parameters<typeof createSession>[0]) =>
+    createSession(params, { client: writeClient });
+  const fresh = await writeSession({ key: freshKey, model: "openai/gpt-test-a", fastMode: true });
   expect(fresh.ok, JSON.stringify(fresh.error)).toBe(true);
   expect(fresh.payload?.entry).toMatchObject({
     providerOverride: "openai",
@@ -885,11 +849,12 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     fastMode: true,
   });
 
-  const sameSelection = await directSessionReq<CreatedSession>(
-    "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low", fastMode: false },
-    { client: writeClient },
-  );
+  const sameSelection = await writeSession({
+    key: existingKey,
+    model: "openai/gpt-test-a",
+    thinkingLevel: "low",
+    fastMode: false,
+  });
   expect(sameSelection.ok, JSON.stringify(sameSelection.error)).toBe(true);
   expect(sameSelection.payload?.entry).toMatchObject({
     providerOverride: "openai",
@@ -898,22 +863,20 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     fastMode: false,
   });
 
-  const sameSubagentSelection = await directSessionReq<CreatedSession>(
-    "sessions.create",
-    { key: existingSubagentKey, model: "openai/gpt-test-a" },
-    { client: writeClient },
-  );
+  const sameSubagentSelection = await writeSession({
+    key: existingSubagentKey,
+    model: "openai/gpt-test-a",
+  });
   expect(sameSubagentSelection.ok, JSON.stringify(sameSubagentSelection.error)).toBe(true);
   expect(sameSubagentSelection.payload?.entry).toMatchObject({
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
   });
 
-  const sameSelectionWithProfile = await directSessionReq<CreatedSession>(
-    "sessions.create",
-    { key: existingProfileKey, model: "openai/gpt-test-a" },
-    { client: writeClient },
-  );
+  const sameSelectionWithProfile = await writeSession({
+    key: existingProfileKey,
+    model: "openai/gpt-test-a",
+  });
   expect(sameSelectionWithProfile.ok, JSON.stringify(sameSelectionWithProfile.error)).toBe(true);
   expect(sameSelectionWithProfile.payload?.entry).toMatchObject({
     providerOverride: "openai",
@@ -921,54 +884,29 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     authProfileOverride: "work",
   });
 
-  const profileDenied = await directSessionReq(
-    "sessions.create",
-    { key: existingProfileKey, model: "openai/gpt-test-a@other" },
-    { client: writeClient },
-  );
-  expect(profileDenied.ok).toBe(false);
-  expect(profileDenied.error).toMatchObject({
-    code: "FORBIDDEN",
-    message: "missing scope: operator.admin",
+  const profileDenied = await writeSession({
+    key: existingProfileKey,
+    model: "openai/gpt-test-a@other",
   });
+  expectAdminRequired(profileDenied);
 
-  const denied = await directSessionReq(
-    "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-b" },
-    { client: writeClient },
-  );
-  expect(denied.ok).toBe(false);
-  expect(denied.error).toMatchObject({
-    code: "FORBIDDEN",
-    message: "missing scope: operator.admin",
-  });
+  const denied = await writeSession({ key: existingKey, model: "openai/gpt-test-b" });
+  expectAdminRequired(denied);
 
   const unscopedDenied = await directSessionReq(
     "sessions.create",
     { key: existingKey, model: "openai/gpt-test-b" },
     { client: unscopedClient },
   );
-  expect(unscopedDenied.ok).toBe(false);
-  expect(unscopedDenied.error).toMatchObject({
-    code: "FORBIDDEN",
-    message: "missing scope: operator.admin",
-  });
+  expectAdminRequired(unscopedDenied);
 
   testState.agentConfig = {
     models: {
       "openai/gpt-test-b": { alias: "gpt-test-a" },
     },
   };
-  const aliasDenied = await directSessionReq(
-    "sessions.create",
-    { key: existingKey, model: "gpt-test-a" },
-    { client: writeClient },
-  );
-  expect(aliasDenied.ok).toBe(false);
-  expect(aliasDenied.error).toMatchObject({
-    code: "FORBIDDEN",
-    message: "missing scope: operator.admin",
-  });
+  const aliasDenied = await writeSession({ key: existingKey, model: "gpt-test-a" });
+  expectAdminRequired(aliasDenied);
 
   expect(loadSessionEntry({ sessionKey: existingKey, storePath })).toMatchObject({
     sessionId: "sess-existing",
@@ -983,30 +921,13 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
     authProfileOverride: "work",
   });
 
-  const thinkingDenied = await directSessionReq(
-    "sessions.create",
-    { key: existingKey, thinkingLevel: "high" },
-    { client: writeClient },
-  );
-  expect(thinkingDenied.ok).toBe(false);
-  expect(thinkingDenied.error).toMatchObject({
-    code: "FORBIDDEN",
-    message: "missing scope: operator.admin",
-  });
+  const thinkingDenied = await writeSession({ key: existingKey, thinkingLevel: "high" });
+  expectAdminRequired(thinkingDenied);
 
-  const fastModeDenied = await directSessionReq(
-    "sessions.create",
-    { key: existingKey, fastMode: true },
-    { client: writeClient },
-  );
-  expect(fastModeDenied.ok).toBe(false);
-  expect(fastModeDenied.error).toMatchObject({
-    code: "FORBIDDEN",
-    message: "missing scope: operator.admin",
-  });
+  const fastModeDenied = await writeSession({ key: existingKey, fastMode: true });
+  expectAdminRequired(fastModeDenied);
 
-  const admin = await directSessionReq<CreatedSession>(
-    "sessions.create",
+  const admin = await createSession(
     { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high", fastMode: true },
     { client: adminClient },
   );
