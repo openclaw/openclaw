@@ -1,5 +1,6 @@
+// Doctor repairs incident-scale Codex plugin state only after durable session convergence.
 import { createHash } from "node:crypto";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -64,165 +65,193 @@ afterEach(() => {
   note.mockClear();
 });
 
-it("repairs a full store of mixed stable bindings without losing current or uncertain ownership", async () => {
-  const incidentStateDir = sessionDirs.make();
-  vi.stubEnv("OPENCLAW_STATE_DIR", incidentStateDir);
-  const env = process.env;
-  const config: OpenClawConfig = {
-    agents: { entries: { main: {} } },
-    plugins: { entries: { codex: { enabled: true } } },
-  };
-  setRuntimeConfigSnapshot(config);
+describe("doctor incident-scale Codex binding repair", () => {
+  it("repairs a full store of mixed stable bindings without losing current or uncertain ownership", async () => {
+    const incidentStateDir = sessionDirs.make();
+    vi.stubEnv("OPENCLAW_STATE_DIR", incidentStateDir);
+    const env = process.env;
+    const config: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      plugins: { entries: { codex: { enabled: true } } },
+    };
+    setRuntimeConfigSnapshot(config);
 
-  type SeedRow = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
-  const rows: SeedRow[] = [];
-  const row = (namespace: string, key: string, value: SeedRow["value"]): SeedRow => ({
-    pluginId: "codex",
-    namespace,
-    key,
-    value,
-  });
-  const activeBinding = (sessionId: string, threadId = `thread-${sessionId}`) => ({
-    version: 1,
-    state: "active",
-    sessionId,
-    binding: { threadId, cwd: "/workspace" },
-  });
-  const capacity = () => getPluginStateCapacity("codex", env).liveEntries;
-  const doctor = (shouldRepair: boolean) =>
-    noteSessionTranscriptHealth({ cfg: config, env, shouldRepair });
-  const retain = (key: string, sessionId: string, extra: Record<string, unknown> = {}) => {
-    rows.push(row(BINDING_NAMESPACE, key, { ...activeBinding(sessionId), ...extra }));
-  };
-  const currentOwners = [
-    { sessionKey: "agent:main:main", sessionId: "shared-live" },
-    { sessionKey: "agent:main:other", sessionId: "shared-live" },
-    { sessionKey: "agent:main:current-a", sessionId: "live-a" },
-    { sessionKey: "agent:main:current-b", sessionId: "live-b" },
-  ];
-  const readCurrentOwners = () =>
-    currentOwners.map(({ sessionKey }) => ({
-      sessionKey,
-      sessionId: loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey })?.entry
-        .sessionId,
-    }));
-  // Old timestamps are pruned during seeding; these owners must still exist when Doctor runs.
-  const updatedAt = Date.now();
-  for (const { sessionKey, sessionId } of currentOwners) {
-    await replaceSessionEntry({ agentId: "main", env, sessionKey }, { sessionId, updatedAt });
-    retain(stableKey(sessionKey), sessionId);
-  }
-  expect(readCurrentOwners()).toEqual(currentOwners);
-  // ID-only evidence cannot distinguish an orphan hash from either valid shared-ID owner.
-  retain(stableKey("agent:main:ambiguous-old-key"), "shared-live");
-  retain("session:main:live-a", "live-a");
-  retain(stableKey("agent:missing:unknown", "missing"), "missing-owner");
-  retain("session:main:leased", "leased", {
-    lease: { token: "live-lease", expiresAt: Date.now() + 600_000 },
-  });
-  retain("session:main:supervised", "supervised", {
-    binding: {
-      threadId: "native-source",
-      cwd: "/workspace",
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "native-source",
-    },
-  });
-  retain("session:main:pending", "pending", {
-    binding: {
-      threadId: "pending-source",
-      cwd: "/workspace",
-      pendingSupervisionBranch: { sourceThreadId: "pending-source" },
-    },
-  });
-  retain("conversation:external-owner", "external-owner");
-  retain("session:main:malformed", "malformed", { state: "unknown" });
-  const retainedBindings = rows.slice();
-  const orphanCount = SESSION_BINDING_COUNT - retainedBindings.length;
-  for (let index = 0; index < orphanCount; index += 1) {
-    const sessionId = index === 0 ? "live-b" : `incident-session-${index}`;
-    rows.push(
-      row(
-        BINDING_NAMESPACE,
-        index > 0 && index < 73
-          ? `session:main:${sessionId}`
-          : stableKey(`agent:main:run:${index}`),
-        index % 2 === 0
-          ? activeBinding(sessionId, `incident-thread-${index}`)
-          : { version: 1, state: "cleared", sessionId, retired: true },
-      ),
-    );
-  }
-  for (let index = 0; index < ADVISORY_MANAGED_THREAD_COUNT; index += 1) {
-    rows.push(
-      row(MANAGED_THREAD_NAMESPACE, `sha256:${index.toString(16).padStart(64, "0")}`, {
-        version: 1,
-        kind: "managed-thread",
-        sourceHomeId: "incident-source-home",
-        threadId: `managed-thread-${index}`,
+    const rows: Parameters<typeof seedPluginStateEntriesForTests>[0] = [];
+    const retain = (key: string, sessionId: string, extra: Record<string, unknown> = {}) => {
+      rows.push({
+        pluginId: "codex",
+        namespace: BINDING_NAMESPACE,
+        key,
+        value: {
+          version: 1,
+          state: "active",
+          sessionId,
+          binding: { threadId: `thread-${sessionId}`, cwd: "/workspace" },
+          ...extra,
+        },
+      });
+    };
+    const currentOwners = (
+      [
+        ["main", "shared-live"],
+        ["other", "shared-live"],
+        ["current-a", "live-a"],
+        ["current-b", "live-b"],
+      ] as const
+    ).map(([name, sessionId]) => ({ sessionKey: `agent:main:${name}`, sessionId }));
+    const readCurrentOwners = () =>
+      currentOwners.map(({ sessionKey }) => ({
+        sessionKey,
+        sessionId: loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey })?.entry
+          .sessionId,
+      }));
+    // Old timestamps are pruned during seeding; these owners must still exist when Doctor runs.
+    const updatedAt = Date.now();
+    for (const { sessionKey, sessionId } of currentOwners) {
+      await replaceSessionEntry({ agentId: "main", env, sessionKey }, { sessionId, updatedAt });
+      retain(stableKey(sessionKey), sessionId);
+    }
+    expect(readCurrentOwners()).toEqual(currentOwners);
+    // ID-only evidence cannot distinguish an orphan hash from either valid shared-ID owner.
+    retain(stableKey("agent:main:ambiguous-old-key"), "shared-live");
+    retain("session:main:live-a", "live-a");
+    retain(stableKey("agent:missing:unknown", "missing"), "missing-owner");
+    retain("session:main:leased", "leased", {
+      lease: { token: "live-lease", expiresAt: Date.now() + 600_000 },
+    });
+    retain("session:main:supervised", "supervised", {
+      binding: {
+        threadId: "native-source",
+        cwd: "/workspace",
+        connectionScope: "supervision",
+        supervisionSourceThreadId: "native-source",
+      },
+    });
+    retain("session:main:pending", "pending", {
+      binding: {
+        threadId: "pending-source",
+        cwd: "/workspace",
+        pendingSupervisionBranch: { sourceThreadId: "pending-source" },
+      },
+    });
+    retain("conversation:external-owner", "external-owner");
+    retain("session:main:malformed", "malformed", { state: "unknown" });
+    const retainedBindings = rows.slice();
+    const orphanCount = SESSION_BINDING_COUNT - retainedBindings.length;
+    for (let index = 0; index < orphanCount; index += 1) {
+      const sessionId = index === 0 ? "live-b" : `incident-session-${index}`;
+      rows.push({
+        pluginId: "codex",
+        namespace: BINDING_NAMESPACE,
+        key:
+          index > 0 && index < 73
+            ? `session:main:${sessionId}`
+            : stableKey(`agent:main:run:${index}`),
+        value:
+          index % 2 === 0
+            ? {
+                version: 1,
+                state: "active",
+                sessionId,
+                binding: { threadId: `incident-thread-${index}`, cwd: "/workspace" },
+              }
+            : { version: 1, state: "cleared", sessionId, retired: true },
+      });
+    }
+    for (let index = 0; index < ADVISORY_MANAGED_THREAD_COUNT; index += 1) {
+      rows.push({
+        pluginId: "codex",
+        namespace: MANAGED_THREAD_NAMESPACE,
+        key: `sha256:${index.toString(16).padStart(64, "0")}`,
+        value: {
+          version: 1,
+          kind: "managed-thread",
+          sourceHomeId: "incident-source-home",
+          threadId: `managed-thread-${index}`,
+        },
+      });
+    }
+    seedPluginStateEntriesForTests(rows);
+
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(INCIDENT_ROW_COUNT);
+
+    const runActualDoctorRepair = () =>
+      noteSessionTranscriptHealth({
+        cfg: config,
+        env,
+        shouldRepair: true,
+      });
+
+    await noteSessionTranscriptHealth({
+      cfg: config,
+      env,
+      shouldRepair: false,
+    });
+    expect(note.mock.calls.flat().join("\n")).toContain("orphaned session ownership");
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(INCIDENT_ROW_COUNT);
+    note.mockClear();
+
+    await runActualDoctorRepair();
+
+    expect(readCurrentOwners()).toEqual(currentOwners);
+    const bindingRows = ["session-key:", "session:", "conversation:"].flatMap((prefix) =>
+      pluginStateDoctorEntriesInKeyRange({
+        pluginId: "codex",
+        namespace: BINDING_NAMESPACE,
+        prefix,
+        limit: 512,
+        env,
       }),
     );
-  }
-  seedPluginStateEntriesForTests(rows);
+    expect(
+      bindingRows
+        .map((row) => ({ key: row.key, value: row.value }))
+        .toSorted((a, b) => a.key.localeCompare(b.key)),
+    ).toEqual(
+      retainedBindings
+        .map((row) => ({ key: row.key, value: row.value }))
+        .toSorted((a, b) => a.key.localeCompare(b.key)),
+    );
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(
+      ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Removed ${orphanCount} orphaned Codex`),
+      expect.any(String),
+    );
 
-  expect(capacity()).toBe(INCIDENT_ROW_COUNT);
-
-  await doctor(false);
-  expect(note.mock.calls.flat().join("\n")).toContain("orphaned session ownership");
-  expect(capacity()).toBe(INCIDENT_ROW_COUNT);
-  note.mockClear();
-
-  await doctor(true);
-
-  expect(readCurrentOwners()).toEqual(currentOwners);
-  const bindingRows = ["session-key:", "session:", "conversation:"].flatMap((prefix) =>
-    pluginStateDoctorEntriesInKeyRange({
-      pluginId: "codex",
-      namespace: BINDING_NAMESPACE,
-      prefix,
-      limit: 512,
+    const managedThreads = createPluginStateKeyedStore<{ threadId: string }>("codex", {
+      namespace: MANAGED_THREAD_NAMESPACE,
+      maxEntries: 20_000,
+      overflowPolicy: "evict-oldest",
       env,
-    }),
-  );
-  const valuesByKey = (entries: ReadonlyArray<{ key: string; value: unknown }>) =>
-    Object.fromEntries(entries.map(({ key, value }) => [key, value]));
-  expect(bindingRows).toHaveLength(retainedBindings.length);
-  expect(valuesByKey(bindingRows)).toEqual(valuesByKey(retainedBindings));
-  expect(capacity()).toBe(ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length);
-  expect(note).toHaveBeenCalledWith(
-    expect.stringContaining(`Removed ${orphanCount} orphaned Codex`),
-    expect.any(String),
-  );
+    });
+    const preservedRows = await managedThreads.entries();
+    expect(preservedRows).toHaveLength(ADVISORY_MANAGED_THREAD_COUNT);
+    expect(new Set(preservedRows.map((entry) => entry.value.threadId)).size).toBe(
+      ADVISORY_MANAGED_THREAD_COUNT,
+    );
 
-  const managedThreads = createPluginStateKeyedStore<{ threadId: string }>("codex", {
-    namespace: MANAGED_THREAD_NAMESPACE,
-    maxEntries: 20_000,
-    overflowPolicy: "evict-oldest",
-    env,
-  });
-  const preservedRows = await managedThreads.entries();
-  expect(preservedRows).toHaveLength(ADVISORY_MANAGED_THREAD_COUNT);
-  expect(new Set(preservedRows.map((entry) => entry.value.threadId)).size).toBe(
-    ADVISORY_MANAGED_THREAD_COUNT,
-  );
+    // Repaired ownership remains writable through the public store.
+    const bindings = createPluginStateKeyedStore<{ recovered: boolean }>("codex", {
+      namespace: BINDING_NAMESPACE,
+      maxEntries: INCIDENT_ROW_COUNT,
+      overflowPolicy: "reject-new",
+      env,
+    });
+    await bindings.register("conversation:recovered-headroom", { recovered: true });
+    expect(await bindings.lookup("conversation:recovered-headroom")).toEqual({
+      recovered: true,
+    });
+    await bindings.delete("conversation:recovered-headroom");
 
-  // Repaired ownership remains writable through the public store.
-  const bindings = createPluginStateKeyedStore<{ recovered: boolean }>("codex", {
-    namespace: BINDING_NAMESPACE,
-    maxEntries: INCIDENT_ROW_COUNT,
-    overflowPolicy: "reject-new",
-    env,
-  });
-  await bindings.register("conversation:recovered-headroom", { recovered: true });
-  expect(await bindings.lookup("conversation:recovered-headroom")).toEqual({
-    recovered: true,
-  });
-  await bindings.delete("conversation:recovered-headroom");
+    note.mockClear();
+    await runActualDoctorRepair();
 
-  note.mockClear();
-  await doctor(true);
-
-  expect(capacity()).toBe(ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length);
-  expect(await managedThreads.entries()).toHaveLength(ADVISORY_MANAGED_THREAD_COUNT);
-  expect(note.mock.calls.flat().join("\n")).not.toContain("orphaned Codex");
-}, 120_000);
+    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(
+      ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
+    );
+    expect(await managedThreads.entries()).toHaveLength(ADVISORY_MANAGED_THREAD_COUNT);
+    expect(note.mock.calls.flat().join("\n")).not.toContain("orphaned Codex");
+  }, 120_000);
+});

@@ -18,6 +18,7 @@ const settleRetainedDoctorSessionSources = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 const runPostSessionPluginDoctorStateRepairs = vi.hoisted(() => vi.fn());
 
+// mock-isolation: capture Doctor notes without rendering terminal output.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("./doctor-session-sqlite.js", () => ({
@@ -30,6 +31,7 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   runPostSessionPluginDoctorStateRepairs,
 }));
 
+// mock-isolation: observe repair ordering without mutating session state.
 vi.mock("./doctor-session-incognito-key-repair.js", () => ({ repairReservedIncognitoSessionKeys }));
 
 vi.mock("./doctor-session-delivery-state.js", async (importOriginal) => {
@@ -45,6 +47,7 @@ vi.mock("./doctor-session-exec-policy.js", () => ({
   repairLegacySessionExecPolicy: vi.fn(),
 }));
 
+// mock-isolation: observe repair ordering without mutating canonical session keys.
 vi.mock("./doctor-session-canonical-keys.js", () => ({ repairCanonicalSessionKeys }));
 
 vi.mock("./doctor-session-worktree-workspace.js", () => ({

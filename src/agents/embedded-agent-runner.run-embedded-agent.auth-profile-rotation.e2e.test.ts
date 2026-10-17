@@ -52,8 +52,7 @@ const installRunEmbeddedMocks = () => {
       return { apiKey: token.token, baseUrl: token.baseUrl, expiresAt: token.expiresAt };
     },
   });
-  // The model resolver stays deterministic so retry assertions only observe
-  // profile selection, cooldowns, and provider auth preparation.
+  // mock-isolation: deterministic model resolution isolates profile rotation and provider auth.
   vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) => {
       const subscriptionModel = modelId === "chatgpt-mock";

@@ -1,8 +1,8 @@
 import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import {
@@ -14,6 +14,7 @@ import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generatio
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { runBtwSideQuestion } from "./btw.js";
@@ -21,12 +22,13 @@ import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-const selectedSource = vi.hoisted(
-  (): {
+const selectedSource = vi.hoisted(() => {
+  const state: {
     input?: PreparedModelRuntimeInput;
     acquisition?: { entered: () => void; completion: Promise<void> };
-  } => ({}),
-);
+  } = {};
+  return state;
+});
 
 // Exercise BTW against an already-owned source without enabling configured producer disposal.
 vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
@@ -57,57 +59,53 @@ const publishedRuntimeResourceModes = [
 it.each(publishedRuntimeResourceModes)(
   "retains an acquired SQLite source through %s and replacement",
   async (mode) => {
-    await withOpenClawTestState(
-      {
-        label: "published-runtime-resources",
-        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_BUNDLED_PLUGINS_DIR: undefined },
-      },
-      async (state) => {
-        const pluginId = "published-runtime-provider";
-        const pluginRoot = state.path("plugin");
-        fs.mkdirSync(pluginRoot);
-        const fixture = createColdPluginFixture({
-          rootDir: pluginRoot,
-          pluginId,
-          providerId: pluginId,
-          manifest: {
-            channels: [],
-            channelConfigs: {},
-            providerAuthChoices: [],
-            startup: { agentHarnesses: [pluginId] },
-            modelCatalog: {
-              providers: {
-                [pluginId]: {
-                  discovery: "static",
-                  api: "openai-completions",
-                  baseUrl: "https://fixture.invalid/v1",
-                  models: [{ id: "model", name: "Fixture model", input: ["text"] }],
-                },
+    await withOpenClawTestState({ label: "published-runtime-resources" }, async (state) => {
+      const pluginId = "published-runtime-provider";
+      const pluginRoot = state.path("plugin");
+      const emptyBundled = state.path("empty-bundled");
+      fs.mkdirSync(pluginRoot);
+      fs.mkdirSync(emptyBundled);
+      const fixture = createColdPluginFixture({
+        rootDir: pluginRoot,
+        pluginId,
+        providerId: pluginId,
+        manifest: {
+          channels: [],
+          channelConfigs: {},
+          providerAuthChoices: [],
+          startup: { agentHarnesses: [pluginId] },
+          modelCatalog: {
+            providers: {
+              [pluginId]: {
+                discovery: "static",
+                api: "openai-completions",
+                baseUrl: "https://fixture.invalid/v1",
+                models: [{ id: "model", name: "Fixture model", input: ["text"] }],
               },
             },
           },
-        });
-        const key = `__published_runtime_resources_${state.root}`;
-        const connections: Array<{ file: string; database: DatabaseSync; disposals: number }> = [];
-        const requestSignal: { current?: AbortSignal } = {};
-        const abortRegistry: { current?: ReturnType<typeof getPluginRuntimeGenerationRegistry> } =
-          {};
-        const bridge = {
-          connections,
-          getRequestSignal: getSessionMcpRequestSignal,
-          getRegistry: getPluginRuntimeGenerationRegistry,
-          requestSignal,
-          abortRegistry,
-          abortObserved: createDeferredCore(),
-          entered: createDeferredCore(),
-          finish: createDeferredCore(),
-          cleanupEntered: createDeferredCore(),
-          cleanupFinish: createDeferredCore(),
-        };
-        Object.defineProperty(globalThis, key, { configurable: true, value: bridge });
-        fs.writeFileSync(
-          fixture.runtimeSource,
-          `
+        },
+      });
+      const key = `__published_runtime_resources_${path.basename(state.root)}`;
+      const connections: Array<{ file: string; database: DatabaseSync; disposals: number }> = [];
+      const requestSignal: { current?: AbortSignal } = {};
+      const abortRegistry: { current?: ReturnType<typeof getPluginRuntimeGenerationRegistry> } = {};
+      const bridge = {
+        connections,
+        getRequestSignal: getSessionMcpRequestSignal,
+        getRegistry: getPluginRuntimeGenerationRegistry,
+        requestSignal,
+        abortRegistry,
+        abortObserved: createDeferredCore(),
+        entered: createDeferredCore(),
+        finish: createDeferredCore(),
+        cleanupEntered: createDeferredCore(),
+        cleanupFinish: createDeferredCore(),
+      };
+      Object.defineProperty(globalThis, key, { configurable: true, value: bridge });
+      fs.writeFileSync(
+        fixture.runtimeSource,
+        `
 const { DatabaseSync } = require("node:sqlite");
 module.exports = {
   id: ${JSON.stringify(pluginId)},
@@ -150,140 +148,170 @@ module.exports = {
   },
 };
 `,
-        );
-        const config: OpenClawConfig = {
-          agents: {
-            entries: { main: {} },
-            defaults: {
-              model: { primary: `${pluginId}/model` },
-              workspace: state.workspaceDir,
-              models: { [`${pluginId}/model`]: { agentRuntime: { id: pluginId } } },
+      );
+      const config: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            model: { primary: `${pluginId}/model` },
+            workspace: state.workspaceDir,
+            models: { [`${pluginId}/model`]: { agentRuntime: { id: pluginId } } },
+          },
+        },
+        models: {
+          providers: {
+            [pluginId]: {
+              api: "openai-completions",
+              apiKey: "synthetic-btw-fixture",
+              baseUrl: "https://fixture.invalid/v1",
+              models: [
+                {
+                  id: "model",
+                  name: "Fixture model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 1024,
+                },
+              ],
             },
           },
-          plugins: {
-            load: { paths: [pluginRoot] },
-            slots: { memory: "none" },
-            entries: { [pluginId]: { enabled: true } },
-          },
-        };
-        expect(OpenClawSchema.safeParse(config).success).toBe(true);
-        const input = {
-          config,
-          agentId: "main",
-          agentDir: state.agentDir("main"),
-          workspaceDir: state.workspaceDir,
-          readOnly: true,
-          loadRuntimePlugins: true,
-          skipCredentials: true,
-          runtimePluginSelections: [{ provider: pluginId, modelId: "model", agentId: "main" }],
-        };
-        await resetPreparedModelRuntimeSnapshotsForTest();
-        clearPluginMetadataLifecycleCaches();
-        const leases = new AsyncDisposableStack();
-        const owner = new AsyncWorkScope();
-        const acquisitionEntered = createDeferredCore();
-        const acquisitionFinish = createDeferredCore();
-        const cancellationReason = new Error("BTW parent closed");
-        let sideQuestion: ReturnType<typeof runBtwSideQuestion> | undefined;
-        try {
-          const first = leases.use(
-            await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" }),
-          );
-          expect(connections).toHaveLength(1);
-          const original = expectDefined(connections[0], "original provider registration");
-          selectedSource.input = input;
-          if (mode === "BTW parent close during acquisition") {
-            selectedSource.acquisition = {
-              entered: acquisitionEntered.resolve,
-              completion: acquisitionFinish.promise,
-            };
-          }
-          sideQuestion = owner.track(() =>
-            runBtwSideQuestion({
-              cfg: config,
-              agentId: "main",
-              agentDir: input.agentDir,
-              provider: pluginId,
-              model: "model",
-              question: "What is the answer?",
-              sessionEntry: {
-                sessionId: "btw-native-fixture",
-                updatedAt: 1,
-                agentHarnessId: pluginId,
-              },
-              sessionKey: "agent:main:btw-native-fixture",
-              isNewSession: false,
-              resolvedThinkLevel: "off",
-              resolvedReasoningLevel: "off",
-            }),
-          );
-          if (mode === "BTW parent close during acquisition") {
-            await awaitGateBeforeSettlement(
-              acquisitionEntered.promise,
-              sideQuestion,
-              "BTW did not enter acquisition",
-            );
-            owner.beginClose(cancellationReason);
-            expect(original.disposals).toBe(0);
-            acquisitionFinish.resolve();
-          }
-          await awaitGateBeforeSettlement(
-            bridge.entered.promise,
-            sideQuestion,
-            "BTW did not enter the acquired harness",
-          );
-          if (mode === "BTW parent close") {
-            owner.beginClose(cancellationReason);
-          }
-          expect(bridge.requestSignal.current?.aborted).toBe(true);
-          expect(bridge.requestSignal.current?.reason).toBe(cancellationReason);
-          await first[Symbol.asyncDispose]();
-          expect(original.database.isOpen).toBe(true);
-          const replacement = leases.use(
-            await acquireReadOnlyPreparedModelRuntime(input, {
-              catalogMode: "static",
-            }),
-          );
-          expect(connections).toHaveLength(2);
-          const successor = expectDefined(connections[1], "replacement provider registration");
-          expect(original.database.prepare("SELECT value FROM answer").get()?.value).toBe(42);
-          bridge.finish.resolve();
-          await bridge.cleanupEntered.promise;
-          expect(original.database.isOpen).toBe(true);
-          bridge.cleanupFinish.resolve();
-          expect(await sideQuestion).toEqual({ text: "42" });
-          await bridge.abortObserved.promise;
-          expect(bridge.abortRegistry.current).toBe(first.snapshot.pluginRegistry);
-          await owner.drain();
-          await expect.poll(() => original.disposals).toBe(1);
-          expect(original.database.isOpen).toBe(false);
-          expect(successor.database.isOpen).toBe(true);
-          {
-            using reopened = new DatabaseSync(original.file, { readOnly: true });
-            expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
-          }
-          await replacement[Symbol.asyncDispose]();
-          await expect.poll(() => successor.disposals).toBe(1);
-        } finally {
-          acquisitionFinish.resolve();
-          bridge.finish.resolve();
-          bridge.cleanupFinish.resolve();
-          await Promise.allSettled([sideQuestion, owner.drain()]);
-          selectedSource.input = undefined;
-          selectedSource.acquisition = undefined;
-          await Promise.allSettled([leases.disposeAsync()]);
+        },
+        plugins: {
+          load: { paths: [pluginRoot] },
+          slots: { memory: "none" },
+          entries: { [pluginId]: { enabled: true } },
+        },
+      };
+      expect(OpenClawSchema.safeParse(config).success).toBe(true);
+      const input = {
+        config,
+        agentId: "main",
+        agentDir: state.agentDir("main"),
+        workspaceDir: state.workspaceDir,
+        readOnly: true,
+        loadRuntimePlugins: true,
+        skipCredentials: true,
+        runtimePluginSelections: [{ provider: pluginId, modelId: "model", agentId: "main" }],
+      };
+      await withEnvAsync(
+        { OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundled, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        async () => {
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
-          resetPluginLoaderTestStateForTest();
-          cleanupPluginLoaderFixturesForTest();
-          for (const connection of connections) {
-            if (connection.database.isOpen) {
-              connection.database.close();
+          let first: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
+          let replacement:
+            | Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>
+            | undefined;
+          const owner = new AsyncWorkScope();
+          const acquisitionEntered = createDeferredCore();
+          const acquisitionFinish = createDeferredCore();
+          const cancellationReason = new Error("BTW parent closed");
+          let sideQuestion: ReturnType<typeof runBtwSideQuestion> | undefined;
+          try {
+            first = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
+            expect(connections).toHaveLength(1);
+            const original = expectDefined(connections[0], "original provider registration");
+            selectedSource.input = input;
+            if (mode === "BTW parent close during acquisition") {
+              selectedSource.acquisition = {
+                entered: acquisitionEntered.resolve,
+                completion: acquisitionFinish.promise,
+              };
             }
+            sideQuestion = owner.track(() =>
+              runBtwSideQuestion({
+                cfg: config,
+                agentId: "main",
+                agentDir: input.agentDir,
+                provider: pluginId,
+                model: "model",
+                question: "What is the answer?",
+                sessionEntry: {
+                  sessionId: "btw-native-fixture",
+                  updatedAt: 1,
+                  agentHarnessId: pluginId,
+                },
+                sessionKey: "agent:main:btw-native-fixture",
+                isNewSession: false,
+                resolvedThinkLevel: "off",
+                resolvedReasoningLevel: "off",
+              }),
+            );
+            if (mode === "BTW parent close during acquisition") {
+              await Promise.race([
+                acquisitionEntered.promise,
+                sideQuestion.then(() => {
+                  throw new Error("BTW did not enter acquisition");
+                }),
+              ]);
+              owner.beginClose(cancellationReason);
+              expect(original.disposals).toBe(0);
+              acquisitionFinish.resolve();
+            }
+            await Promise.race([
+              bridge.entered.promise,
+              sideQuestion.then(() => {
+                throw new Error("BTW did not enter the acquired harness");
+              }),
+            ]);
+            if (mode === "BTW parent close") {
+              owner.beginClose(cancellationReason);
+            }
+            expect(bridge.requestSignal.current?.aborted).toBe(true);
+            expect(bridge.requestSignal.current?.reason).toBe(cancellationReason);
+            await first[Symbol.asyncDispose]();
+            expect(original.database.isOpen).toBe(true);
+            replacement = await acquireReadOnlyPreparedModelRuntime(input, {
+              catalogMode: "static",
+            });
+            expect(connections).toHaveLength(2);
+            const successor = expectDefined(connections[1], "replacement provider registration");
+            expect(original.database.prepare("SELECT value FROM answer").get()?.value).toBe(42);
+            bridge.finish.resolve();
+            await bridge.cleanupEntered.promise;
+            expect(original.database.isOpen).toBe(true);
+            bridge.cleanupFinish.resolve();
+            expect(await sideQuestion).toEqual({ text: "42" });
+            await bridge.abortObserved.promise;
+            expect(bridge.abortRegistry.current === first.snapshot.pluginRegistry).toBe(true);
+            await owner.drain();
+            await expect.poll(() => original.disposals).toBe(1);
+            expect(original.database.isOpen).toBe(false);
+            expect(successor.database.isOpen).toBe(true);
+            const reopened = new DatabaseSync(original.file, { readOnly: true });
+            try {
+              expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
+            } finally {
+              reopened.close();
+            }
+            await replacement[Symbol.asyncDispose]();
+            await expect.poll(() => successor.disposals).toBe(1);
+          } finally {
+            acquisitionFinish.resolve();
+            bridge.finish.resolve();
+            bridge.cleanupFinish.resolve();
+            await Promise.allSettled([sideQuestion, owner.drain()]);
+            selectedSource.input = undefined;
+            selectedSource.acquisition = undefined;
+            await Promise.allSettled([
+              first?.[Symbol.asyncDispose](),
+              replacement?.[Symbol.asyncDispose](),
+            ]);
+            await resetPreparedModelRuntimeSnapshotsForTest();
+            clearPluginMetadataLifecycleCaches();
+            resetPluginLoaderTestStateForTest();
+            cleanupPluginLoaderFixturesForTest();
+            for (const connection of connections) {
+              if (connection.database.isOpen) {
+                connection.database.close();
+              }
+            }
+            Reflect.deleteProperty(globalThis, key);
           }
-          Reflect.deleteProperty(globalThis, key);
-        }
-      },
-    );
+        },
+      );
+    });
   },
 );

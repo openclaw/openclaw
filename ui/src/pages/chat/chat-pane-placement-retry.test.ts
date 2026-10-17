@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMoveTarget } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   sessionPlacementAction,
   sessionPlacementActionReason,
@@ -12,7 +13,12 @@ import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
-import { createPlacementPane, retryPlacementSession } from "./chat-pane-placement.test-support.ts";
+import {
+  activePlacementSession,
+  createTestChatPane,
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+} from "./chat-pane.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 beforeEach(() => {
@@ -21,159 +27,198 @@ beforeEach(() => {
 afterEach(() => dialogs.cleanup());
 
 function fixture(target: SessionMoveTarget = { kind: "gateway" }, abandonSource?: true) {
-  const { pane, state, request, reconcileMutation } = createPlacementPane(dialogs, undefined, [
-    "operator.admin",
-    "operator.write",
-  ]);
-  const session = retryPlacementSession(target, abandonSource);
+  const request = dialogs.mockRequest(async () => ({ ok: true }));
+  const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
+  const { pane, state } = createTestChatPane({
+    client: createGatewayBrowserClientFixture({ request }),
+    sessions: createSessionCapabilityFixture({ reconcileMutation }),
+  });
+  pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    ["sessions.move"],
+    ["operator.admin", "operator.write"],
+  );
+  const original = activePlacementSession();
+  const session: GatewaySessionRow = {
+    ...original,
+    sessionId: "retry-session",
+    label: "Retry release review",
+    placement: { ...original.placement, state: "draining", generation: 2 },
+    placementMove: {
+      target,
+      updatedAtMs: 2,
+      error: "Workspace reconciliation failed.",
+      retry: {
+        expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
+        target,
+        ...(abandonSource ? { abandonSource } : {}),
+      },
+    },
+  };
   state.sessionKey = session.key;
   state.currentSessionId = session.sessionId;
   state.sessionsResult = { ...createSessionsListResult(), sessions: [session] };
-  const requireProfile = () => {
-    pane.context.agents.state.agentsList!.sessionPlacement = {
-      requiredProfile: { id: "required", providerId: "device" },
-    };
-  };
   const run = () =>
     dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, session));
-  return { pane, state, session, request, reconcileMutation, requireProfile, run };
+  return { pane, state, session, request, reconcileMutation, run };
 }
 
-it.each([
-  { kind: "gateway" },
-  { kind: "device", deviceId: "build-device" },
-  { kind: "profile", profileId: "cloud", os: "windows/wsl2", machineClass: "fast" },
-] satisfies SessionMoveTarget[])("retries exact $kind intent without a picker", async (target) => {
-  const { session, request, reconcileMutation, run } = fixture(target);
-  expect(sessionPlacementAction(session)).toBe("retry");
-  await run();
-  expect(request).toHaveBeenCalledExactlyOnceWith("sessions.move", {
-    key: session.key,
-    agentId: "main",
-    expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
-    target,
-  });
-  expect(reconcileMutation).toHaveBeenCalledWith("main");
-  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-});
-
-it.each([
-  "missing-receipt",
-  "missing-receipt-active",
-  "pending",
-  "reconciling",
-  "active",
-  "archived",
-  "profile-without-admin",
-  "required-profile",
-] as const)("refuses %s instead of changing the destination", async (scenario) => {
-  const { pane, session, request, requireProfile, run } = fixture({
-    kind: "profile",
-    profileId: "cloud",
-  });
-  if (scenario.startsWith("missing-receipt")) {
-    session.placementMove!.retry = undefined;
-  }
-  if (scenario === "pending") {
-    session.placementMove!.error = undefined;
-  }
-  const state = scenario === "missing-receipt-active" ? "active" : scenario;
-  if ((state === "active" || state === "reconciling") && session.placement?.state === "draining") {
-    session.placement = { ...session.placement, state };
-  }
-  if (scenario === "archived") {
-    session.archived = true;
-  }
-  if (scenario === "profile-without-admin") {
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.move"],
-      ["operator.write"],
-    );
-  }
-  if (scenario === "required-profile") {
-    requireProfile();
-  }
-  await run();
-  expect(request).not.toHaveBeenCalled();
-  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-});
-
-it("requires explicit destructive confirmation again when retrying abandonment", async () => {
-  const { session, request, run } = fixture({ kind: "gateway" }, true);
-  const cancelled = run();
-  answerConfirmDialog(await waitForConfirmDialogActions(), "cancel");
-  await cancelled;
-  expect(request).not.toHaveBeenCalled();
-  const retried = run();
-  const confirmation = await waitForConfirmDialogActions();
-  expect(document.body.textContent).toContain(
-    "Unsynced device files and in-flight work may be lost",
+describe("durable placement move retry", () => {
+  it.each([
+    { kind: "gateway" },
+    { kind: "device", deviceId: "build-device" },
+    { kind: "profile", profileId: "cloud", os: "windows/wsl2", machineClass: "fast" },
+  ] satisfies SessionMoveTarget[])(
+    "retries the exact $kind intent without a destination picker",
+    async (target) => {
+      const { session, request, reconcileMutation, run } = fixture(target);
+      expect(sessionPlacementAction(session)).toBe("retry");
+      await run();
+      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.move", {
+        key: session.key,
+        agentId: "main",
+        expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
+        target,
+      });
+      expect(reconcileMutation).toHaveBeenCalledWith("main");
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
   );
-  answerConfirmDialog(confirmation, "confirm");
-  await retried;
-  expect(request).toHaveBeenCalledExactlyOnceWith("sessions.move", {
-    key: session.key,
-    agentId: "main",
-    ...session.placementMove!.retry,
-  });
-});
 
-it.each(["source", "target", "disposition"] as const)(
-  "rejects changed durable %s after confirmation",
-  async (field) => {
+  it.each([
+    "missing-receipt",
+    "missing-receipt-active",
+    "pending",
+    "reconciling",
+    "active",
+    "archived",
+    "profile-without-admin",
+    "required-profile",
+  ] as const)("refuses %s instead of changing the destination", async (scenario) => {
+    const { pane, session, request, run } = fixture({ kind: "profile", profileId: "cloud" });
+    if (scenario === "missing-receipt" || scenario === "missing-receipt-active") {
+      session.placementMove!.retry = undefined;
+      if (scenario === "missing-receipt-active" && session.placement?.state === "draining") {
+        session.placement = { ...session.placement, state: "active" };
+      }
+    }
+    if (scenario === "pending") {
+      session.placementMove!.error = undefined;
+    }
+    if (scenario === "reconciling" && session.placement?.state === "draining") {
+      session.placement = { ...session.placement, state: "reconciling" };
+    }
+    if (scenario === "active" && session.placement?.state === "draining") {
+      session.placement = { ...session.placement, state: "active" };
+    }
+    if (scenario === "archived") {
+      session.archived = true;
+    }
+    if (scenario === "profile-without-admin") {
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["sessions.move"],
+        ["operator.write"],
+      );
+    }
+    if (scenario === "required-profile") {
+      pane.context.agents.state.agentsList = {
+        ...pane.context.agents.state.agentsList!,
+        sessionPlacement: { requiredProfile: { id: "required", providerId: "device" } },
+      };
+    }
+    await run();
+    expect(request).not.toHaveBeenCalled();
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("requires explicit destructive confirmation again when retrying abandonment", async () => {
     const { session, request, run } = fixture({ kind: "gateway" }, true);
+    const cancelled = run();
+    answerConfirmDialog(await waitForConfirmDialogActions(), "cancel");
+    await cancelled;
+    expect(request).not.toHaveBeenCalled();
     const retried = run();
     const confirmation = await waitForConfirmDialogActions();
-    const receipt = session.placementMove!.retry!;
-    if (field === "source") {
-      receipt.expected.generation = 8;
-    }
-    if (field === "target") {
-      receipt.target = session.placementMove!.target = { kind: "device", deviceId: "other" };
-    }
-    if (field === "disposition") {
-      receipt.abandonSource = undefined;
-    }
+    expect(document.body.textContent).toContain(
+      "Unsynced device files and in-flight work may be lost",
+    );
     answerConfirmDialog(confirmation, "confirm");
     await retried;
-    expect(request).not.toHaveBeenCalled();
-  },
-);
-
-it("preserves a failed retry visibly and permits a required-profile retry only to that profile", async () => {
-  const { pane, state, session, request, requireProfile, run } = fixture({
-    kind: "profile",
-    profileId: "required",
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.move", {
+      key: session.key,
+      agentId: "main",
+      ...session.placementMove!.retry,
+    });
   });
-  requireProfile();
-  expect(
-    sessionPlacementActionReason(pane.context.gateway.snapshot, session, "required"),
-  ).toBeUndefined();
-  request.mockRejectedValueOnce(new Error("Workspace still cannot be reconciled."));
-  await run();
-  expect(state.lastError).toContain("Workspace still cannot be reconciled");
-  expect(session.placementMove!.retry!.expected.generation).toBe(1);
-  expect(sessionPlacementAction(session)).toBe("retry");
-  expect(request).toHaveBeenCalledTimes(1);
-});
-it.each([
-  { state: "failed", recoveryError: "Worker failed", recoveryAction: "restart" },
-  { state: "local" },
-] as const)("blocks $state recovery while a Move is outstanding", async (placement) => {
-  const { pane, session, request } = fixture();
-  session.placement = {
-    generation: 3,
-    createdAtMs: 1,
-    updatedAtMs: 3,
-    stateChangedAtMs: 3,
-    ...placement,
-  };
-  session.repositoryWorkspaceId = "repository-workspace";
-  pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-    ["sessions.move", "sessions.dispatch", "sessions.reclaim"],
-    ["operator.admin", "operator.write"],
+
+  it.each(["source", "target", "disposition"] as const)(
+    "rejects a changed durable %s after confirmation",
+    async (field) => {
+      const { session, request, run } = fixture({ kind: "gateway" }, true);
+      const retried = run();
+      const confirmation = await waitForConfirmDialogActions();
+      const receipt = session.placementMove!.retry!;
+      if (field === "source") {
+        receipt.expected.generation = 8;
+      }
+      if (field === "target") {
+        session.placementMove = {
+          ...session.placementMove!,
+          target: { kind: "device", deviceId: "other" },
+          retry: { expected: receipt.expected, target: { kind: "device", deviceId: "other" } },
+        };
+      }
+      if (field === "disposition") {
+        receipt.abandonSource = undefined;
+      }
+      answerConfirmDialog(confirmation, "confirm");
+      await retried;
+      expect(request).not.toHaveBeenCalled();
+    },
   );
-  await pane.changeHeaderPlacement(session, "recover");
-  expect(request).not.toHaveBeenCalled();
-  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+
+  it("preserves a failed retry visibly and permits a required-profile retry only to that profile", async () => {
+    const { pane, state, session, request, run } = fixture({
+      kind: "profile",
+      profileId: "required",
+    });
+    pane.context.agents.state.agentsList = {
+      ...pane.context.agents.state.agentsList!,
+      sessionPlacement: { requiredProfile: { id: "required", providerId: "device" } },
+    };
+    expect(
+      sessionPlacementActionReason(pane.context.gateway.snapshot, session, "required"),
+    ).toBeUndefined();
+    request.mockRejectedValueOnce(new Error("Workspace still cannot be reconciled."));
+    await run();
+    expect(state.lastError).toContain("Workspace still cannot be reconciled");
+    expect(session.placementMove!.retry!.expected.generation).toBe(1);
+    expect(sessionPlacementAction(session)).toBe("retry");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it.each(["failed", "local"] as const)(
+    "does not select an alternate destination through %s recovery while a Move is outstanding",
+    async (placementState) => {
+      const { pane, session, request } = fixture();
+      session.placement =
+        placementState === "failed"
+          ? {
+              state: "failed",
+              generation: 3,
+              createdAtMs: 1,
+              updatedAtMs: 3,
+              stateChangedAtMs: 3,
+              recoveryError: "Worker failed",
+              recoveryAction: "restart",
+            }
+          : { state: "local", generation: 3, createdAtMs: 1, updatedAtMs: 3, stateChangedAtMs: 3 };
+      session.repositoryWorkspaceId = "repository-workspace";
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["sessions.move", "sessions.dispatch", "sessions.reclaim"],
+        ["operator.admin", "operator.write"],
+      );
+      await pane.changeHeaderPlacement(session, "recover");
+      expect(request).not.toHaveBeenCalled();
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
 });

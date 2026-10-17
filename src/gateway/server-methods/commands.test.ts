@@ -90,6 +90,7 @@ vi.mock("../../plugins/command-specs.js", async (importOriginal) => ({
     return mockPluginSpecs.map((entry) => Object.assign({}, entry, { nativeName: entry.name }));
   }),
 }));
+// mock-isolation: command inventory comes from this suite's synthetic plugin registry.
 vi.mock("../../plugins/commands.js", () => ({
   listPluginCommands: vi.fn(() =>
     mockPluginSpecs.map((entry) => Object.assign({}, entry, { pluginId: "plugin-tts" })),
@@ -107,6 +108,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 vi.mock("../../channels/plugins/read-only-command-defaults.js", () => ({
   resolveReadOnlyChannelCommandDefaults: () => undefined,
 }));
+// mock-isolation: resolve only synthetic channel plugins without loading bundled runtimes.
 vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: vi.fn(channelPlugin),
   getChannelPlugin: vi.fn(channelPlugin),

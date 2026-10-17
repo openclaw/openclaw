@@ -37,14 +37,7 @@ beforeEach(() => {
   native.read.mockReset().mockResolvedValue(null);
 });
 
-const read = (file: string) => fs.readFile(file, "utf8");
-const result = (stdout = "", code = 0, stderr = "", termination: "exit" | "signal" = "exit") => ({
-  stdout,
-  code,
-  stderr,
-  termination,
-});
-async function createInstallFixture(absentInput = false) {
+async function createInstallFixture() {
   const root = temporary.make("openclaw-systemd-rollback-");
   const env = {
     HOME: root,
@@ -69,72 +62,50 @@ async function createInstallFixture(absentInput = false) {
     environment: { SERVICE_VALUE: "candidate" },
     environmentValueSources: { SERVICE_VALUE: "file" as const },
   };
-  if (absentInput) {
-    await fs.rm(environment);
-  }
   return { env, unit, environment, originals, installArgs };
 }
 
-function authority() {
-  let current = true;
-  return {
-    revoke() {
-      current = false;
-      assertGatewayServiceUpdateCurrent();
-    },
-    run<T>(operation: () => Promise<T>) {
-      return withGatewayServiceUpdateAuthority(
-        () => {
-          if (!current) {
-            throw new Error("Doctor custody revoked");
-          }
-        },
-        operation,
-        { updateOwned: false, assertRecoveryCurrent: () => {} },
-      );
-    },
-  };
-}
-function expectText(text: string, ...parts: string[]) {
-  for (const part of parts) {
-    expect(text).toContain(part);
-  }
-}
-
-it.each([false, true])("retains concurrent unit inputs (replacement=%s)", async (replacement) => {
-  const { unit, environment, installArgs } = await createInstallFixture(true);
-  const rename = fs.rename.bind(fs);
-  let edited = false;
-  vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-    await rename(source, destination);
-    if (destination === unit && !edited) {
-      edited = true;
-      const contents = `${await read(unit)}# concurrent edit\n`;
-      const target = replacement ? `${unit}.operator` : unit;
-      await fs.writeFile(target, contents, { mode: 0o600 });
-      if (replacement) {
-        await rename(target, unit);
+it.each([false, true])(
+  "retains generated input referenced by a concurrent unit edit (replacement=%s)",
+  async (replacement) => {
+    const { unit, environment, installArgs } = await createInstallFixture();
+    await fs.rm(environment);
+    const rename = fs.rename.bind(fs);
+    let edited = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      await rename(source, destination);
+      if (destination === unit && !edited) {
+        edited = true;
+        const contents = `${await fs.readFile(unit, "utf8")}# concurrent edit\n`;
+        const target = replacement ? `${unit}.operator` : unit;
+        await fs.writeFile(target, contents, { mode: 0o600 });
+        if (replacement) {
+          await rename(target, unit);
+        }
       }
-    }
-  });
+    });
 
-  await expect(stageSystemdService(installArgs)).rejects.toThrow("changed during publication");
-  expectText(await read(unit), "# concurrent edit", environment);
-  expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
-});
+    await expect(stageSystemdService(installArgs)).rejects.toThrow("changed during publication");
+    expect(await fs.readFile(unit, "utf8")).toContain("# concurrent edit");
+    expect(await fs.readFile(unit, "utf8")).toContain(environment);
+    expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+  },
+);
 
 it.each(["success", "failure", "interruption"] as const)(
-  "retains cached inputs until rollback reload (%s)",
+  "keeps cached candidate inputs until rollback reload confirms restoration (%s)",
   async (reload) => {
-    const { unit, environment, originals, installArgs } = await createInstallFixture(true);
+    const { unit, environment, originals, installArgs } = await createInstallFixture();
+    await fs.rm(environment);
     let cachedUnit = originals.get(unit)!;
     let activationFailed = false;
+    let restoredReload = false;
     let inputPresentAtReload = false;
     const warnings: string[] = [];
     native.active.mockResolvedValue({ ok: true, value: true });
     native.exec.mockImplementation(async (_env, args) => {
       if (args[0] === "daemon-reload") {
-        const diskUnit = await read(unit);
+        const diskUnit = await fs.readFile(unit, "utf8");
         if (activationFailed) {
           expect(diskUnit).toBe(originals.get(unit));
           inputPresentAtReload = await fs.stat(environment).then(
@@ -142,37 +113,54 @@ it.each(["success", "failure", "interruption"] as const)(
             () => false,
           );
           if (reload !== "success") {
-            return result("", 1, `reload ${reload}`, reload === "failure" ? "exit" : "signal");
+            return {
+              code: 1,
+              termination: reload === "failure" ? "exit" : "signal",
+              stdout: "",
+              stderr: `rollback reload ${reload}`,
+            };
           }
+          restoredReload = true;
         }
         cachedUnit = diskUnit;
       }
       if (args[0] === "restart" && !activationFailed) {
         expect(cachedUnit).toContain(environment);
         activationFailed = true;
-        return result("", 1, "candidate failed");
+        return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
       }
-      return result(args[0] === "is-enabled" ? "enabled" : "");
+      return {
+        code: 0,
+        termination: "exit",
+        stdout: args[0] === "is-enabled" ? "enabled" : "",
+        stderr: "",
+      };
     });
-    await expect(
-      installSystemdService({ ...installArgs, warn: (message) => warnings.push(message) }),
-    ).rejects.toThrow("candidate failed");
-    expect(await read(unit)).toBe(originals.get(unit));
+    const installation = installSystemdService({
+      ...installArgs,
+      warn: (message) => warnings.push(message),
+    });
+    await expect(installation).rejects.toThrow("candidate failed");
+    expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
     expect(inputPresentAtReload).toBe(true);
     if (reload === "success") {
+      expect(restoredReload).toBe(true);
       expect(cachedUnit).toBe(originals.get(unit));
       await expect(fs.stat(environment)).rejects.toMatchObject({ code: "ENOENT" });
       expect(warnings).toEqual([]);
     } else {
       expect(cachedUnit).toContain(environment);
-      expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
-      expectText(warnings.join("\n"), "retained", environment, "Retry");
+      expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+      expect(warnings.join("\n")).toContain("retained");
+      expect(warnings.join("\n")).toContain(environment);
+      expect(warnings.join("\n")).toContain("Retry");
     }
   },
 );
 
-it("retries rollback reload before retiring inputs", async () => {
-  const { env, unit, environment, originals } = await createInstallFixture(true);
+it("retries a failed rollback reload before retiring retained generated inputs", async () => {
+  const { env, unit, environment, originals } = await createInstallFixture();
+  await fs.rm(environment);
   const warnings: string[] = [];
   await withSystemdDefinitionMutation(
     env,
@@ -180,15 +168,20 @@ it("retries rollback reload before retiring inputs", async () => {
     async (mutation) => {
       await mutation.publish(environment, "SERVICE_VALUE=candidate\n", 0o600);
       await mutation.publish(unit, `[Service]\nEnvironmentFile=${environment}\n`, 0o600);
-      native.exec.mockResolvedValueOnce(result("", 1, "reload failed"));
+      native.exec.mockResolvedValueOnce({
+        code: 1,
+        termination: "exit",
+        stdout: "",
+        stderr: "reload failed",
+      });
       await expect(mutation.restoreAll()).rejects.toThrow("reload was not confirmed");
-      expect(await read(unit)).toBe(originals.get(unit));
-      expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
+      expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
+      expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
       native.exec.mockImplementationOnce(async (_env, args) => {
         expect(args).toEqual(["daemon-reload"]);
-        expect(await read(unit)).toBe(originals.get(unit));
-        expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
-        return result();
+        expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
+        expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+        return { code: 0, termination: "exit", stdout: "", stderr: "" };
       });
       await expect(mutation.restoreAll()).resolves.toBe(true);
       await expect(fs.stat(environment)).rejects.toMatchObject({ code: "ENOENT" });
@@ -205,12 +198,16 @@ it.each([
   { enabled: "enabled", running: true, failure: "availability-read" },
   { enabled: "enabled", running: true, failure: "definition-read" },
   { enabled: "enabled", running: true, failure: "policy-read" },
-])("restores prefix and policy: $failure ($enabled)", async (prior) => {
+])("preserves the previous prefix and native policy after $failure ($enabled)", async (prior) => {
   const { unit, originals, installArgs } = await createInstallFixture();
   let enabled = prior.enabled;
   let running = prior.running;
   let failed = false;
-  const { revoke, run } = authority();
+  let current = true;
+  const revoke = () => {
+    current = false;
+    assertGatewayServiceUpdateCurrent();
+  };
   if (prior.failure === "availability-read") {
     native.available.mockImplementationOnce(async () => revoke());
   }
@@ -240,17 +237,25 @@ it.each([
     }
     if (args[0] === "restart") {
       if (!failed) {
-        expect(await read(unit)).toContain("/prefix-b/");
+        expect(await fs.readFile(unit, "utf8")).toContain("/prefix-b/");
         running = false;
         failed = true;
-        return result("", 1, "candidate failed");
+        return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
       }
-      expect(await read(unit)).toBe(originals.get(unit));
+      expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
       running = true;
     }
-    return result(stdout);
+    return { code: 0, termination: "exit", stdout, stderr: "" };
   });
-  const installation = run(() => installSystemdService(installArgs));
+  const installation = withGatewayServiceUpdateAuthority(
+    () => {
+      if (!current) {
+        throw new Error("Doctor custody revoked during service preparation");
+      }
+    },
+    () => installSystemdService(installArgs),
+    { updateOwned: false, assertRecoveryCurrent: () => {} },
+  );
   if (prior.failure === "activation") {
     await expect(installation).rejects.toThrow("candidate failed");
   } else {
@@ -261,52 +266,64 @@ it.each([
     expect(native.exec.mock.calls.every(([, args]) => args[0] === "is-enabled")).toBe(true);
   }
   for (const [file, contents] of originals) {
-    expect(await read(file)).toBe(contents);
+    expect(await fs.readFile(file, "utf8")).toBe(contents);
     expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
   }
   expect({ enabled, running }).toEqual({ enabled: prior.enabled, running: prior.running });
 });
 
 it.each(["publication", "activation"])(
-  "leaves %s recovery to the definition transaction",
+  "leaves %s interruption recovery to the definition transaction",
   async (failure) => {
     const { unit, environment, originals, installArgs } = await createInstallFixture();
-    const { revoke, run } = authority();
+    let current = true;
+    const revoke = () => {
+      current = false;
+      assertGatewayServiceUpdateCurrent();
+    };
     native.exec.mockImplementation(async (_env, args) => {
       assertGatewayServiceUpdateCurrent();
       if (failure === "activation" && args[0] === "restart") {
         revoke();
       }
-      return result();
+      return { code: 0, termination: "exit", stdout: "", stderr: "" };
     });
     const check = async () => {
       assertGatewayServiceUpdateCurrent();
     };
-    const installation = run(() =>
-      installSystemdService({
-        ...installArgs,
-        definitionTransaction: {
-          assertCurrent: assertGatewayServiceUpdateCurrent,
-          beforeWrite: check,
-          filePrepared: check,
-          fileWritten: async (file) => {
-            if (failure === "publication" && file === unit) {
-              revoke();
-            }
-            await check();
+    const installation = withGatewayServiceUpdateAuthority(
+      () => {
+        if (!current) {
+          throw new Error("Doctor custody revoked during transaction-owned installation");
+        }
+      },
+      () =>
+        installSystemdService({
+          ...installArgs,
+          definitionTransaction: {
+            assertCurrent: assertGatewayServiceUpdateCurrent,
+            beforeWrite: check,
+            filePrepared: check,
+            fileWritten: async (file) => {
+              if (failure === "publication" && file === unit) {
+                revoke();
+              }
+              await check();
+            },
+            taskPrepared: check,
+            taskWritten: check,
           },
-          taskPrepared: check,
-          taskWritten: check,
-        },
-      }),
+        }),
+      { updateOwned: false, assertRecoveryCurrent: () => {} },
     );
     await expect(installation).rejects.toMatchObject({
       code: "service-authority-revoked",
       outcome: undefined,
     });
-    expect(await read(unit)).toContain("/prefix-b/");
-    expect(await read(environment)).toContain("SERVICE_VALUE=candidate");
-    expect(await read(`${unit}.bak`)).toBe(originals.get(unit));
+    // The central receipt owner must restore these together in its own order.
+    expect(await fs.readFile(unit, "utf8")).toContain("/prefix-b/");
+    expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+    expect(await fs.readFile(`${unit}.bak`, "utf8")).toBe(originals.get(unit));
     expect(native.exec.mock.calls.map(([, args]) => args[0])).toEqual(
       failure === "publication" ? [] : ["daemon-reload", "enable", "restart"],
     );
