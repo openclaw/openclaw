@@ -1,4 +1,5 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   persistColdLoadWarmState,
@@ -19,6 +20,36 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
+
+function observeSidebarSnapshotWrite(
+  page: Page,
+  expected: { navigationView: "online"; people: number },
+) {
+  return page.evaluateHandle(({ navigationView, people }) => {
+    // oxlint-disable-next-line typescript/unbound-method -- call(this, value, key) preserves each store receiver.
+    const put = IDBObjectStore.prototype.put;
+    return {
+      done: new Promise<void>((resolve) => {
+        IDBObjectStore.prototype.put = function (
+          this: IDBObjectStore,
+          value: { model?: { navigationView?: string; onlineUsers?: unknown[] } },
+          key?: IDBValidKey,
+        ) {
+          const request = put.call(this, value, key);
+          if (
+            this.name === "sidebarSnapshots" &&
+            value.model?.navigationView === navigationView &&
+            value.model.onlineUsers?.length === people
+          ) {
+            IDBObjectStore.prototype.put = put;
+            this.transaction.addEventListener("complete", () => resolve(), { once: true });
+          }
+          return request;
+        };
+      }),
+    };
+  }, expected);
+}
 
 async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
   const open = indexedDB.open("openclaw-chat-snapshots");
@@ -165,9 +196,16 @@ suite.define(() => {
           await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
         ).toBe(30);
         await sidebar.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
+        await page.evaluate("globalThis.__name = (fn) => fn");
+        const onlineWrite = await observeSidebarSnapshotWrite(page, {
+          navigationView: "online",
+          people: 120,
+        });
         await sidebar.locator('[data-navigation-view="online"]').click();
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
+        await onlineWrite.evaluate(({ done }) => done);
+        await onlineWrite.dispose();
 
         await page
           .frameLocator(".board-widget__frame")
@@ -188,40 +226,48 @@ suite.define(() => {
         await page.locator(".context-usage").waitFor();
 
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-        await thread.hover();
-        const coverage = thread.evaluate(async (element) => {
+        // Use the gutter outside widget frames and sample after native wheel delivery.
+        await thread.hover({ position: { x: 4, y: 4 } });
+        const coverage = await thread.evaluateHandle((element) => {
           const initialTop = element.scrollTop;
           const padding = getComputedStyle(element);
           const topPadding = Number.parseFloat(padding.paddingTop);
           const bottomPadding = Number.parseFloat(padding.paddingBottom);
-          const frames: Array<{ scrollTop: number; covered: boolean }> = [];
-          for (let frame = 0; frame < 20; frame++) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
-            const viewport = element.getBoundingClientRect();
-            const rows = [...element.querySelectorAll(".chat-virtual-row")].map((row) =>
-              row.getBoundingClientRect(),
-            );
-            frames.push({
-              scrollTop: element.scrollTop,
-              covered:
-                Math.min(...rows.map((row) => row.top)) <= viewport.top + topPadding + 1 &&
-                Math.max(...rows.map((row) => row.bottom)) >= viewport.bottom - bottomPadding - 1,
-            });
-          }
-          return { initialTop, frames };
+          const wheel = new Promise<void>((resolve) => {
+            element.addEventListener("wheel", () => resolve(), { once: true, passive: true });
+          });
+          return {
+            sample: wheel.then(async () => {
+              const frames: Array<{ scrollTop: number; covered: boolean }> = [];
+              for (let frame = 0; frame < 20; frame++) {
+                await new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => resolve());
+                });
+                const viewport = element.getBoundingClientRect();
+                const rows = [...element.querySelectorAll(".chat-virtual-row")].map((row) =>
+                  row.getBoundingClientRect(),
+                );
+                frames.push({
+                  scrollTop: element.scrollTop,
+                  covered:
+                    Math.min(...rows.map((row) => row.top)) <= viewport.top + topPadding + 1 &&
+                    Math.max(...rows.map((row) => row.bottom)) >=
+                      viewport.bottom - bottomPadding - 1,
+                });
+              }
+              return { initialTop, frames };
+            }),
+          };
         });
         await page.mouse.wheel(0, -1800);
-        const sampled = await coverage;
+        const sampled = await coverage.evaluate(({ sample }) => sample);
+        await coverage.dispose();
         expect(sampled.frames.some((frame) => frame.scrollTop < sampled.initialTop)).toBe(true);
         expect(
           sampled.frames.every((frame) => frame.covered),
           JSON.stringify(sampled),
         ).toBe(true);
 
-        await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
-        await page.evaluate("globalThis.__name = (fn) => fn");
         const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
           sessionKey: fixture.selectedSessionKey,
           sidebarView: "online",
@@ -258,25 +304,9 @@ suite.define(() => {
         if (!presence) {
           throw new Error("The Team fixture must include presence events");
         }
-        const sidebarWrite = await page.evaluateHandle(() => {
-          // oxlint-disable-next-line typescript/unbound-method -- call(this, value, key) preserves each store receiver.
-          const put = IDBObjectStore.prototype.put;
-          return {
-            done: new Promise<void>((resolve) => {
-              IDBObjectStore.prototype.put = function (
-                this: IDBObjectStore,
-                value: { model?: { onlineUsers?: unknown[] } },
-                key?: IDBValidKey,
-              ) {
-                const request = put.call(this, value, key);
-                if (this.name === "sidebarSnapshots" && value.model?.onlineUsers?.length === 119) {
-                  IDBObjectStore.prototype.put = put;
-                  this.transaction.addEventListener("complete", () => resolve(), { once: true });
-                }
-                return request;
-              };
-            }),
-          };
+        const sidebarWrite = await observeSidebarSnapshotWrite(page, {
+          navigationView: "online",
+          people: 119,
         });
         await gateway.emitGatewayEvent("presence", {
           presence: presence.payload.presence
