@@ -27,7 +27,7 @@ import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
 } from "../embedded-agent-runner/compact-reasons.js";
-import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.queued-execution.js";
+import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.types.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,

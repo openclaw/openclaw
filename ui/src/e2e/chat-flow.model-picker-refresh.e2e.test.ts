@@ -222,10 +222,10 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const picker = pickerFor(page);
     const previous = picker.locator('[data-chat-model-option="anthropic/claude-haiku-4-5"]');
+    await picker.locator('[data-chat-model-select="true"]').click();
     await previous.waitFor({ state: "attached" });
     const discoveryCount = (await gateway.getRequests("models.list")).length;
     await gateway.deferNext("models.list", { view: "configured" });
-    await picker.locator('[data-chat-model-select="true"]').click();
     const search = picker.locator("[data-chat-model-search]");
     await search.fill("anthropic");
     await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);

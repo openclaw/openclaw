@@ -13,7 +13,7 @@ import {
 } from "./sqlite-file-generation.js";
 import * as readOnlyLocation from "./sqlite-readonly-location.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
-import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "./update-database-generations.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -63,7 +63,7 @@ function expectedClosedGeneration(file: string): string {
 
 it.each(["auto", "off"] as const)(
   "retains exact closed generations and source bytes with native copying %s",
-  (mode) => {
+  async (mode) => {
     const previous = getFsSafeNativeConfig();
     try {
       configureFsSafeNative({ mode });
@@ -73,7 +73,9 @@ it.each(["auto", "off"] as const)(
           fs.existsSync(file + suffix) ? [{ suffix, bytes: fs.readFileSync(file + suffix) }] : [],
         );
         const expected = expectedClosedGeneration(file);
-        expect(readUpdateDatabaseGenerations([file]), layout).toEqual({ [file]: expected });
+        expect(await readUpdatePhysicalDatabaseGenerations([file]), layout).toEqual({
+          [file]: expected,
+        });
         for (const { suffix, bytes } of before) {
           expect(fs.readFileSync(file + suffix), `${layout}${suffix}`).toEqual(bytes);
         }
@@ -89,7 +91,7 @@ it.each(["auto", "off"] as const)(
 
 it.each(["header", "catalog", "truncated"] as const)(
   "keeps native %s refusal and cleans up a digest-matched private image",
-  (damage) => {
+  async (damage) => {
     const { file, staging } = generationFixture();
     const bytes = fs.readFileSync(file);
     if (damage === "header") {
@@ -101,7 +103,7 @@ it.each(["header", "catalog", "truncated"] as const)(
     }
     fs.writeFileSync(file, damage === "truncated" ? bytes.subarray(0, 101) : bytes);
     const before = fs.readFileSync(file);
-    expect(() => readUpdateDatabaseGenerations([file])).toThrow(
+    await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
       damage === "catalog" ? /malformed database schema/ : /not a database|malformed/,
     );
     expect(fs.readFileSync(file)).toEqual(before);
@@ -111,7 +113,7 @@ it.each(["header", "catalog", "truncated"] as const)(
 
 it.each(["auto", "off"] as const)(
   "rejects a valid transient copy of a malformed source with native copying %s",
-  (mode) => {
+  async (mode) => {
     const { file, staging, prepare } = generationFixture();
     const valid = fs.readFileSync(file);
     const malformed = Buffer.from(valid);
@@ -134,7 +136,9 @@ it.each(["auto", "off"] as const)(
     const previous = getFsSafeNativeConfig();
     try {
       configureFsSafeNative({ mode });
-      expect(() => readUpdateDatabaseGenerations([file])).toThrow(/snapshot hash mismatch/);
+      await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+        /snapshot hash mismatch/,
+      );
     } finally {
       configureFsSafeNative(previous);
     }
@@ -146,7 +150,7 @@ it.each(["auto", "off"] as const)(
 
 it.each(["same-size write", "truncation", "identity replacement"] as const)(
   "refuses a captured source's %s before native admission",
-  (change) => {
+  async (change) => {
     const { file, staging, prepare } = generationFixture();
     const original = fs.readFileSync(file);
     const changed = Buffer.from(original);
@@ -164,7 +168,7 @@ it.each(["same-size write", "truncation", "identity replacement"] as const)(
         return prepare(pathname, staging, ...rest);
       },
     );
-    expect(() => readUpdateDatabaseGenerations([file])).toThrow(
+    await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
       change === "identity replacement" ? /file identity changed/ : /snapshot (hash|size) mismatch/,
     );
     expect(fs.readdirSync(staging)).toEqual([]);
@@ -182,7 +186,7 @@ it.each([
   ["journal", "before acquisition"],
   ["journal", "during copying"],
   ["wal", "before acquisition"],
-] as const)("refuses captured-digest acquisition when %s appears %s", (sidecar, timing) => {
+] as const)("refuses captured-digest acquisition when %s appears %s", async (sidecar, timing) => {
   const { file, staging, prepare } = generationFixture();
   const before = fs.readFileSync(file);
   const sidecarPath = `${file}-${sidecar}`;
@@ -212,7 +216,9 @@ it.each([
       return prepared;
     },
   );
-  expect(() => readUpdateDatabaseGenerations([file])).toThrow(/SQLite source did not stabilize/);
+  await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+    /SQLite source did not stabilize/,
+  );
   expect(appeared).toBe(true);
   expect(acquired).toBe(false);
   // Staging leases own a separate SQLite token; neither source nor private
@@ -226,7 +232,7 @@ it.each([
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it("reads a sidecar-free private payload once while retaining four source-family passes", () => {
+it("reads a sidecar-free private payload once while retaining four source-family passes", async () => {
   const { file, staging } = generationFixture();
   const database = new DatabaseSync(file);
   database.exec(
@@ -259,7 +265,7 @@ it("reads a sidecar-free private payload once while retaining four source-family
       return count;
     },
   );
-  expect(readUpdateDatabaseGenerations([file])[file]).toEqual(expect.any(String));
+  expect((await readUpdatePhysicalDatabaseGenerations([file]))[file]).toEqual(expect.any(String));
   const size = Number(source.size);
   expect(sourceBytes).toBeGreaterThanOrEqual(4 * size);
   // A byte-copy fallback can add one source pass. Headers are bounded overhead.
@@ -268,12 +274,12 @@ it("reads a sidecar-free private payload once while retaining four source-family
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it("preserves update custody when database timestamps drift during hashing", () => {
+it("preserves update custody when database timestamps drift during hashing", async () => {
   const file = path.join(dirs.make("update-generation-drift-"), "state.sqlite");
   const database = new DatabaseSync(file);
   database.exec("CREATE TABLE receipt(value TEXT); INSERT INTO receipt VALUES ('retained');");
   database.close();
-  const before = readUpdateDatabaseGenerations([file]);
+  const before = await readUpdatePhysicalDatabaseGenerations([file]);
   const identity = fs.statSync(file, { bigint: true });
   const fstat = fs.fstatSync;
   let observations = 0;
@@ -291,7 +297,7 @@ it("preserves update custody when database timestamps drift during hashing", () 
   });
   const timestamp = fs.statSync(file);
   fs.utimesSync(file, timestamp.atime, new Date(timestamp.mtimeMs + 1_000));
-  expect(readUpdateDatabaseGenerations([file])).toEqual(before);
+  expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual(before);
   expect(observations).toBeGreaterThan(1);
 });
 

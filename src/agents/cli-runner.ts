@@ -573,7 +573,7 @@ async function runPreparedCliAgentOwned(
         }
         await finalizeCliContextEngineTurn({
           context,
-          historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
+          historyMessages: contextEngineHistoryMessages,
           assistantText,
           terminalAnchor: assistantTranscript.terminalAnchor,
           output,

@@ -62,7 +62,7 @@ describe("chat pane composer controls", () => {
       state.sessionKey = "agent:main:main";
       state.chatModelCatalogInitialized = false;
       const container = document.createElement("div");
-      const draw = () => renderPaneModelControl(composerControls(state), container);
+      const draw = () => renderPaneModelControl(composerControls(state), container, true);
       onTestFinished(() => {
         checking.resolve({ models: [] });
         retireChatMetadataRequests(state);
@@ -271,7 +271,7 @@ describe("chat pane composer controls", () => {
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(host.chatModelsLoading).toBe(false);
     const container = document.createElement("div");
-    renderPaneModelControl(composerControls(host), container);
+    renderPaneModelControl(composerControls(host), container, true);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

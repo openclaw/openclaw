@@ -172,6 +172,13 @@ migration through the whole-database quick check, and a quick result never
 publishes full-verification facts. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
 
+Canonical index repair checks each rebuilt table and its indexes once after
+DDL, instead of scanning the whole database again. Its source integrity check
+still follows the policy above, including a full scan when requested, and the
+migration finalizer keeps its data and foreign-key checks. This changes
+candidate-side Doctor and schema preparation; the installed updater still runs
+first under its own version's behavior.
+
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
@@ -393,13 +400,22 @@ It does not discard committed WAL pages, repair the source, or change plan ident
 Snapshot debug telemetry reports operation and owner,
 main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
-Verified snapshot publication hashes the private staged image once after validation
-and verifies the published file again after transfer. Source and output integrity
-checks, durable backup publication, and recovery ownership remain unchanged.
+Verified snapshot publication retains the original image digest through an owned
+same-file transfer and verifies the final published bytes. Distinct physical copies
+also receive their own byte comparison before publication. Moving a verified
+snapshot into the original capture's payload directory preserves its digest without
+rehashing the rename. Source and output integrity checks, durable backup publication,
+and recovery ownership remain unchanged.
 Doctor's legacy transcript-label inspection uses stored navigation metadata to skip
 expanding compressed events outside user and assistant messages. A detected repair
 still reads the complete exact transcript and revalidates it before writing;
 plaintext and older transcript stores retain their existing inspection behavior.
+
+Standalone Doctor's original-state capture reuses the maintenance owner's exclusive
+SQLite source custody instead of hashing live write generations before, after, and
+at sealing. The captured image retains WAL recovery, integrity, and digest checks.
+This manual recovery evidence never authorizes automatic rollback. Generic updater
+rollback backups and PostgreSQL stores retain their source-generation checks.
 
 Update validation reuses the prepared rehearsal databases for read-only checks.
 The complete updater isolation markers and physical containment of the database
