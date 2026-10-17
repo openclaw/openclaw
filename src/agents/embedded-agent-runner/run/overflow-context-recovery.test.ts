@@ -1,5 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -27,7 +27,10 @@ import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
-type RecoveryInput = Omit<Parameters<typeof recoverEmbeddedRunOverflow>[0], "attempt">;
+type RecoveryParams = Parameters<typeof recoverEmbeddedRunOverflow>[0];
+type RecoveryInput = Omit<RecoveryParams, "attempt" | "runParams"> & {
+  runParams: RecoveryParams["runParams"] & { sessionTarget: SessionTranscriptRuntimeTarget };
+};
 type PromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 async function withRecovery(
@@ -215,7 +218,7 @@ it("rejects a changed active transcript without losing a known compaction", asyn
           sessionId: "session-2",
           sessionFile: "agent:main:session-2",
           sessionTarget: {
-            ...expectDefined(input.runParams.sessionTarget, "active transcript target"),
+            ...input.runParams.sessionTarget,
             sessionId: "session-2",
           },
         });
