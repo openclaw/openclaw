@@ -3,7 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
+import {
+  LINK_READER_BADGE_TONES,
+  type ControlUiLinkReaderPreview,
+} from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -50,9 +53,7 @@ export function parsePreviewResponse(
     throw new Error("Invalid link preview response");
   }
   const badgeValue = isRecord(value.badge) ? value.badge : undefined;
-  const tone = (["neutral", "positive", "negative", "attention", "accent"] as const).find(
-    (item) => item === badgeValue?.tone,
-  );
+  const tone = LINK_READER_BADGE_TONES.find((item) => item === badgeValue?.tone);
   const badge =
     badgeValue && typeof badgeValue.label === "string" && tone
       ? { label: badgeValue.label, tone, timestamp: readNonBlankString(badgeValue.timestamp) }
@@ -134,19 +135,38 @@ export function cacheEntryFromDocument(
 
 /** Preserve last-known facts on refresh failure, but never promote them to fresh cache data. */
 export async function requestReaderPreview(
-  client: GatewayBrowserClient | null,
+  scope: {
+    client: GatewayBrowserClient | null;
+    agentId: string | undefined;
+    sessionKey: string | undefined;
+  },
   target: LinkReaderTarget,
-  agentId: string | undefined,
   signal: AbortSignal,
   isCurrent: () => boolean,
   cached?: CacheEntry,
 ): Promise<ControlUiLinkReaderPreview> {
+  const { client, agentId, sessionKey } = scope;
   const method = target.reader.linkReader.previewMethod;
   if (!client || !method || !isCurrent()) {
     throw new Error("Link preview requires an available reader");
   }
-  const params = { ...(agentId ? { agentId } : {}), url: target.href };
-  let preview = parsePreviewResponse(target, await client.request(method, params, { signal }));
+  if (target.reader.linkReader.sessionScoped && !sessionKey) {
+    throw new Error(t("linkReader.sessionRequired"));
+  }
+  const params = {
+    ...(agentId ? { agentId } : {}),
+    ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
+    url: target.href,
+  };
+  let preview: ControlUiLinkReaderPreview;
+  try {
+    preview = parsePreviewResponse(target, await client.request(method, params, { signal }));
+  } catch (error) {
+    if (signal.aborted || !cached?.preview) {
+      throw error;
+    }
+    return { ...cached.preview, stale: true };
+  }
   if (preview.stale && isCurrent()) {
     // One awaited refresh joins the server's stale-while-revalidate work; no polling.
     try {

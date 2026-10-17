@@ -55,15 +55,12 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  if (
-    normalized.startsWith("\0@oxc-project+runtime@") &&
-    normalized.endsWith("/helpers/esm/decorate.js")
-  ) {
-    // Chat and New Session still use decorators; neither route owns their shared helper.
-    return "decorator-runtime";
-  }
-
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/route-entry.ts":
+      // Pending New Session previews must render while the Chat route entry waits.
+      return "chat-route-entry";
+    case "ui/src/pages/devices/devices-page.tsx":
+      return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
     case "ui/src/pages/cron/cron-page.tsx":
@@ -110,35 +107,18 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "chat-transcript-styles";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "lit") ||
-    moduleIdIncludesPackage(id, "lit-html") ||
-    moduleIdIncludesPackage(id, "@lit/reactive-element")
-  ) {
-    // These directives have only deferred consumers. Keep
-    // their implementation and helpers with those consumers, outside startup.
-    return /\/directives\/(?:cache|guard|unsafe-html|unsafe-svg|until|private-async-helpers)\.js$/u.test(
-      normalized,
-    )
-      ? undefined
-      : "lit-runtime";
-  }
-
-  if (
-    moduleIdIncludesPackage(id, "highlight.js") ||
-    moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "dompurify") ||
-    moduleIdIncludesPackage(id, "entities") ||
-    moduleIdIncludesPackage(id, "linkify-it") ||
-    moduleIdIncludesPackage(id, "mdurl") ||
-    moduleIdIncludesPackage(id, "punycode.js") ||
-    moduleIdIncludesPackage(id, "uc.micro")
-  ) {
+  // The composer uses MarkdownIt for synchronous emoji completion, but only
+  // transcript rendering needs highlighting and sanitization.
+  if (moduleIdIncludesPackage(id, "highlight.js") || moduleIdIncludesPackage(id, "dompurify")) {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (moduleIdIncludesPackage(id, "zod")) {
     return "config-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "json5")) {
+    // Zod validates boot snapshots; JSON5 loads only when a config consumer warms it.
+    return "json5-runtime";
   }
 
   if (moduleIdIncludesPackage(id, "libphonenumber-js")) {

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
@@ -68,6 +67,7 @@ import {
   type UsageCostWorkerReply,
   type UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
@@ -173,7 +173,7 @@ export async function executeUsageCostWorker(
   if (!cacheDatabase) {
     throw new Error("Usage cache database is not owned by this worker operation");
   }
-  const readCache = <T>(read: (db: DatabaseSync) => T, missing: T): T => {
+  const readCache = <T>(read: (db: EngineConnection) => T, missing: T): T => {
     const result = withOpenClawAgentDatabaseReadOnly(({ db }) => read(db), {
       ...cacheDatabase,
       env,
@@ -213,25 +213,18 @@ export async function executeUsageCostWorker(
       }),
     );
   };
-  const readBody = (row: SessionCostUsageRollupRow) =>
-    control.runNativeSection(() =>
-      readDatabase(cacheDatabase, () =>
-        readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row), undefined),
-      ),
-    );
   const readPartitionedBody = async (row: SessionCostUsageRollupRow) => {
     const receipt = refreshInputs?.rollupReceipt();
     const cached = refreshInputs?.readRollup(row.key, receipt);
-    if (
-      cached?.body &&
-      cached.row.updatedAt === row.updatedAt &&
-      cached.row.valueJson === row.valueJson
-    ) {
+    if (cached?.body) {
       return cached.body;
     }
     const body = await control.runNativeSection(() =>
       readDatabase(cacheDatabase, () =>
-        readCache((db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row), undefined),
+        readCache(
+          (db) => readSessionCostUsageRollupWithPartitionsInDatabase(db, row.key),
+          undefined,
+        ),
       ),
     );
     if (body) {
@@ -497,18 +490,33 @@ export async function executeUsageCostWorker(
   const files = operation.sessionFiles ? requestedFiles : await inventory(operation.sessionsDir);
   const filesByPath = new Map(files.map((file) => [file.filePath, file]));
   let pruned = false;
-  for (const row of rows) {
-    if (filesByPath.has(row.key)) {
-      continue;
+  if (!operation.sessionFiles) {
+    let batch: UsageCostWorkerHostEffects["prune-rows"]["input"] = [];
+    let batchBytes = 0;
+    const sendBatch = async () => {
+      const transfers = batch.map((row) => row.value.buffer);
+      await host("prune-rows", batch, transfers);
+      batch = [];
+      batchBytes = 0;
+    };
+    for (const row of rows) {
+      if (filesByPath.has(row.key)) {
+        continue;
+      }
+      const value = new TextEncoder().encode(row.valueJson);
+      const rowBytes = value.byteLength + 2 * row.key.length;
+      // Preserve single-row delivery for oversized metadata without growing other batches.
+      if (batch.length > 0 && (batch.length >= 64 || batchBytes + rowBytes > 1024 * 1024)) {
+        await sendBatch();
+      }
+      batch.push({ key: row.key, value, updatedAt: row.updatedAt });
+      batchBytes += rowBytes;
+      pruned = true;
     }
-    pruned = true;
-    const bytes = new TextEncoder().encode(row.valueJson);
-    await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
-      bytes.buffer,
-    ]);
-  }
-  if (!operation.sessionFiles && pruned) {
-    await host("prune", {});
+    if (batch.length > 0) {
+      await sendBatch();
+      await host("prune", {});
+    }
   }
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
@@ -590,7 +598,11 @@ export async function executeUsageCostWorker(
         body = snapshot;
         priorPartitions = snapshot?.partitions ?? [];
       } else {
-        body = await readBody(row);
+        body = await control.runNativeSection(() =>
+          readDatabase(cacheDatabase, () =>
+            readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row.key), undefined),
+          ),
+        );
       }
       previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)

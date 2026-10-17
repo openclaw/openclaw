@@ -17,7 +17,7 @@ import type {
 import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import type { RealtimeTalkInputController } from "./input.ts";
+import type { RealtimeTalkInputOwner } from "./input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
@@ -95,7 +95,7 @@ export type RealtimeTalkTransportContext = {
   voiceSessionId?: string;
   flushTranscriptWrites?: () => Promise<void>;
   callbacks: RealtimeTalkCallbacks;
-  input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
+  input: Pick<RealtimeTalkInputOwner, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
 };
 
@@ -240,6 +240,7 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     : undefined;
 }
 
+// Settlement releases this wait's Gateway subscription, abort listener, and timers together.
 export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
@@ -495,6 +496,7 @@ function maybeSpeakRealtimeTalkControlResult(
   }
 }
 
+// Owns the consult's abort listener until its acknowledged run and result settle.
 export async function submitRealtimeTalkConsult(params: {
   ctx: RealtimeTalkTransportContext;
   args: unknown;

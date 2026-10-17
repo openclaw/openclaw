@@ -8,14 +8,27 @@ import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./op
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { openExistingSqliteWorkerBackend } from "./openclaw-state.worker.js";
 
-vi.mock("./openclaw-state-worker-runtime.js", () => {
-  throw new Error("Plugin-state preparation must not load unrelated shared-state commands");
+// mock-isolation: Throw on import to detect eager loading of unrelated secret commands.
+vi.mock("../secrets/store/secret-store.worker.js", () => {
+  throw new Error("Cold preparation must not load secret-store commands");
+});
+// mock-isolation: Throw on import to detect eager loading of unrelated cron commands.
+vi.mock("../cron/store/dispatch.worker.js", () => {
+  throw new Error("Cold preparation must not load cron commands");
+});
+// mock-isolation: Throw on import to detect eager loading of unrelated updater commands.
+vi.mock("../infra/update-run-dispatch.worker.js", () => {
+  throw new Error("Cold preparation must not load updater commands");
 });
 
-it.each(["restartLifecycle.consumeIntent", "restartLifecycle.writeHandoff"] as const)(
+it.each([
+  "restartLifecycle.consumeIntent",
+  "restartLifecycle.writeHandoff",
+  "sessionUpstream.listWatched",
+] as const)(
   "prepares cold %s without application commands or database access",
   async (commandType) => {
-    await withOpenClawTestState({ label: "restart-lazy-preparation" }, async () => {
+    await withOpenClawTestState({ label: "state-lazy-preparation" }, async () => {
       const databasePath = openOpenClawStateDatabase().path;
       await closeOpenClawStateDatabaseAsync();
       const context = captureOpenClawStateWorkerContext();
@@ -37,15 +50,18 @@ it.each(["restartLifecycle.consumeIntent", "restartLifecycle.writeHandoff"] as c
   },
 );
 
-it("keeps the shared-state command worker independent of host runtime discovery", () => {
+it("keeps shared-state and session-upstream workers independent of host runtime discovery", () => {
   expect(
-    findSourceImportBackedges("src/state/openclaw-state-worker-runtime.ts", [
-      "src/config/io.snapshot.ts",
-      "src/config/validation-core.ts",
-      "src/plugins/loader-runtime-load.ts",
-      "src/channels/plugins/registry.ts",
-      "packages/gateway-protocol/src/validator-registry.ts",
-    ]),
+    findSourceImportBackedges(
+      ["src/state/openclaw-state.worker.ts", "src/sessions/session-upstream-links.worker.ts"],
+      [
+        "src/config/io.snapshot.ts",
+        "src/config/validation-core.ts",
+        "src/plugins/loader-runtime-load.ts",
+        "src/channels/plugins/registry.ts",
+        "packages/gateway-protocol/src/validator-registry.ts",
+      ],
+    ),
   ).toEqual([]);
 });
 

@@ -10,7 +10,10 @@ import {
   openOpenClawAgentSqliteWorkerStore,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  closeOpenClawAgentDatabasesAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
@@ -40,7 +43,7 @@ function publicationPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"]
 
 function createPublicationDatabase(stateDir: string) {
   const options = { agentId: "main", path: path.join(stateDir, "agent.sqlite") };
-  const { db } = openOpenClawAgentDatabase(options);
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
   ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
   db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
     VALUES ('memory/current.md', 'memory', 'old', 1, 1)`);
@@ -317,7 +320,9 @@ it("preserves a committed publication when binding cleanup fails", async () => {
     worker = undefined;
     await closeOpenClawAgentDatabasesAsync(state.stateDir);
     const recovered = openOpenClawAgentDatabase(options);
-    expect(readMemoryDatabaseRevision(recovered.db)).toBe(beforeRevision + 1);
+    expect(readMemoryDatabaseRevision(requireNativeSqliteDatabase(recovered.db))).toBe(
+      beforeRevision + 1,
+    );
     expect(recovered.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     expect(recovered.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   } finally {

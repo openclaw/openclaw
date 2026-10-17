@@ -13,7 +13,7 @@ import {
   stubScreenshotMedia,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
 import "./browser-panel.ts";
 
@@ -107,12 +107,89 @@ function pageTitle(panel: Panel) {
   return panel.renderRoot?.querySelector<HTMLImageElement>(".bp-shot")?.alt;
 }
 
-function controllerFor(panel: Panel): BrowserPanelController {
-  return (panel as unknown as { browserPanelController: BrowserPanelController })
-    .browserPanelController;
+function controllerFor(panel: Panel): BrowserPanel {
+  return (panel as unknown as { browserPanelController: BrowserPanel }).browserPanelController;
 }
 
 describe("browser panel route handoff", () => {
+  it("owns resize observation and wheel interception with the rendered viewport", async () => {
+    const observed = new Map<Element, (width: number, height: number) => void>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly targets = new Set<Element>();
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          this.targets.add(target);
+          observed.set(target, (width, height) =>
+            this.callback(
+              [
+                {
+                  target,
+                  contentRect: new DOMRectReadOnly(0, 0, width, height),
+                  borderBoxSize: [],
+                  contentBoxSize: [],
+                  devicePixelContentBoxSize: [],
+                },
+              ],
+              this,
+            ),
+          );
+        }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+          observed.delete(target);
+        }
+        disconnect() {
+          for (const target of this.targets) {
+            this.unobserve(target);
+          }
+        }
+      },
+    );
+    const gateway = browserGateway();
+    const panel = await mountPanel(gateway.client);
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
+    const viewport = panel.querySelector<HTMLElement>(".bp-viewport")!;
+    expect(observed.has(viewport)).toBe(true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    observed.get(viewport)!(640, 480);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(gateway.request).toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({
+        body: { kind: "resize", targetId: "t1", width: 640, height: 480 },
+      }),
+    );
+    const wheel = () => new WheelEvent("wheel", { deltaY: 60, bubbles: true, cancelable: true });
+    const liveWheel = wheel();
+    viewport.dispatchEvent(liveWheel);
+    expect(liveWheel.defaultPrevented).toBe(true);
+
+    panel.available = false;
+    await panel.updateComplete;
+    expect(panel.querySelector(".bp-viewport")).toBeNull();
+    expect(observed.has(viewport)).toBe(false);
+    panel.available = true;
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
+    const reopenedViewport = panel.querySelector<HTMLElement>(".bp-viewport")!;
+    expect(reopenedViewport).not.toBe(viewport);
+    expect(observed.has(reopenedViewport)).toBe(true);
+    // A retained detached node must not send input to the reopened browser.
+    const retiredWheel = wheel();
+    viewport.dispatchEvent(retiredWheel);
+    expect(retiredWheel.defaultPrevented).toBe(false);
+    const reopenedWheel = wheel();
+    reopenedViewport.dispatchEvent(reopenedWheel);
+    expect(reopenedWheel.defaultPrevented).toBe(true);
+
+    panel.remove();
+    await waitForSolid(() => expect(observed.has(reopenedViewport)).toBe(false));
+    const detachedWheel = wheel();
+    reopenedViewport.dispatchEvent(detachedWheel);
+    expect(detachedWheel.defaultPrevented).toBe(false);
+  });
+
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
     const focusCount = () =>
@@ -131,7 +208,7 @@ describe("browser panel route handoff", () => {
     const afterClick = focusCount();
     expect(afterClick).toBe(1);
     panel.preferredTab = { tab: { ...hostTab }, revision: "first" };
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(focusCount()).toBe(afterClick);
     expect(pageTitle(panel)).toBe("work");
@@ -148,7 +225,7 @@ describe("browser panel route handoff", () => {
     panel.preferredTab = { tab: nodeTab, revision: "third" };
     await panel.updateComplete;
     const hiddenCount = gateway.request.mock.calls.length;
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(gateway.request).toHaveBeenCalledTimes(hiddenCount);
     panel.presented = true;
@@ -360,7 +437,9 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client);
     await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     vi.useFakeTimers();
-    controllerFor(panel).handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+    controllerFor(panel).input.handleWheel(
+      new WheelEvent("wheel", { deltaY: 60, cancelable: true }),
+    );
     chooseCard(panel, nodeTab);
     await vi.advanceTimersByTimeAsync(150);
     expect(

@@ -184,6 +184,8 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "portable-identity-columns-v22", path: databasePath },
         { kind: "meeting-transcript-start-time", path: databasePath },
         { kind: "task-run-indexes-v24", path: databasePath },
+        { kind: "subagent-operator-recovery-v25", path: databasePath },
+        { kind: "session-state-head-layout-v26", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({

@@ -95,7 +95,7 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
             {(action) => (
               <button
                 type="button"
-                class={action === "approve" ? "btn btn--sm primary" : "btn btn--sm"}
+                class={["btn btn--sm", { primary: action === "approve" }]}
                 disabled={Boolean(props.channels.pairingBusyRequestId) || !props.canManagePairing}
                 aria-label={t(`channels.pairing.${action}Aria`, {
                   sender: request().senderId,
@@ -340,7 +340,7 @@ function PairingPromptContent(params: {
         <openclaw-modal-actions class="channels-pairing-dialog__actions">
           <button
             type="button"
-            class={approving() ? "btn primary" : "btn danger"}
+            class={["btn", approving() ? "primary" : "danger"]}
             disabled={busy()}
             onClick={() => params.props.onPairingPromptConfirm()}
           >

@@ -371,7 +371,7 @@ const NETWORK_PROXY_PLUGIN_CONFIG = {
   appServer: {
     networkProxy: {
       enabled: true,
-      domains: { "api.openai.com": "allow" },
+      domains: { "api.openai.com": "allow" as const },
       allowUpstreamProxy: true,
       proxyUrl: "http://127.0.0.1:3128",
     },
@@ -551,6 +551,7 @@ describe("codex conversation binding", () => {
         config: {},
         pluginConfig: {},
         runtime: {
+          config: { current: () => ({}) },
           modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
           state: {
             openSyncKeyedStore: () => stateStore,

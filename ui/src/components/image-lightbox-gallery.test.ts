@@ -1,6 +1,7 @@
+import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { ImageLightboxGalleryController } from "./image-lightbox-gallery.ts";
+import { createImageLightboxGallery } from "./image-lightbox-gallery.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 
 function imageItem(title: string) {
@@ -8,7 +9,8 @@ function imageItem(title: string) {
 }
 
 let decode: ReturnType<typeof vi.fn<() => Promise<void>>>;
-let controller: ImageLightboxGalleryController;
+let controller: ReturnType<typeof createImageLightboxGallery>;
+let disposeGallery: () => void;
 
 beforeEach(() => {
   decode = vi.fn(async () => {});
@@ -19,11 +21,14 @@ beforeEach(() => {
       decode = decode;
     },
   );
-  controller = new ImageLightboxGalleryController(vi.fn());
+  controller = createRoot((dispose) => {
+    disposeGallery = dispose;
+    return createImageLightboxGallery();
+  });
 });
 
 afterEach(() => {
-  controller.dispose();
+  disposeGallery();
   vi.unstubAllGlobals();
 });
 
@@ -49,8 +54,8 @@ describe("image lightbox gallery resource lifecycle", () => {
       const navigation = moving ? controller.move(1) : undefined;
       await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
       if (moving) {
-        expect(controller.current).toBe(initial);
-        expect(controller.busy).toBe(true);
+        expect(controller.peek().current).toBe(initial);
+        expect(controller.peek().busy).toBe(true);
       }
       if (action === "upgrade evict") {
         expect(await controller.move(1)).toBe(true);
@@ -63,10 +68,10 @@ describe("image lightbox gallery resource lifecycle", () => {
         expect(await navigation).toBe(false);
       }
       await vi.waitFor(() => expect(late.release).toHaveBeenCalledOnce());
-      expect(controller.current).toBe(action === "upgrade evict" ? beyond : replacement);
-      expect(controller.busy).toBe(false);
-      expect(controller.failed).toBe(false);
-      controller.dispose();
+      expect(controller.peek().current).toBe(action === "upgrade evict" ? beyond : replacement);
+      expect(controller.peek().busy).toBe(false);
+      expect(controller.peek().failed).toBe(false);
+      disposeGallery();
       await Promise.resolve();
       expect(late.release).toHaveBeenCalledOnce();
       expect(initial.release).not.toHaveBeenCalled();
@@ -92,11 +97,11 @@ describe("image lightbox gallery resource lifecycle", () => {
         expect(await returning).toBe(true);
       } else {
         await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2));
-        expect(controller.current).toBe(neighbor);
-        expect(controller.index).toBe(1);
+        expect(controller.peek().current).toBe(neighbor);
+        expect(controller.peek().index).toBe(1);
         expect(await controller.move(-1)).toBe(true);
       }
-      expect(controller.current).toBe(original);
+      expect(controller.peek().current).toBe(original);
       expect(load).toHaveBeenCalledOnce();
     },
   );
@@ -120,17 +125,17 @@ describe("image lightbox gallery resource lifecycle", () => {
       if (failure === "decode") {
         await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
       }
-      await vi.waitFor(() => expect(controller.upgradeFailed).toBe(true));
-      expect(controller.current?.src).toBe(initial.src);
-      expect(controller.failed).toBe(false);
-      expect(controller.upgrading).toBe(false);
+      await vi.waitFor(() => expect(controller.peek().upgradeFailed).toBe(true));
+      expect(controller.peek().current?.src).toBe(initial.src);
+      expect(controller.peek().failed).toBe(false);
+      expect(controller.peek().upgrading).toBe(false);
       expect(initial.release).not.toHaveBeenCalled();
       const recovered = imageItem("recovered-display");
       load.mockResolvedValueOnce(recovered);
       controller.retryDisplayImage();
-      expect(controller.upgrading).toBe(true);
-      await vi.waitFor(() => expect(controller.current).toBe(recovered));
-      expect(controller.upgradeFailed).toBe(false);
+      expect(controller.peek().upgrading).toBe(true);
+      await vi.waitFor(() => expect(controller.peek().current).toBe(recovered));
+      expect(controller.peek().upgradeFailed).toBe(false);
       expect(load).toHaveBeenCalledTimes(2);
     },
   );
@@ -149,20 +154,20 @@ describe("image lightbox gallery resource lifecycle", () => {
     expect(load).not.toHaveBeenCalled();
     expect(await controller.move(1)).toBe(false);
     expect(broken.release).toHaveBeenCalledOnce();
-    expect(controller.current).toBe(initial);
-    expect(controller.failed).toBe(true);
+    expect(controller.peek().current).toBe(initial);
+    expect(controller.peek().failed).toBe(true);
 
     expect(await controller.move(1)).toBe(false);
-    expect(controller.current).toBe(initial);
-    expect(controller.index).toBe(0);
-    expect(controller.failed).toBe(true);
-    expect(controller.busy).toBe(false);
+    expect(controller.peek().current).toBe(initial);
+    expect(controller.peek().index).toBe(0);
+    expect(controller.peek().failed).toBe(true);
+    expect(controller.peek().busy).toBe(false);
 
     expect(await controller.move(1)).toBe(true);
-    expect(controller.current).toBe(recovered);
-    expect(controller.index).toBe(1);
-    expect(controller.failed).toBe(false);
-    controller.dispose();
+    expect(controller.peek().current).toBe(recovered);
+    expect(controller.peek().index).toBe(1);
+    expect(controller.peek().failed).toBe(false);
+    disposeGallery();
     await vi.waitFor(() => expect(recovered.release).toHaveBeenCalledOnce());
     expect(broken.release).toHaveBeenCalledOnce();
     expect(initial.release).not.toHaveBeenCalled();
@@ -180,17 +185,17 @@ describe("image lightbox gallery resource lifecycle", () => {
     expect(decode).not.toHaveBeenCalled();
 
     expect(await controller.move(1)).toBe(true);
-    expect(controller.current).toBe(images[2]);
+    expect(controller.peek().current).toBe(images[2]);
     expect(loads[2]).toHaveBeenCalledExactlyOnceWith(true);
     expect(loads[0]).not.toHaveBeenCalled();
     expect(loads[3]).not.toHaveBeenCalled();
     expect(loads[4]).not.toHaveBeenCalled();
     expect(await controller.move(-1)).toBe(true);
-    expect(controller.current?.src).toBe(initial.src);
+    expect(controller.peek().current?.src).toBe(initial.src);
     expect(await controller.move(1)).toBe(true);
     expect(loads[2]).toHaveBeenCalledOnce();
     expect(await controller.move(1)).toBe(true);
-    expect(controller.current).toBe(images[3]);
+    expect(controller.peek().current).toBe(images[3]);
     expect(loads[3]).toHaveBeenCalledExactlyOnceWith(true);
     expect(loads[4]).not.toHaveBeenCalled();
     expect(initial.release).not.toHaveBeenCalled();
@@ -200,7 +205,7 @@ describe("image lightbox gallery resource lifecycle", () => {
     await Promise.resolve();
     expect(images[3]!.release).toHaveBeenCalledOnce();
     expect(loads[1]).toHaveBeenCalledOnce();
-    controller.dispose();
+    disposeGallery();
     await Promise.resolve();
     expect(images[2]!.release).toHaveBeenCalledOnce();
     expect(initial.release).toHaveBeenCalledOnce();

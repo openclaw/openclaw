@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
+import type { IsolatedCompletionPurpose } from "../agents/isolated-completion-purpose.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -16,6 +17,7 @@ import {
 import {
   cloneDiagnosticValueForListener,
   createDiagnosticMetadataForListener,
+  createDiagnosticValueForListeners,
   deepFreezeDiagnosticValue,
 } from "./diagnostic-event-snapshot.js";
 import {
@@ -85,6 +87,8 @@ type DiagnosticUsageEvent = DiagnosticSessionEvent & {
   agentId?: string;
   provider?: string;
   model?: string;
+  purpose?: IsolatedCompletionPurpose;
+  runtimeKind?: "cli" | "harness";
   usage: {
     input?: number;
     output?: number;
@@ -673,6 +677,19 @@ type DiagnosticModelCallErrorEvent = DiagnosticModelCallEndedEvent & {
   memory?: DiagnosticMemoryUsage;
 };
 
+type DiagnosticModelResponseObservedEvent = Omit<
+  DiagnosticModelCallBaseEvent,
+  "observationUnit" | "promptStats" | "upstreamRequestIdHash"
+> & {
+  type: "model.response.observed";
+  upstreamRequestIdHash: string;
+  /** The event timestamp is receipt time, not a provider completion boundary. */
+  timestampSource: "receipt";
+  usageSource: "native-normalized";
+  usageScope: "response";
+  usage?: DiagnosticModelCallUsage;
+};
+
 type DiagnosticModelCallPromptStats = Readonly<{
   inputMessagesCount?: number;
   inputMessagesChars?: number;
@@ -808,6 +825,7 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
+  | DiagnosticModelResponseObservedEvent
   | (DiagnosticBaseEvent & {
       type: "secret.egress";
       outcome: "forwarded" | "refused";
@@ -951,6 +969,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "worker.request",
   "diagnostic.gc",
   "gateway.event_loop.sample",
+  "gateway.main_thread.stall",
   "gateway.http.cancelled",
   "gateway.rpc",
   "tool.execution.started",
@@ -967,6 +986,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "model.response.observed",
   "run.progress",
   "run.execution_phase",
   "agent.commentary",
@@ -1038,6 +1058,8 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
+    const eventForListener = createDiagnosticValueForListeners(enriched);
+    let metadataForListener: DiagnosticEventMetadata | undefined;
     if (!options.trustedListenersOnly) {
       for (const [listener, interest] of state.listeners) {
         if (!isInternalDiagnosticEventInterested(interest, enriched.type, metadata.trusted)) {
@@ -1045,8 +1067,8 @@ function dispatchDiagnosticEvent(
         }
         try {
           listener(
-            cloneDiagnosticValueForListener(enriched),
-            createDiagnosticMetadataForListener(metadata),
+            eventForListener(),
+            (metadataForListener ??= createDiagnosticMetadataForListener(metadata)),
           );
         } catch (err) {
           const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -1061,8 +1083,8 @@ function dispatchDiagnosticEvent(
         continue;
       }
       try {
-        const eventForListener = cloneDiagnosticValueForListener(enriched);
-        const metadataForListener = createDiagnosticMetadataForListener(metadata);
+        const event = eventForListener();
+        metadataForListener ??= createDiagnosticMetadataForListener(metadata);
         const otel = isTrustedOtelDiagnosticListener(listener);
         let privateDataForListener = EMPTY_DIAGNOSTIC_PRIVATE_DATA;
         if (interest?.includePrivateData !== false && (privateData || otel)) {
@@ -1076,7 +1098,7 @@ function dispatchDiagnosticEvent(
           }
           privateDataForListener = deepFreezeDiagnosticValue(cloned);
         }
-        listener(eventForListener, metadataForListener, privateDataForListener);
+        listener(event, metadataForListener, privateDataForListener);
       } catch (err) {
         const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
         console.error(
@@ -1604,6 +1626,7 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
       "log.record",
       "gateway.rpc",
       "gateway.event_loop.sample",
+      "gateway.main_thread.stall",
       "gateway.http.cancelled",
       "diagnostic.gc",
     ],

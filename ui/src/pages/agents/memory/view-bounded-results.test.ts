@@ -123,14 +123,16 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},
     onOpenConfig: () => {},
-    onOpenWikiPage: async () => null,
+    onOpenWikiPage: async () => {},
+    onCloseWikiPreview: () => {},
+    wikiPreview: null,
     onBackfillDiary: () => {},
     onCopyDreamingArchivePath: () => {},
     onDedupeDreamDiary: () => {},
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
     onRepairDreamingArtifacts: () => {},
-    onViewStateChange: () => {},
+    onViewStateChange: (update) => update(viewState),
   };
 }
 

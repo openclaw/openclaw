@@ -9,7 +9,6 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
-import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import {
@@ -340,7 +339,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     if (!suppressTyping) {
       await typing.onReplyStart();
     }
-    logVerbose("Inbound body empty after normalization; skipping agent run");
     return finishReplyPreparation(typing, () => ({
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     }));

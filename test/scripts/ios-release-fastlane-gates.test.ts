@@ -1315,15 +1315,15 @@ end
     });
   });
 
-  it("runs screenshot shards alongside builds without changing runner authorization", () => {
+  it("captures all screenshot families once without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
+    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-capture:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
-    const shardJobStart = iosJobEnd;
-    const shardJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", shardJobStart);
-    const shardJob = workflow.slice(shardJobStart, shardJobEnd);
-    const reducerJobStart = shardJobEnd;
+    const captureJobStart = iosJobEnd;
+    const captureJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", captureJobStart);
+    const captureJob = workflow.slice(captureJobStart, captureJobEnd);
+    const reducerJobStart = captureJobEnd;
     const reducerJobEnd = workflow.indexOf("\n  android:\n", reducerJobStart);
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
@@ -1331,32 +1331,32 @@ end
     expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
-    expect(shardJob).toContain("needs: [preflight]");
-    expect(shardJob).toContain("max-parallel: 2");
-    expect(shardJob).toContain("device_family: [iphone, ipad-13]");
-    expect(shardJob).toContain(
-      "OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}",
-    );
-    expect(shardJob).not.toContain("run_ios_fastlane ios watch_screenshot");
-    expect(shardJob).toContain("run: pnpm ios:screenshots");
-    expect(shardJob).toContain("id: package_screenshot_evidence");
-    expect(shardJob).toContain('if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then');
+    expect(captureJob).toContain("needs: [preflight]");
+    expect(captureJob).not.toContain("strategy:");
+    expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_DEVICE_FAMILY");
+    expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_SKIP_WATCH");
+    expect(captureJob).not.toContain("run_ios_fastlane ios watch_screenshot");
+    expect(captureJob).toContain("run: pnpm ios:screenshots");
+    expect(captureJob).toContain("id: package_screenshot_evidence");
+    expect(captureJob).not.toContain("--family");
     expect(
-      shardJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
-    ).toHaveLength(2);
-    expect(shardJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
-    expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
-    expect(shardJob).toContain("steps.device_screenshots.outcome == 'failure'");
-    expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
-    expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
-    expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
-    expect(shardJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
-    expect(shardJob).not.toContain('test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"');
-    expect(shardJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
-    expect(shardJob).not.toContain("SnapshotDerivedData");
-    expect(shardJob.match(/contents: read/g)).toHaveLength(1);
-    expect(reducerJob).toContain("needs: [preflight, ios-screenshot-shard]");
-    expect(reducerJob).toContain("merge-multiple: false");
+      captureJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
+    ).toHaveLength(1);
+    expect(captureJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
+    expect(captureJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(captureJob).toContain("steps.device_screenshots.outcome == 'failure'");
+    expect(captureJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
+    expect(captureJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
+    expect(captureJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
+    expect(captureJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(captureJob).not.toContain(
+      'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
+    );
+    expect(captureJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
+    expect(captureJob).not.toContain("SnapshotDerivedData");
+    expect(captureJob.match(/contents: read/g)).toHaveLength(1);
+    expect(reducerJob).toContain("needs: [preflight, ios-screenshot-capture]");
+    expect(reducerJob).not.toContain("merge-multiple:");
     expect(reducerJob).toContain("Setup screenshot evidence Node");
     expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");

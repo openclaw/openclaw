@@ -36,6 +36,7 @@ type BackupGitCreateOptions = {
 type BackupGitScopeOptions = {
   global?: boolean;
   agent?: string;
+  store?: string;
 };
 
 export const GIT_BACKUP_PUSH_CREDENTIAL_WARNING =
@@ -60,9 +61,13 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
   }
+  const globalPath = options.all || options.global ? resolveOpenClawStateSqlitePath() : undefined;
+  if (globalPath) {
+    assertNotUpdateCapturePath(globalPath, resolveStateDir());
+  }
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   let agents: Array<{ agentId: string; databasePath: string }> = [];
   if (options.all || normalizedAgents.length > 0) {
-    const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
     const agentIds = options.all
       ? listAgentIds(config).toSorted()
       : normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
@@ -72,11 +77,9 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
     path: string;
     identity: GitBackupIdentity;
   }> = [];
-  if (options.all || options.global) {
-    const selectedPath = resolveOpenClawStateSqlitePath();
-    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
+  if (globalPath) {
     databases.push({
-      path: selectedPath,
+      path: globalPath,
       identity: { role: "global" },
     });
   }
@@ -91,11 +94,21 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
 
 function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
   const agent = options.agent?.trim();
-  if (options.global === true && agent) {
-    throw new Error("Choose exactly one Git backup scope: --global or --agent <id>.");
+  const store = options.store?.trim();
+  if (options.store !== undefined && !store) {
+    throw new Error("--store must not be blank");
   }
-  if (options.global !== true && !agent) {
-    throw new Error("Choose a Git backup scope: --global or --agent <id>.");
+  const scopes = Number(options.global === true) + Number(Boolean(agent)) + Number(Boolean(store));
+  if (scopes > 1) {
+    throw new Error(
+      "Choose exactly one Git backup scope: --global, --agent <id>, or --store <id>.",
+    );
+  }
+  if (scopes === 0) {
+    throw new Error("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
+  }
+  if (store) {
+    return { role: "generic", id: store };
   }
   return options.global === true
     ? { role: "global" }
@@ -121,6 +134,7 @@ export async function backupGitInitCommand(
 
 export async function backupGitCreateCommand(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
+  const databases = await resolveCreateDatabases(options);
   if (options.push && !options.excludeSecrets) {
     runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
@@ -131,7 +145,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
       createGitBackup({
         repositoryPath,
         stateDir: resolveStateDir(),
-        databases: await resolveCreateDatabases(options),
+        databases,
         all: options.all,
         excludeSecrets: options.excludeSecrets,
         push: options.push,

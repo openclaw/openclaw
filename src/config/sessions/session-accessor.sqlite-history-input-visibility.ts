@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveHistoryMessageSequence,
   resolveVisibleHistoryProjection,
@@ -19,7 +19,7 @@ import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcr
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
-const inputMessageJson = (database: DatabaseSync) =>
+const inputMessageJson = (database: EngineConnection) =>
   /* kysely-allow-raw: Project only input provenance and exact run correlation without hydrating message bodies. */
   sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.role'),
     'idempotencyKey', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.idempotencyKey'),

@@ -7,7 +7,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createChannelMessage, createThread } from "./internal/discord.js";
+import { createChannelMessage, createThread } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";

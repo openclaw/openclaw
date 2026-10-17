@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type { SqliteWorkerCommand } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
@@ -19,7 +19,7 @@ export type MemoryIndexReadOperations = Pick<
 export type MemoryIndexReadCommand = SqliteWorkerCommand<MemoryIndexReadOperations>;
 
 /** Published WAL readers and private shadow writers consume the same read kernels. */
-export function readMemoryIndex(db: DatabaseSync, command: MemoryIndexReadCommand) {
+export function readMemoryIndex(db: EngineConnection, command: MemoryIndexReadCommand) {
   switch (command.type) {
     case "index.facts":
       return { type: command.type, value: readMemoryDatabaseFacts(db) };

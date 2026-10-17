@@ -1,10 +1,10 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { emptyLegacyContent as litNothing } from "../../../lit/solid-content.tsx";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -340,7 +340,7 @@ function FramedMessage(props: {
             prepared={prepared()}
           />
           <GroupAvatar frame={props.frame} />
-          <ReplyLineConnector line={line()} avatar={frame().hasAvatar ? true : litNothing} />
+          <ReplyLineConnector line={line()} avatar={frame().hasAvatar} />
         </div>
       </Show>
       <Show when={showActions()}>
@@ -383,8 +383,7 @@ function FramedMessageGroup(props: {
   );
   const [mobile, setMobile] = createSignal(media?.matches ?? false);
   const onLayoutChange = () => setMobile(media?.matches ?? false);
-  media?.addEventListener("change", onLayoutChange);
-  onCleanup(() => media?.removeEventListener("change", onLayoutChange));
+  onSettled(() => media && listen(media, "change", onLayoutChange));
   return (
     <div
       class={frame().className}
@@ -483,7 +482,7 @@ function FramedMessageGroup(props: {
           </div>
         </Show>
       </Show>
-      <ReplyLineConnector line={frame().replyLine} avatar={frame().hasAvatar ? true : litNothing} />
+      <ReplyLineConnector line={frame().replyLine} avatar={frame().hasAvatar} />
     </div>
   );
 }

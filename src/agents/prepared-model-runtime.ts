@@ -169,7 +169,6 @@ export function cancelPreparedModelRuntimeRefresh(): void {
 
 async function closeModelRuntime(error: Error): Promise<void> {
   refreshRequestEpoch += 1;
-  remoteCatalogPublication.cancel(error);
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;

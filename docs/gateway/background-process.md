@@ -152,6 +152,12 @@ sandbox backend.
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
+For retained Linux process-group cleanup, adopted zombies are reaped after the
+tracked root exits. Active groups share asynchronous direct-child discovery,
+woken by child-exit signals with a one-second fallback while descendants remain.
+Cleanup stops when the groups disappear or their cleanup budgets expire; it does
+not periodically scan the host's process table.
+
 On Linux with the default Node runtime, the Gateway starts a small spawn broker
 before loading its main runtime.
 If initial broker startup fails, the Gateway logs the failure reason and runtime
@@ -181,10 +187,11 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
-Managed exec and negotiated worker workspace commands on Linux with Node use a dedicated
+Managed exec on Linux with Node or Bun uses a dedicated
 child subreaper. It acquires kernel child ownership before launch, adopts orphaned
 descendants, and stops and reaps them even if they create another process group
-or session. Completion requires the kernel to report no remaining children, the
+or session. Negotiated worker workspace commands use the same owner through their
+Node host. Completion requires the kernel to report no remaining children, the
 matching owner receipt, and output drain. It does not depend on group-directed
 signals, a process-table census, or inherited-pipe closure alone.
 

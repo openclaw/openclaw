@@ -10,6 +10,7 @@ import {
 } from "./provider-http.test-helpers.js";
 
 const {
+  resolveApiKeyForProviderMock,
   postJsonRequestMock,
   executeProviderOperationWithRetryMock,
   fetchWithTimeoutMock,
@@ -67,6 +68,27 @@ function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
 }
 
 describe("minimax music generation provider", () => {
+  it.each(["minimax", "minimax-portal"])(
+    "rejects an invalid %s media origin before resolving credentials or submitting music",
+    async (providerId) => {
+      await expect(
+        buildMinimaxMusicGenerationProvider(providerId).generateMusic(
+          musicRequest({
+            provider: providerId,
+            cfg: {
+              models: {
+                providers: { [providerId]: { baseUrl: "https://[", models: [] } },
+              },
+            },
+          }),
+        ),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+      expect(postJsonRequestMock).not.toHaveBeenCalled();
+      expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("streams generated music chunks from MiniMax", async () => {
     const chunkA = Buffer.from("ID3\x04\x00mp3-a");
     const chunkB = Buffer.from("mp3-b");
@@ -87,7 +109,12 @@ describe("minimax music generation provider", () => {
 
     const provider = buildMinimaxMusicGenerationProvider();
     const result = await provider.generateMusic(
-      musicRequest({ model: "", lyrics: "our city wakes", durationSeconds: 45 }),
+      musicRequest({
+        model: "",
+        lyrics: "our city wakes",
+        durationSeconds: 45,
+        cfg: { models: { providers: { minimax: { baseUrl: "   ", models: [] } } } },
+      }),
     );
 
     const request = mockCallArg(postJsonRequestMock);

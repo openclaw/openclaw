@@ -381,9 +381,10 @@ describe("CronService read ops while job is running", () => {
 });
 
 describe("CronService", () => {
-  it("keeps sibling jobs when separately loaded services mutate the same partition", async () => {
+  it("keeps sibling writes visible when separately loaded services mutate and run jobs", async () => {
     const store = await makeStorePath();
-    const { cron: cronA } = createService(store.storePath);
+    const enqueueSystemEvent = vi.fn();
+    const { cron: cronA } = createService(store.storePath, { enqueueSystemEvent });
     const { cron: cronB } = createService(store.storePath);
     try {
       await cronA.status();
@@ -404,6 +405,14 @@ describe("CronService", () => {
         "first-cached-service-job",
         "second-cached-service-job",
       ]);
+      await cronB.update("first-cached-service-job", {
+        payload: { kind: "systemEvent", text: "updated by sibling" },
+      });
+      await expect(cronA.run("first-cached-service-job", "force")).resolves.toEqual({
+        ok: true,
+        ran: true,
+      });
+      expect(enqueueSystemEvent).toHaveBeenCalledWith("updated by sibling", expect.anything());
     } finally {
       cronA.stop();
       cronB.stop();

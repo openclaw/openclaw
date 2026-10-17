@@ -24,6 +24,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { clearArtifactDownloads } from "./artifact-download-grants.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -415,6 +416,7 @@ async function closeGatewayResources(
         disposeRuntime("bundle-lsp", params.disposeAllBundleLspRuntimes),
       ]);
     });
+    await shutdownStep("artifact-downloads", clearArtifactDownloads);
     await shutdownStep("periodic-maintenance", () => params.maintenance?.stopPeriodicTasks());
     await shutdownStep("skill-usage", () => params.maintenance?.skillUsageCleanup());
     try {

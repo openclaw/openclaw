@@ -585,7 +585,7 @@ export async function buildStatusReplyParts(
       sessionEntry?.outputTokens,
       sessionEntry?.cacheRead,
       sessionEntry?.cacheWrite,
-    ].every((value) => typeof value === "number") &&
+    ].every((value) => value !== undefined) &&
     Boolean(sessionEntry?.model || activeModel);
   const [lifecycleTimestamps, transcriptUsage] = await Promise.all([
     resolveSessionLifecycleTimestampsAsync({

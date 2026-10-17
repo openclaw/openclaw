@@ -39,6 +39,7 @@ export type ChatOwnerRecord = {
 };
 
 export type ColdLoadProbeInput = {
+  ownerProbes?: boolean;
   latencyMs: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;

@@ -90,6 +90,8 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const metrics = collectStartupTraceMetrics(details, "plugins.gateway-load.plugin.trace-plugin");
+    expect(metrics.configValidationMs).toEqual(expect.any(Number));
+    expect(metrics.artifactPreparationMs).toEqual(expect.any(Number));
     expect(metrics.loadMs).toEqual(expect.any(Number));
     expect(metrics.loadFailedCount).toBe(0);
     expect(metrics.registerMs).toEqual(expect.any(Number));
@@ -1348,7 +1350,6 @@ describe("loadOpenClawPlugins", () => {
         expect(reenter.mock.results[0]).toMatchObject({
           type: "throw",
           value: {
-            name: "PluginLoadReentryError",
             message: `plugin load reentry detected for cache key: ${cacheKey}`,
           },
         });

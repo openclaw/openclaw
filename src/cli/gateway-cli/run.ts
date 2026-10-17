@@ -32,10 +32,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
-import {
-  recordGatewayDatabaseBoot,
-  installGatewayDatabaseEngine,
-} from "../../gateway/server-database-engine.js";
+import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
 import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import { isChannelStartupSuppressedByEnvironment } from "../../gateway/server-sidecar-startup-mode.js";
@@ -46,6 +43,7 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   formatGatewayCrashLoopManualChannelStartHint,
@@ -830,7 +828,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
-    const boot = recordGatewayDatabaseBoot(process.env, startedAtMs);
+    const boot = await beginGatewayBootLifecycle(process.env, startedAtMs);
     crashLoopDecision = boot.decision;
     activeBootId = boot.id;
     bootRecorded = activeBootId !== undefined;
@@ -879,7 +877,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       onRestartStartupFailure: triageStartupFailure,
       start: async (startOptions = {}) => {
         const { requestHotReloadRecovery, ...startupOptions } = startOptions;
-        const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
@@ -889,7 +886,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           auth: authOverride,
           tailscale: tailscaleOverride,
           ...startupOptions,
-          prepareConfigSnapshot: snapshotPreparation.prepareHostConfigSnapshot,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
           startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart,
           ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
@@ -982,7 +978,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       runtime: defaultRuntime,
       retry: async () => await runGatewayCommandOnce(opts, hooks),
     });
-    if (recovery.status === "recovered") {
+    if (recovery) {
       return;
     }
     defaultRuntime.exit(EXIT_CONFIG_ERROR);

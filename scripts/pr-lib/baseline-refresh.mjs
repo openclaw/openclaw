@@ -25,12 +25,41 @@ function git(args, options = {}) {
   return execFileSync(executable, args, { maxBuffer: Infinity, ...options });
 }
 const text = (...args) => decoder.decode(git(args)).trim();
-const hash = (bytes, write = false) =>
-  decoder
-    .decode(
-      git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], { input: bytes }),
-    )
-    .trim();
+function hash(bytes, write = false) {
+  if (write) {
+    return decoder
+      .decode(git(["hash-object", "--no-filters", "-w", "--stdin"], { input: bytes }))
+      .trim();
+  }
+  const directory = fs.mkdtempSync(join(tmpdir(), "openclaw-pr-hash-"));
+  const path = join(directory, "snapshot");
+  let fd;
+  let directoryRemoved = false;
+  try {
+    // Finish and close the exclusive writer before opening a fresh read-only
+    // descriptor. Hash captured bytes, never a later read of the authority path.
+    fs.writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+    fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    // PR supervision requires POSIX. Unlink before dispatch so interruption
+    // cannot leave authority bytes behind while Git owns the descriptor.
+    fs.unlinkSync(path);
+    fs.rmdirSync(directory);
+    directoryRemoved = true;
+    return decoder
+      .decode(git(["hash-object", "--no-filters", "--stdin"], { stdio: [fd, "pipe", "pipe"] }))
+      .trim();
+  } finally {
+    try {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    } finally {
+      if (!directoryRemoved) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  }
+}
 
 // Empty resolution files are valid blobs. Read the opened regular descriptor once;
 // Git receives those bytes without filters, pathname rereads or text normalization.

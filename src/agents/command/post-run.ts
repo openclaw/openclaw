@@ -19,7 +19,6 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildRestartRecoveryTerminalDeliveryEvidence,
-  constrainRestartRecoveryDeliveryPayloads,
   shouldPersistCurrentRunSessionCleanup,
 } from "../agent-command-restart-recovery.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
@@ -153,7 +152,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
   // display history cannot reconstruct a yielded or intentionally empty result.
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(terminal.metadata.terminalReply);
   const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
-  let result = {
+  const result = {
     ...params.attempt.result,
     meta: {
       ...params.attempt.result.meta,
@@ -184,16 +183,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const assistantTranscriptOwned =
       finalVisiblePayload !== undefined &&
       getReplyPayloadMetadata(finalVisiblePayload)?.assistantTranscriptOwned === true;
-    if (params.opts.internalDeliveryMediaUrls !== undefined) {
-      result = {
-        ...result,
-        payloads: constrainRestartRecoveryDeliveryPayloads(
-          result.payloads,
-          params.opts.internalDeliveryMediaUrls,
-          params.opts.internalDeliverySuppressText === true,
-        ),
-      };
-    }
     const resultErrorPayload = result.payloads?.find((payload) => payload.isError === true);
     if (resultErrorPayload) {
       const message =

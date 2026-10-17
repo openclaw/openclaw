@@ -2295,7 +2295,7 @@ describe("Codex plugin thread config", () => {
   it("uses durable policy and app cache key in the cheap input fingerprint", async () => {
     const appCache = new CodexAppInventoryCache();
     const first = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime-a",
     });
     await appCache.refreshNow({
@@ -2303,11 +2303,11 @@ describe("Codex plugin thread config", () => {
       request: async (method, params) => codexAppInventoryResponse(method, [], params),
     });
     const second = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime-a",
     });
     const third = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime-b",
     });
     expect(second).toBe(first);
@@ -2332,7 +2332,7 @@ describe("Codex plugin thread config", () => {
 
   it("builds a diagnostic deny-all fallback after plugin config timeout", () => {
     const fallback = buildCodexPluginThreadConfigTimeoutFallback({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime",
       message: "Plugin discovery timed out.",
     });
@@ -2776,7 +2776,7 @@ function pluginDetail(
 }
 
 async function buildReadyGoogleCalendarThreadConfig(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig,
 ): Promise<Awaited<ReturnType<typeof buildCodexPluginThreadConfig>>> {
   const appCache = await cacheApps([appInfo("google-calendar-app", true)]);
 
@@ -2812,13 +2812,13 @@ describe("missing configured plugins", () => {
     {
       marketplaceName: "missing-marketplace",
       code: "marketplace_missing",
-      actions: "ask",
+      actions: "ask" as const,
       enabled: true,
     },
   ])(
     "keeps healthy runtime apps for $code with actions=$actions enabled=$enabled",
     async ({ marketplaceName, code, actions, enabled }) => {
-      const pluginConfig = {
+      const pluginConfig: CodexPluginConfig = {
         codexPlugins: {
           enabled: true,
           allow_all_plugins: true,

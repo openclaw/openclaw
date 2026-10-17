@@ -388,7 +388,6 @@ function readIncognitoSessionRow(params: {
       identity: current.version.epoch,
       assertCurrent() {
         assertSessionCurrent?.();
-        memory.binding?.actor.assertReadable();
         memory.authority.assertCurrent();
       },
     },

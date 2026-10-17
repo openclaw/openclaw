@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
+import "./desktop-panel.ts";
 import {
   createPanel,
   mountPanel,
@@ -14,7 +15,7 @@ import {
 
 type Panel = ReturnType<typeof createPanel>;
 const button = (panel: Panel) =>
-  panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-picture-in-picture-button")!;
+  panel.querySelector<HTMLButtonElement>(".desktop-picture-in-picture-button")!;
 
 function createPopup() {
   const frames = new Map<number, FrameRequestCallback>();
@@ -97,7 +98,7 @@ async function setup(mode: "embedded" | "dock" | "document" = "embedded", connec
     requestedSource: "gateway",
     desktopClientFactory: () => ({ connect }),
   });
-  mountPanel(panel);
+  await mountPanel(panel);
   if (mode === "dock") {
     panel.handleToggleRequest(
       new CustomEvent("openclaw:desktop-toggle", {
@@ -121,12 +122,21 @@ describe("Desktop Picture-in-Picture ownership", () => {
     vi.unstubAllGlobals();
   });
 
+  it("accepts a native close before the Solid panel mounts", () => {
+    const panel = document.createElement("openclaw-desktop-panel");
+    expect(() =>
+      panel.handleToggleRequest(
+        new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
+      ),
+    ).not.toThrow();
+  });
+
   it.each(["dock"] as const)(
     "mirrors %s without reconnecting or changing control; browser close preserves the viewer",
     async (mode) => {
       const { popup, tick, frames, drawImage, requestWindow } = createMirrorFixture();
       const { panel, request, connect, disconnect } = await setup(mode);
-      const source = panel.renderRoot.querySelector("canvas")!;
+      const source = panel.querySelector("canvas")!;
       button(panel).click();
       // Native request occurs synchronously, while the click still has user activation.
       expect(requestWindow).toHaveBeenCalledOnce();
@@ -190,7 +200,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
       button(panel).click();
       await waitForSolid(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
       expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
-      unmountPanel(panel);
+      await unmountPanel(panel);
       publish("light", "rgb(233 246 238)", "rgb(25 51 36)");
       await Promise.resolve();
       expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
@@ -215,7 +225,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
     const { panel, disconnect } = await setup();
     button(panel).click();
     await waitForSolid(() =>
-      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
         "Check browser permissions",
       ),
     );
@@ -238,11 +248,11 @@ describe("Desktop Picture-in-Picture ownership", () => {
     await waitForSolid(() => expect(button(panel).getAttribute("aria-busy")).toBe("false"));
     expect(button(panel).getAttribute("aria-pressed")).toBe("false");
     expect(popup.document.querySelector("canvas")).toBeNull();
-    expect(panel.renderRoot.querySelector('[role="alert"]')).toBeNull();
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
     expect(disconnect).not.toHaveBeenCalled();
   });
 
-  it.each(["disconnect", "source switch", "session switch", "unmount"])(
+  it.each(["disconnect", "source switch", "session switch", "hidden", "unmount"])(
     "closes late PiP completions after %s",
     async (reason) => {
       const pending = createDeferred<Window>();
@@ -259,8 +269,12 @@ describe("Desktop Picture-in-Picture ownership", () => {
         updatePanel(panel, { requestedSource: "another-machine" });
       } else if (reason === "session switch") {
         updatePanel(panel, { sessionKey: "agent:main:another-session" });
+      } else if (reason === "hidden") {
+        updatePanel(panel, { presented: false });
+        await panel.updateComplete;
+        expect(button(panel).getAttribute("aria-busy")).toBe("true");
       } else {
-        unmountPanel(panel);
+        await unmountPanel(panel);
       }
       await panel.updateComplete;
       pending.resolve(popup as unknown as Window);

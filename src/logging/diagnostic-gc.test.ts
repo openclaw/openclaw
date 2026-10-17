@@ -126,7 +126,7 @@ it("owns demand, sampled GC batches, and disable/re-enable through the existing 
 
     setDiagnosticsEnabledForProcess(false);
     native.collect([{ gcType: "Scavenge", cost: 99_000 }]);
-    stopGatewayDiagnosticHeartbeat();
+    start();
     expect(native.active.size).toBe(0);
     setDiagnosticsEnabledForProcess(true);
     start();
@@ -150,6 +150,7 @@ it("owns demand, sampled GC batches, and disable/re-enable through the existing 
   } finally {
     unsubscribe();
     publicUnsubscribe();
+    await scheduler.stop();
   }
 });
 

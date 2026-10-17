@@ -16,7 +16,7 @@ export function createRepositoryFixture(
     cloudProfiles?: DraftGatewayState["cloudProfiles"];
   } = {},
 ) {
-  const requestUpdate = vi.fn();
+  const changed = vi.fn();
   const persistPreference = vi.fn();
   const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
   const request = vi.fn<(method: string, params?: Record<string, unknown>) => Promise<unknown>>(
@@ -73,20 +73,18 @@ export function createRepositoryFixture(
     readPreference,
   } as unknown as DraftGatewayState;
   const browser = new DraftPlaceBrowser(gateway, () => ({ context, isAdmin: true }), {
-    requestUpdate,
+    changed,
     updateComplete: () => Promise.resolve(),
     onProjectMissing: vi.fn(),
     onSelectProject: vi.fn(),
     onApprovedListing: vi.fn(),
-    querySelector: () => null,
     activeElement: () => null,
-    body: () => null,
   });
   const state = new DraftPlaceState(
     gateway,
     browser,
     () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
-    { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
+    { changed, onError: vi.fn(), onClearError: vi.fn() },
   );
   return {
     state,
@@ -96,6 +94,6 @@ export function createRepositoryFixture(
     persistPreference,
     readPreference,
     request,
-    requestUpdate,
+    changed,
   };
 }

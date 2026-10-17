@@ -70,12 +70,11 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
     return [];
   }
-  const stringFlag = (label: string, value: unknown) =>
-    typeof value === "string" && value.length > 0 ? `${label}:${value}` : undefined;
+  const stringFlag = (label: string, value?: string) => (value ? `${label}:${value}` : undefined);
   let fastFlag: string | undefined;
   if (entry.fastMode === "auto" || entry.fastMode === "ultrafast") {
     fastFlag = `fast:${entry.fastMode}`;
-  } else if (typeof entry.fastMode === "boolean") {
+  } else if (entry.fastMode !== undefined) {
     fastFlag = entry.fastMode ? "fast" : "fast:off";
   }
   return [
@@ -143,159 +142,154 @@ async function prepareSessionStatusDetails(
       allowCacheLookup: false,
     }) ?? null;
 
-  // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
+  // Project each candidate once; agent and aggregate windows only select these facts.
   const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
-  const buildSessionRows = async (rows: SessionEntrySummary[]) =>
-    Promise.all(
-      rows.map(async (candidate) => {
-        const cached = sessionRows.get(candidate);
-        if (cached) {
-          return { ...cached, flags: [...cached.flags] };
-        }
-        const { sessionKey: key, entry } = candidate;
-        const agentId = parseAgentSessionKey(key)?.agentId;
-        const updatedAt = entry.updatedAt ?? null;
-        const age = updatedAt ? now - updatedAt : null;
-        const configuredForSession = resolveConfiguredStatusModelRef({
-          cfg,
-          defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
-          agentId,
-        });
-        const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
-        const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
-        const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
-        const model = resolvedModel.model ?? configuredSessionModel;
-        const lookupModel =
-          resolveStatusModelLookupRef({
-            provider: resolvedModel.provider,
-            model,
-            defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-          }) ?? resolvedModel;
-        const lookupModelId = lookupModel.model ?? model;
-        const selectedModelLabel =
-          resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-        const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-          provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-          model: configuredSessionModel,
-          defaultProvider: DEFAULT_PROVIDER,
-        });
-        const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+  await Promise.all(
+    candidates.map(async (candidate) => {
+      const { sessionKey: key, entry } = candidate;
+      const agentId = parseAgentSessionKey(key)?.agentId;
+      const updatedAt = entry.updatedAt ?? null;
+      const age = updatedAt ? now - updatedAt : null;
+      const configuredForSession = resolveConfiguredStatusModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        agentId,
+      });
+      const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
+      const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
+      const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
+      const model = resolvedModel.model ?? configuredSessionModel;
+      const lookupModel =
+        resolveStatusModelLookupRef({
           provider: resolvedModel.provider,
           model,
           defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        });
-        const runtimeMatchesConfiguredModel =
-          selectedModelComparisonLabel != null &&
-          configuredSessionModelComparisonLabel != null &&
-          areRuntimeModelRefsEquivalent(
-            selectedModelComparisonLabel,
-            configuredSessionModelComparisonLabel,
-            { config: cfg },
-          );
-        const contextModelProvider = runtimeMatchesConfiguredModel
-          ? configuredForSession.provider
-          : lookupModel.provider;
-        const modelSelectionDiffers =
-          selectedModelComparisonLabel != null &&
-          configuredSessionModelComparisonLabel != null &&
-          selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
-          !runtimeMatchesConfiguredModel &&
-          (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
-        // Session rows show the live selected model and warn for user-pinned
-        // differences as well as runtime fallback selections (#96126).
-        const runtime = resolveSessionRuntime({
-          cfg,
-          entry,
-          provider: lookupModel.provider,
-          model: lookupModelId ?? "",
-          agentId,
-          sessionKey: key,
-          acpMeta: metadataByCandidate.get(candidate) ?? null,
-        });
-        const modelContext = await resolveModelContext(
-          lookupModel.provider,
-          lookupModelId ?? undefined,
-          agentId,
-          runtime.id,
-          entry,
+        }) ?? resolvedModel;
+      const lookupModelId = lookupModel.model ?? model;
+      const selectedModelLabel =
+        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+      const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
+        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        model: configuredSessionModel,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+      const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+        provider: resolvedModel.provider,
+        model,
+        defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+      });
+      const runtimeMatchesConfiguredModel =
+        selectedModelComparisonLabel != null &&
+        configuredSessionModelComparisonLabel != null &&
+        areRuntimeModelRefsEquivalent(
+          selectedModelComparisonLabel,
+          configuredSessionModelComparisonLabel,
+          { config: cfg },
         );
-        const resolvedContextTokens = resolveContextTokensForModel({
-          cfg,
+      const contextModelProvider = runtimeMatchesConfiguredModel
+        ? configuredForSession.provider
+        : lookupModel.provider;
+      const modelSelectionDiffers =
+        selectedModelComparisonLabel != null &&
+        configuredSessionModelComparisonLabel != null &&
+        selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
+        !runtimeMatchesConfiguredModel &&
+        (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
+      // Session rows show the live selected model and warn for user-pinned
+      // differences as well as runtime fallback selections (#96126).
+      const runtime = resolveSessionRuntime({
+        cfg,
+        entry,
+        provider: lookupModel.provider,
+        model: lookupModelId,
+        agentId,
+        sessionKey: key,
+        acpMeta: metadataByCandidate.get(candidate) ?? null,
+      });
+      const modelContext = await resolveModelContext(
+        lookupModel.provider,
+        lookupModelId,
+        agentId,
+        runtime.id,
+        entry,
+      );
+      const resolvedContextTokens = resolveContextTokensForModel({
+        cfg,
+        provider: lookupModel.provider,
+        model: lookupModelId,
+        ...modelContext,
+        allowAsyncLoad: false,
+        allowCacheLookup: false,
+      });
+      const contextTokens =
+        resolveProjectedSessionContextTokens({
+          entry,
           provider: lookupModel.provider,
           model: lookupModelId,
-          ...modelContext,
-          allowAsyncLoad: false,
-          allowCacheLookup: false,
-        });
-        const contextTokens =
-          resolveProjectedSessionContextTokens({
-            entry,
+          agentHarnessId: runtime.id,
+          resolvedContextTokens,
+          authoredContextTokens: resolveAuthoredModelContextTokens({
+            cfg,
             provider: lookupModel.provider,
+            modelProvider: contextModelProvider,
             model: lookupModelId,
-            agentHarnessId: runtime.id,
-            resolvedContextTokens,
-            authoredContextTokens: resolveAuthoredModelContextTokens({
-              cfg,
-              provider: lookupModel.provider,
-              modelProvider: contextModelProvider,
-              model: lookupModelId,
-            }),
-          }) ?? null;
-        const total = resolveSessionTotalTokens(entry);
-        const freshTotal = resolveFreshSessionTotalTokens(entry);
-        const totalTokensFresh = freshTotal !== undefined;
-        const remaining =
-          contextTokens != null && freshTotal !== undefined
-            ? Math.max(0, contextTokens - freshTotal)
-            : null;
-        const pct =
-          contextTokens && contextTokens > 0 && freshTotal !== undefined
-            ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
-            : null;
-        const row = {
-          agentId,
-          key,
-          kind: classifySessionKey(key, entry),
-          sessionId: entry?.sessionId,
-          updatedAt,
-          age,
-          thinkingLevel: entry?.thinkingLevel,
-          fastMode: entry?.fastMode,
-          verboseLevel: entry?.verboseLevel,
-          traceLevel: entry?.traceLevel,
-          reasoningLevel: entry?.reasoningLevel,
-          elevatedLevel: entry?.elevatedLevel,
-          systemSent: entry?.systemSent,
-          abortedLastRun: entry?.abortedLastRun,
-          inputTokens: entry?.inputTokens,
-          outputTokens: entry?.outputTokens,
-          cacheRead: entry?.cacheRead,
-          cacheWrite: entry?.cacheWrite,
-          totalTokens: total ?? null,
-          totalTokensFresh,
-          remainingTokens: remaining,
-          percentUsed: pct,
-          model,
-          configuredModel: configuredSessionModelLabel,
-          selectedModel: selectedModelLabel,
-          modelSelectionReason: modelSelectionDiffers
-            ? hasUserPinnedModelSelection(entry)
-              ? "session override"
-              : "fallback selected"
-            : null,
-          runtime: runtime.label,
-          contextTokens,
-          flags: buildFlags(entry),
-        } satisfies SessionStatus;
-        sessionRows.set(candidate, row);
-        return row;
-      }),
-    );
+          }),
+        }) ?? null;
+      const total = resolveSessionTotalTokens(entry);
+      const freshTotal = resolveFreshSessionTotalTokens(entry);
+      const totalTokensFresh = freshTotal !== undefined;
+      const remaining =
+        contextTokens != null && freshTotal !== undefined
+          ? Math.max(0, contextTokens - freshTotal)
+          : null;
+      const pct =
+        contextTokens && contextTokens > 0 && freshTotal !== undefined
+          ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
+          : null;
+      const row = {
+        agentId,
+        key,
+        kind: classifySessionKey(key, entry),
+        sessionId: entry?.sessionId,
+        updatedAt,
+        age,
+        thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
+        verboseLevel: entry?.verboseLevel,
+        traceLevel: entry?.traceLevel,
+        reasoningLevel: entry?.reasoningLevel,
+        elevatedLevel: entry?.elevatedLevel,
+        systemSent: entry?.systemSent,
+        abortedLastRun: entry?.abortedLastRun,
+        inputTokens: entry?.inputTokens,
+        outputTokens: entry?.outputTokens,
+        cacheRead: entry?.cacheRead,
+        cacheWrite: entry?.cacheWrite,
+        totalTokens: total ?? null,
+        totalTokensFresh,
+        remainingTokens: remaining,
+        percentUsed: pct,
+        model,
+        configuredModel: configuredSessionModelLabel,
+        selectedModel: selectedModelLabel,
+        modelSelectionReason: modelSelectionDiffers
+          ? hasUserPinnedModelSelection(entry)
+            ? "session override"
+            : "fallback selected"
+          : null,
+        runtime: runtime.label,
+        contextTokens,
+        flags: buildFlags(entry),
+      } satisfies SessionStatus;
+      sessionRows.set(candidate, row);
+    }),
+  );
 
   return {
     defaults: { model: configModel, contextTokens: configContextTokens },
-    buildSessionRows,
+    buildSessionRows: (rows: readonly SessionEntrySummary[]) =>
+      rows.map((candidate) => sessionRows.get(candidate)!),
   };
 }
 
@@ -481,19 +475,17 @@ export async function getStatusSummary(
         ...new Set([...recentCandidates, ...sessionStores.byAgent.flatMap(({ recent }) => recent)]),
       ])
     : undefined;
-  const byAgent = await Promise.all(
-    sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
-      agentId: agent.id,
-      ...(agent.status ? { status: agent.status } : {}),
-      ...(includeSensitive && agent.admissionRefusal
-        ? { admissionRefusal: agent.admissionRefusal }
-        : {}),
-      path: includeSensitive ? path : "[redacted]",
-      count,
-      recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
-    })),
-  );
-  const recent = sessionDetails ? await sessionDetails.buildSessionRows(recentCandidates) : [];
+  const byAgent = sessionStores.byAgent.map(({ agent, path, count, recent }) => ({
+    agentId: agent.id,
+    ...(agent.status ? { status: agent.status } : {}),
+    ...(includeSensitive && agent.admissionRefusal
+      ? { admissionRefusal: agent.admissionRefusal }
+      : {}),
+    path: includeSensitive ? path : "[redacted]",
+    count,
+    recent: sessionDetails ? sessionDetails.buildSessionRows(recent) : [],
+  }));
+  const recent = sessionDetails ? sessionDetails.buildSessionRows(recentCandidates) : [];
   const hostDesktopStatus =
     options.hostDesktopStatus ??
     (
@@ -502,8 +494,20 @@ export async function getStatusSummary(
       ).inspectHostDesktop({ config: cfg.desktop?.host })
     ).status;
   const sqliteWal = readOpenClawStateWalHealth();
+  const databaseStores = options.includeCliProjection
+    ? (
+        await import("../infra/database-engine/admitted-diagnostics.js")
+      ).describeAdmittedDatabaseStores(cfg)
+    : undefined;
   return {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    ...(databaseStores
+      ? {
+          databaseStores: includeSensitive
+            ? databaseStores
+            : databaseStores.map((store) => Object.assign({}, store, { path: null })),
+        }
+      : {}),
     ...(options.includeCliProjection
       ? { cliProjection: buildStatusCliProjection(cfg, agentList) }
       : {}),

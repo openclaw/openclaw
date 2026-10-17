@@ -32,7 +32,7 @@ import { Icon } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
 import "../tooltip.ts";
 
-export type SessionRunVisibility = typeof sessionRunVisibility;
+type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
 
 function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
@@ -44,7 +44,10 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
     <Show when={props.attention.kind !== "none"}>
       <openclaw-tooltip prop:content={parts().preview ? "" : parts().status} open-on-click>
         <span
-          class={`sidebar-session-attention__icon sidebar-session-attention__icon--${props.attention.kind}`}
+          class={[
+            "sidebar-session-attention__icon",
+            `sidebar-session-attention__icon--${props.attention.kind}`,
+          ]}
           data-session-attention={props.attention.kind}
           role={label() ? "img" : undefined}
           aria-label={label()}
@@ -195,7 +198,7 @@ export function SessionRowBadges(props: SessionRowBadgesParams) {
           {(badge) => (
             <openclaw-tooltip prop:content={badge().label}>
               <span
-                class={`session-row-badge session-row-badge--${badge().modifier}`}
+                class={["session-row-badge", `session-row-badge--${badge().modifier}`]}
                 data-pull-request-state={badge().pullRequestState}
                 data-placement-state={badge().placementState}
                 data-disk-space-status={badge().diskSpaceStatus}
@@ -284,7 +287,10 @@ function SessionIdleState(props: { session: SidebarRecentSession }) {
       <Show when={state()}>
         {(current) => (
           <span
-            class={`sidebar-child-session__status sidebar-child-session__status--${props.session.status}`}
+            class={[
+              "sidebar-child-session__status",
+              `sidebar-child-session__status--${props.session.status}`,
+            ]}
             role="img"
             aria-label={current().label}
             title={current().label}

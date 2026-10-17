@@ -20,7 +20,7 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "./context
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   ensureCustomElementDefined,
-  type LazyCustomElementRequestController,
+  type LazyCustomElementRequests,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
@@ -28,12 +28,12 @@ import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 type CommandPaletteShellHost = {
   readonly context?: Pick<ApplicationContext, "gateway"> &
     Partial<Pick<ApplicationContext, "config">>;
-  readonly commandPalette?: CommandPaletteElement;
+  readonly elements: { commandPalette?: CommandPaletteElement };
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteTarget?: CommandPaletteTargetDetail;
   chatNavigationOptions(face: "chat"): ApplicationNavigationOptions | undefined;
   navigate(routeId: "chat", options?: ApplicationNavigationOptions): void;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
+  readonly lazyCustomElements: LazyCustomElementRequests;
 };
 
 type CommandPaletteShellActions = {
@@ -57,10 +57,10 @@ export class ShellCommandPaletteOwner {
   }
 
   readonly open = (): void => {
-    const palette = this.#host.commandPalette;
+    const palette = this.#host.elements.commandPalette;
     // Opening is an intent, not a prompt transport. Never persist event detail.
     const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT);
-    if (palette) {
+    if (palette?.isConnected) {
       this.loading.handoff(() => {
         // The loader keeps keyboard custody until the replacement accepts focus.
         // Read its final value and recheck ownership at that boundary.
@@ -106,8 +106,8 @@ export class ShellCommandPaletteOwner {
       this.#host.lazyCustomElements.visibleState?.element === this.#host.commandPaletteElement
     ) {
       this.closePending();
-    } else if (this.#host.commandPalette) {
-      this.#host.commandPalette.togglePalette();
+    } else if (this.#host.elements.commandPalette?.isConnected) {
+      this.#host.elements.commandPalette.togglePalette();
     } else {
       this.open();
     }
@@ -146,7 +146,7 @@ export class ShellCommandPaletteOwner {
 }
 
 /** In-memory custody outlives the loading view, until the real palette accepts it. */
-export function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "context">) {
+function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "context">) {
   type Presentation = {
     draft?: CommandPaletteInputSnapshot;
     returnFocus?: HTMLElement | null;

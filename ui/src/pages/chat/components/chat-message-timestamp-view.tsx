@@ -58,19 +58,18 @@ function prepareTimestamp(timestamp: number) {
 }
 
 function TimestampTime(props: { view: ReturnType<typeof prepareTimestamp> }) {
+  const dateTime = createMemo(() => props.view.dateTime);
+  const label = createMemo(() => props.view.relativeLabel);
   return (
-    <time class="chat-group-timestamp" datetime={props.view.dateTime} aria-live="off">
-      {props.view.relativeLabel}
+    <time class="chat-group-timestamp" datetime={dateTime()} aria-live="off">
+      {label()}
     </time>
   );
 }
 
-export function renderSolidChatTimestamp(timestamp: number, metadata: JSX.Element[] = []) {
-  return <ChatTimestamp timestamp={timestamp} metadata={metadata} />;
-}
-
 export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element[] }) {
   const view = createMemo(() => prepareTimestamp(props.timestamp));
+  const contextLabel = createMemo(() => t("chat.messages.contextFor", { timestamp: view().title }));
   const hasMetadata = () => Boolean(props.metadata?.length);
   return (
     <openclaw-tooltip
@@ -79,11 +78,7 @@ export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element
       prop:content={hasMetadata() ? "" : view().label}
     >
       <Show when={hasMetadata()} fallback={<TimestampTime view={view()} />}>
-        <button
-          type="button"
-          class="msg-meta__summary"
-          aria-label={t("chat.messages.contextFor", { timestamp: view().title })}
-        >
+        <button type="button" class="msg-meta__summary" aria-label={contextLabel()}>
           <TimestampTime view={view()} />
         </button>
       </Show>
@@ -120,6 +115,8 @@ export function extractGroupMeta(
   let model: string | null = null;
   let hasUsage = false;
   let maxPromptTokens = 0;
+  let maxLegacyPromptTokens = 0;
+  let hasContextUsage = false;
   let usageUnavailable = false;
 
   for (const { message } of group.messages) {
@@ -149,11 +146,17 @@ export function extractGroupMeta(
       cacheWrite += callCacheWrite;
       // A context marker holds the latest call; the counters may cover a whole multi-call turn.
       const context = asOptionalRecord(asOptionalRecord(m.usage)?.contextUsage);
-      const callPromptTokens =
-        context?.state === "available" && typeof context.promptTokens === "number"
-          ? context.promptTokens
-          : callInput + callCacheRead + callCacheWrite;
-      maxPromptTokens = Math.max(maxPromptTokens, callPromptTokens);
+      if (context?.state === "available" && typeof context.promptTokens === "number") {
+        hasContextUsage = true;
+        maxPromptTokens = Math.max(maxPromptTokens, context.promptTokens);
+      } else if (context?.state === "unavailable") {
+        hasContextUsage = true;
+      } else {
+        maxLegacyPromptTokens = Math.max(
+          maxLegacyPromptTokens,
+          callInput + callCacheRead + callCacheWrite,
+        );
+      }
     }
     // Producers write cost nested under usage.cost (the AssistantMessage
     // shape); a bare message.cost never exists, so reading only it left the
@@ -184,9 +187,11 @@ export function extractGroupMeta(
     return null;
   }
 
+  // Legacy counters are an estimate only when the group has no explicit context snapshots.
+  const promptTokens = hasContextUsage ? maxPromptTokens : maxLegacyPromptTokens;
   const contextPercent =
-    contextWindow && maxPromptTokens > 0
-      ? Math.min(Math.round((maxPromptTokens / contextWindow) * 100), 100)
+    contextWindow && promptTokens > 0
+      ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
       : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };

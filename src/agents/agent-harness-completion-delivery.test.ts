@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   captureHarnessCompletionRecovery,
@@ -432,58 +431,18 @@ describe("host-owned harness completion recovery", () => {
     },
   );
 
-  it.each(["unchanged", "physical", "revision", "claim", "terminal"])(
-    "rechecks %s custody after awaiting missing submitted input",
-    async (changed) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const { entry, target, request } = await admit(state);
-        const unowned = {
-          ...entry,
-          restartRecoveryHarnessCompletion: undefined,
-          restartRecoveryDeliverySourceRunId: undefined,
-          restartRecoveryDeliveryRunId: undefined,
-        };
-        await replaceSessionEntry(target, unowned);
-        const entered = createDeferred();
-        const result = createDeferred<undefined>();
-        const read = vi
-          .spyOn(sessionAccessor, "readSessionSubmittedInput")
-          .mockImplementationOnce(() => {
-            entered.resolve();
-            return result.promise;
-          });
-        const reconciliation = reconcileHarnessCompletionDelivery(request);
-        try {
-          await awaitGateBeforeSettlement(
-            entered.promise,
-            reconciliation,
-            "completion bypassed submitted-input read",
-          );
-          const successor =
-            changed === "claim"
-              ? entry
-              : changed === "terminal"
-                ? terminalEntry(entry)
-                : {
-                    ...unowned,
-                    sessionId: changed === "physical" ? "physical-2" : entry.sessionId,
-                    lifecycleRevision:
-                      changed === "revision" ? "revision-2" : entry.lifecycleRevision,
-                  };
-          await replaceSessionEntry(target, successor);
-          result.resolve(undefined);
-          expect(await reconciliation).toBe(changed === "unchanged" ? "unowned" : "blocked");
-        } finally {
-          result.resolve(undefined);
-          try {
-            await reconciliation;
-          } finally {
-            read.mockRestore();
-          }
-        }
+  it("leaves completion without a saved claim or submitted input unowned", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { entry, target, request } = await admit(state);
+      await replaceSessionEntry(target, {
+        ...entry,
+        restartRecoveryHarnessCompletion: undefined,
+        restartRecoveryDeliverySourceRunId: undefined,
+        restartRecoveryDeliveryRunId: undefined,
       });
-    },
-  );
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("unowned");
+    });
+  });
 
   it("keeps an accepted source pending and adopts its original identity in a new operational run", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

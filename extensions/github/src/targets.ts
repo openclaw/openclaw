@@ -1,3 +1,4 @@
+import type { ControlUiLinkReaderDetailParams } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GitHubItemTarget = {
@@ -76,11 +77,15 @@ const GITHUB_LINK_PATH = new RegExp(
   "u",
 );
 
-export function parseGitHubLinkParams(value: unknown): {
+export function parseGitHubLinkParams(
+  value: unknown,
+  host = "github.com",
+): {
   target: GitHubTarget;
   url: string;
   agentId?: string;
   refresh: boolean;
+  section?: ControlUiLinkReaderDetailParams["section"];
   filesExpanded: boolean;
 } | null {
   if (
@@ -88,6 +93,11 @@ export function parseGitHubLinkParams(value: unknown): {
     typeof value.url !== "string" ||
     value.url.length > 4096 ||
     (value.refresh !== undefined && typeof value.refresh !== "boolean") ||
+    (value.section !== undefined &&
+      value.section !== "overview" &&
+      value.section !== "checks" &&
+      value.section !== "files" &&
+      value.section !== "discussion") ||
     (value.agentId !== undefined && (typeof value.agentId !== "string" || !value.agentId.trim()))
   ) {
     return null;
@@ -96,7 +106,7 @@ export function parseGitHubLinkParams(value: unknown): {
     const url = new URL(value.url);
     if (
       url.protocol !== "https:" ||
-      url.hostname !== "github.com" ||
+      url.hostname !== host ||
       url.username ||
       url.password ||
       url.port ||
@@ -117,6 +127,7 @@ export function parseGitHubLinkParams(value: unknown): {
           url: url.href,
           ...(typeof value.agentId === "string" ? { agentId: value.agentId.trim() } : {}),
           refresh: value.refresh === true,
+          ...(value.section !== undefined ? { section: value.section } : {}),
           filesExpanded: subpage === "files",
         }
       : null;
@@ -125,7 +136,7 @@ export function parseGitHubLinkParams(value: unknown): {
   }
 }
 
-export function githubTargetUrl(target: GitHubTarget): string {
+export function githubTargetUrl(target: GitHubTarget, host = "github.com"): string {
   const id = target.kind === "commit" ? target.sha : target.number;
-  return `https://github.com/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
+  return `https://${host}/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
 }

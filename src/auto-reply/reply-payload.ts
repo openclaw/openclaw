@@ -151,8 +151,7 @@ export function stripReplyMediaFailureFallback(
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
   return Boolean(
-    readNonBlankString(payload.mediaUrl) ||
-    (Array.isArray(payload.mediaUrls) && payload.mediaUrls.some(readNonBlankString)),
+    readNonBlankString(payload.mediaUrl) || payload.mediaUrls?.some(readNonBlankString),
   );
 }
 
@@ -434,12 +433,11 @@ export function readReplyPayloadSourceOccurrence(
   const sourceText = metadata?.blockSourceText;
   const sourceRange = metadata?.blockSourceRange;
   if (
-    typeof assistantMessageIndex !== "number" ||
+    assistantMessageIndex === undefined ||
     !Number.isSafeInteger(assistantMessageIndex) ||
     assistantMessageIndex < 0 ||
-    typeof sourceText !== "string" ||
-    !Array.isArray(sourceRange) ||
-    sourceRange.length !== 2
+    sourceText === undefined ||
+    !sourceRange
   ) {
     return undefined;
   }

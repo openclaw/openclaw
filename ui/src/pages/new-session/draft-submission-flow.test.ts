@@ -38,6 +38,30 @@ async function readyChatRoute() {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("publishes complete restored drafts and attachment-read changes", () => {
+    const { flow } = createDraftFixture();
+    const snapshots: ReturnType<typeof flow.composerDraft.read>[] = [];
+    const stop = flow.composerDraft.subscribe(() => snapshots.push(flow.composerDraft.read()));
+    try {
+      const mentions = [{ profileId: "alex", start: 0, end: 5 }];
+      flow.restoreDraftState({
+        message: "@Alex restored",
+        mentions,
+        attachments: [],
+        visibility: "normal",
+      });
+      expect(snapshots.at(-1)).toMatchObject({ draft: "@Alex restored", mentions });
+      flow.restoreMessage("A replacement");
+      expect(snapshots.at(-1)).toMatchObject({ draft: "A replacement", mentions: [] });
+      const signal = flow.attachmentDraft.reads.readSignal;
+      flow.attachmentDraft.reads.updatePending(signal, 1);
+      expect(snapshots.at(-1)?.pendingAttachmentReads).toBe(1);
+    } finally {
+      stop();
+      flow.disconnect();
+    }
+  });
+
   it.each(["available", "unavailable before create", "unavailable after create"] as const)(
     "preserves the runtime through Auto placement when recovery storage is %s",
     async (storage) => {
@@ -491,7 +515,7 @@ describe("DraftSubmissionFlow", () => {
 
   it("makes attachment restore release only displaced payload ids", () => {
     const revokeObjectURL = stubObjectUrls("blob:shared", "blob:displaced", "blob:incoming");
-    const { flow, requestUpdate } = createDraftFixture();
+    const { flow, changed } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
     const shared = registerTextPayload("shared");
     const displaced = registerTextPayload("displaced");
@@ -503,7 +527,7 @@ describe("DraftSubmissionFlow", () => {
     ]);
     flow.attachmentDraft.replace([shared, displaced]);
     noteUserMutation.mockClear();
-    requestUpdate.mockClear();
+    changed.mockClear();
     revokeObjectURL.mockClear();
 
     flow.attachmentDraft.restore([shared, incoming]);
@@ -513,19 +537,19 @@ describe("DraftSubmissionFlow", () => {
     expect(getChatAttachmentDataUrl(incoming)).not.toBeNull();
     expect(getChatAttachmentDataUrl(displaced)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledOnce();
     flow.attachmentDraft.reset();
   });
 
   it("releases the displaced payload and renders placement recovery once without a user mutation", () => {
     const revokeObjectURL = stubObjectUrls("blob:current-draft");
-    const { flow, requestUpdate } = createDraftFixture();
+    const { flow, changed } = createDraftFixture();
     const noteUserMutation = vi.spyOn(flow.draftPersistence, "noteUserMutation");
     const current = registerTextPayload("current");
     expect(getChatAttachmentPreviewUrl(current)).toBe("blob:current-draft");
     flow.attachmentDraft.replace([current]);
     noteUserMutation.mockClear();
-    requestUpdate.mockClear();
+    changed.mockClear();
     revokeObjectURL.mockClear();
     expect(
       writeSessionPlacementRecovery({
@@ -560,7 +584,7 @@ describe("DraftSubmissionFlow", () => {
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:current-draft");
     expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledOnce();
     expect(flow.message).toBe("@Alex recovered cloud prompt");
     expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
     expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual([

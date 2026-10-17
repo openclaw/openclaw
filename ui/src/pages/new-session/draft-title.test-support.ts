@@ -1,4 +1,4 @@
-import { createRoot, createSignal, flush } from "solid-js";
+import { createRoot } from "solid-js";
 import { onTestFinished } from "vitest";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
@@ -36,12 +36,8 @@ export function createDraftTitleFixture(
     takePreparedTitle: () => titles.takePreparedTitle(),
   });
   let titles!: ReturnType<typeof createNewSessionTitle>;
-  let refresh!: () => void;
   const disposeTitles = createRoot((dispose) => {
-    const [revision, setRevision] = createSignal(0);
-    refresh = () => setRevision((value) => value + 1);
     titles = createNewSessionTitle(() => {
-      revision();
       return {
         context: fixture.context,
         data,
@@ -52,11 +48,8 @@ export function createDraftTitleFixture(
     });
     return dispose;
   });
-  const synchronizeTitles = () => {
-    refresh();
-    flush();
-  };
-  flush();
+  const synchronizeTitles = () => titles.synchronize();
+  synchronizeTitles();
   onTestFinished(() => {
     disposeTitles();
     fixture.flow.disconnect();

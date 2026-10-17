@@ -113,20 +113,114 @@ describe("patchSessionRows", () => {
     );
   });
 
-  it("acknowledges hidden runs conditionally with Mark as read but not with Mark as unread", async () => {
-    const run = { ...sessionRow(1), key: "agent:main:subagent:done", isChild: true };
-    const parent: SidebarRecentSession = {
+  it.each(["operator.write", "operator.sessions.write", "operator.admin"])(
+    "acknowledges hidden runs conditionally with %s",
+    async (scope) => {
+      const run = { ...sessionRow(1), key: "agent:main:subagent:done", isChild: true };
+      const parent: SidebarRecentSession = {
+        ...sessionRow(0),
+        unread: false,
+        subagentSummary: {
+          attention: { kind: "none" },
+          runningChildCount: 0,
+          failedChildCount: 0,
+          unreadHiddenRuns: [run],
+        },
+      };
+      const harness = createHarness({ scopes: [scope] });
+      expect(
+        sessionMenuReasons({ snapshot: harness.scope.gateway.snapshot, session: parent })[
+          "toggle-unread"
+        ],
+      ).toBeUndefined();
+
+      await runBatchSessionAction(
+        harness.host,
+        { kind: "toggle-unread" },
+        [parent],
+        true,
+        harness.scope,
+      );
+      await runBatchSessionAction(
+        harness.host,
+        { kind: "toggle-unread" },
+        [parent],
+        false,
+        harness.scope,
+      );
+
+      // Selected rows keep their explicit batch read; folded runs keep manual markers.
+      expect(harness.request.mock.calls.map(([, params]) => params)).toEqual([
+        { targets: [sessionTarget(parent)], patch: { unread: false } },
+        { targets: [sessionTarget(parent)], patch: { unread: true } },
+      ]);
+      expect(harness.patch.mock.calls).toEqual([
+        [
+          run.key,
+          { unread: false },
+          { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
+        ],
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      name: "foreign selection",
+      methods: ["sessions.patch", "sessions.patchMany"],
+      scopes: ["operator.sessions.write"],
+      sharingRole: "member" as const,
+    },
+    {
+      name: "read-only scope",
+      methods: ["sessions.patch", "sessions.patchMany"],
+      scopes: ["operator.sessions.read"],
+      sharingRole: "owner" as const,
+    },
+    {
+      name: "unavailable method",
+      methods: [],
+      scopes: ["operator.sessions.write"],
+      sharingRole: "owner" as const,
+    },
+  ])("denies unread changes for $name", async ({ methods, scopes, sharingRole }) => {
+    const harness = createHarness({ methods, scopes });
+    const rows = [sessionRow(0), { ...sessionRow(1), sharingRole }];
+    expect(
+      sessionMenuReasons({
+        snapshot: harness.scope.gateway.snapshot,
+        session: rows[0]!,
+        batchRows: rows,
+      })["toggle-unread"],
+    ).toBeDefined();
+    await runBatchSessionAction(
+      harness.host,
+      { kind: "toggle-unread" },
+      rows,
+      false,
+      harness.scope,
+    );
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledOnce();
+  });
+
+  it("leaves foreign hidden runs unread when an owner marks the parent read", async () => {
+    const run = {
+      ...sessionRow(1),
+      key: "agent:main:subagent:foreign",
+      sharingRole: "member" as const,
+    };
+    const parent = {
       ...sessionRow(0),
-      unread: false,
       subagentSummary: {
-        attention: { kind: "none" },
+        attention: { kind: "none" as const },
         runningChildCount: 0,
         failedChildCount: 0,
         unreadHiddenRuns: [run],
       },
     };
-    const harness = createHarness();
-
+    const harness = createHarness({ scopes: ["operator.sessions.write"] });
     await runBatchSessionAction(
       harness.host,
       { kind: "toggle-unread" },
@@ -134,26 +228,9 @@ describe("patchSessionRows", () => {
       true,
       harness.scope,
     );
-    await runBatchSessionAction(
-      harness.host,
-      { kind: "toggle-unread" },
-      [parent],
-      false,
-      harness.scope,
-    );
-
-    // Selected rows keep their explicit batch read; folded runs keep manual markers.
-    expect(harness.request.mock.calls.map(([, params]) => params)).toEqual([
-      { targets: [sessionTarget(parent)], patch: { unread: false } },
-      { targets: [sessionTarget(parent)], patch: { unread: true } },
-    ]);
-    expect(harness.patch.mock.calls).toEqual([
-      [
-        run.key,
-        { unread: false },
-        { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
-      ],
-    ]);
+    expect(harness.request).toHaveBeenCalledOnce();
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
   });
 
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {
@@ -545,43 +622,52 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
-  it("surfaces a forced worktree removal that could not create a snapshot", async () => {
-    const harness = createHarness({
-      ...destructiveHarness,
-      methods: [...destructiveHarness.methods, "worktrees.remove"],
-    });
-    harness.deleteOne.mockResolvedValueOnce({
-      deleted: true,
-      worktreePreserved: {
+  it.each(["snapshot failure", "request rejection"] as const)(
+    "surfaces one forced worktree removal %s after confirmed session deletion",
+    async (failure) => {
+      const harness = createHarness({
+        ...destructiveHarness,
+        methods: [...destructiveHarness.methods, "worktrees.remove"],
+      });
+      harness.deleteOne.mockResolvedValueOnce({
+        deleted: true,
+        worktreePreserved: {
+          id: "wt-1",
+          branch: "feature",
+          path: "/tmp/worktree",
+          reason: "snapshot-failed",
+        },
+      } as never);
+      const rejection = new Error("worktree removal failed");
+      if (failure === "snapshot failure") {
+        harness.request.mockResolvedValueOnce({
+          removed: true,
+          snapshotError: "nested gitlink",
+        } as never);
+      } else {
+        harness.request.mockRejectedValueOnce(rejection);
+      }
+
+      const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+      answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+      const worktreeActions = await waitForConfirmDialogActions();
+      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+        "OpenClaw could not create a safety snapshot",
+      );
+      answerConfirmDialog(worktreeActions, "confirm");
+      await pending;
+
+      expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
         id: "wt-1",
-        branch: "feature",
-        path: "/tmp/worktree",
-        reason: "snapshot-failed",
-      },
-    } as never);
-    harness.request.mockResolvedValueOnce({
-      removed: true,
-      snapshotError: "nested gitlink",
-    } as never);
-
-    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    const worktreeActions = await waitForConfirmDialogActions();
-    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "OpenClaw could not create a safety snapshot",
-    );
-    answerConfirmDialog(worktreeActions, "confirm");
-    await pending;
-
-    expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
-      id: "wt-1",
-      force: true,
-    });
-    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
-      harness.scope,
-      "nested gitlink",
-    );
-  });
+        force: true,
+      });
+      expect(harness.publishSessionMutationError).toHaveBeenCalledOnce();
+      expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+        harness.scope,
+        failure === "snapshot failure" ? "nested gitlink" : rejection,
+      );
+    },
+  );
 
   it.each([
     { name: "sidebar opt-out", offerSkip: true, reset: false, confirm: false },

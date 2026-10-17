@@ -311,8 +311,8 @@ describe("managed worktree registry", () => {
     `);
     legacy.close();
 
-    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
     const database = openOpenClawStateDatabase({ env }).db;
+    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
     const columns = database.prepare("PRAGMA table_info(worktrees)").all() as Array<{
       name?: unknown;
     }>;

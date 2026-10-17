@@ -4,7 +4,6 @@ import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -22,7 +21,6 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const notice =
   "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
-const databaseIdentity = Symbol("restart-tombstone-database");
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -80,12 +78,6 @@ describe("restart tombstone channel feedback", () => {
   });
 
   afterEach(() => {
-    emitSessionIdentityMutation({
-      kind: "delete",
-      agentId: "main",
-      databaseIdentity,
-      previous: { sessionId: "failed-session", sessionKeys: [sessionKey] },
-    });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
   });
@@ -153,16 +145,18 @@ describe("restart tombstone channel feedback", () => {
     },
   );
 
-  it("clears notice suppression on reset", async () => {
+  it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
     await rejectInbound();
-    const previous = { sessionId: "failed-session", sessionKeys: [sessionKey] };
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: "main",
-      databaseIdentity,
-      previous,
-      current: previous,
-    });
+    if (change === "session") {
+      sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
+    } else {
+      sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        cycleId: "replacement-cycle",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      };
+    }
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);
   });

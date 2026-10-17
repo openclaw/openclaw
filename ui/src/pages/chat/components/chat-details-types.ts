@@ -4,7 +4,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
-import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
@@ -50,6 +50,7 @@ export type ChatDetailsProps = Pick<
     pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
     onOpenSessionDiff?: () => void;
     onOpenWorkspace?: () => void;
+    onCompact?: () => void | Promise<unknown>;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;
     githubPublication?: GitHubPublicationView;

@@ -553,6 +553,10 @@ suite.define(() => {
       const note = page.frameLocator('[data-widget-name="status"] iframe').getByRole("textbox");
       await note.fill("Keep this draft");
       const frameHandle = await frame.elementHandle();
+      // Side dashboards keep their card chrome; a main dashboard remains a page.
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "1px",
+      );
       await focusChatSidePanel(page);
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
@@ -581,8 +585,9 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
       await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
+      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
-        "1px",
+        "0px",
       );
       expect(await frame.evaluate((element, previous) => element === previous, frameHandle)).toBe(
         true,

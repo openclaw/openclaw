@@ -104,26 +104,21 @@ function setupOwnedBrowser(
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   const cache = path.join(fixture.root, "browsers");
   const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const suffix =
+    platform === "linux" ? (arch === "arm64" ? "linux-arm64" : "linux64") : `mac-${arch}`;
   const shell = path.join(
     cache,
     "chromium_headless_shell-100",
-    platform === "linux"
-      ? `chrome-headless-shell-${process.arch === "arm64" ? "linux-arm64" : "linux64"}`
-      : `chrome-headless-shell-mac-${arch}`,
+    `chrome-headless-shell-${suffix}`,
     "chrome-headless-shell",
   );
   const chrome = path.join(
     cache,
     "chromium-100",
+    `chrome-${suffix}`,
     ...(platform === "linux"
-      ? [`chrome-${process.arch === "arm64" ? "linux-arm64" : "linux64"}`, "chrome"]
-      : [
-          `chrome-mac-${arch}`,
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ]),
+      ? ["chrome"]
+      : ["Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"]),
   );
   for (const executable of [shell, chrome]) {
     fs.mkdirSync(path.dirname(executable), { recursive: true });
@@ -207,6 +202,32 @@ function setupOwnedBrowser(
     return true;
   });
   return { resolved, profile, kill, chrome, shell, userDataDir };
+}
+
+type OwnedBrowser = ReturnType<typeof setupOwnedBrowser>;
+async function expectStop(
+  { resolved, profile, kill }: Pick<OwnedBrowser, "resolved" | "profile" | "kill">,
+  status = "unverified",
+  signals = 0,
+) {
+  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({ status });
+  expect(kill).toHaveBeenCalledTimes(signals);
+}
+
+function stubReadyLaunch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
+  );
+  const proc = Object.assign(new EventEmitter(), {
+    pid: 5432,
+    exitCode: null,
+    signalCode: null,
+    stderr: new EventEmitter(),
+    kill: vi.fn(),
+  });
+  fixture.spawn.mockReturnValue(proc);
+  return proc;
 }
 
 it.each(
@@ -304,10 +325,7 @@ it.each(["unavailable", "ambiguous"])(
 it("does not release a lockless full Chrome profile while its CDP port is occupied", async () => {
   const { resolved, profile, kill, userDataDir } = setupOwnedBrowser("cache", true, true);
   fs.unlinkSync(path.join(userDataDir, "SingletonLock"));
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it.each([true, false])(
@@ -372,10 +390,7 @@ it("preserves data when shell process discovery fails despite a free CDP port", 
     }
     return "";
   });
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it.each(
@@ -416,10 +431,7 @@ it("preserves a shell profile when its process is alive but no longer listening"
   const { resolved, profile, kill } = setupOwnedBrowser("cache", true, false, "linux");
   fs.writeFileSync(path.join(fixture.root, "proc", "net", "tcp"), "header\n");
   fixture.portProbe.mockResolvedValue(undefined);
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it("preserves a shell profile with duplicate directory flags after the port changes", async () => {
@@ -448,19 +460,13 @@ it("does not signal a lockless shell after its process identity changes", async 
       throw new Error("CDP is unavailable");
     }),
   );
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).not.toHaveBeenCalled();
+  await expectStop({ resolved, profile, kill });
 });
 
 it("does not release shell profile data when the CDP port remains occupied after shutdown", async () => {
   const { resolved, profile, kill } = setupOwnedBrowser("cache", true);
   fixture.portProbe.mockRejectedValue(new Error("Port is already in use."));
-  await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toMatchObject({
-    status: "unverified",
-  });
-  expect(kill).toHaveBeenCalledOnce();
+  await expectStop({ resolved, profile, kill }, "unverified", 1);
 });
 
 it.each(["launch", "reset"] as const)(
@@ -474,19 +480,7 @@ it.each(["launch", "reset"] as const)(
       entered.resolve();
       await release.promise;
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
-    );
-    fixture.spawn.mockReturnValue(
-      Object.assign(new EventEmitter(), {
-        pid: 5432,
-        exitCode: null,
-        signalCode: null,
-        stderr: new EventEmitter(),
-        kill: vi.fn(),
-      }),
-    );
+    stubReadyLaunch();
     const firstLaunch = launchOpenClawChrome(resolved, profile, { headlessOverride: true });
     await entered.promise;
     try {
@@ -589,18 +583,7 @@ it.each([
       }
     });
     fixture.diagnose.mockResolvedValue({ ok: false, code, cdpUrl: profile.cdpUrl });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
-    );
-    const proc = Object.assign(new EventEmitter(), {
-      pid: 5432,
-      exitCode: null,
-      signalCode: null,
-      stderr: new EventEmitter(),
-      kill: vi.fn(),
-    });
-    fixture.spawn.mockReturnValue(proc);
+    const proc = stubReadyLaunch();
     const launch = launchOpenClawChrome(resolved, profile, {
       headlessOverride: true,
       platform: "darwin",

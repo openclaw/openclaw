@@ -11,7 +11,7 @@ function fixture(command: CommandFixture) {
     fs.copyFileSync(path.resolve(file), path.join(root, file));
   }
   fs.mkdirSync(path.join(root, "dist"));
-  const cli = String.raw`#!/usr/bin/env node
+  const cli = String.raw`#!${process.execPath}
 import fs from 'node:fs';
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.RECORD, JSON.stringify({args, pid:process.pid, parentPid:process.ppid, marker:process.env.OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER})+'\n');

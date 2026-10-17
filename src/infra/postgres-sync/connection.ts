@@ -35,12 +35,14 @@ import {
   validatePostgresBindings,
   type BridgeReply,
   type BridgeCommand,
+  type PostgresResult,
 } from "./protocol.js";
 import { runPostgresTransactionSync } from "./transaction.js";
 
 export class PostgresSyncConnection implements PostgresSqlConnection {
   isOpen = true;
   isTransaction = false;
+  mutationRevision = 0;
   readonly advisoryLockKey: bigint;
   private readonly port: MessagePort;
   private readonly control = new Int32Array(new SharedArrayBuffer(8));
@@ -54,7 +56,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     url: string,
     readonly schema: string,
     readonly anchor: DatabaseSync,
-    storeId: string,
+    readonly storeId: string,
     options?: {
       lockTimeoutMs?: number;
       statementTimeoutMs?: number;
@@ -100,6 +102,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     return runPostgresTransactionSync(this, operation, options, ...modes);
   }
 
+  readRecoveryGeneration(lock = false): string {
+    return this.request({ operation: "recovery-generation", storeId: this.storeId, lock }, false);
+  }
+
   private loseConnection(): Error {
     if (!this.failure && this.outcomeUnknown) {
       // The write may have committed, so invalidate anchor caches before reconnecting.
@@ -125,7 +131,15 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
   }
 
-  private request(request: BridgeCommand, outcomeUnknown = true) {
+  private request(
+    request: Extract<BridgeCommand, { operation: "recovery-generation" }>,
+    outcomeUnknown?: boolean,
+  ): string;
+  private request(
+    request: Exclude<BridgeCommand, { operation: "recovery-generation" }>,
+    outcomeUnknown?: boolean,
+  ): PostgresResult;
+  private request(request: BridgeCommand, outcomeUnknown = true): PostgresResult | string {
     if (this.mainThread && request.operation !== "close") {
       assertEngineStoreExecutionAllowed();
     }
@@ -166,26 +180,24 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       }
       throw decodePostgresError(reply.error);
     }
-    return reply.result;
+    return "generation" in reply ? reply.generation : reply.result;
   }
 
   query(sql: string, parameters: readonly SQLInputValue[] = [], readBigInts = false) {
     return observeDatabaseOperation("postgres", "statement", sql, () =>
-      this.execute(sql, parameters, readBigInts),
+      this.execute(rewritePostgresPlaceholders(sql), parameters, readBigInts),
     );
   }
 
   private execute(sql: string, parameters: readonly SQLInputValue[], readBigInts: boolean) {
-    this.assertOpen();
     validatePostgresBindings(parameters);
-    const rewrittenSql = rewritePostgresPlaceholders(sql);
     const wasTransaction = this.isTransaction;
     // A later statement in a combined BEGIN request can fail after BEGIN succeeded.
     if (/^\s*BEGIN\b/i.test(sql)) {
       this.isTransaction = true;
     }
     const result = this.request(
-      { operation: "query", sql: rewrittenSql, parameters },
+      { operation: "query", sql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
@@ -194,11 +206,15 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         throw new Error("PostgreSQL transaction rolled back instead of committing");
       }
     }
-    const autocommitWrite =
-      !wasTransaction &&
+    const mutated =
       /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
         result.command ?? "",
       );
+    if (mutated) {
+      // Like SQLite's mutation witness, rollback does not rewind local cache invalidation.
+      this.mutationRevision++;
+    }
+    const autocommitWrite = !wasTransaction && mutated;
     if (result.command === "COMMIT" || autocommitWrite) {
       // All confirmed commits advance the anchor, including callers using raw SQL.
       withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
@@ -223,11 +239,13 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   prepare(sql: string): SqlStatement {
     this.assertOpen();
-    rewritePostgresPlaceholders(sql);
+    const rewrittenSql = rewritePostgresPlaceholders(sql);
     let readBigInts = false;
     let columns: { name: string }[] = [];
     const execute = (parameters: SQLInputValue[]) => {
-      const result = this.query(sql, parameters, readBigInts);
+      const result = observeDatabaseOperation("postgres", "statement", sql, () =>
+        this.execute(rewrittenSql, parameters, readBigInts),
+      );
       columns = result.columns;
       return result;
     };

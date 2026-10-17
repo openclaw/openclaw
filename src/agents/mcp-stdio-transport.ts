@@ -242,17 +242,13 @@ export class OpenClawStdioClientTransport implements Transport {
       const json = serializeMessage(message);
       // Settle from the write callback so async EPIPE rejects instead of
       // escaping to uncaughtException. (#75438)
-      try {
-        stdin.write(json, (err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
-        });
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
+      stdin.write(json, (err) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
     });
   }
 }

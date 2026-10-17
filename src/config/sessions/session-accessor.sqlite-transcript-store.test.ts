@@ -8,6 +8,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
@@ -152,8 +153,10 @@ describe("SQLite transcript append", () => {
       timestamp: 1001,
       message: { role: "assistant", content: "next" },
     };
-    const policy = trackSqliteStatementExecutions(database.db, ["policy"], (sql) =>
-      sql.includes('"session_key_contract"') ? "policy" : null,
+    const policy = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["policy"],
+      (sql) => (sql.includes('"session_key_contract"') ? "policy" : null),
     );
     let nextJson: string | false;
     try {
@@ -226,7 +229,7 @@ async function withRewriteFixture(
       env: state.env,
     };
     const owner = openOpenClawAgentDatabase(scope);
-    const { db } = owner;
+    const db = requireNativeSqliteDatabase(owner.db);
     runOpenClawAgentWriteTransaction((database) => {
       appendTranscriptEventsInTransaction(database, scope, events);
     }, scope);
@@ -363,7 +366,7 @@ describe("SQLite exact transcript rewrite", () => {
       expect(before.storage[1]?.event_json === null).toBe(true);
       expect(before.storage[2]?.event_zstd instanceof Uint8Array).toBe(true);
       const work = trackSqliteStatementExecutions(
-        openOpenClawAgentDatabase(scope).db,
+        requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db),
         ["fts", "size"],
         (sql) =>
           /\bsession_transcript_fts\b/i.test(sql)

@@ -23,7 +23,7 @@ import type {
 export function extractMSTeamsHtmlAttachmentIds(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): string[] {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return [];
   }
@@ -47,7 +47,7 @@ export function extractMSTeamsHtmlAttachmentIds(
 export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsHtmlAttachmentSummary | undefined {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return undefined;
   }
@@ -131,7 +131,7 @@ function createAdvertisedMediaFact(
 export function resolveMSTeamsAdvertisedMedia(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsInboundMedia[] {
-  const list = Array.isArray(attachments) ? attachments : [];
+  const list = attachments ?? [];
   if (list.length === 0) {
     return [];
   }

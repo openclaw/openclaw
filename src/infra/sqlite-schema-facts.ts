@@ -57,6 +57,8 @@ const owners = resolveGlobalSingleton(
 
 /** Schema publications outside DDL (such as a deferred version marker) share this revision. */
 export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
+  // A freshly reopened handle must bind retained physical facts before explicit invalidation.
+  getSqliteDatabaseSchemaRevision(database);
   invalidateSchemaFacts(database, true);
 }
 
@@ -406,7 +408,9 @@ function trackSchemaChanges(
 
 /** Local mutation witness; committed sibling writes use the physical admission revision. */
 export function readSqliteNativeMutationRevision(database: EngineConnection): number | undefined {
-  return isPostgresSqlConnection(database) ? undefined : owners.get(database)?.mutationRevision;
+  return isPostgresSqlConnection(database)
+    ? database.mutationRevision
+    : owners.get(database)?.mutationRevision;
 }
 
 /** Derived caches may retain reads from a tracked transaction until its first mutation. */

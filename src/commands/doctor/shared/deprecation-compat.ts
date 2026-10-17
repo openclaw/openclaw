@@ -1,4 +1,3 @@
-// Inventory of doctor compatibility migrations that outlive deprecated runtime/config paths.
 type DoctorDeprecationCompatStatus = "active" | "deprecated" | "removal-pending" | "removed";
 
 type DoctorDeprecationCompatOwner =

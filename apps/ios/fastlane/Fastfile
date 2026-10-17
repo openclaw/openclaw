@@ -260,7 +260,7 @@ def with_screenshot_simulator(template, diagnostics: nil)
   require_idle_screenshot_simulators!
   name = template.fetch("name")
   udid = screenshot_phase(diagnostics, "create", device: name) do
-    sh("xcrun", "simctl", "create", name, template.fetch("deviceTypeIdentifier"), template.fetch("runtime"), log: false).strip
+    sh("xcrun", "simctl", "create", name, template.fetch("deviceTypeIdentifier"), template.fetch("runtime")).strip
   end
   UI.user_error!("simctl create did not return a simulator UUID.") unless udid.match?(/\A[\da-fA-F]{8}(?:-[\da-fA-F]{4}){3}-[\da-fA-F]{12}\z/)
 

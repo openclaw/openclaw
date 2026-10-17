@@ -25,6 +25,7 @@ import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-au
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
@@ -72,6 +73,8 @@ type McpLoopbackScopeParams = {
   /** Host-selected coding owners for pre-grant projection only. */
   defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
+  /** Memory audience of the authenticating run-bound grant; cached per grant token. */
+  memoryAudience?: MemoryAudience;
   grantToken?: string;
   /**
    * Liveness of the authenticating client grant. Deliberately absent from the
@@ -337,6 +340,7 @@ async function constructMcpLoopbackTools(
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     messageActionTurnCapability: params.messageActionTurnCapability,
+    memoryAudience: params.memoryAudience,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
@@ -460,7 +464,7 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
       requireExplicitMessageTarget: context.requireExplicitMessageTarget === true,
       nodeExecAllowed: context.nodeExecAllowed === true,
       delegationCapability:
-        context.delegationCapability === "report_only" ? "report_only" : undefined,
+        context.delegationCapability === "full" ? undefined : context.delegationCapability,
     },
     admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
     defaultMediatedToolNames: params.defaultMediatedToolNames,

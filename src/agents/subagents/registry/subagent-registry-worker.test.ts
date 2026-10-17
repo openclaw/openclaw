@@ -18,10 +18,8 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../../../state/openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.test-support.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -282,7 +280,7 @@ it("refuses quarantined registry reads in the worker without replacing resident 
   subagentRuns.set(resident.runId, resident);
   const revision = getSubagentRegistryPublicationRevision();
   const reason = "synthetic registry quarantine";
-  recordOpenClawDatabaseQuarantine({ env: state.env, kind: "state", path: pathname, reason });
+  seedOpenClawDatabaseQuarantine({ env: state.env, kind: "state", path: pathname, reason });
   const staging = vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync");
   const hostSql = observeParentSqlite();
   try {
@@ -879,5 +877,10 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(() => subagentRuns.runWithCompletionAuthority(alias, () => "stale")).toThrow(
     "runtime owner is no longer active",
   );
-  expect(subagentRuns.runWithCompletionAuthority(recovered, () => "recovered")).toBe("recovered");
+  // Gateway ownership alone cannot authorize a continuation without its operator source.
+  const dispatch = vi.fn();
+  expect(() => subagentRuns.runWithCompletionAuthority(recovered, dispatch)).toThrow(
+    "Subagent completion authority is no longer active",
+  );
+  expect(dispatch).not.toHaveBeenCalled();
 });

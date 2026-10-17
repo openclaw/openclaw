@@ -33,6 +33,7 @@ export const LINK_READER_METADATA_UPDATED_EVENT = "openclaw:link-reader-metadata
 export type LinkReaderMetadataUpdate = {
   client: GatewayBrowserClient;
   agentId: string | undefined;
+  sessionKey: string | undefined;
   target: LinkReaderTarget;
   preview: ControlUiLinkReaderPreview;
 };

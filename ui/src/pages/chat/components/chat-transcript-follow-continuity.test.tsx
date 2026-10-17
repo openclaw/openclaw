@@ -6,7 +6,7 @@ import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { lockChatScroll } from "../scroll.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -63,7 +63,7 @@ describe("transcript follow continuity", () => {
       renderRows(rows);
       expect(transcriptSize(container)).toBe(before + 60);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -73,21 +73,12 @@ describe("transcript follow continuity", () => {
       const flushFrames = stubAnimationFrames();
       transcriptDomState.measuredRowHeight = 120;
       let followEnabled = true;
-      const transcript = new ChatTranscriptController(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: Promise.resolve(true),
+      const transcript = createChatTranscript(vi.fn(), () => "smooth-no-op", {
+        canFollowEnd: () => followEnabled,
+        onReaderScroll: () => {
+          followEnabled = false;
         },
-        () => "smooth-no-op",
-        {
-          canFollowEnd: () => followEnabled,
-          onReaderScroll: () => {
-            followEnabled = false;
-          },
-        },
-      );
+      });
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
         kind: "content",
         key: "row:" + index,
@@ -155,7 +146,7 @@ describe("transcript follow continuity", () => {
         expect(container.scrollTop).toBe(departure === "none" ? 4235 : readerOffset);
         expect(followEnabled).toBe(departure !== "wheel");
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         vi.useRealTimers();
       }
     },
@@ -170,16 +161,9 @@ describe("transcript follow continuity", () => {
     async ({ source, settled }) => {
       stubAnimationFrames();
       const policy = makeChatHost({ chatHasAutoScrolled: true });
-      const transcript = new ChatTranscriptController(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: Promise.resolve(true),
-        },
-        () => "follow-continuity",
-        { canFollowEnd: () => !policy.chatFollowLocked },
-      );
+      const transcript = createChatTranscript(vi.fn(), () => "follow-continuity", {
+        canFollowEnd: () => !policy.chatFollowLocked,
+      });
       Object.assign(policy, {
         chatCancelScroll: () => transcript.cancelScroll(),
       });
@@ -215,7 +199,7 @@ describe("transcript follow continuity", () => {
       expect(writes).toEqual([
         expect.objectContaining({ behavior: "instant", top: settled ? 4200 : 1000 }),
       ]);
-      transcript.hostDisconnected();
+      transcript.dispose();
     },
   );
   it.each([
@@ -237,13 +221,8 @@ describe("transcript follow continuity", () => {
       const { container, renderRows, transcript } = await mountTestTranscript(
         `typing-distance-${distance}`,
         rows,
-        new ChatTranscriptController(
-          {
-            addController: () => undefined,
-            removeController: () => undefined,
-            requestUpdate: () => undefined,
-            updateComplete: Promise.resolve(true),
-          },
+        createChatTranscript(
+          () => undefined,
           () => `typing-distance-${distance}-${followEnabled}`,
           { canFollowEnd: () => followEnabled },
         ),
@@ -306,7 +285,7 @@ describe("transcript follow continuity", () => {
           expect(container.scrollTop).toBe(readerOffset - 100);
         }
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );

@@ -141,7 +141,7 @@ describe("Dynamic route startup bridge", () => {
     const context = { ...baseContext, gateway: gateway.gateway };
     const route = router.getRoute("plugin")!;
     const originalComponent = route.component;
-    route.component = async () => ({ render: () => null });
+    route.component = async () => ({ renderSolid: () => null });
     setPluginTabSlugs();
     try {
       await startApplicationRouter(router, history, "/ui", context);
@@ -252,7 +252,7 @@ describe("Dynamic route startup bridge", () => {
       const originalComponent = route.component;
       try {
         route.loader = loader;
-        route.component = async () => ({ render: () => null });
+        route.component = async () => ({ renderSolid: () => null });
 
         await startApplicationRouter(router, history, basePath, createStartupContext(basePath));
 
@@ -308,7 +308,7 @@ describe("Dynamic route startup bridge", () => {
       const originalComponent = route.component;
       try {
         route.loader = loader;
-        route.component = async () => ({ render: () => null });
+        route.component = async () => ({ renderSolid: () => null });
 
         await startApplicationRouter(router, history, "", createStartupContext());
         expect(loader).toHaveBeenCalledOnce();
@@ -351,7 +351,7 @@ describe("Dynamic route startup bridge", () => {
     const originalComponent = route.component;
     try {
       route.loader = () => notFound({ routeId: "chat" });
-      route.component = async () => ({ render: () => null });
+      route.component = async () => ({ renderSolid: () => null });
 
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
@@ -393,7 +393,7 @@ describe("Dynamic route startup bridge", () => {
     const originalComponent = route.component;
     try {
       route.loader = loader;
-      route.component = async () => ({ render: () => null });
+      route.component = async () => ({ renderSolid: () => null });
 
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
@@ -428,7 +428,7 @@ describe("Dynamic route startup bridge", () => {
       route.loader = () => {
         throw failure;
       };
-      route.component = async () => ({ render: () => null });
+      route.component = async () => ({ renderSolid: () => null });
 
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
@@ -474,7 +474,7 @@ describe("Agent panel route paths", () => {
     if (!agentsRoute) {
       throw new Error("Agents route missing");
     }
-    agentsRoute.component = async () => ({ render: () => null });
+    agentsRoute.component = async () => ({ renderSolid: () => null });
     const agentsList = {
       defaultId: "main",
       mainKey: "main",

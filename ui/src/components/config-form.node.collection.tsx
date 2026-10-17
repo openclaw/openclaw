@@ -170,7 +170,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     isSupportedConfigValueValid(schema, [])
       ? []
       : undefined);
-  const atomicCandidate = wholeArrayDefault && structuredClone(wholeArrayDefault);
+  const atomicCandidate = wholeArrayDefault;
   const canAppend = maximumItems === undefined || arrayValue.length < maximumItems;
   const requiresDraft = atomicCandidate === undefined && autoCandidate === undefined;
   const nextItemSchema = itemSchemaAt(arrayValue.length);

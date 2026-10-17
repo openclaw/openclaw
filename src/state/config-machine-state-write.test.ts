@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSharedAuthProfileRows } from "../agents/auth-profiles/sqlite-read.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -236,5 +237,58 @@ describe("generic machine-state credential writes", () => {
     await writeConfigMachineStateAsync(authKey, store("later"), current.options);
     expect(current.read()).toEqual(credential("later"));
     expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
+  });
+});
+
+it("keeps shared auth discovery warm and observes machine-state worker writes", async () => {
+  const current = credentialFixture();
+  const context = captureOpenClawStateWorkerContext(current.options);
+  const first = await readSharedAuthProfileRows(context);
+  expect(first.store).toMatchObject({ status: "readable", raw: store("original") });
+
+  await writeConfigMachineStateAsync("fixture.unrelated", 1, current.options);
+  expect(await readSharedAuthProfileRows(context)).toBe(first);
+  expect(current.read()).toEqual(credential("original"));
+  expect(await readSharedAuthProfileRows(context)).toBe(first);
+
+  await writeConfigMachineStateAsync(
+    "authProfiles.state",
+    {
+      order: { fixture: [profileId] },
+    },
+    current.options,
+  );
+  expect((await readSharedAuthProfileRows(context)).state).toEqual({
+    status: "readable",
+    raw: { order: { fixture: [profileId] } },
+  });
+
+  await writeConfigMachineStateAsync(authKey, store("changed"), current.options);
+  const changed = await readSharedAuthProfileRows(context);
+  expect(changed.store).toMatchObject({ status: "readable", raw: store("changed") });
+  expect(current.authority.readCurrentCredential()).toEqual(credential("changed"));
+
+  expect(() =>
+    runOpenClawStateWriteTransaction(() => {
+      deleteConfigMachineState(authKey, current.options);
+      throw new Error("rollback");
+    }, current.options),
+  ).toThrow("rollback");
+  const afterRollback = await readSharedAuthProfileRows(context);
+  expect(afterRollback).toEqual(changed);
+  expect(await readSharedAuthProfileRows(context)).toBe(afterRollback);
+
+  updateConfigMachineState("authProfiles.state", () => undefined, current.options);
+  deleteConfigMachineState(authKey, current.options);
+  expect(await readSharedAuthProfileRows(context)).toMatchObject({
+    store: { status: "missing", reason: "row" },
+    state: { status: "missing", reason: "row" },
+  });
+  expect(current.authority.readCurrentCredential()).toBeUndefined();
+
+  importConfigMachineState([[authKey, store("reconnected")]], current.options);
+  expect((await readSharedAuthProfileRows(context)).store).toMatchObject({
+    status: "readable",
+    raw: store("reconnected"),
   });
 });

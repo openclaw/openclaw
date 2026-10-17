@@ -268,10 +268,11 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
   });
 
-  it("rejects oversized OpenAI-compatible image JSON", async () => {
-    postJsonRequestMock.mockResolvedValue(
+  it("rejects image JSON beyond the generated image download ceiling", async () => {
+    // Edit mode returns at most one image, so the bound is one 64 MiB image as base64.
+    postMultipartRequestMock.mockResolvedValue(
       jsonResponse({
-        data: [{ b64_json: "x".repeat(35 * 1024 * 1024) }],
+        data: [{ b64_json: "x".repeat(90 * 1024 * 1024) }],
       }),
     );
     const provider = createProvider();
@@ -279,6 +280,7 @@ describe("OpenAI-compatible image provider helper", () => {
     await expect(
       generate(provider, {
         prompt: "too large",
+        inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
       }),
     ).rejects.toThrow("sample.image-generation: JSON response exceeds");
   });

@@ -111,6 +111,33 @@ export function isSessionStoreTopologyChange(change: SessionRowChange): boolean 
   );
 }
 
+/** Replay descriptive reads when a committed topology change supersedes their captured stores. */
+export async function readWithSessionStoreTopology<T>(read: () => Promise<T>): Promise<T> {
+  let changed: boolean;
+  const stop = sessionChanges.subscribeFacts((change) => {
+    if (isSessionStoreTopologyChange(change)) {
+      changed = true;
+    }
+  });
+  try {
+    for (;;) {
+      changed = false;
+      try {
+        const result = await read();
+        if (!changed) {
+          return result;
+        }
+      } catch (error) {
+        if (!changed) {
+          throw error;
+        }
+      }
+    }
+  } finally {
+    stop();
+  }
+}
+
 type SessionRowNotification =
   | Omit<Extract<SessionRowChange, { sessionKey: string }>, "facts" | "factsInvalidated">
   | Omit<Extract<SessionRowChange, { all: true }>, "factsInvalidated">;

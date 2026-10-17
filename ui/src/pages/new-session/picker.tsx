@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { onCleanup } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { CheckoutChipOptions } from "./checkout-chip.ts";
 
 type PickerState = Pick<
@@ -84,35 +85,39 @@ export function SessionPicker(props: {
         id={`new-session-${props.kind}-popover`}
         label={props.label}
         anchor={trigger}
-        class={`new-session-page__select new-session-page__${props.kind}-popover new-session-page__picker-popover`}
+        class={[
+          "new-session-page__select",
+          `new-session-page__${props.kind}-popover`,
+          "new-session-page__picker-popover",
+        ]}
         open={props.state.popoverOpen}
         placement="bottom-start"
         onOpenChange={(open) => (open ? props.state.onPopoverShow() : props.state.onPopoverHide())}
         ref={(handle) => {
           popover = handle;
           const surface = handle.overlay.surface;
-          const afterHide = (event: Event) => {
-            if (event.target !== surface) {
-              return;
-            }
-            props.state.onPopoverAfterHide();
-            props.onAfterHide?.();
-          };
-          const select = (event: MouseEvent) => {
-            if (
-              !event.defaultPrevented &&
-              event.target instanceof Element &&
-              event.target.closest('[data-popover="close"]')
-            ) {
-              handle.overlay.request(false, "return");
-            }
-          };
-          surface.addEventListener("overlay-after-hide", afterHide);
-          surface.addEventListener("click", select);
-          cleanup = () => {
-            surface.removeEventListener("overlay-after-hide", afterHide);
-            surface.removeEventListener("click", select);
-          };
+          const stops = [
+            listen(surface, "overlay-after-hide", (event) => {
+              if (event.target === surface) {
+                const active = surface.ownerDocument.activeElement;
+                if (!active || active === surface.ownerDocument.body || surface.contains(active)) {
+                  trigger.focus();
+                }
+                props.state.onPopoverAfterHide();
+                props.onAfterHide?.();
+              }
+            }),
+            listen(surface, "click", (event) => {
+              if (
+                !event.defaultPrevented &&
+                event.target instanceof Element &&
+                event.target.closest('[data-popover="close"]')
+              ) {
+                handle.overlay.request(false, "return");
+              }
+            }),
+          ];
+          cleanup = () => stops.forEach((stop) => stop());
           props.ref?.(handle);
         }}
       >

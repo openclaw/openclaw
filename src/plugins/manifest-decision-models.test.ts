@@ -60,6 +60,26 @@ it("discovers only decision models owned by the manifest without executing its r
     },
   ]);
   expect(result.manifest.providers ?? []).toEqual([]);
+  expect(result.manifest.modelCatalog?.providers?.fixture?.models).toEqual([
+    {
+      id: "fast",
+      name: "Fast decisions",
+      inference: {
+        chat: false,
+        decision: {
+          protocol: "decision-v1",
+          input: ["text"],
+          questions: {
+            boolean: { probabilities: "boolean", abstention: false, requiresCriteria: true },
+            choice: { probabilities: "provider-defined", abstention: false, maxOptions: 64 },
+            score: { probabilities: "provider-defined", abstention: false, maxOptions: 64 },
+          },
+          confidence: "none",
+          limits: { maxQuestions: 32, maxInputTokens: 512, inputTokenScope: "encoded-question" },
+        },
+      },
+    },
+  ]);
 });
 
 it("bounds provider metadata before discovery can expose it to tool diagnostics", () => {
@@ -108,5 +128,50 @@ it("bounds provider metadata before discovery can expose it to tool diagnostics"
       capabilities: { questionTypes: ["boolean"] },
     },
     { provider: "fixture", id: "invalid", name: "Invalid" },
+  ]);
+});
+
+it("keeps explicit canonical identities authoritative over V1 input, including rejected rows", () => {
+  const root = tempDirs.make("manifest-decision-identity-");
+  fs.writeFileSync(
+    path.join(root, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "fixture",
+      configSchema: { type: "object" },
+      contracts: { decisionProviders: ["fixture"] },
+      modelCatalog: {
+        providers: {
+          fixture: {
+            models: [
+              {
+                id: "native",
+                name: "Native",
+                inference: { chat: false, decision: { protocol: "native", input: ["image"] } },
+              },
+              {
+                id: "rejected",
+                name: "Rejected",
+                inference: { decision: { protocol: "invalid", input: ["unrecognized"] } },
+              },
+            ],
+          },
+        },
+      },
+      decisionModels: [
+        { provider: "fixture", id: "native", name: "Legacy duplicate" },
+        { provider: "fixture", id: "rejected", name: "Must not resurrect" },
+      ],
+    }),
+  );
+  const result = loadPluginManifest(root);
+  if (!result.ok) {
+    throw new Error(result.error);
+  }
+  expect(result.manifest.modelCatalog?.providers?.fixture?.models).toEqual([
+    {
+      id: "native",
+      name: "Native",
+      inference: { chat: false, decision: { protocol: "native", input: ["image"] } },
+    },
   ]);
 });

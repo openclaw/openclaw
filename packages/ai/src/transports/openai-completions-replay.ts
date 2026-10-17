@@ -1,7 +1,8 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Model } from "@openclaw/llm-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
 import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
+import type { ProviderContext } from "../provider-types.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
@@ -30,7 +31,7 @@ function hasGoogleCompatThoughtSignatureTruncationFootprint(value: string): bool
 
 function injectToolCallThoughtSignatures(
   outgoingMessages: ChatCompletionMessageParam[],
-  context: Context,
+  context: ProviderContext,
   model: OpenAIModeModel,
 ): void {
   if (!isGoogleOpenAICompatModel(model)) {
@@ -231,7 +232,7 @@ function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): bool
 // strip them for stock OpenAI before a follow-up request hits the wire.
 export function applyCompletionsReplay(
   outgoingMessages: ChatCompletionMessageParam[],
-  context: Context,
+  context: ProviderContext,
   model: OpenAIModeModel,
   compat: {
     requiresReasoningContentOnAssistantMessages: boolean;

@@ -15,7 +15,6 @@ import {
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
   type SqliteDatabaseAdmissionCursor,
-  withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import {
   readSqliteWorkerMonotonicNs,
@@ -26,25 +25,27 @@ import {
 import {
   SQLITE_COLD_ADMISSION_PENDING,
   exchangeDatabaseAdmissions,
-  exchangeSqliteDatabaseAdmissions,
   getSqliteDatabaseAdmissionUpstream,
+  withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
 import {
   deferSqliteWorkerNativeCommitReceipt,
   currentSqliteWorkerOperationAdmission as currentAdmission,
-  type WorkerAdmissionScope,
   readNativeCommitReceipt,
   type NativeCommitReceipt,
   type RetainedWorkerTransactionAdmission,
   type SqliteWorkerNativeSettlement,
   type SqliteWorkerNativeSettlementOwner,
-  type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
 import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 export type { SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
+export {
+  withSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmissionAsync,
+} from "./sqlite-worker-operation-scope.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
@@ -241,6 +242,8 @@ function createOperationAdmission(
         !(message.decision instanceof SharedArrayBuffer) ||
         message.decision.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
         (message.location !== undefined && typeof message.location !== "string") ||
+        (message.deadlineAtMs !== undefined &&
+          (typeof message.deadlineAtMs !== "number" || !Number.isFinite(message.deadlineAtMs))) ||
         (message.create !== undefined &&
           typeof message.create !== "boolean" &&
           message.create !== "admitted")
@@ -252,8 +255,18 @@ function createOperationAdmission(
         return;
       }
       const decision = new Int32Array(message.decision);
+      const deadlineAtMs = message.deadlineAtMs;
+      const assertWaiting = () => {
+        if (
+          Atomics.load(decision, 0) !== REQUESTED ||
+          (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs)
+        ) {
+          throw new SqliteWorkerError("SQLite admission requester stopped waiting", "unavailable");
+        }
+      };
       let coldOpenPath: string | undefined;
       try {
+        assertWaiting();
         if (closed) {
           throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
         }
@@ -310,15 +323,23 @@ function createOperationAdmission(
           }
           // A descendant publication must reach the descriptor owner before its sibling opens.
           installSqliteDatabaseAdmissions(
-            exchangeDatabaseAdmissions(
-              upstream.port,
-              admissions,
-              location,
-              create ? "admitted" : undefined,
+            withSqliteDatabaseAdmissionWait(
+              {
+                deadlineAtMs,
+                assertActive: assertWaiting,
+              },
+              () =>
+                exchangeDatabaseAdmissions(
+                  upstream.port,
+                  admissions,
+                  location,
+                  create ? "admitted" : undefined,
+                ),
             ),
           );
         } else if (location) {
           try {
+            assertWaiting();
             if (create) {
               prepareSqliteDatabaseAdmission(location, { create: true });
             }
@@ -330,7 +351,9 @@ function createOperationAdmission(
           }
         }
         const scope =
-          message.location === undefined ? undefined : { location: message.location, admissions };
+          message.location === undefined && admissions.length === 0
+            ? undefined
+            : { location: message.location, admissions };
         const cursor = databaseAdmissionCursors.get(admission);
         const reply = captureSqliteDatabaseAdmissions(
           cursor?.cursor ?? databaseAdmissionCursor,
@@ -338,7 +361,7 @@ function createOperationAdmission(
         );
         message.port.postMessage(reply, []);
         recordWorkerMessage("admission", "to_worker");
-        Atomics.store(decision, 0, GRANTED);
+        Atomics.compareExchange(decision, 0, REQUESTED, GRANTED);
       } catch (error) {
         const cursor = databaseAdmissionCursors.get(admission);
         if (cursor) {
@@ -643,51 +666,6 @@ function createOperationAdmission(
     commitObservers.push(observer);
   });
   return admission;
-}
-
-/** Install only the private port belonging to the broker's currently executing operation. */
-export function withSqliteWorkerOperationAdmission<T>(
-  owner: SqliteWorkerOperationContext,
-  operation: () => T,
-): T {
-  const scope = { owner, port: owner.port, active: true };
-  try {
-    return runSqliteWorkerAdmissionScope(scope, operation);
-  } finally {
-    scope.active = false;
-  }
-}
-
-/** Async factories and cleanup retain the same grant until their accepted work settles. */
-export async function withSqliteWorkerOperationAdmissionAsync<T>(
-  owner: SqliteWorkerOperationContext,
-  operation: () => T | Promise<T>,
-): Promise<T> {
-  const scope = { owner, port: owner.port, active: true };
-  try {
-    return await runSqliteWorkerAdmissionScope(scope, operation);
-  } finally {
-    scope.active = false;
-  }
-}
-
-function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation: () => T): T {
-  return currentAdmission.run(scope, () =>
-    withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
-      if (!scope.active) {
-        const upstream = getSqliteDatabaseAdmissionUpstream();
-        if (create || !upstream || upstream.closed) {
-          throw new SqliteWorkerError(
-            "SQLite facts require their retained admission",
-            "unavailable",
-          );
-        }
-        // Retained cleanup may publish facts; creation still needs the live grant.
-        return exchangeDatabaseAdmissions(upstream.port, admissions, location);
-      }
-      return exchangeSqliteDatabaseAdmissions(scope.port, admissions, location, create);
-    }, operation),
-  );
 }
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */

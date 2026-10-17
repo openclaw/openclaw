@@ -237,6 +237,90 @@ describe("Gateway matrix transcript evidence", () => {
     expect(incomplete.usage).toBeUndefined();
     expect(incomplete.costUsd).toBeUndefined();
   });
+
+  it.each([
+    { label: "zero placeholders", input: 0, output: 0, known: "none" },
+    { label: "provisional counters", input: 20, output: 3, known: "none" },
+    { label: "known then unavailable", input: 20, output: 3, known: "before" },
+    { label: "unavailable then known", input: 20, output: 3, known: "after" },
+  ])("does not qualify $label as measured savings", ({ input, output, known }) => {
+    const unavailable = {
+      message: {
+        ...assistantCall("unavailable", "return await matrix_read({});").message,
+        usage: {
+          input,
+          output,
+          totalTokens: input + output,
+          cost: { total: 0.5 },
+          usageReport: { state: "unavailable" },
+        },
+      },
+    };
+    const observed = {
+      message: {
+        ...assistantCall("observed", "return 1;").message,
+        usage: {
+          input: 100,
+          output: 10,
+          totalTokens: 110,
+          cost: { total: 0.002 },
+          usageReport: { state: "available" },
+        },
+      },
+    };
+    const trace = collectGatewayMatrixTrace([
+      ...(known === "before" ? [observed] : []),
+      unavailable,
+      nestedActivity("unavailable", "matrix_read", {}, { value: 1 }),
+      toolOutcome("unavailable", { status: "completed", value: 1 }),
+      ...(known === "after" ? [observed] : []),
+    ]);
+    expect(trace.assistantTurns).toBe(known === "none" ? 1 : 2);
+    expect(trace.models).toEqual(["openai/gpt-5.6-sol"]);
+    expect(trace.calls).toHaveLength(known === "none" ? 1 : 2);
+    expect(trace.outcomes).toHaveLength(1);
+    expect(trace.activities).toHaveLength(1);
+    expect(trace.activities[0]).toMatchObject({ name: "matrix_read", result: { value: 1 } });
+    expect(trace.usage).toBeUndefined();
+    expect(trace.costUsd).toBeUndefined();
+
+    const compared = compareCodeModeMatrixResults(
+      [{ ...comparisonRow(), usage: { input: 100, output: 10 }, costUsd: 0.002 }],
+      [
+        {
+          ...comparisonRow(),
+          gitSha: "candidate-sha",
+          usage: trace.usage,
+          costUsd: trace.costUsd,
+        },
+      ],
+    );
+    expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+    });
+  });
+
+  it("retains genuinely measured zero usage and cost", () => {
+    const trace = collectGatewayMatrixTrace([
+      {
+        message: {
+          ...assistantCall("zero", "return 0;").message,
+          usage: {
+            input: 0,
+            output: 0,
+            totalTokens: 0,
+            cost: { total: 0, totalOrigin: "provider-billed" },
+            usageReport: { state: "available" },
+          },
+        },
+      },
+    ]);
+    expect(trace.usage).toEqual({ input: 0, output: 0, total: 0 });
+    expect(trace.costUsd).toBe(0);
+    expect(trace.assistantTurns).toBe(1);
+  });
 });
 
 describe("Gateway matrix capability preflight", () => {

@@ -558,50 +558,33 @@ describe("firecrawl tools", () => {
     expect(capturedBody?.includeDomains).toBeUndefined();
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
-    expect(
-      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).toBeUndefined();
-
-    for (const blockedUrl of [
-      "http://[::1]/admin",
-      "http://user:pass@127.0.0.1/secret",
-      "http://10.0.0.5/secret",
-      "http://169.254.169.254/latest/meta-data/",
+  it.each([
+    ["http://[::1]/admin", /Blocked hostname or private\/internal IP/],
+    ["http://user:pass@127.0.0.1/secret", /Blocked hostname or private\/internal IP/],
+    ["http://10.0.0.5/secret", /Blocked hostname or private\/internal IP/],
+    ["http://169.254.169.254/latest/meta-data/", /Blocked hostname or private\/internal IP/],
+    [
       "http://metadata.google.internal/computeMetadata/v1/",
-      "file:///etc/passwd",
-    ]) {
-      expect(() => firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed(blockedUrl)).toThrow(
-        /Blocked|non-HTTP/i,
-      );
-    }
-
-    try {
-      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("not-a-valid-url?token=secret");
-      expect.fail("Expected invalid URL to be blocked");
-    } catch (error) {
-      expect((error as Error).message).toBe("Invalid URL supplied to Firecrawl scrape");
-      expect((error as Error).message).not.toContain("token=secret");
-    }
-  });
-
-  it("rejects blocked scrape targets before cache lookup or network fetch", async () => {
+      /Blocked hostname or private\/internal IP/,
+    ],
+    ["file:///etc/passwd", /Blocked non-HTTP/i],
+    ["not-a-valid-url?token=secret", /^Invalid URL supplied to Firecrawl scrape$/],
+  ] as const)("rejects unsafe scrape target %s before network fetch", async (url, message) => {
     const fetchSpy = vi.fn(async () => new Response("should not be called"));
     global.fetch = fetchSpy as typeof fetch;
 
-    await expect(
-      runActualFirecrawlScrape({
-        cfg: firecrawlConfig({
-          webFetch: {
-            apiKey: "firecrawl-key",
-            baseUrl: "https://api.firecrawl.dev",
-          },
-        }),
-        url: "http://169.254.169.254/latest/meta-data/",
-        extractMode: "markdown",
+    const request = runActualFirecrawlScrape({
+      cfg: firecrawlConfig({
+        webFetch: {
+          apiKey: "firecrawl-key",
+          baseUrl: "https://api.firecrawl.dev",
+        },
       }),
-    ).rejects.toThrow(/Blocked hostname or private\/internal IP/);
-
+      url,
+      extractMode: "markdown",
+    });
+    await expect(request).rejects.toThrow(message);
+    await expect(request).rejects.not.toThrow("token=secret");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

@@ -12,14 +12,6 @@ type CustomThemeImportViewState = {
   focusToken: number;
 };
 
-export const INITIAL_CUSTOM_THEME_IMPORT_STATE: CustomThemeImportViewState = {
-  url: "",
-  busy: false,
-  message: null,
-  expanded: false,
-  focusToken: 0,
-};
-
 type ImportMessages = {
   blocked: (reason: "loading" | "unsaved") => string;
   imported: (label: string) => string;
@@ -29,7 +21,13 @@ type ImportMessages = {
 export class CustomThemeImportOwner {
   private currentImport: object | null = null;
   private gatewayScope = "";
-  private state = INITIAL_CUSTOM_THEME_IMPORT_STATE;
+  private state: CustomThemeImportViewState = {
+    url: "",
+    busy: false,
+    message: null,
+    expanded: false,
+    focusToken: 0,
+  };
 
   constructor(private readonly publish: (state: CustomThemeImportViewState) => void) {}
 

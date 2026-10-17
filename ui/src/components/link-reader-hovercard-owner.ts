@@ -71,6 +71,7 @@ export class HovercardOwner {
       this.seeds = {
         client: this.host.client,
         agentId: this.host.agentId,
+        sessionKey: this.host.sessionKey,
         generation: this.host.client?.connectionGeneration,
         recoveryScope: this.host.client?.recoveryScope,
         previews: this.host.previewSeeds,
@@ -123,6 +124,7 @@ export class HovercardOwner {
   private seeds: {
     client: GatewayBrowserClient | null;
     agentId: string | undefined;
+    sessionKey: string | undefined;
     generation: number | undefined;
     recoveryScope: string | undefined;
     previews: readonly ControlUiLinkReaderPreview[];
@@ -134,6 +136,7 @@ export class HovercardOwner {
       !seeds ||
       seeds.client !== this.host.client ||
       seeds.agentId !== this.host.agentId ||
+      seeds.sessionKey !== this.host.sessionKey ||
       seeds.generation !== this.host.client?.connectionGeneration ||
       seeds.recoveryScope !== this.host.client?.recoveryScope
     ) {
@@ -190,10 +193,11 @@ export class HovercardOwner {
   }
 
   private readonly handleMetadataUpdate = (event: CustomEvent<LinkReaderMetadataUpdate>) => {
-    const { client, agentId, target, preview: detail } = event.detail;
+    const { client, agentId, sessionKey, target, preview: detail } = event.detail;
     if (
       client !== this.host.client ||
       agentId !== this.host.agentId ||
+      (sessionKey ?? "") !== (this.host.sessionKey ?? "") ||
       !this.host.readers.includes(target.reader)
     ) {
       return;
@@ -354,14 +358,12 @@ export class HovercardOwner {
       return;
     }
     const request = this.previewRequest;
-    if (request?.state === "pending") {
+    if (request?.state === "pending" && this.hovercard.held) {
       const seed = this.seedPreview(target);
-      if (this.hovercard.held) {
-        if (seed) {
-          this.show(anchor, seed, true);
-        } else if (this.allowLoading && context?.succeeded) {
-          this.show(anchor);
-        }
+      if (seed) {
+        this.show(anchor, seed, true);
+      } else if (this.allowLoading && context?.succeeded) {
+        this.show(anchor);
       }
     } else if (request?.state === "complete" && request.preview) {
       if (request.preview.href === target.href && (this.hovercard.card || this.hovercard.held)) {
@@ -692,6 +694,8 @@ export class HovercardOwner {
     signal: AbortSignal,
   ): Promise<ControlUiLinkReaderPreview> {
     const key = linkReaderTargetKey(target);
+    // Backoff expires request reuse, not the last-known facts retained for failed retries.
+    const previous = this.cache.get(key);
     const cached = cachedReaderPreview(this.cache, target);
     this.cache.delete(key);
     // Dismissal invalidates only that request, even before its rejection settles.
@@ -701,21 +705,23 @@ export class HovercardOwner {
     }
 
     const controller = new AbortController();
-    const client = this.host.client;
+    const { client, agentId, sessionKey } = this.host;
+    const scope = { client, agentId, sessionKey };
     const context = this.previewContext;
-    const agentId = this.host.agentId;
     const isCurrent = () =>
       client !== null &&
       !controller.signal.aborted &&
       client === this.host.client &&
       agentId === this.host.agentId &&
+      sessionKey === this.host.sessionKey &&
       previewContextFor(client, agentId) === context &&
       this.host.readers.includes(target.reader);
     const entry: CacheEntry = {
+      preview: previous?.preview,
       expiresAt: Date.now() + SUCCESS_CACHE_MS,
       controller,
       subscribers: new Set(),
-      promise: requestReaderPreview(client, target, agentId, controller.signal, isCurrent, cached)
+      promise: requestReaderPreview(scope, target, controller.signal, isCurrent, previous)
         .then((preview) => {
           if (isCurrent() && this.cache.get(key) === entry) {
             entry.preview = preview;

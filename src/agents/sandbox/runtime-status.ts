@@ -55,6 +55,7 @@ import {
 } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { shellEscapeBackslash as shellEscapeSingleArg } from "../../shared/shell-quote.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -609,10 +610,6 @@ function redactSessionKey(value: string): string {
     return "(redacted)";
   }
   return `${escapeControlCharsVisible(truncateUtf16Safe(trimmed, 6))}…${escapeControlCharsVisible(sliceUtf16Safe(trimmed, -6))}`;
-}
-
-function shellEscapeSingleArg(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 export function formatSandboxToolPolicyBlockedMessage(params: {

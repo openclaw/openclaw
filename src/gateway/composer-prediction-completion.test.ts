@@ -79,6 +79,29 @@ describe("composer prediction completion", () => {
     expect(completion).not.toHaveBeenCalled();
   });
 
+  it("checks the zero-tool contract again for utility fallback runtimes", async () => {
+    const params = input("utility");
+    params.cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "example/default", fallbacks: ["example/main-backup"] },
+          utilityModel: {
+            primary: "example/small",
+            fallbacks: ["example/service-tools", "example/backup"],
+          },
+        },
+      },
+    };
+    completion.mockRejectedValueOnce(new Error("503 service unavailable"));
+    route
+      .mockResolvedValueOnce({ selection: { selectedHarnessId: "openclaw" } })
+      .mockResolvedValueOnce({ selection: { selectedHarnessId: "agentsapi" } })
+      .mockResolvedValueOnce({ selection: { selectedHarnessId: "openclaw" } });
+
+    expect(await completeComposerPrediction(params)).toBe("What should I check next?");
+    expect(completion.mock.calls.map(([call]) => call.model)).toEqual(["small", "backup"]);
+  });
+
   it.each(["NO_SUGGESTION", "", "x".repeat(501)])(
     "allows empty or unusable output without buying a retry",
     async (text) => {

@@ -391,7 +391,7 @@ it.each(revocations)("preserves proxy runs until %s ends", async (revocation) =>
       expect(original.authority.signal?.aborted).toBe(false);
       expect(original.authority.assertCurrent).not.toThrow();
       expect(clients.size).toBe(0);
-      expect([...dispatch.clients.authorityClients]).toHaveLength(0);
+      expect([...dispatch.clients.authorityClients]).toEqual([client]);
       const otherOriginRemoved = structuredClone(oidc);
       otherOriginRemoved.gateway!.controlUi!.allowedOrigins = [browserOrigin.origin];
       await write(otherOriginRemoved);

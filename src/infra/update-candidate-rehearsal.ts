@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
@@ -58,6 +59,10 @@ function isolatedConfig(
   migrationPolicy?: "rehearse" | "startup-only",
 ): OpenClawConfigWithLegacyRoster {
   const copied = structuredClone(config);
+  if (Object.values(resolveDatabaseFamilyEngines(copied)).includes("postgres")) {
+    // Provider exports are private SQLite images, never live PostgreSQL anchors.
+    copied.database = { engine: "sqlite" };
+  }
   const projectPluginPath = (value: string) => {
     const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
     if (!projected) {

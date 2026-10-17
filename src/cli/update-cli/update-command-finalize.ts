@@ -335,6 +335,7 @@ async function updateFinalizeCommandInternal(
   };
 
   const doctorParams = {
+    opts: { fullIntegrityCheck: opts.fullIntegrityCheck },
     root,
     nodeRunner,
     runId: invokingRunId,

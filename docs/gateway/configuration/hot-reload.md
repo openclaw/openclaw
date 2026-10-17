@@ -48,6 +48,8 @@ for the newer config to apply. A superseding edit that overwrites an unapplied
 change still reports that earlier write as unconfirmed.
 
 Agent-only edits retain session admission and active runtimes for unchanged agents.
+Changing `agents.defaults.workspace` applies to new runs; an agent's explicit
+`workspace` still takes precedence.
 Creation prepares the new agent's runtime database before publishing its config entry.
 Overlapping creation and deletion preserve unchanged agents' prepared model generations
 and session creation. Registry discovery follows completed roster publications;
@@ -179,6 +181,15 @@ Changes to `agents.defaults.models`, agent model selection and fallbacks, and
 own plugin settings still follows its plugin reload policy.
 Overlapping model or credential changes use the newer write's runtime application;
 superseding an earlier publication does not itself require a Gateway restart.
+
+After a transient connection failure, an in-flight turn using a directly configured
+provider can retry with an endpoint whose hot reload has completed. It keeps the same
+model, permissions, prompt, conversation history, and model limits while resolving
+credentials, headers, and request settings from the updated provider config.
+Removing a key also takes effect when the updated local provider requires no authentication.
+Auth-profile, native-runtime, dynamically prepared, and managed local-service
+transports keep their admitted settings; start a new turn after changing those.
+Caller request overrides also retain their selected transport.
 
 Agent sandbox tool allow/deny lists under `agents.entries.<id>.tools.sandbox`
 hot-apply without restarting plugin services. Workboard reads live session facts;

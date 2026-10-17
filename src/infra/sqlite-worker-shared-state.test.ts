@@ -360,9 +360,14 @@ describe("canonical shared-state worker admission", () => {
         expect(
           await executeOpenClawStateWorker(alias, {
             type: "audit.writer.prune",
-            input: "events",
+            input: undefined,
           }),
-        ).toMatchObject({ status: "settled", error: expect.any(String) });
+        ).toEqual([
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+        ]);
       } else {
         await expect(
           executeOpenClawStateWorker(

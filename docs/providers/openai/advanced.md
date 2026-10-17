@@ -101,7 +101,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     request and response still match the current history, OpenClaw sends only
     the new input and references the prior response with
     `previous_response_id`. Otherwise it sends full history without that
-    reference.
+    reference. Idle cached connections expire after five minutes; keeping a
+    connection warm does not retain the completed run's execution context.
 
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an
@@ -290,9 +291,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For store-capable direct OpenAI Responses models (`openai/*` resolved to
-    `api.openai.com`), the OpenAI plugin's OpenClaw stream wrapper auto-enables
-    server-side compaction:
+    With the built-in `legacy` context engine, the OpenAI plugin's OpenClaw
+    stream wrapper auto-enables server-side compaction for store-capable direct
+    OpenAI Responses models (`openai/*` resolved to `api.openai.com`):
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
@@ -305,6 +306,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     custom proxies, and routes with `compat.supportsStore: false`. It applies to
     the built-in OpenClaw runtime and embedded OpenAI provider hooks. The native
     Codex app-server harness continues to own its own compaction.
+
+    On direct API-key `openai-responses` routes, defaults, explicit opt-in, and
+    stored checkpoint replay follow
+    [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership).
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model

@@ -28,6 +28,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   completedTurnMessageAnchor,
@@ -906,13 +907,17 @@ describe("context-engine turn outbox", () => {
     };
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
     const queries: string[] = [];
-    const statements = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) => {
-      if (!/^select/i.test(sql) || !sql.includes("context_engine_turn_outbox")) {
-        return null;
-      }
-      queries.push(sql);
-      return "outbox";
-    });
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["outbox"],
+      (sql) => {
+        if (!/^select/i.test(sql) || !sql.includes("context_engine_turn_outbox")) {
+          return null;
+        }
+        queries.push(sql);
+        return "outbox";
+      },
+    );
     try {
       expect(backend.execute(command)).toEqual({ warnings: [], pending: true, admitted: false });
       expect(statements.counts.outbox).toBe(1);

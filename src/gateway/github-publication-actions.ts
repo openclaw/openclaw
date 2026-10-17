@@ -23,13 +23,13 @@ import { prepareGitHubPublicationRequesterV2 } from "./github-publication-reques
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
-  params: SessionGitHubActionParams;
+  params: Exclude<SessionGitHubActionParams, { action: "refresh_base" }>;
 };
 type SessionRead = Awaited<ReturnType<typeof prepareGitHubPublicationSession>>;
 
 /** Keep every selected parent alive; a reparented child cannot redirect a retained action. */
 async function preparePublishingSession(
-  params: SessionGitHubActionParams,
+  params: { sessionKey: string; agentId?: string; publishingSessionKey?: string },
   assertCurrent: () => void,
   resources: DisposableStack,
 ) {
@@ -109,6 +109,8 @@ function pullRequestState(value: unknown, publication: SessionGitHubPublicationP
     typeof value.merged !== "boolean" ||
     (value.mergeable !== null && typeof value.mergeable !== "boolean") ||
     typeof value.mergeable_state !== "string" ||
+    typeof value.title !== "string" ||
+    (value.body !== null && typeof value.body !== "string") ||
     (value.merge_commit_sha !== null && typeof value.merge_commit_sha !== "string")
   ) {
     throw new Error(
@@ -129,7 +131,19 @@ function pullRequestState(value: unknown, publication: SessionGitHubPublicationP
     mergeCommit: value.merged ? value.merge_commit_sha : null,
     mergeable: value.mergeable,
     mergeState: value.mergeable_state,
+    title: value.title,
+    body: value.body ?? "",
   };
+}
+
+function assertPreservedPublicationFooter(before: string, after: string) {
+  const marker = before.indexOf("\n\n<!-- openclaw-publication:");
+  const credit = before.indexOf("\n\n## Worked on by\n\n");
+  // Preserve the whole original suffix; added lookalike blocks cannot replace its identity.
+  const start = marker < 0 ? credit : credit < 0 ? marker : Math.min(marker, credit);
+  if (start >= 0 && !after.includes(before.slice(start))) {
+    throw new Error("Keep the existing PR attribution, publication marker and footer unchanged.");
+  }
 }
 
 /** Execute one explicit operation against the session's recorded shared publication. */
@@ -143,7 +157,22 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   ) {
     throw new Error("GitHub action session does not match the current conversation.");
   }
-  if (params.action !== "inspect" && (!params.requestId || !params.expectedHeadCommit)) {
+  const edit = params.action === "edit" ? params : undefined;
+  const editsMetadata = edit && (edit.title !== undefined || edit.body !== undefined);
+  if (
+    edit &&
+    ((edit.title !== undefined) !== (edit.expectedTitle !== undefined) ||
+      (edit.body !== undefined) !== (edit.expectedBody !== undefined))
+  ) {
+    throw new Error(
+      "Supply the observed expectedTitle or expectedBody for each field being edited.",
+    );
+  }
+  if (
+    params.action !== "inspect" &&
+    (!edit || editsMetadata) &&
+    (!params.requestId || !params.expectedHeadCommit)
+  ) {
     throw new Error(
       "Inspect the published PR first, then supply its requestId and expectedHeadCommit.",
     );
@@ -175,6 +204,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     target.assertCurrent();
     admitted.requester.assertCurrent();
     if (
+      !edit &&
       !roleScopesAllow({
         role: "operator",
         requestedScopes: ["operator.write"],
@@ -185,13 +215,17 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertRequester();
-  const receipt = await service.latestShared(session, undefined, undefined, () =>
-    target.selected.readCurrent(),
-  );
+  const receipt = edit
+    ? await service.latestPublishedShared(session, () => target.selected.readCurrent())
+    : await service.latestShared(session, undefined, undefined, () =>
+        target.selected.readCurrent(),
+      );
   assertRequester();
   if (receipt?.result.status !== "published") {
     throw new Error(
-      "This session has no completed shared publication. For delegated work, select its publishingSessionKey explicitly.",
+      edit
+        ? "This session has no completed shared publication to edit."
+        : "This session has no completed shared publication. For delegated work, select its publishingSessionKey explicitly.",
     );
   }
   const publication = receipt.result;
@@ -251,17 +285,18 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     return pullRequestState(JSON.parse(result.stdout.toString("utf8")), publication);
   };
   const present = (state: ReturnType<typeof pullRequestState>): void => {
-    const { nodeId: _, ...facts } = state;
+    const { nodeId: _, title, body, ...facts } = state;
     const result: SessionGitHubActionResult = {
       publication,
       publishingSessionKey: session.sessionKey,
       ...facts,
+      ...(edit ? { title, body } : {}),
     };
     assertCurrent();
     options.respond(true, result);
   };
   const before = await read();
-  if (params.action === "inspect") {
+  if (params.action === "inspect" || (edit && !editsMetadata)) {
     return present(before);
   }
   const assertHead = (state: ReturnType<typeof pullRequestState>) => {
@@ -272,6 +307,31 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertHead(before);
+  const metadataMatches = (state: ReturnType<typeof pullRequestState>) =>
+    edit &&
+    (edit.title === undefined || state.title === edit.title) &&
+    (edit.body === undefined || state.body === edit.body);
+  if (edit) {
+    if (metadataMatches(before)) {
+      return present(before);
+    }
+    if (
+      (edit.title !== undefined &&
+        before.title !== edit.title &&
+        before.title !== edit.expectedTitle) ||
+      (edit.body !== undefined && before.body !== edit.body && before.body !== edit.expectedBody)
+    ) {
+      throw new Error(
+        "The PR metadata changed; read it with edit and reconcile the requested changes before retrying.",
+      );
+    }
+    if (edit.body !== undefined) {
+      assertPreservedPublicationFooter(before.body, edit.body);
+    }
+    if (before.state === "merged" || before.state === "closed") {
+      throw new Error("The published PR is closed; its metadata and saved work are unchanged.");
+    }
+  }
   if (
     before.state === "merged" ||
     (params.action === "ready" && before.state === "open") ||
@@ -317,10 +377,10 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       githubPublicationApiArgs(
         params.action === "ready"
           ? "graphql"
-          : params.action === "close"
+          : params.action === "close" || edit
             ? endpoint
             : `${endpoint}/merge`,
-        params.action === "ready" ? "POST" : params.action === "close" ? "PATCH" : "PUT",
+        params.action === "ready" ? "POST" : params.action === "close" || edit ? "PATCH" : "PUT",
         host,
       ),
       {
@@ -333,15 +393,20 @@ export async function performSessionGitHubAction(options: Options): Promise<void
                   "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
                 variables: { id: before.nodeId },
               }
-            : params.action === "close"
-              ? { state: "closed" }
-              : {
-                  sha: params.expectedHeadCommit,
-                  merge_method: params.mergeMethod,
-                  ...(attribution?.attribution?.trailers.length
-                    ? { commit_message: attribution.attribution.trailers.join("\n") }
-                    : {}),
-                },
+            : edit
+              ? {
+                  ...(edit.title !== undefined ? { title: edit.title } : {}),
+                  ...(edit.body !== undefined ? { body: edit.body } : {}),
+                }
+              : params.action === "close"
+                ? { state: "closed" }
+                : {
+                    sha: params.expectedHeadCommit,
+                    merge_method: params.action === "merge" ? params.mergeMethod : undefined,
+                    ...(attribution?.attribution?.trailers.length
+                      ? { commit_message: attribution.attribution.trailers.join("\n") }
+                      : {}),
+                  },
         ),
       },
     );
@@ -350,6 +415,14 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   }
   const after = await read();
   assertHead(after);
+  if (edit) {
+    if (metadataMatches(after)) {
+      return present(after);
+    }
+    throw new Error(
+      "GitHub has not confirmed the metadata edit; read the PR with edit before retrying. Saved work is unchanged.",
+    );
+  }
   if (
     after.state === "merged" ||
     (params.action === "ready" && after.state === "open") ||

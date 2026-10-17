@@ -59,6 +59,8 @@ ChatGPT SSE errors preserve HTTP status and `Retry-After` together, so a transie
 
 For SDK calls that retain internal retries, Stainless-based SDKs such as Anthropic and OpenAI can receive `retry-after-ms` or `retry-after` on retryable responses (`408`, `409`, `429`, and `5xx`). When that wait is longer than 60 seconds, OpenClaw injects `x-should-retry: false` so the SDK returns control promptly. Override this SDK-only cap with `OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS=<seconds>`. Set it to `0`, `false`, `off`, `none`, or `disabled` to let those SDK calls honor long `Retry-After` sleeps internally.
 
+When a fallback chain fails, bounded provider reset guidance is extracted from the error message without displaying the surrounding response metadata.
+
 Chinese exhausted-quota messages follow the same policy, including MiniMax Token Plan's `已达到 Token Plan 用量上限`, z.ai's `已达到每周/每月使用上限`, and `额度已用尽` / `配额已用尽`. Temporary `请求过于频繁` throttles keep the same-model retry budget.
 
 ### Managed Git operations
@@ -98,7 +100,13 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 Discord and Telegram channel retry timings are built in and are not configurable in `openclaw.json`.
 
-The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget; `0` disables retries, and rate limits remain capped at 10 total attempts per consecutive outage. This is an embedded session setting, not an `openclaw.json` key, and it does not configure native harness request retries. Automatic recovery requires no new configuration.
+The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local native harnesses: Codex, Copilot, and Muse. `0` disables these retries; rate limits remain capped at 10 total attempts per consecutive outage. Without an explicit setting, the harness's existing retry count or OpenClaw's default applies.
+
+This is a `settings.json` setting, not an `openclaw.json` key. OpenClaw merges agent-global settings, enabled bundle settings, and project settings from the effective workspace, subject to the existing project-settings trust policy. Prepared sessions retain that snapshot until a new session or explicit invalidation.
+
+Native harnesses prepare this count from their admitted Gateway-local execution directory before tools or inference. Remote/container execution, ACP, Agents API, and external harnesses that do not report a local settings scope retain their existing retry count/default; OpenClaw does not read remote paths as local settings directories.
+
+Only the retry count is shared. `retry.provider.maxRetryDelayMs` and `timeoutMs` retain their embedded-runtime scope; native harness request retries, delays, and timeouts remain native-owned. Disabling continuation retries does not disable the separate tool-free finalizer for completed work. Automatic recovery requires no new configuration.
 
 ## Notes
 

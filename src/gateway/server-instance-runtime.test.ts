@@ -67,7 +67,7 @@ describe("createGatewayInstanceRuntime", () => {
       const options = {
         expectFinal: true,
         ...(dedicatedPrincipal
-          ? { internalDeliveryMediaUrls: ["https://example.test/media"] }
+          ? { runtimeContextFragments: [{ kind: "runtime-instruction" as const, text: "media" }] }
           : {}),
         assertAdmissionCurrent: () => {
           if (!requesterCurrent) {

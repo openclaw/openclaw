@@ -158,8 +158,12 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
-When Memory Core owns the memory slot, its Gateway service schedules each configured
-agent's memory manager to open at startup and after plugin replacement. This
+When Memory Core owns the memory slot, a fresh Gateway start opens an agent's
+memory manager on its first memory search, flush, or turn that needs it, so an
+idle Gateway does not start index and transcript workers for every agent. Once a
+manager has run in the Gateway process, the Memory Core service schedules each
+configured agent's memory manager to open again whenever the service restarts,
+including after plugin replacement and memory or agent configuration changes. This
 background activation waits for that agent's database preparation, including
 after an upgrade or restart, without delaying Gateway readiness. Failed
 preparation reports the database's repair guidance. Watched file changes can
@@ -198,7 +202,10 @@ New session content becomes searchable after that delay. The current turn alread
 has its own content in context; `memory_search` does not force a transcript flush.
 Graceful shutdown does not flush queued indexing. On the next startup, incremental
 catch-up resumes from each source's indexed sequence, including rewrites and
-compaction. A failed full rebuild retains
+compaction. Startup compares source metadata; missing transcripts are parsed and
+checked for indexing eligibility once the background pass can run. Explicit source
+diagnostics still inspect content to exclude system-only transcripts from eligible
+counts. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
 An index built before any content exists remains valid as content arrives;
 restarting does not require a full rebuild just because the index started empty.
@@ -230,7 +237,9 @@ recovery scan every five minutes, so a missed native event can take that long to
 be detected. This recovery interval does not change polling cadence. Automatic
 fallback logs one warning per watcher lifetime. Agents in the same process share
 observations of the same admitted root, retaining each agent's file-selection
-rules. More than 128 combined scopes use additional bounded subscriptions. If a
+rules. Joining or leaving an unchanged selection keeps the existing filesystem
+baseline; changes to the combined scopes or enabled file kinds rescan it.
+More than 128 combined scopes use additional bounded subscriptions. If a
 shared observation fails, its members retry independently for the rest of their
 watcher lifetimes, so one failing scope cannot repeatedly disable healthy peers.
 The last agent to stop observing a root closes its subscription. A running memory

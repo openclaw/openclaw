@@ -20,16 +20,6 @@ function captureSessionWriterDeliveryRead(
   return memory ? () => memory.readCurrent() : undefined;
 }
 
-class SessionWriterDeliveryRevokedError extends PlatformMessageNotDispatchedError {
-  constructor() {
-    super("Session writer changed before final reply delivery", {
-      cause: undefined,
-      retryable: false,
-    });
-    this.name = "SessionWriterDeliveryRevokedError";
-  }
-}
-
 function isEntryAuthorized(
   authority: SessionWriterDeliveryAuthority,
   current: ReturnType<NonNullable<SessionWriterDeliveryAuthority["readCurrentSession"]>>,
@@ -178,6 +168,12 @@ export function assertSessionWriterDeliveryAuthorized(
   authority: SessionWriterDeliveryAuthority | undefined,
 ): void {
   if (authority && !isAuthorityCurrent(authority)) {
-    throw new SessionWriterDeliveryRevokedError();
+    throw new PlatformMessageNotDispatchedError(
+      "Session writer changed before final reply delivery",
+      {
+        cause: undefined,
+        retryable: false,
+      },
+    );
   }
 }

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
@@ -62,6 +63,10 @@ export function readSessionTranscriptJsonlBytesInDatabase(
 }
 
 export function refreshSessionPlannerStatisticsInDatabase(database: OpenClawAgentDatabase): void {
+  if (isPostgresSqlConnection(database.db)) {
+    // PostgreSQL's server owns planner statistics and native page maintenance.
+    return;
+  }
   // SAFETY: SQLite returns this fixed numeric column for PRAGMA analysis_limit.
   const row = database.db.prepare("PRAGMA analysis_limit").get() as
     | { analysis_limit?: unknown }
@@ -104,8 +109,7 @@ export function applySessionEntryMaintenanceInDatabase(
     () => (preservation ??= readPreservation()),
     refreshCandidates,
   );
-  const apply = prepared.kind === "no-op" ? prepared.apply : prepared.captureMutation();
-  return apply(database, onArchived, postimages);
+  return prepared(database, onArchived, postimages);
 }
 
 type SessionEntryMaintenanceApply = (
@@ -114,24 +118,16 @@ type SessionEntryMaintenanceApply = (
   postimages?: SessionEntryWritePostimages,
 ) => SessionEntryMaintenancePlan;
 
-type SessionEntryMaintenancePreparation =
-  | { kind: "no-op"; value: SessionEntryMaintenancePlan; apply: SessionEntryMaintenanceApply }
-  | { kind: "write"; captureMutation(): SessionEntryMaintenanceApply };
-
 /** Prepare before the write transaction; compare selected rows and protection dependencies inside it. */
 export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
-): SessionEntryMaintenancePreparation {
+): SessionEntryMaintenanceApply {
   const maintenance = params.maintenance;
   if (maintenance.mode === "warn") {
-    return {
-      kind: "no-op",
-      value: emptySessionEntryMaintenancePlan(),
-      apply: emptySessionEntryMaintenancePlan,
-    };
+    return emptySessionEntryMaintenancePlan;
   }
 
   // Key projections and indexed age candidates keep unrelated entry payloads out
@@ -144,13 +140,9 @@ export function prepareSessionEntryMaintenanceInDatabase(
     Date.now() < retainedAgeFact.next.at &&
     !shouldRunSessionEntryMaintenance({ entryCount, maxEntries: maintenance.maxEntries })
   ) {
-    return {
-      kind: "no-op",
-      value: emptySessionEntryMaintenancePlan(),
-      apply(database) {
-        stageSessionEntryMaintenanceAgeFact(database.db, { ...retainedAgeFact, entryCount });
-        return emptySessionEntryMaintenancePlan();
-      },
+    return (database) => {
+      stageSessionEntryMaintenanceAgeFact(database.db, { ...retainedAgeFact, entryCount });
+      return emptySessionEntryMaintenancePlan();
     };
   }
   invalidateSessionEntryMaintenanceAgeFact(reader.db);
@@ -231,13 +223,9 @@ export function prepareSessionEntryMaintenanceInDatabase(
     if (durableNoCandidates) {
       value.durableNoCandidates = true;
     }
-    return {
-      kind: "no-op",
-      value,
-      apply(database) {
-        stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
-        return value;
-      },
+    return (database) => {
+      stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
+      return value;
     };
   }
   // Selected victims have not changed yet; their future age hint is not committed.
@@ -268,12 +256,8 @@ export function prepareSessionEntryMaintenanceInDatabase(
       ).rows,
     };
   };
-  const apply = (
-    expected: ReturnType<typeof readInputs>,
-    database: OpenClawAgentDatabase,
-    onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
-    postimages?: SessionEntryWritePostimages,
-  ): SessionEntryMaintenancePlan => {
+  const expected = readInputs(reader);
+  return (database, onArchived, postimages) => {
     if (
       !isDeepStrictEqual(expected, readInputs(database)) ||
       (capArchived + capped > 0 &&
@@ -403,14 +387,5 @@ export function prepareSessionEntryMaintenanceInDatabase(
       pruned,
       capped,
     };
-  };
-  return {
-    kind: "write",
-    captureMutation() {
-      // Capture only for a mutation, synchronously within the planning read transaction.
-      const expected = readInputs(reader);
-      return (database, onArchived, postimages) =>
-        apply(expected, database, onArchived, postimages);
-    },
   };
 }

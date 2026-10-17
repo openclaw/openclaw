@@ -62,7 +62,6 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
-  InternalFollowupRun,
 } from "./agent-runner-execution.types.js";
 import {
   markAgentRunFailureReplyPayload,
@@ -110,7 +109,6 @@ async function executeAgentTurnInternalLoop(
   compaction: AgentTurnCompaction,
 ): Promise<AgentTurnInternalResult> {
   let params = inputParams;
-  const heartbeatState = { didLogStrip: false };
   // Direct delivery receipts retain settlement facts across fallback candidates.
   const directBlockDeliveries: DirectBlockDelivery[] = [];
   // Queued turns reconciled their probe at admission. Rechecking it against
@@ -201,9 +199,8 @@ async function executeAgentTurnInternalLoop(
           buildReplyMediaContextParams(params.followupRun, params.sessionKey, runtimeConfig),
         ),
       );
-    const internalFollowupRun = params.followupRun as InternalFollowupRun;
     const hasQueuedCurrentTurnImages =
-      internalFollowupRun.currentTurnImagesPrepared === true ||
+      params.followupRun.currentTurnImagesPrepared === true ||
       Object.hasOwn(params.followupRun, "images") ||
       Object.hasOwn(params.followupRun, "imageOrder");
     // Queue admission owns current-turn materialization, including empty results.
@@ -212,7 +209,7 @@ async function executeAgentTurnInternalLoop(
       ? {
           images: params.followupRun.images,
           imageOrder: params.followupRun.imageOrder,
-          mediaImageLayout: internalFollowupRun.mediaImageLayout,
+          mediaImageLayout: params.followupRun.mediaImageLayout,
         }
       : await agentTurnTiming.measure("current_turn_images", () =>
           resolveCurrentTurnImages({
@@ -388,7 +385,6 @@ async function executeAgentTurnInternalLoop(
         turn: params,
         replyMediaContext,
         directBlockDeliveries,
-        heartbeatState,
       });
       const cycleParams: AgentFallbackCycleParams = {
         preparedRunAdmission,
@@ -538,7 +534,6 @@ async function executeAgentTurnInternalLoop(
     result: runResult,
     resolved: { provider: fallbackProvider, model: fallbackModel },
     fallback: { exhausted: fallbackExhausted, attempts: fallbackAttempts },
-    didLogHeartbeatStrip: heartbeatState.didLogStrip,
     autoCompactionCount: compaction.count,
     hasDirectlySentBlockReply:
       directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||

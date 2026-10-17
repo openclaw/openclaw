@@ -2,33 +2,15 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SolidController } from "../lit/solid-controller-host.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { DockLayoutController } from "./dock-layout-controller.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
+import { createDockLayout, type DockLayout } from "./dock-layout.ts";
 import { createDockPanelLayout, type DockPanelPlacement } from "./dock-panel-layout.ts";
 
-function createControllerHost() {
-  return {
-    addController: vi.fn((_controller: SolidController) => undefined),
-    removeController: vi.fn((_controller: SolidController) => undefined),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-    isConnected: true,
-  };
-}
-
-function createEmbeddedControllerHost() {
-  const host = Object.assign(document.createElement("div"), {
-    addController: vi.fn((_controller: SolidController) => undefined),
-    removeController: vi.fn((_controller: SolidController) => undefined),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
-  host.setAttribute("embedded", "");
-  return host;
+function createNotifications() {
+  return { notify: vi.fn() };
 }
 
 function createLayout(defaultDock: Exclude<DockPanelPlacement, "main">) {
@@ -44,12 +26,12 @@ function createLayout(defaultDock: Exclude<DockPanelPlacement, "main">) {
 }
 
 function mountResizer<TDock extends DockPanelPlacement>(
-  host: ReturnType<typeof createControllerHost>,
-  controller: DockLayoutController<TDock>,
+  host: ReturnType<typeof createNotifications>,
+  controller: DockLayout<TDock>,
 ) {
   return mountSolid(() => {
     const [revision, setRevision] = createSignal(0);
-    host.requestUpdate.mockImplementation(() => setRevision((value) => value + 1));
+    host.notify.mockImplementation(() => setRevision((value) => value + 1));
     return (
       <DockResizer controller={(revision(), controller)} classPrefix="test" label="Resize panel" />
     );
@@ -110,18 +92,19 @@ describe("createDockPanelLayout", () => {
   });
 });
 
-describe("DockLayoutController open intent", () => {
+describe("DockLayout open intent", () => {
   it("reads saved intent once per attachment and preserves explicit choices across suppression", () => {
     const layout = createLayout("right");
     layout.save({ ...layout.defaults, open: true });
     const load = vi.spyOn(layout, "load");
     let available = false;
-    const controller = new DockLayoutController(createControllerHost(), {
+    const controller = createDockLayout({
+      ...createNotifications(),
       layout,
       reservationPrefix: "test-intent",
       isAvailable: () => available,
     });
-    controller.hostConnected();
+    controller.connect();
     expect(controller.open).toBe(false);
 
     controller.setSuppressed(true);
@@ -142,19 +125,45 @@ describe("DockLayoutController open intent", () => {
     controller.setOpen(true);
     controller.hideWithoutPersisting();
     expect(controller.restoreOpenState()).toBe(true);
-    controller.hostDisconnected();
+    controller.dispose();
 
     // A new attachment captures the saved preference afresh.
     layout.save({ ...layout.defaults, open: false });
-    controller.hostConnected();
+    controller.connect();
     expect(controller.open).toBe(false);
     expect(controller.restoreOpenState()).toBe(false);
     expect(load).toHaveBeenCalledTimes(2);
-    controller.hostDisconnected();
+    controller.dispose();
   });
 });
 
-describe("DockLayoutController inline columns", () => {
+it("clamps to viewport changes only while attached", () => {
+  let width = 520;
+  const dock = createDockLayout({
+    ...createNotifications(),
+    layout: createLayout("right"),
+    reservationPrefix: "test-resize-lifetime",
+    isAvailable: () => true,
+    maxWidth: () => width,
+  });
+  dock.connect();
+  dock.setOpen(true);
+  width = 420;
+  window.dispatchEvent(new Event("resize"));
+  expect(dock.width).toBe(420);
+  expect(
+    document.documentElement.style.getPropertyValue("--oc-test-resize-lifetime-reserve-right"),
+  ).toBe("420px");
+  dock.dispose();
+  width = 320;
+  window.dispatchEvent(new Event("resize"));
+  expect(dock.width).toBe(420);
+  expect(
+    document.documentElement.style.getPropertyValue("--oc-test-resize-lifetime-reserve-right"),
+  ).toBe("0px");
+});
+
+describe("DockLayout inline columns", () => {
   it.each([
     { dock: "bottom", hostKind: "element", reserved: { bottom: "320px", right: "0px" } },
   ] as const)(
@@ -162,19 +171,19 @@ describe("DockLayoutController inline columns", () => {
     ({ dock, reserved }) => {
       const layout = createLayout("right");
       layout.save({ open: true, dock, height: 320, width: 520 });
-      const embeddedHost = createEmbeddedControllerHost();
+      const embeddedHost = { ...createNotifications(), isEmbedded: () => true };
       // Both instances of one panel share its layout store and reservation properties.
       const options = { layout, reservationPrefix: "test-shared", isAvailable: () => true };
-      const standalone = new DockLayoutController(createControllerHost(), options);
-      const embedded = new DockLayoutController(embeddedHost, options);
+      const standalone = createDockLayout({ ...createNotifications(), ...options });
+      const embedded = createDockLayout({ ...embeddedHost, ...options });
       const reservation = () => ({
         bottom: document.documentElement.style.getPropertyValue("--oc-test-shared-reserve-bottom"),
         right: document.documentElement.style.getPropertyValue("--oc-test-shared-reserve-right"),
       });
       const cleared = { bottom: "0px", right: "0px" };
 
-      standalone.hostConnected();
-      embedded.hostConnected();
+      standalone.connect();
+      embedded.connect();
       standalone.syncReservation();
       embedded.syncReservation();
       expect(reservation()).toEqual(reserved);
@@ -184,10 +193,10 @@ describe("DockLayoutController inline columns", () => {
       expect(reservation()).toEqual(cleared);
 
       standalone.setOpen(true);
-      embedded.hostDisconnected();
+      embedded.dispose();
       expect(reservation()).toEqual(reserved);
 
-      standalone.hostDisconnected();
+      standalone.dispose();
       expect(reservation()).toEqual(cleared);
     },
   );
@@ -204,15 +213,16 @@ describe("DockLayoutController inline columns", () => {
     });
     const reservation = "--oc-test-inline-reserve-right";
     document.documentElement.style.setProperty(reservation, "17px");
-    const host = createEmbeddedControllerHost();
-    const controller = new DockLayoutController(host, {
+    const host = { ...createNotifications(), isEmbedded: () => true };
+    const controller = createDockLayout({
+      ...host,
       layout,
       reservationPrefix: "test-inline",
       isAvailable: () => true,
       maxWidth: () => 420,
     });
 
-    controller.hostConnected();
+    controller.connect();
     const { container, unmount } = mountResizer(host, controller);
     flush();
     const separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
@@ -234,29 +244,32 @@ describe("DockLayoutController inline columns", () => {
     });
     expect(document.documentElement.style.getPropertyValue(reservation)).toBe("17px");
 
-    const restored = new DockLayoutController(createEmbeddedControllerHost(), {
+    const restored = createDockLayout({
+      ...createNotifications(),
+      isEmbedded: () => true,
       layout,
       reservationPrefix: "test-inline",
       isAvailable: () => true,
       maxWidth: () => 420,
     });
-    restored.hostConnected();
+    restored.connect();
     expect(restored.width).toBe(380);
-    restored.hostDisconnected();
-    controller.hostDisconnected();
+    restored.dispose();
+    controller.dispose();
     unmount();
     document.documentElement.style.removeProperty(reservation);
   });
 
   it("exposes keyboard-operable separator semantics for right and bottom docks", async () => {
     const layout = createLayout("right");
-    const host = createControllerHost();
-    const controller = new DockLayoutController(host, {
+    const host = createNotifications();
+    const controller = createDockLayout({
+      ...host,
       layout,
       reservationPrefix: "test-keyboard",
       isAvailable: () => true,
     });
-    controller.hostConnected();
+    controller.connect();
 
     const { container, unmount } = mountResizer(host, controller);
     flush();
@@ -282,7 +295,7 @@ describe("DockLayoutController inline columns", () => {
     );
     expect(controller.height).toBeGreaterThan(320);
 
-    controller.hostDisconnected();
+    controller.dispose();
     unmount();
   });
 });

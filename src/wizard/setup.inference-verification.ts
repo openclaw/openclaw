@@ -34,6 +34,7 @@ import type { SystemAgentVerifiedInferenceBinding } from "../system-agent/verifi
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
+import { readSetupConfigAuthority } from "./setup.shared.js";
 
 export async function completeSetupModelAuth(params: {
   config: OpenClawConfig;
@@ -46,6 +47,7 @@ export async function completeSetupModelAuth(params: {
   keepExistingModelConfig: boolean;
   importedInferenceVerified: boolean;
   configTarget: SetupInferenceConfigTarget;
+  assertCurrent?: () => void;
 }): Promise<{ config: OpenClawConfig; verified: boolean; persisted: boolean }> {
   const { stagedCandidate, opts, baseConfig } = params;
   const replacementTarget = resolveOnboardingSetupTarget(baseConfig);
@@ -85,6 +87,7 @@ export async function completeSetupModelAuth(params: {
       runtime: params.runtime,
       configTarget: params.configTarget,
       required: params.usedImportFlow && params.keepExistingModelConfig,
+      assertCurrent: params.assertCurrent,
     });
     let config = verification.config;
     if (!verification.verified && verification.attempted && stagedCandidate) {
@@ -113,6 +116,7 @@ export async function offerLiveModelVerification(params: {
   stateDir?: string;
   configTarget: SetupInferenceConfigTarget;
   required?: boolean;
+  assertCurrent?: () => void;
 }): Promise<{
   config: OpenClawConfig;
   attempted: boolean;
@@ -120,6 +124,15 @@ export async function offerLiveModelVerification(params: {
   verified: boolean;
   modelRef?: string;
 }> {
+  const assertCurrent =
+    params.assertCurrent ??
+    (params.opts.nonInteractive
+      ? undefined
+      : (
+          await readSetupConfigAuthority(
+            params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : undefined,
+          )
+        ).assertCurrent);
   const requiresCandidateVerification = (config: OpenClawConfig) => {
     const provider = resolveDefaultModelForAgent({ cfg: config }).provider;
     return (
@@ -393,6 +406,7 @@ export async function offerLiveModelVerification(params: {
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
+      assertCurrent,
       ...(params.agentDir ? { agentDir: params.agentDir } : {}),
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     });

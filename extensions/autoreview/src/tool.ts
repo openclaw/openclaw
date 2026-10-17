@@ -11,7 +11,7 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 
 const paths = () => Type.Optional(Type.Array(Type.String({ minLength: 1 })));
-export const autoReviewParameters = Type.Object(
+const autoReviewParameters = Type.Object(
   {
     mode: Type.Optional(
       Type.Union(

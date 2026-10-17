@@ -135,9 +135,14 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         expect((await gateway.getRequests("connect")).length).toBeGreaterThan(0);
         await page.locator(".sidebar-identity-card").click();
+        const switcher = page.locator('[data-value="command:gateways"]');
+        await switcher.click();
+        await page.getByRole("menu", { name: "Team", exact: true }).waitFor({ state: "visible" });
+        const currentHealth = switcher.locator(".sidebar-gateway-health");
         const teamHealth = gatewayRow(page, "profile:team").locator(".sidebar-gateway-health");
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
+        await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("ok");
         const identity = page.locator(".sidebar-identity-card");
         expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
         await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
@@ -154,6 +159,7 @@ suite.define(() => {
         await gateway.setOnline(false);
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("error");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Unreachable");
+        await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("error");
         await assertSelectionUnchanged(page);
         if (proof) {
           await page.screenshot({
@@ -167,6 +173,7 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
+        await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("ok");
         await assertSelectionUnchanged(page);
         expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
         await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);

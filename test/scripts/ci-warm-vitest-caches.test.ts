@@ -54,9 +54,13 @@ afterEach(() => {
 });
 
 describe("protected Vitest cache collection", () => {
-  it.each(["linux", "linux-hosted"])(
-    "preserves Node and compatible Bun seeds before final UI pruning after a failure (%s)",
-    async (platform) => {
+  it.each(
+    ["linux", "linux-hosted"].flatMap((platform) =>
+      [undefined, "bun-all", "dual-all"].map((policy) => ({ platform, policy })),
+    ),
+  )(
+    "preserves protected Node and compatible Bun seeds for $platform ($policy)",
+    async ({ platform, policy }) => {
       const fixtureEnv = testRunnerFixtureEnv();
       for (const name of ["CI", "GITHUB_ACTIONS", "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE"]) {
         vi.stubEnv(name, fixtureEnv[name]);
@@ -71,6 +75,7 @@ describe("protected Vitest cache collection", () => {
       for (const [name, value] of Object.entries({
         CI: "true",
         CACHE_WARM_PLATFORM: platform,
+        OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
         NODE_OPTIONS: "--max-old-space-size=8192",
         NODE_COMPILE_CACHE: compileRoot,
         OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: cacheRoot,
@@ -83,6 +88,7 @@ describe("protected Vitest cache collection", () => {
         vi.stubEnv(name, value);
       }
       for (const name of [
+        "OPENCLAW_BUN_PATH",
         "OPENCLAW_NODE_TEST_TARGETS_JSON",
         "OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64",
         "OPENCLAW_NODE_TEST_ENV_JSON",
@@ -165,6 +171,8 @@ describe("protected Vitest cache collection", () => {
       }
       const [bun, node] = uiCollections;
       expect(bun!.env).toMatchObject(BUN_UI_TEST_ENV);
+      // CI selects the pinned fork from PATH; a bare command is not a Bun path override.
+      expect(bun!.env.OPENCLAW_BUN_PATH).toBeUndefined();
       expect(bun!.env.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
       expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(
         join(cacheRoot, "vitest-cache-bun-0"),

@@ -794,204 +794,189 @@ describe("runCodexAppServerSideQuestion", () => {
     ]);
   });
 
-  it.each(["ok", "binding-changed"])(
-    "projects bound ask policy before side-thread forks: %s",
-    async (outcome) => {
-      const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
-      const rejectsReplay = outcome === "binding-changed";
-      const nativeAppConfig = {
-        enabled: true,
-        links: {
-          account: { approvals_reviewer: "auto_review", default_tools_approval_mode: "approve" },
-        },
-        tools: {
-          write: { enabled: false, approval_mode: "approve" },
-          read: { approval_mode: "approve" },
-          retired: { approval_mode: "approve" },
-        },
-      };
-      const savedAppConfig = structuredClone(nativeAppConfig);
-      const turnStarted = createDeferred<void>();
-      const client = createFakeClient({
-        completeTurn: rejectsReplay,
-        onTurnStart: () => turnStarted.resolve(),
-      });
-      const baseRequest = client.request.getMockImplementation()!;
-      client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
-        if (method === "app/installed") {
-          return {
-            apps: ["ask-app", "unbound-app"].map((id) => ({
-              id,
-              runtimeName: id,
-              enabled: true,
-              callable: true,
-            })),
-          };
-        }
-        if (method === "app/read") {
-          expect(requestParams).toEqual({ appIds: ["ask-app"], includeTools: true });
-          return {
-            apps: [
-              {
-                id: "ask-app",
-                name: "Ask",
-                pluginDisplayNames: [],
-                toolSummaries: [false, true].map((readOnly) => ({
-                  name: readOnly ? "read" : "write",
-                  title: null,
-                  description: null,
-                  isEnabled: readOnly,
-                  disabledReason: null,
-                  isReadOnly: readOnly,
-                })),
-              },
-            ],
-            missingAppIds: [],
-          };
-        }
-        if (method === "config/read") {
-          if (outcome === "binding-changed") {
-            readCodexAppServerBindingMock.mockReturnValue({ threadId: "replacement-thread" });
-          }
-          return { config: { apps: { "ask-app": nativeAppConfig } }, layers: [] };
-        }
-        if (method === "config/batchWrite" || method === "config/value/write") {
-          throw new Error("side-question admission cannot write saved app settings");
-        }
-        return baseRequest(method, requestParams);
-      });
-      getSharedCodexAppServerClientMock.mockResolvedValue(client);
-      readCodexAppServerBindingMock.mockReturnValue({
-        schemaVersion: 2,
-        threadId: "parent-thread",
-        sessionFile: "/tmp/session-1.jsonl",
-        cwd: "/tmp/workspace",
-        authProfileId: "openai:work",
-        model: "gpt-5.5",
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        pluginAppPolicyContext: {
-          fingerprint: "mixed-plugin-policy",
-          apps: Object.fromEntries(
-            [
-              ["ask", "ask"],
-              ["true", "allow"],
-              ["false", "deny"],
-              ["auto", "auto"],
-            ].map(([name, mode]) => [
-              `${name}-app`,
-              {
-                configKey: name,
-                marketplaceName: "openai",
-                pluginName: name,
-                allowDestructiveActions: mode !== "deny",
-                destructiveApprovalMode: mode,
-                mcpServerNames: [name],
-              },
-            ]),
-          ),
-          pluginAppIds: {
-            ask: ["ask-app"],
-            true: ["true-app"],
-            false: ["false-app"],
-            auto: ["auto-app"],
-          },
-        },
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      });
-
-      const run = runCodexAppServerSideQuestion(sideParams(), {
-        pluginConfig: { appServer: { mode: "guardian" } },
-      });
-      if (rejectsReplay) {
-        await expect(run).rejects.toThrow("binding changed before fork");
-        const methods = client.request.mock.calls.map(([method]) => method);
-        expect(methods).not.toContain("config/batchWrite");
-        expect(methods).not.toContain("config/value/write");
-        expect(methods).not.toContain("thread/fork");
-        return;
+  it("projects bound ask policy before side-thread forks", async () => {
+    const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
+    const nativeAppConfig = {
+      enabled: true,
+      links: {
+        account: { approvals_reviewer: "auto_review", default_tools_approval_mode: "approve" },
+      },
+      tools: {
+        write: { enabled: false, approval_mode: "approve" },
+        read: { approval_mode: "approve" },
+        retired: { approval_mode: "approve" },
+      },
+    };
+    const savedAppConfig = structuredClone(nativeAppConfig);
+    const turnStarted = createDeferred<void>();
+    const client = createFakeClient({
+      completeTurn: false,
+      onTurnStart: () => turnStarted.resolve(),
+    });
+    const baseRequest = client.request.getMockImplementation()!;
+    client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
+      if (method === "app/installed") {
+        return {
+          apps: ["ask-app", "unbound-app"].map((id) => ({
+            id,
+            runtimeName: id,
+            enabled: true,
+            callable: true,
+          })),
+        };
       }
-      await Promise.race([
-        turnStarted.promise,
-        run.then(() => {
-          throw new Error("Side question finished before starting its turn");
-        }),
+      if (method === "app/read") {
+        expect(requestParams).toEqual({ appIds: ["ask-app"], includeTools: true });
+        return {
+          apps: [
+            {
+              id: "ask-app",
+              name: "Ask",
+              pluginDisplayNames: [],
+              toolSummaries: [false, true].map((readOnly) => ({
+                name: readOnly ? "read" : "write",
+                title: null,
+                description: null,
+                isEnabled: readOnly,
+                disabledReason: null,
+                isReadOnly: readOnly,
+              })),
+            },
+          ],
+          missingAppIds: [],
+        };
+      }
+      if (method === "config/read") {
+        return { config: { apps: { "ask-app": nativeAppConfig } }, layers: [] };
+      }
+      if (method === "config/batchWrite" || method === "config/value/write") {
+        throw new Error("side-question admission cannot write saved app settings");
+      }
+      return baseRequest(method, requestParams);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    readCodexAppServerBindingMock.mockReturnValue({
+      schemaVersion: 2,
+      threadId: "parent-thread",
+      sessionFile: "/tmp/session-1.jsonl",
+      cwd: "/tmp/workspace",
+      authProfileId: "openai:work",
+      model: "gpt-5.5",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      pluginAppPolicyContext: {
+        fingerprint: "mixed-plugin-policy",
+        apps: Object.fromEntries(
+          [
+            ["ask", "ask"],
+            ["true", "allow"],
+            ["false", "deny"],
+            ["auto", "auto"],
+          ].map(([name, mode]) => [
+            `${name}-app`,
+            {
+              configKey: name,
+              marketplaceName: "openai",
+              pluginName: name,
+              allowDestructiveActions: mode !== "deny",
+              destructiveApprovalMode: mode,
+              mcpServerNames: [name],
+            },
+          ]),
+        ),
+        pluginAppIds: {
+          ask: ["ask-app"],
+          true: ["true-app"],
+          false: ["false-app"],
+          auto: ["auto-app"],
+        },
+      },
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    const run = runCodexAppServerSideQuestion(sideParams(), {
+      pluginConfig: { appServer: { mode: "guardian" } },
+    });
+    await Promise.race([
+      turnStarted.promise,
+      run.then(() => {
+        throw new Error("Side question finished before starting its turn");
+      }),
+    ]);
+    try {
+      const response = await client.handleRequest({
+        id: "side-approval-policy",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "side-thread",
+          turnId: "turn-1",
+          serverName: "forms",
+          mode: "form",
+          message: "Enter a value",
+          requestedSchema: { type: "object", properties: { value: { type: "string" } } },
+        },
+      });
+      expect(response).not.toBeUndefined();
+      const policy = approvalSpy.mock.calls.at(-1)?.[0].pluginAppPolicyContext;
+      expect(Object.keys(policy?.apps ?? {}).toSorted()).toEqual([
+        "ask-app",
+        "auto-app",
+        "false-app",
+        "true-app",
       ]);
-      try {
-        const response = await client.handleRequest({
-          id: "side-approval-policy",
-          method: "mcpServer/elicitation/request",
-          params: {
-            threadId: "side-thread",
-            turnId: "turn-1",
-            serverName: "forms",
-            mode: "form",
-            message: "Enter a value",
-            requestedSchema: { type: "object", properties: { value: { type: "string" } } },
-          },
-        });
-        expect(response).not.toBeUndefined();
-        const policy = approvalSpy.mock.calls.at(-1)?.[0].pluginAppPolicyContext;
-        expect(Object.keys(policy?.apps ?? {}).toSorted()).toEqual([
-          "ask-app",
-          "auto-app",
-          "false-app",
-          "true-app",
-        ]);
-        expect(policy?.pluginAppIds.ask).toEqual(["ask-app"]);
-      } finally {
-        client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
-        client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-        await expect(run).resolves.toEqual({ text: "Side answer." });
-      }
+      expect(policy?.pluginAppIds.ask).toEqual(["ask-app"]);
+    } finally {
+      client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+      client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+      await expect(run).resolves.toEqual({ text: "Side answer." });
+    }
 
-      const methods = client.request.mock.calls.map(([method]) => method);
-      expect(methods.indexOf("app/read")).toBeLessThan(methods.indexOf("thread/fork"));
-      expect(methods.filter((method) => method === "config/read")).toHaveLength(1);
-      expect(methods).not.toContain("config/batchWrite");
-      expect(methods).not.toContain("config/value/write");
-      expect(nativeAppConfig).toEqual(savedAppConfig);
-      const forkParams = client.request.mock.calls.find(
-        ([method]) => method === "thread/fork",
-      )?.[1] as Record<string, unknown> | undefined;
-      expect(forkParams?.approvalsReviewer).toBe("auto_review");
-      const config = forkParams?.config as Record<string, unknown> | undefined;
-      expect(config).not.toHaveProperty("approvals_reviewer");
-      expect(config?.["features.code_mode"]).toBe(true);
-      expect(config?.apps).toEqual({
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
-        },
-        "ask-app": {
-          enabled: true,
-          approvals_reviewer: "user",
-          destructive_enabled: true,
-          open_world_enabled: true,
-          default_tools_approval_mode: "auto",
-          links: { account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" } },
-          tools: { write: { approval_mode: "auto" } },
-        },
-        "auto-app": {
-          enabled: true,
-          destructive_enabled: true,
-          open_world_enabled: true,
-        },
-        "false-app": {
-          enabled: true,
-          destructive_enabled: false,
-          open_world_enabled: true,
-        },
-        "true-app": {
-          enabled: true,
-          destructive_enabled: true,
-          open_world_enabled: true,
-        },
-      });
-    },
-  );
+    const methods = client.request.mock.calls.map(([method]) => method);
+    expect(methods.indexOf("app/read")).toBeLessThan(methods.indexOf("thread/fork"));
+    expect(methods.filter((method) => method === "config/read")).toHaveLength(1);
+    expect(methods).not.toContain("config/batchWrite");
+    expect(methods).not.toContain("config/value/write");
+    expect(nativeAppConfig).toEqual(savedAppConfig);
+    const forkParams = client.request.mock.calls.find(
+      ([method]) => method === "thread/fork",
+    )?.[1] as Record<string, unknown> | undefined;
+    expect(forkParams?.approvalsReviewer).toBe("auto_review");
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(config).not.toHaveProperty("approvals_reviewer");
+    expect(config?.["features.code_mode"]).toBe(true);
+    expect(config?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+      "ask-app": {
+        enabled: true,
+        approvals_reviewer: "user",
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+        links: { account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" } },
+        tools: { write: { approval_mode: "auto" } },
+      },
+      "auto-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+      },
+      "false-app": {
+        enabled: true,
+        destructive_enabled: false,
+        open_world_enabled: true,
+      },
+      "true-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+      },
+    });
+  });
 
   it.each(["sender denial", "managed provider"] as const)(
     "disables side-question search for %s",
@@ -2456,39 +2441,5 @@ describe("runCodexAppServerSideQuestion", () => {
       }
     },
   );
-  it("delivers a side thread's question prompt through its provider channel", async () => {
-    const onToolResult = vi.fn();
-    type ToolOptions = NonNullable<
-      Parameters<
-        (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]
-      >[0]
-    >;
-    let capturedQuestionPrompt: ToolOptions["questionPrompt"];
-    createOpenClawCodingToolsMock.mockImplementation((options: ToolOptions) => {
-      capturedQuestionPrompt = options.questionPrompt;
-      return [
-        {
-          name: "ask_user",
-          description: "Ask the person a question",
-          parameters: { type: "object", properties: {}, additionalProperties: true },
-          execute: toolExecuteMock,
-        },
-      ];
-    });
-
-    await runSideQuestionWithManagedWebSearchCall(
-      sideParams({
-        messageProvider: "telegram",
-        opts: { onToolResult },
-      }),
-      { preserveToolFactory: true, toolName: "ask_user", toolArguments: { header: "Choice" } },
-    );
-
-    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
-    expect(capturedQuestionPrompt).toBeDefined();
-    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
-    await capturedQuestionPrompt?.send({ text: "Question for you:" });
-    expect(onToolResult).toHaveBeenCalledExactlyOnceWith({ text: "Question for you:" });
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

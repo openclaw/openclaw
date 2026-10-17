@@ -7,7 +7,7 @@ import {
   RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
 } from "./audio.ts";
-import { RealtimeTalkCameraController } from "./camera-controller.ts";
+import { RealtimeTalkCameraOwner } from "./camera-owner.ts";
 import { buildGoogleLiveUrl, GOOGLE_LIVE_SETUP_TIMEOUT_MS } from "./google-live-lifecycle.ts";
 import { GoogleLiveToolOwner, type GoogleLiveFunctionCall } from "./google-live-tools.ts";
 import {
@@ -57,6 +57,7 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
   };
 }
 
+// Owns the provider socket and media; stop closes them and callbacks reject retired sockets.
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly gemini31LiveModel: boolean;
   private readonly completeInputTranscripts: boolean;
@@ -69,10 +70,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private closed = false;
   private interruptedTurn = false;
-  private readonly camera: RealtimeTalkCameraController;
+  private readonly camera: RealtimeTalkCameraOwner;
   private active = false;
   private readonly startup = Promise.withResolvers<RealtimeTalkTransportStartResult>();
-  private startupError: Error | undefined;
   private cameraPublished = false;
   private videoFramesActive = false;
   private hasSentVideoFrame = false;
@@ -106,7 +106,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         this.videoFramesActive && this.hasSentVideoFrame && this.camera.hasUsableTrack(),
       sendResult: (callId, name, result) => this.sendToolResult(callId, name, result),
     });
-    this.camera = new RealtimeTalkCameraController({
+    this.camera = new RealtimeTalkCameraOwner({
       getDeviceId: () => this.ctx.videoDeviceId,
       setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
       isClosed: () => this.closed,
@@ -171,9 +171,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.failConnection(ws, "Realtime connection failed");
     });
     const result = await this.startup.promise;
-    if (this.startupError) {
-      throw this.startupError;
-    }
     return this.closed ? "cancelled" : result;
   }
 
@@ -262,8 +259,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     if (!this.active) {
-      this.startupError = new Error(detail);
-      this.startup.reject(this.startupError);
+      this.startup.reject(new Error(detail));
       try {
         this.stop({ emitClosed: false });
       } catch {

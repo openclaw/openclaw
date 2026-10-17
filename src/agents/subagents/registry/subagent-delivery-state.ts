@@ -23,7 +23,6 @@ export function resetRequesterSettleWakeRetry(
     attemptCount: 0,
     replayCount: undefined,
     nextAttemptAt: undefined,
-    deferralCount: undefined,
     lastError: undefined,
   };
 }

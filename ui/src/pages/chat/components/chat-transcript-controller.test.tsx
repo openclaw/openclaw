@@ -22,7 +22,7 @@ import {
   contact,
   TranscriptTestHost,
 } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -51,8 +51,8 @@ describe("chat transcript controller", () => {
     const transcript = createTestTranscript(props.paneId);
     const chatFace = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, transcript), chatFace);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
     const chatScroller = expectDefined(chatFace.querySelector(".chat-thread"), "chat scroller");
     expect(observedElements.has(chatScroller)).toBe(true);
@@ -63,14 +63,14 @@ describe("chat transcript controller", () => {
     }
     if (foreignHost) {
       render(null, chatFace);
-      transcript.hostUpdated();
+      transcript.update();
       await flushDeferredRowPrune();
     }
     const dock = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, transcript), dock);
     // A foreign Solid host mounts after the pane's last update; attachment must follow the DOM ref.
     if (!foreignHost) {
-      transcript.hostUpdated();
+      transcript.update();
     }
     await flushDeferredRowPrune();
     const dockScroller = expectDefined(dock.querySelector(".chat-thread"), "dock scroller");
@@ -81,7 +81,7 @@ describe("chat transcript controller", () => {
       expect(observedElements.has(row)).toBe(true);
     }
     expect(observedElements.has(chatScroller)).toBe(false);
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
 
   it("measures newly inserted rows after Solid connects them", async () => {
@@ -97,8 +97,8 @@ describe("chat transcript controller", () => {
     ]);
 
     render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
     for (const observer of resizeObservers) {
       for (const row of transcriptRows(container)) {
@@ -114,7 +114,10 @@ describe("chat transcript controller", () => {
     stubAnimationFrames();
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
     const host = new TranscriptTestHost();
-    const transcript = new ChatTranscriptController(host, () => "native-measured-tail");
+    const transcript = (host.transcript = createChatTranscript(
+      () => host.requestRender(),
+      () => "native-measured-tail",
+    ));
     const rows = numberedContentRows(6);
     const scroller = document.createElement("div");
     scroller.className = "chat-thread";
@@ -313,7 +316,7 @@ describe("chat transcript controller", () => {
         expect(session.activeMessageId(["retained"])).toBe("retained");
         expect(session.activeMessageId(["older"])).toBe("older");
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         if (idleBeforeRelease) {
           vi.useRealTimers();
         }
@@ -396,9 +399,9 @@ describe("chat transcript controller", () => {
       scrollHeight: { configurable: true, value: 600 },
     });
 
-    transcript.hostConnected();
+    transcript.start();
     transcript.scrollToEnd({ source: "auto" });
-    transcript.hostUpdated();
+    transcript.update();
     await Promise.resolve();
     flushFrames();
     render(renderChatThread(props, transcript), container);
@@ -428,10 +431,10 @@ describe("chat transcript controller", () => {
         ),
         container,
       );
-      transcript.hostUpdated();
+      transcript.update();
       await flushDeferredRowPrune();
     };
-    transcript.hostConnected();
+    transcript.start();
     await draw(false, first);
     const button = expectDefined(
       container.querySelector<HTMLButtonElement>(".chat-history-boundary__action"),
@@ -450,7 +453,7 @@ describe("chat transcript controller", () => {
     button.click();
     expect(next).toHaveBeenCalledOnce();
     expect(first).toHaveBeenCalledOnce();
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
 
   it("renders the history tail immediately after an empty disconnected shell", () => {
@@ -463,8 +466,8 @@ describe("chat transcript controller", () => {
       clientHeight: { configurable: true, value: 600 },
       scrollHeight: { configurable: true, value: 600 },
     });
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     flushFrames();
 
     const messages = Array.from({ length: 40 }, (_, index) => ({
@@ -476,7 +479,7 @@ describe("chat transcript controller", () => {
 
     expect(container.textContent).toContain("Cached history 39");
     expect(container.textContent).not.toContain("Cached history 0");
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
 
   it.each([true, false])("settles a non-overflowing restore (initially loading=%s)", (loading) => {
@@ -491,7 +494,7 @@ describe("chat transcript controller", () => {
       : threadProps("pane-short-scroll", "agent:main:session-a");
     const renderWindow = (isLoading: boolean) => {
       render(renderChatThread({ ...props, loading: isLoading }, transcript), container);
-      transcript.hostUpdated();
+      transcript.update();
       flush();
     };
     renderWindow(loading);
@@ -501,20 +504,20 @@ describe("chat transcript controller", () => {
         value: 600,
       });
     }
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     const onSettled = vi.fn();
     transcript.scrollToOffset(420, onSettled);
     renderWindow(loading);
     for (let update = 0; update < (loading ? 1 : 100); update++) {
-      transcript.hostUpdated();
+      transcript.update();
     }
     expect(onSettled).not.toHaveBeenCalled();
     if (loading) {
       renderWindow(false);
     } else {
       for (let frame = 0; frame <= 60; frame++) {
-        transcript.hostUpdated();
+        transcript.update();
         flushFrames();
       }
     }
@@ -528,14 +531,18 @@ describe("chat transcript controller", () => {
     const host = new TranscriptTestHost();
     const container = host.transcriptRoot;
     const policy = makeChatHost({ chatScrollElement: () => container });
-    policy.renderLifecycle.invalidate = () => host.requestUpdate();
+    policy.renderLifecycle.invalidate = () => host.requestRender();
     const onReaderScroll = vi.fn((towardEnd?: boolean) =>
       handleChatScrollTakeover(policy, towardEnd),
     );
-    const transcript = new ChatTranscriptController(host, () => "restore-retry", {
-      canFollowEnd: () => !policy.chatFollowLocked,
-      onReaderScroll,
-    });
+    const transcript = (host.transcript = createChatTranscript(
+      () => host.requestRender(),
+      () => "restore-retry",
+      {
+        canFollowEnd: () => !policy.chatFollowLocked,
+        onReaderScroll,
+      },
+    ));
     const rows = numberedContentRows(40);
     let scrollHeight = 600;
     Object.defineProperties(container, {
@@ -635,7 +642,7 @@ describe("chat transcript controller", () => {
         transcript.scrollToOffset(420, range === "measurable" ? undefined : onSettled);
         if (range === "growing") {
           for (let update = 0; update < 20; update++) {
-            transcript.hostUpdated();
+            transcript.update();
           }
           expect(onSettled).not.toHaveBeenCalled();
           frames(4);
@@ -674,7 +681,7 @@ describe("chat transcript controller", () => {
           }
         }
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -764,7 +771,7 @@ describe("chat transcript controller", () => {
           expect(container.scrollTop).toBe(0);
         }
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -773,16 +780,9 @@ describe("chat transcript controller", () => {
     "retires an end index without losing newer native movement (%s px)",
     async (nativeGrowth) => {
       const flushFrames = stubAnimationFrames();
-      const transcript = new ChatTranscriptController(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: Promise.resolve(true),
-        },
-        () => `retired-end-index-${nativeGrowth}`,
-        { canFollowEnd: () => false },
-      );
+      const transcript = createChatTranscript(vi.fn(), () => `retired-end-index-${nativeGrowth}`, {
+        canFollowEnd: () => false,
+      });
       const content = numberedContentRows(12);
       const typing: TestContentRow = {
         kind: "content",
@@ -842,7 +842,7 @@ describe("chat transcript controller", () => {
           before,
         );
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         vi.useRealTimers();
       }
     },
@@ -862,7 +862,7 @@ describe("chat transcript controller", () => {
     try {
       container.scrollTop = 1000;
       container.dispatchEvent(new Event("scroll"));
-      transcript.hostUpdated();
+      transcript.update();
       transcript.scrollToEnd({ behavior: "smooth" });
       await Promise.resolve();
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 4200, behavior: "smooth" });
@@ -892,7 +892,7 @@ describe("chat transcript controller", () => {
       expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 4300, behavior: "instant" });
       expect(transcript.isProgrammaticScroll).toBe(false);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       vi.useRealTimers();
     }
   });
@@ -905,20 +905,11 @@ describe("chat transcript controller", () => {
       const onViewportResize = vi.fn(() =>
         scheduleCommittedChatScroll(policy, false, false, { source: "resize" }),
       );
-      const transcript = new ChatTranscriptController(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: Promise.resolve(true),
-        },
-        () => `height-resize-${locked}`,
-        {
-          onViewportResize,
-          canFollowEnd: () => !policy.chatFollowLocked,
-          onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
-        },
-      );
+      const transcript = createChatTranscript(vi.fn(), () => `height-resize-${locked}`, {
+        onViewportResize,
+        canFollowEnd: () => !policy.chatFollowLocked,
+        onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+      });
       const rows = numberedContentRows(12);
       const { container } = await mountTestTranscript(`height-resize-${locked}`, rows, transcript);
       try {
@@ -966,7 +957,7 @@ describe("chat transcript controller", () => {
         expect(onViewportResize).toHaveBeenCalledTimes(2);
         expect(policy.chatFollowLocked).toBe(locked);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -1015,7 +1006,7 @@ describe("chat transcript controller", () => {
       expect(transcriptSize(container)).toBe(total + 72);
       expect(container.scrollTop).toBe(readerOffset);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -1023,13 +1014,8 @@ describe("chat transcript controller", () => {
     "keeps disclosure anchoring after a plain owner geometry commit unless interrupted=%s",
     async (interrupt) => {
       const geometryEventTarget = document.body.appendChild(document.createElement("div"));
-      const host = {
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: Promise.resolve(true),
-      };
-      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`, {
+      const notify = vi.fn();
+      const transcript = createChatTranscript(notify, () => `disclosure-${interrupt}`, {
         geometryEventTarget,
       });
       const rows: TestContentRow[] = [
@@ -1049,7 +1035,7 @@ describe("chat transcript controller", () => {
         container.scrollTop = 300;
         container.querySelector("button")!.click();
         rowTop = 160;
-        transcript.hostUpdated();
+        transcript.update();
         expect(container.scrollTop).toBe(300);
         if (interrupt) {
           container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
@@ -1065,7 +1051,7 @@ describe("chat transcript controller", () => {
         );
         expect(container.scrollTop).toBe(interrupt ? 200 : 360);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -1097,7 +1083,7 @@ describe("chat transcript controller", () => {
       }
       expect(container.scrollTop).toBe(420);
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 });

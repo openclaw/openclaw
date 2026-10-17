@@ -4,10 +4,11 @@ import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
 import { copyTreeCloseOnExec } from "../../test/helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { pathExists } from "../utils.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
@@ -140,11 +141,12 @@ export async function resolveCandidateNodeRuntimeForTest(): Promise<{
   if (!process.versions.bun) {
     return { path: process.execPath, version: process.versions.node };
   }
-  const systemNode = await resolveSystemNodeInfo({});
-  if (systemNode?.status !== "supported" || !systemNode.version) {
-    throw new Error("This candidate runtime test requires a supported system Node");
+  const nodePath = resolveTestNodeExecPath();
+  const node = await resolveNodeRuntimeInfo(nodePath);
+  if (node.status !== "supported" || !node.version) {
+    throw new Error("This candidate runtime test requires a supported Node");
   }
-  return { path: systemNode.path, version: systemNode.version };
+  return { path: nodePath, version: node.version };
 }
 
 export async function expectCancelledGitCandidateCleanup({

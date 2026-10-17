@@ -7,7 +7,11 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { isRetryableGhJsonErrorMessage } from "./ci-run-timings.mjs";
-import { refitTestTimings, type CiTimingRun } from "./lib/ci-test-timings-refit.mts";
+import {
+  isCiTimingRuntimeTrial,
+  refitTestTimings,
+  type CiTimingRun,
+} from "./lib/ci-test-timings-refit.mts";
 import { ciTestTimingsSchema } from "./lib/ci-test-timings-schema.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
@@ -220,10 +224,21 @@ async function main() {
       const attemptLogs: CiTimingRun["logs"] = [];
       for (const job of timingJobs) {
         console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
+        const text = await readGh([
+          "api",
+          `repos/${repo}/actions/jobs/${job.id}/logs`,
+          ...logFlags,
+        ]);
+        if (isCiTimingRuntimeTrial(text)) {
+          console.error(
+            `Skipped ${source} run ${run.id}: runtime trial is excluded from timing learning.`,
+          );
+          return undefined;
+        }
         attemptLogs.push({
           kind: job.kind,
           labels: job.labels,
-          text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
+          text,
         });
       }
       const { contributingRunIds } = refitTestTimings([
@@ -237,11 +252,17 @@ async function main() {
       );
       logs.push(...attemptLogs);
     }
+    // Both rename endpoints changed; similarity detection would fetch historical
+    // blobs from the filtered checkout and omit the old path from exclusion.
     const changedUiFiles = logs.some((log) => log.kind === "uiE2e")
-      ? execFileSync("git", ["diff", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        })
+      ? execFileSync(
+          "git",
+          ["diff", "--no-renames", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        )
           .split("\0")
           .filter((file) => /\.e2e\.test\.[cm]?[jt]sx?$/u.test(file))
       : [];
@@ -321,6 +342,9 @@ async function main() {
           continue;
         }
         const timingRun = await readRun(run, source);
+        if (timingRun === undefined) {
+          continue;
+        }
         if (timingRun === null) {
           console.error(
             `Skipped ${source} run ${run.id}: jobs completed after frozen UTC cutoff ${upper}.`,
@@ -371,6 +395,9 @@ async function main() {
         throw new Error(`Requested tooling run ${id} returned run ${run.id}`);
       }
       const timingRun = await readRun(run, "tooling");
+      if (timingRun === undefined) {
+        throw new Error(`Requested tooling run ${id} is a runtime trial. No timing file written.`);
+      }
       if (timingRun === null) {
         throw new Error(
           `Requested tooling run ${id} has jobs completed after frozen UTC cutoff ${upper}.`,

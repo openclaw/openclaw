@@ -28,7 +28,11 @@ import {
 } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
-import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
+import {
+  isClaudeCliProvider,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
+} from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -457,10 +461,6 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
-}
-
-export function isClaudeCliProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() === "claude-cli";
 }
 
 /** Restores completion tools only on runtimes that enforce the captured requester cap. */

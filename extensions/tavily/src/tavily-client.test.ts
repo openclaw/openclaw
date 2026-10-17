@@ -27,8 +27,8 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   writeCache,
 }));
 
-vi.mock("./config.js", () => ({
-  DEFAULT_TAVILY_BASE_URL: "https://api.tavily.com",
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
   TAVILY_API_KEY_CONFIG_PATH: "plugins.entries.tavily.config.webSearch.apiKey",
   resolveTavilyApiKey: () => "test-key",
   resolveTavilyBaseUrl,
@@ -77,16 +77,37 @@ describe("tavily client", () => {
     },
   );
 
-  it("falls back to the default host for invalid base urls", async () => {
-    resolveTavilyBaseUrl.mockReturnValueOnce("not a url");
-    await runTavilySearch({ query: "invalid base URL" });
-    resolveTavilyBaseUrl.mockReturnValueOnce("");
-    await runTavilyExtract({ urls: ["https://example.com"] });
+  it.each(["search", "extract"] as const)(
+    "rejects an invalid %s proxy URL before sending credentials or queries to another host",
+    async (kind) => {
+      resolveTavilyBaseUrl.mockReturnValueOnce("not a url");
+      const operation =
+        kind === "search"
+          ? runTavilySearch({ query: "invalid proxy" })
+          : runTavilyExtract({ urls: ["https://example.com"] });
 
-    expect(postTrustedWebToolsJson).toHaveBeenCalledTimes(2);
-    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe("https://api.tavily.com/search");
-    expect(postTrustedWebToolsJson.mock.calls[1]?.[0]?.url).toBe("https://api.tavily.com/extract");
-  });
+      await expect(operation).rejects.toBeInstanceOf(TypeError);
+      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+      expect(writeCache).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["search", "extract"] as const)(
+    "appends the %s endpoint to a valid reverse-proxy path",
+    async (kind) => {
+      resolveTavilyBaseUrl.mockReturnValueOnce("https://proxy.example/tavily/");
+      if (kind === "search") {
+        await runTavilySearch({ query: "proxy search" });
+      } else {
+        await runTavilyExtract({ urls: ["https://example.com"] });
+      }
+
+      expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+      expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe(
+        `https://proxy.example/tavily/${kind}`,
+      );
+    },
+  );
 
   it("normalizes hostile search URLs and publication prose at the provider owner", async () => {
     respondWith({

@@ -7,6 +7,7 @@ import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { setExpansionState } from "../chat-thread.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -107,7 +108,7 @@ it.each(["answer", "reasoning"] as const)(
         expect(reads, stream).toBe(0);
       }
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   },
 );
@@ -134,13 +135,13 @@ function drawThread(props: ReturnType<typeof threadProps>) {
     draw: () => {
       render(renderChatThread(props, transcript), container);
       flush();
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       flush();
     },
     dispose: () => {
       render(null, container);
-      transcript.hostDisconnected();
+      transcript.dispose();
     },
   };
 }
@@ -177,6 +178,10 @@ it("renders browser previews in their own row outside the work summary", () => {
     ],
   );
   props.showToolCalls = true;
+  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
   const view = drawThread(props);
   try {
     view.draw();
@@ -362,7 +367,7 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     props.messages = [replacement, hit];
     expect(project()).toEqual([replacement, hit, liveMessage()]);
   } finally {
-    transcript.hostDisconnected();
+    transcript.dispose();
   }
 });
 

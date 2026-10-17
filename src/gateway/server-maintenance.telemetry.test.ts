@@ -278,7 +278,7 @@ describe("gateway telemetry maintenance", () => {
         expect(refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
         expect(broadcast).not.toHaveBeenCalled();
         expect(runWorktreeGc).not.toHaveBeenCalled();
-        expect(runDeliveryQueueMediaGc).toHaveBeenCalledOnce();
+        expect(runDeliveryQueueMediaGc).not.toHaveBeenCalled();
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
         expect(state.dedupe.has("retained-during-drain")).toBe(true);
         expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);

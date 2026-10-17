@@ -81,6 +81,7 @@ function recordDiagnosticEvent(
     case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "gateway.event_loop.sample":
+    case "gateway.main_thread.stall":
       recordOperationTimingEvent(store, evt, metadata);
       return;
     case "model.usage":

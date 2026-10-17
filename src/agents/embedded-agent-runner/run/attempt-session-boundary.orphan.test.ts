@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
+  appendTranscriptEvent,
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
@@ -58,6 +59,7 @@ async function withPersistedOrphanBoundary(
     idempotencyKey?: string;
     excludeFromContext?: boolean;
     selectedOwner?: boolean;
+    recoveryNotice?: "tail" | "before-metadata";
   },
   run: (fixture: {
     input: Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
@@ -90,9 +92,27 @@ async function withPersistedOrphanBoundary(
         ? { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } }
         : {}),
     });
+    const appendRecoveryNotice = () =>
+      appendTranscriptEvent(target, {
+        type: "custom_message",
+        id: "recovery-notice",
+        parentId: seed.getAppendParentId(),
+        timestamp: new Date(2).toISOString(),
+        customType: "session-send-recovery-blocked",
+        content: "Saved input could not be delivered because its endpoint was replaced.",
+        display: true,
+        excludeFromContext: true,
+      });
+    if (options.recoveryNotice === "before-metadata") {
+      await appendRecoveryNotice();
+      await seed.reloadPersistedTranscriptAsync();
+    }
     if (options.metadata) {
       await seed.appendThinkingLevelChange("low");
       await seed.appendModelChange("openai", "gpt-5.5");
+    }
+    if (options.recoveryNotice === "tail") {
+      await appendRecoveryNotice();
     }
     const manager = guardSessionManager(
       SessionManager.openBounded(target, {
@@ -166,6 +186,52 @@ async function withPersistedOrphanBoundary(
 }
 
 describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
+  it.each(["tail", "before-metadata", "before-later-orphan"] as const)(
+    "keeps an excluded recovery notice visible through later turns: %s",
+    async (recoveryNotice) => {
+      await withPersistedOrphanBoundary(
+        {
+          parent: true,
+          metadata: true,
+          recoveryNotice: recoveryNotice === "before-later-orphan" ? "tail" : recoveryNotice,
+        },
+        async ({ input, manager, orphanId, target }) => {
+          const previousInputs = ["orphan wake"];
+          if (recoveryNotice === "before-later-orphan") {
+            previousInputs.push("later orphan wake");
+            await manager.appendMessageAsync({
+              role: "user",
+              content: "later orphan wake",
+              timestamp: 3,
+            });
+            input.activeSession.agent.state.messages = manager.buildSessionContext().messages;
+          }
+          const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+          expect(boundary.orphanRepair).toBeUndefined();
+          expect(input.activeSession.agent.state.messages).toMatchObject(
+            previousInputs.map((content) => ({ role: "user", content })),
+          );
+          await manager.appendMessageAsync({ role: "user", content: "new request", timestamp: 3 });
+          await manager.appendMessageAsync(
+            makeAssistantMessageFixture({
+              content: [{ type: "text", text: "new reply" }],
+              timestamp: 4,
+            }),
+          );
+          const reopened = await SessionManager.openAsync(target);
+          expect(reopened.getBranch().map((entry) => entry.id)).toEqual(
+            expect.arrayContaining([orphanId, "recovery-notice"]),
+          );
+          expect(reopened.buildSessionContext().messages).toMatchObject([
+            ...previousInputs.map((content) => ({ role: "user", content })),
+            { role: "user", content: "new request" },
+            { role: "assistant", content: [{ type: "text", text: "new reply" }] },
+          ]);
+        },
+      );
+    },
+  );
+
   it.each(["orphan", "current", "excluded"] as const)(
     "preserves speech finalized while orphan repair waits for write admission: %s",
     async (kind) => {

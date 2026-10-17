@@ -30,7 +30,11 @@ import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
+import {
+  assistantMessage,
+  createCodexTestModel,
+  createCodexTestToolTerminalObserver,
+} from "./test-support.js";
 
 export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 
@@ -72,26 +76,6 @@ export function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-}
-
-function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
 }
 
 export async function createParams(): Promise<EmbeddedRunAttemptParams> {

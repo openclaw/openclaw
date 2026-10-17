@@ -6,14 +6,14 @@
 // same transaction, anything ambiguous (leaf controls, branch switches)
 // marks the session dirty for its write or maintenance owner to rebuild from
 // the canonical visible-path resolver.
-import type { DatabaseSync } from "node:sqlite";
-import type { Expression } from "kysely";
+import { sql, type Expression } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -74,13 +74,13 @@ export type SessionTranscriptIndexProjection = {
 export const SYNC_REBUILD_MAX_ROWS = 4_000;
 export const SYNC_REBUILD_MAX_BYTES = 4 * 1024 * 1024;
 
-function getIndexKysely(db: DatabaseSync) {
+function getIndexKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptIndexDatabase>(db);
 }
 
 /** Size the old projection and incoming rows before their owning transaction mutates either. */
 export function shouldRebuildSessionTranscriptIndexSynchronously(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   events: readonly unknown[] = [],
 ): boolean {
@@ -121,7 +121,7 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
 }
 
 function selectSessionTranscriptProjectionState(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string | Expression<string>,
 ) {
   return getIndexKysely(db)
@@ -149,7 +149,7 @@ function selectSessionTranscriptProjectionState(
 }
 
 function readSessionTranscriptProjectionState(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): (SessionTranscriptProjectionState & { hasUnclassifiedEvents: boolean }) | undefined {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
@@ -175,10 +175,12 @@ function readSessionTranscriptProjectionState(
 
 /** The projection owner supplies the same readiness predicate to compound readers. */
 export function selectSessionTranscriptIndexStatus(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string | Expression<string>,
 ) {
   const kysely = getIndexKysely(db);
+  const postgres = isPostgresSqlConnection(db);
+  const distinct = postgres ? "is distinct from" : "is not";
   return kysely
     .selectFrom(
       kysely
@@ -196,15 +198,15 @@ export function selectSessionTranscriptIndexStatus(
     .select((eb) =>
       eb
         .or([
-          eb("state.needs_rebuild", "is not", 0),
-          eb("state.indexed_seq", "is not", eb.ref("latest.seq")),
-          eb("state.has_unclassified", "=", 1),
+          eb("state.needs_rebuild", distinct, 0),
+          eb("state.indexed_seq", distinct, eb.ref("latest.seq")),
+          eb("state.has_unclassified", "=", postgres ? sql.lit(true) : 1),
         ])
         .as("needs_reconcile"),
     );
 }
 
-function readSessionTranscriptIndexStatus(db: DatabaseSync, sessionId: string) {
+function readSessionTranscriptIndexStatus(db: EngineConnection, sessionId: string) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     selectSessionTranscriptIndexStatus(db, sessionId),
@@ -212,11 +214,14 @@ function readSessionTranscriptIndexStatus(db: DatabaseSync, sessionId: string) {
   return row ? { needsReconcile: Boolean(row.needs_reconcile) } : undefined;
 }
 
-export function sessionTranscriptIndexNeedsReconcile(db: DatabaseSync, sessionId: string): boolean {
+export function sessionTranscriptIndexNeedsReconcile(
+  db: EngineConnection,
+  sessionId: string,
+): boolean {
   return readSessionTranscriptIndexStatus(db, sessionId)?.needsReconcile ?? false;
 }
 
-function createWatermarkWriter(db: DatabaseSync, sessionId: string, updateExisting = false) {
+function createWatermarkWriter(db: EngineConnection, sessionId: string, updateExisting = false) {
   const write = prepareSqliteQuerySync<SessionTranscriptProjectionState & { updatedAt: number }>(
     db,
     (parameter) => {
@@ -244,7 +249,7 @@ function createWatermarkWriter(db: DatabaseSync, sessionId: string, updateExisti
     withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(row));
 }
 
-function createActiveEventInserter(db: DatabaseSync, sessionId: string) {
+function createActiveEventInserter(db: EngineConnection, sessionId: string) {
   const write = prepareSqliteQuerySync<PreparedSessionTranscriptProjection["activeRows"][number]>(
     db,
     (parameter) =>
@@ -262,7 +267,7 @@ function createActiveEventInserter(db: DatabaseSync, sessionId: string) {
     withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(row));
 }
 
-function deleteActiveEventRows(db: DatabaseSync, sessionId: string): void {
+function deleteActiveEventRows(db: EngineConnection, sessionId: string): void {
   withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
     executeSqliteQuerySync(
       db,
@@ -281,9 +286,9 @@ function deleteActiveEventRows(db: DatabaseSync, sessionId: string): void {
  * Retain only within a synchronous batch whose source cannot mutate this session.
  */
 export function createTranscriptIndexAppenderInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
-): (params: TranscriptIndexAppend) => boolean {
+): { append: (params: TranscriptIndexAppend) => boolean; flush: () => void } {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   const initial = readSessionTranscriptProjectionState(db, sessionId);
   let watermark: SessionTranscriptProjectionState | undefined = initial;
@@ -291,7 +296,20 @@ export function createTranscriptIndexAppenderInTransaction(
   let insertActiveEvent: ReturnType<typeof createActiveEventInserter> | undefined;
   let insertFts: ReturnType<typeof createSessionTranscriptFtsInserter> | undefined;
   let updateWatermark: ReturnType<typeof createWatermarkWriter> | undefined;
-  return (params) => {
+  let persisted = initial !== undefined;
+  let pendingUpdatedAt: number | undefined;
+  const markDirty = (current: SessionTranscriptProjectionState) => {
+    watermark = { ...current, needsRebuild: true };
+    pendingUpdatedAt = Date.now();
+    if (actor) {
+      actor.transcript.contextStats = undefined;
+      actor.transcript.projection = {
+        ...watermark,
+        hasUnclassifiedEvents: hasUnclassifiedEvents ?? false,
+      };
+    }
+  };
+  const appendEvent = (params: TranscriptIndexAppend) => {
     // Existing unindexed rows need a rebuild; only sequence zero initializes a projection.
     if ((!watermark && params.seq !== 0) || watermark?.needsRebuild) {
       return true;
@@ -302,7 +320,7 @@ export function createTranscriptIndexAppenderInTransaction(
     ) {
       // Out-of-band or older writers left incomplete projection facts. Once checked,
       // this batch's own forward rows all carry an explicit context classification.
-      watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
+      markDirty(watermark);
       return true;
     }
     const append = prepareSessionTranscriptProjectionAppend({
@@ -318,7 +336,7 @@ export function createTranscriptIndexAppenderInTransaction(
       // Out-of-band writes, branch changes, and legacy/canonical transitions
       // need the full visible-tree resolver rather than append-time inference.
       if (watermark) {
-        watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
+        markDirty(watermark);
       }
       return true;
     }
@@ -345,22 +363,32 @@ export function createTranscriptIndexAppenderInTransaction(
       needsRebuild: false,
       updatedAt: params.createdAt,
     };
-    // Initialization still upserts; this synchronous batch owns all subsequent updates.
-    const write = watermark
-      ? (updateWatermark ??= createWatermarkWriter(db, sessionId, true))
-      : createWatermarkWriter(db, sessionId);
-    write(nextWatermark);
     watermark = nextWatermark;
+    pendingUpdatedAt = params.createdAt;
     if (actor) {
       actor.transcript.projection = { ...nextWatermark, hasUnclassifiedEvents: false };
     }
     return false;
   };
+  return {
+    append: appendEvent,
+    flush() {
+      if (pendingUpdatedAt === undefined || !watermark) {
+        return;
+      }
+      const write = persisted
+        ? (updateWatermark ??= createWatermarkWriter(db, sessionId, true))
+        : createWatermarkWriter(db, sessionId);
+      write({ ...watermark, updatedAt: pendingUpdatedAt });
+      persisted = true;
+      pendingUpdatedAt = undefined;
+    },
+  };
 }
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
 export function markSessionTranscriptIndexDirtyInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): SessionTranscriptProjectionState {
   const now = Date.now();
@@ -375,6 +403,7 @@ export function markSessionTranscriptIndexDirtyInTransaction(
   createWatermarkWriter(db, sessionId)({ ...dirty, updatedAt: now });
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   if (actor) {
+    actor.transcript.contextStats = undefined;
     actor.transcript.projection = {
       ...dirty,
       hasUnclassifiedEvents: actor.transcript.projection?.hasUnclassifiedEvents ?? false,
@@ -385,7 +414,7 @@ export function markSessionTranscriptIndexDirtyInTransaction(
 
 /** In-transaction delete hook: drops index rows alongside transcript rows. */
 export function deleteSessionTranscriptIndexInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): void {
   deleteSessionTranscriptFtsRowsInTransaction(db, sessionId);
@@ -402,7 +431,7 @@ export function deleteSessionTranscriptIndexInTransaction(
 
 /** Replaces only the derived rows affected by an exact raw transcript suffix mutation. */
 export function replaceSessionTranscriptIndexSuffixInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   params: {
     unchangedBeforeSeq: number;
@@ -501,7 +530,7 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
  * rows, indexes the resolved active branch, and resets the watermark to the
  * same append parent the accessor's next append will resolve.
  */
-function rebuildSessionTranscriptIndexInTransaction(db: DatabaseSync, sessionId: string): void {
+function rebuildSessionTranscriptIndexInTransaction(db: EngineConnection, sessionId: string): void {
   deleteSessionTranscriptFtsRowsInTransaction(db, sessionId);
   deleteActiveEventRows(db, sessionId);
   const projection = visitSessionTranscriptProjection(db, sessionId, {
@@ -524,7 +553,7 @@ function rebuildSessionTranscriptIndexInTransaction(db: DatabaseSync, sessionId:
 
 /** Rebuilds one lagging projection under its current write transaction. */
 export function reconcileSessionTranscriptIndexInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): boolean {
   const indexStatus = readSessionTranscriptIndexStatus(db, sessionId);
@@ -541,7 +570,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
 
 // Native synchronous SDK callbacks and operator maintenance retain their owning connection.
 // Runtime disk reconciliation consumes the publication worker's maintained facts.
-function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
+function selectSessionsNeedingTranscriptIndexReconcile(db: EngineConnection) {
   const kysely = getIndexKysely(db);
   return (
     kysely
@@ -602,8 +631,12 @@ function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
  * that gained rows without index state (doctor imports), and watermarks
  * behind the newest row. Ordered for deterministic reconcile passes.
  */
-export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): string[] {
-  const rows = executeSqliteQuerySync(db, selectSessionsNeedingTranscriptIndexReconcile(db)).rows;
+export function listSessionsNeedingTranscriptIndexReconcile(
+  db: EngineConnection,
+  limit?: number,
+): string[] {
+  const query = selectSessionsNeedingTranscriptIndexReconcile(db);
+  const rows = executeSqliteQuerySync(db, limit === undefined ? query : query.limit(limit)).rows;
   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }
 
@@ -614,7 +647,7 @@ const transcriptIndexTables = [
 ] as const;
 
 function selectOrphanedTranscriptOwners(
-  db: DatabaseSync,
+  db: EngineConnection,
   table: (typeof transcriptIndexTables)[number],
 ) {
   const kysely = getIndexKysely(db);
@@ -629,7 +662,7 @@ function selectOrphanedTranscriptOwners(
   );
 }
 
-export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
+export function deleteOrphanedTranscriptIndexRowsInTransaction(db: EngineConnection): void {
   const kysely = getIndexKysely(db);
   // The subquery discovers owners in SQLite; this maintenance write is database-wide.
   for (const table of transcriptIndexTables) {

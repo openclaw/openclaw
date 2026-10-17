@@ -4,7 +4,7 @@ import "../../styles.css";
 import "../../styles/chat.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
-import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 
 let fixture: HTMLElement | undefined;
 let container: HTMLElement | undefined;
@@ -24,13 +24,8 @@ it("reconciles persisted voice while preserving the live tail", async () => {
   container = createComposerContainer();
   container.append(fixture);
   document.body.append(container);
-  const transcript = new ChatTranscriptController(
-    {
-      addController() {},
-      removeController() {},
-      requestUpdate() {},
-      updateComplete: Promise.resolve(true),
-    },
+  const transcript = createChatTranscript(
+    () => undefined,
     () => "talk-reconciliation",
     { canFollowEnd: () => true },
   );

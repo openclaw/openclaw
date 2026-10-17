@@ -20,7 +20,7 @@ import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display
 import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
-import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
+import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-candidates.js";
 
 /** Dispatch only inside the history worker's admitted database lifetime. */
 export async function readSessionHistoryRequest(

@@ -62,6 +62,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
@@ -90,6 +91,8 @@ export async function resolveGatewayScopedTools(
     /** Workspace from the invocation owner's exact session read. */
     preparedSessionWorkspaceDir?: string;
     messageActionTurnCapability?: string;
+    /** Host-minted audience from a run-bound loopback grant; ignored on other surfaces. */
+    memoryAudience?: MemoryAudience;
     authProfileStore?: AuthProfileStore;
     agentDir?: string;
     onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
@@ -380,6 +383,7 @@ export async function resolveGatewayScopedTools(
       : undefined,
     assertInputCommitAllowed: params.assertInputCommitAllowed,
     assertInvocationCurrent,
+    memoryAudience: surface === "loopback" ? params.memoryAudience : undefined,
     ...(swarmCollectorContext
       ? {
           swarmCollector: true,

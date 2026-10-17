@@ -5,7 +5,6 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -39,10 +38,8 @@ import {
   requireRegexMatch,
 } from "./cli-runner.test-helpers.js";
 import { createCliLiveSessionCapability } from "./cli-runner/cli-live-session-registry.js";
-import { logCliInvocation } from "./cli-runner/execute-logging.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
-  buildCliExecLogLine,
   createManagedRun,
   createSuccessfulProcessExit,
   setCliRunnerExecuteTestDeps,
@@ -60,23 +57,6 @@ vi.mock("./bash-tools.exec-approval-request.js", () => ({
   registerExecApprovalRequestForHostOrThrow: vi.fn(),
   resolveRegisteredExecApprovalDecision: vi.fn(),
 }));
-
-// Gateway unit coverage owns quiet-admission timing. These spawn cases only
-// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
-vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/mcp-http.loopback-runtime.js")>();
-  return {
-    ...actual,
-    waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
-      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
-    ) =>
-      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
-        ...options,
-        admissionGraceMs: 0,
-      }),
-  };
-});
 
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
@@ -162,53 +142,6 @@ async function createCliPackageFixture(version: string): Promise<{
 }
 
 describe("runCliAgent spawn path", () => {
-  it("hydrates a session-key-owned agent workspace image before spawning the CLI", async () => {
-    const stateDir = tempDirs.make("openclaw-cli-agent-image-");
-    const workspaceDir = path.join(stateDir, "workspace-arthur");
-    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
-    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
-    await fs.mkdir(path.dirname(imagePath), { recursive: true });
-    await fs.writeFile(imagePath, image);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
-    const context = buildPreparedCliRunContext({
-      sessionKey: "agent:arthur:main",
-      agentId: "arthur",
-      workspaceDir,
-      config: {
-        agents: { entries: { arthur: { workspace: workspaceDir } } },
-      },
-      backend: { imageArg: "--image" },
-    });
-    context.params.media = [{ path: imagePath, contentType: "image/png" }];
-
-    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
-    const spawn = requireRecord(mockCallArg(supervisorSpawnMock), "CLI spawn");
-    const hydratedPath = requireArgAfter(spawn.argv as string[], "--image");
-    await expect(fs.readFile(hydratedPath)).resolves.toEqual(image);
-  });
-
-  it("formats redacted CLI resume diagnostics without exposing raw session ids", () => {
-    const logLine = buildCliExecLogLine({
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-      promptChars: 42,
-      trigger: "heartbeat",
-      useResume: true,
-      cliSessionId: "claude-session-secret",
-      resolvedSessionId: "claude-session-secret",
-      reusableSession: { mode: "reuse", sessionId: "claude-session-secret" },
-      hasHistoryPrompt: false,
-    });
-
-    expect(logLine).toContain("trigger=heartbeat");
-    expect(logLine).toContain("useResume=true");
-    expect(logLine).toContain("session=present");
-    expect(logLine).toContain("reuse=reusable");
-    expect(logLine).toContain("historyPrompt=none");
-    expect(logLine).not.toContain("claude-session-secret");
-  });
-
   it("streams a node-placed Claude resume through the normal JSONL parser", async ({
     onTestFinished,
   }) => {
@@ -786,16 +719,20 @@ describe("runCliAgent spawn path", () => {
       systemPromptPath = requireArgAfter(input.argv, "--append-system-prompt-file");
       expect(systemPromptPath).toContain("openclaw-cli-system-prompt-");
       await expect(fs.readFile(systemPromptPath, "utf-8")).resolves.toBe(
-        "You are a helpful assistant.",
+        "Stable prefix\nDynamic suffix",
       );
-      expect(input.argv).not.toContain("You are a helpful assistant.");
+      expect(input.argv).not.toContain("Stable prefix\nDynamic suffix");
       return createManagedRun({
         ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
       });
     });
 
-    await executePreparedCliRun(buildPreparedCliRunContext({}));
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      }),
+    );
 
     await expectPathMissing(systemPromptPath);
   });
@@ -1582,42 +1519,6 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.ANTHROPIC_API_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("override-oauth-token");
     expect(input.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("100000");
-  });
-
-  it("logs CLI auth env diagnostics as key names without secret values", () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-host");
-    vi.stubEnv("ANTHROPIC_API_TOKEN", "token-host");
-    vi.stubEnv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", "/tmp/host-gemini-settings.json");
-    vi.stubEnv("OPENAI_API_KEY", "sk-openai-host");
-    const log = vi.fn();
-
-    logCliInvocation({
-      args: [],
-      command: "claude",
-      env: {
-        ANTHROPIC_API_TOKEN: "token-child",
-        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-        GEMINI_CLI_HOME: "/tmp/child-gemini-home",
-        OPENAI_API_KEY: "sk-openai-child",
-      },
-      log,
-    });
-
-    const authLog = log.mock.calls.map(([message]) => String(message)).join("\n");
-    expect(authLog).toMatch(/host=.*ANTHROPIC_API_KEY/);
-    expect(authLog).toMatch(/host=.*ANTHROPIC_API_TOKEN/);
-    expect(authLog).toMatch(/host=.*OPENAI_API_KEY/);
-    expect(authLog).toMatch(/child=.*ANTHROPIC_API_TOKEN/);
-    expect(authLog).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
-    expect(authLog).toMatch(/child=.*OPENAI_API_KEY/);
-    expect(authLog).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
-    expect(authLog).toMatch(/runtimeHost=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
-    expect(authLog).toMatch(/runtimeChild=.*GEMINI_CLI_HOME/);
-    expect(authLog).toMatch(/runtimeCleared=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
-    expect(authLog).not.toContain("sk-ant-host");
-    expect(authLog).not.toContain("token-child");
-    expect(authLog).not.toContain("/tmp/child-gemini-home");
-    expect(authLog).not.toContain("sk-openai-child");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

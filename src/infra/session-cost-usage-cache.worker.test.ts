@@ -23,15 +23,9 @@ import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { onSessionCostUsageUpdated } from "./session-cost-usage-events.js";
-import {
-  partitionUsageCostRollup,
-  decodeUsageCostPartition,
-  USAGE_COST_PARTITION_SCOPE,
-} from "./session-cost-usage-partitions.js";
+import { USAGE_COST_PARTITION_SCOPE } from "./session-cost-usage-partitions.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
-import { decodeUsageCostRollup } from "./session-cost-usage-rollup-codec.js";
-import { appendSessionUsageRollupContribution } from "./session-cost-usage-rollup.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   loadCostUsageSummaryFromCache,
@@ -101,74 +95,47 @@ function usageLine(id: string): string {
   })}\n`;
 }
 
-it("refreshes one checkpoint with its partitions after an in-process replacement", async () => {
+it("batches full-refresh snapshots within payload bounds and preserves targeted refreshes and later writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "usage-partition-replacement";
-    const sessionFile = state.path("partition-replacement.jsonl");
+    const agentId = "usage-prune-refresh";
+    const sessionsDir = state.sessionsDir(agentId);
+    const sessionFile = path.join(sessionsDir, "live.jsonl");
+    await fs.mkdir(sessionsDir, { recursive: true });
     const september = usageLine("september");
     const october = usageLine("october").replace("2026-09-18", "2026-10-18");
     await fs.writeFile(sessionFile, september + october);
     await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
-    const row = readSessionCostUsageRollupRows(agentId)[0]!;
-    const { db } = openOpenClawAgentDatabase({ agentId });
-    const body = db
-      .prepare("SELECT blob FROM cache_entries WHERE scope = ? AND key = ?")
-      .get("session-cost-usage-rollup-v3", sessionFile);
-    if (!(body?.blob instanceof Uint8Array)) {
-      throw new Error("Expected stored usage body");
+    const staleKeys = Array.from({ length: 97 }, (_, index) =>
+      path.join(sessionsDir, `removed-${index}.jsonl`),
+    );
+    const owner = usageCacheSqlite.prepareSessionCostUsageRefreshLock(agentId);
+    try {
+      expect(await owner.acquire()).toBe(true);
+      expect(
+        await owner.writeRollup(
+          staleKeys.map((rollupId, index) => ({
+            rollupId,
+            valueJson: new TextEncoder().encode(
+              index === 3
+                ? JSON.stringify({ padding: "x".repeat(1024 * 1024) })
+                : index === 1 || index === 2
+                  ? JSON.stringify({ padding: "x".repeat(600 * 1024) })
+                  : "{}",
+            ),
+            blob: null,
+            updatedAt: 1,
+            partitions: [{ date: "2026-09-01", valueJson: "{}", blob: new Uint8Array([1]) }],
+          })),
+        ),
+      ).toBe(true);
+    } finally {
+      await owner.release();
     }
-    const envelope: unknown = JSON.parse(row.valueJson);
-    if (!isRecord(envelope) || typeof envelope.pricingFingerprint !== "string") {
-      throw new Error("Expected stored usage pricing fingerprint");
-    }
-    const previous = decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob);
-    if (!previous) {
-      throw new Error("Expected stored usage checkpoint");
-    }
-    for (const stored of db
-      .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ?")
-      .all(USAGE_COST_PARTITION_SCOPE)) {
-      if (typeof stored.value_json !== "string" || !(stored.blob instanceof Uint8Array)) {
-        throw new Error("Expected stored usage partition");
-      }
-      const partition = decodeUsageCostPartition(stored.value_json, stored.blob)!;
-      Object.assign(previous.rollup.buckets, partition.buckets);
-    }
-    appendSessionUsageRollupContribution(previous.rollup, {
-      timestamp: Date.UTC(2026, 8, 19),
-      role: "assistant",
-      model: "test",
-      provider: "test",
-      toolNames: [],
-      toolResultCounts: { total: 0, errors: 0 },
-      usageTotals: {
-        ...previous.rollup.untimestamped.totals,
-        input: 1_000,
-        totalTokens: 1_000,
-      },
-    });
-    const replacement = partitionUsageCostRollup({
-      ...previous,
-      scannedAt: row.updatedAt + 1,
-    });
-    // The checkpoint body is unchanged; only the exact metadata match rejects these partitions.
-    expect(
-      decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, replacement.blob),
-    ).toBeDefined();
     await fs.appendFile(sessionFile, october.replace("october", "october-next"));
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(98);
 
-    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
-    let activeLock: ReturnType<typeof prepareLock> | undefined;
-    const locks = vi
-      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-      .mockImplementation((...args) => {
-        const lock = prepareLock(...args);
-        if (args[0] === agentId) {
-          activeLock = lock;
-        }
-        return lock;
-      });
-    let replaced = false;
+    const pruneRequests: Array<{ kind: string; keys: string[]; bytes: number }> = [];
     // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
     const run = WorkerTaskPool.prototype.run;
     const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
@@ -177,37 +144,53 @@ it("refreshes one checkpoint with its partitions after an in-process replacement
       options: WorkerTaskOptions<unknown>,
     ) {
       const onRequest = options.onRequest;
-      if (!onRequest) {
-        return run.call(this, input, options);
-      }
       return run.call(this, input, {
         ...options,
-        onRequest: async (value, context) => {
-          if (!replaced && isRecord(value) && value.kind === "refresh-session") {
-            replaced = true;
-            expect(
-              await activeLock!.writeRollup([
-                {
-                  rollupId: sessionFile,
-                  valueJson: new TextEncoder().encode(replacement.valueJson),
-                  blob: replacement.blob,
-                  partitions: replacement.partitions,
-                  updatedAt: row.updatedAt + 1,
-                },
-              ]),
-            ).toBe(true);
-          }
-          return onRequest(value, context);
-        },
+        onRequest:
+          onRequest &&
+          ((value, context) => {
+            if (isRecord(value) && value.kind === "prune-rows" && Array.isArray(value.input)) {
+              const keys: string[] = [];
+              let bytes = 0;
+              for (const row of value.input) {
+                if (
+                  !isRecord(row) ||
+                  typeof row.key !== "string" ||
+                  !(row.value instanceof Uint8Array)
+                ) {
+                  throw new Error("Expected a transferred usage prune snapshot");
+                }
+                keys.push(row.key);
+                bytes += row.value.byteLength + 2 * row.key.length;
+              }
+              pruneRequests.push({ kind: value.kind, keys, bytes });
+            } else if (isRecord(value) && value.kind === "prune") {
+              pruneRequests.push({ kind: value.kind, keys: [], bytes: 0 });
+            }
+            return onRequest(value, context);
+          }),
       });
     });
     try {
-      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+      await refreshCostUsageCacheForAgent({ config, agentId });
     } finally {
       observer.mockRestore();
-      locks.mockRestore();
     }
-    expect(replaced).toBe(true);
+    const batches = pruneRequests.filter((request) => request.kind === "prune-rows");
+    expect(pruneRequests.at(-1)).toEqual({ kind: "prune", keys: [], bytes: 0 });
+    expect(pruneRequests.filter((request) => request.kind === "prune")).toHaveLength(1);
+    expect(batches.flatMap((batch) => batch.keys).toSorted()).toEqual(staleKeys.toSorted());
+    expect(batches.some((batch) => batch.bytes > 1024 * 1024)).toBe(true);
+    for (const batch of batches) {
+      expect(batch.keys.length).toBeLessThanOrEqual(64);
+      expect(batch.bytes <= 1024 * 1024 || batch.keys.length === 1).toBe(true);
+    }
+    expect(readSessionCostUsageRollupRows(agentId).map((row) => row.key)).toEqual([sessionFile]);
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    expect(
+      db.prepare("SELECT key FROM cache_entries WHERE scope = ?").all(USAGE_COST_PARTITION_SCOPE),
+    ).toHaveLength(2);
+
     await fs.appendFile(sessionFile, usageLine("november").replace("2026-09-18", "2026-11-18"));
     await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     for (const [month, totalTokens] of [
@@ -215,18 +198,16 @@ it("refreshes one checkpoint with its partitions after an in-process replacement
       [9, 20],
       [10, 10],
     ] as const) {
-      const result = await loadSessionCostSummariesFromCache({
-        config,
-        agentId,
-        sessions: [{ sessionFile }],
-        requestRefresh: false,
-        startMs: Date.UTC(2026, month, 1),
-        endMs: Date.UTC(2026, month + 1, 1) - 1,
-      });
-      expect(result).toMatchObject({
-        cacheStatus: { status: "fresh" },
-        summaries: [{ totalTokens }],
-      });
+      expect(
+        await loadSessionCostSummariesFromCache({
+          config,
+          agentId,
+          sessions: [{ sessionFile }],
+          requestRefresh: false,
+          startMs: Date.UTC(2026, month, 1),
+          endMs: Date.UTC(2026, month + 1, 1) - 1,
+        }),
+      ).toMatchObject({ cacheStatus: { status: "fresh" }, summaries: [{ totalTokens }] });
     }
   });
 });

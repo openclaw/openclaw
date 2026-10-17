@@ -258,7 +258,8 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 async function withDirectChatSession(
   run: (sessionDir: string, storePath: string) => Promise<void>,
 ) {
-  const { sessionDir, storePath } = openDirectChatSession();
+  // Deferred recovery must not adopt a later case that reuses this synthetic session ID.
+  const { sessionDir, storePath } = openDirectChatSession({ fresh: true });
   try {
     await run(sessionDir, storePath);
   } finally {
@@ -3604,7 +3605,6 @@ describe("gateway server chat", () => {
         {
           error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
           ok: false,
-          payload: undefined,
         },
       ]);
       expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
@@ -3613,6 +3613,7 @@ describe("gateway server chat", () => {
         expectedRecoveryRunId: "recovery-run",
         expectedRecoverySourceRunId: idempotencyKey,
         expectedSessionId: "sess-main",
+        lane: "main",
         sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: expect.any(Object),

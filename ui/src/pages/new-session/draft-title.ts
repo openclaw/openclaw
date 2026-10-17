@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createEffect, onCleanup } from "solid-js";
+import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -46,7 +46,6 @@ export function createNewSessionTitle(
   let composing = false;
   let submitted: DraftTitleInput | null = null;
 
-  createEffect(readInput, sync);
   onCleanup(() => {
     disposed = true;
     sync(null);
@@ -54,6 +53,7 @@ export function createNewSessionTitle(
   });
 
   return {
+    synchronize: () => sync(readInput()),
     setComposing(value: boolean) {
       composing = value;
       sync(readInput());

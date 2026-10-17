@@ -11,6 +11,7 @@ import {
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
+import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
@@ -177,10 +178,13 @@ function createSessionStreamFn(
       apiKey: auth.apiKey,
       timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
       maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-      headers:
+      headers: applyLocalNoAuthHeaders(
+        modelResult.api,
+        auth.apiKey,
         attributionHeaders || auth.headers || optionsLocal?.headers
           ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
           : undefined,
+      ),
     };
     return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
   };

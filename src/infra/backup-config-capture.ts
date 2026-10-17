@@ -11,6 +11,7 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
 } from "../config/io.types.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { selectDatabaseEngine } from "./database-engine/registry.js";
 import { openLocalFileSafely } from "./fs-safe.js";
 
 type CapturedConfigFile = {
@@ -135,16 +136,20 @@ export async function resolveBackupConfigCapture(
     assertRootAlias,
     revalidate: async () => {
       await assertRootAlias?.();
-      const current = await withOpenClawStateDatabaseReadSnapshot(
-        () =>
-          createConfigIO({
-            configPath: snapshot.path,
-            env: options.env,
-            pluginValidation: options.pluginValidation,
-            observe: false,
-          }).readConfigFileSnapshotForWrite(),
-        { env: options.env },
-      );
+      const read = () =>
+        createConfigIO({
+          configPath: snapshot.path,
+          env: options.env,
+          pluginValidation: options.pluginValidation,
+          observe: false,
+        }).readConfigFileSnapshotForWrite();
+      // Core-only revalidation pins config files without reading database state.
+      const current = await (selectDatabaseEngine(
+        { id: "state", postgres: true },
+        snapshot.sourceConfig,
+      ) === "postgres" && options.pluginValidation === "core-only"
+        ? read()
+        : withOpenClawStateDatabaseReadSnapshot(read, { env: options.env }));
       // A file can be reached repeatedly during discovery. Comparing the resolved
       // source as well as the last hashes prevents accepting mixed observations.
       if (

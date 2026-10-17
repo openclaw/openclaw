@@ -191,6 +191,7 @@ describe("diagnostics gateway methods", () => {
         CommandLane.HookDispatch,
         CommandLane.Main,
         CommandLane.Nested,
+        CommandLane.RestartRecovery,
         CommandLane.Subagent,
         CommandLane.SystemAgent,
         CommandLane.SystemAgentInference,

@@ -4,7 +4,6 @@ import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import { PendingFaceTimeDialStore } from "../src/pending-dial-store.js";
 import {
   createRuntime,
-  FaceTimeHelperActionError,
   mocks,
   pendingDialCancellationResult,
   pendingDialState,
@@ -183,7 +182,7 @@ describe("FaceTime pending dial reconciliation", () => {
 
   it("retains a dial when its helper reports an error after creating the carrier", async () => {
     mocks.helper.startCall.mockRejectedValueOnce(
-      new FaceTimeHelperActionError("Outbound safety mute was not retained while ringing"),
+      new Error("Outbound safety mute was not retained while ringing"),
     );
     const queryStarted = deferred();
     mocks.helper.findOutgoingCall.mockImplementation(async () => {

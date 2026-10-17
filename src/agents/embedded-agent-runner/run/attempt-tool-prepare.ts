@@ -20,7 +20,6 @@ import {
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -188,7 +187,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   // Compaction summaries omit screenshot image blocks. Frames are bound to this
   // generation so retained tool-result text cannot authorize stale coordinates.
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
-  const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+  const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
   const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
@@ -547,7 +546,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   } catch (error) {
     try {
       await runOwnedAgentCleanup({
-        ...attempt,
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        oneShotCliRun: attempt.oneShotCliRun,
         step: "embedded-tool-preparation",
         cleanup: () => releaseTools("error"),
         log,

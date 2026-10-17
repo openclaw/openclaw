@@ -1,4 +1,7 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { PluginManifestRegistry } from "./manifest-registry.types.js";
 
 export type DeclaredProviderOwnerIndex = ReadonlyMap<string, ReadonlySet<string>>;
@@ -50,6 +53,7 @@ export function matchesDeclaredProviderOwner(
 }
 
 type ProviderOwnerIndex = {
+  authScopes: ReadonlyMap<string, "agent" | "plugin" | "conflict">;
   providers: ReadonlyMap<string, readonly string[]>;
   refs: ReadonlyMap<string, readonly string[]>;
 };
@@ -63,6 +67,8 @@ export function getProviderOwnerIndex(registry: PluginManifestRegistry): Provide
   if (cached) {
     return cached;
   }
+  const authScopes = new Map<string, "agent" | "plugin" | "conflict">();
+  const seen = new Set<string>();
   const providers = new Map<string, string[]>();
   const cliBackends = new Map<string, string[]>();
   const append = (map: Map<string, string[]>, ref: string, pluginId: string) => {
@@ -77,13 +83,26 @@ export function getProviderOwnerIndex(registry: PluginManifestRegistry): Provide
   };
   for (const plugin of registry.plugins) {
     const declared = new Set(plugin.providers.map(normalizeProviderId));
+    const firstDeclaration = !seen.has(plugin.id);
+    seen.add(plugin.id);
+    const appendScope = (ref: string, target: string) => {
+      if (!firstDeclaration) {
+        return;
+      }
+      const scope =
+        findNormalizedProviderValue(plugin.modelCatalog?.providers, target)?.authScope ?? "agent";
+      const previous = authScopes.get(ref);
+      authScopes.set(ref, previous && previous !== scope ? "conflict" : scope);
+    };
     for (const ref of declared) {
       append(providers, ref, plugin.id);
+      appendScope(ref, ref);
     }
     const appendAlias = (alias: string, target: string) => {
       const receiver = normalizeProviderId(target);
       if (receiver && declared.has(receiver)) {
         append(providers, normalizeProviderId(alias), plugin.id);
+        appendScope(normalizeProviderId(alias), receiver);
       }
     };
     for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
@@ -105,7 +124,7 @@ export function getProviderOwnerIndex(registry: PluginManifestRegistry): Provide
       map.set(ref, sorted);
     }
   }
-  const index = { providers, refs: new Map([...cliBackends, ...providers]) };
+  const index = { authScopes, providers, refs: new Map([...cliBackends, ...providers]) };
   providerOwnerIndexes.set(registry, index);
   return index;
 }

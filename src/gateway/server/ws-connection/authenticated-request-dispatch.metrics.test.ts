@@ -16,6 +16,7 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { createMainThreadStallMonitor } from "../../../infra/main-thread-stall.js";
 import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { loggingState } from "../../../logging/state.js";
 import {
@@ -98,6 +99,22 @@ function createRequest(handler: GatewayRequestHandler, method = "health") {
 }
 
 describe("authenticated Gateway RPC diagnostics", () => {
+  it("attributes a registered handler stall with diagnostics disabled", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    onTestFinished(() => monitor.stop());
+    const fixture = createRequest(({ respond }) => {
+      now += 250;
+      respond(true, {});
+    });
+    setDiagnosticsEnabledForProcess(false);
+    await fixture.dispatch();
+    expect(monitor.drain().stalls).toEqual([
+      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250 },
+    ]);
+    expect(fixture.events).toEqual([]);
+  });
+
   it.each([
     {
       clientKind: "openclaw-control-ui",

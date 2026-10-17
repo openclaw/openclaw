@@ -136,6 +136,7 @@ suite.define(() => {
       const notice = thread
         .locator(".chat-notice")
         .filter({ hasText: "System · restart recovery" });
+      await thread.locator(".chat-system-events__summary").click();
       await notice.waitFor();
       expect(await notice.locator(".chat-notice__body").count()).toBe(0);
       expect(await notice.getAttribute("role")).toBeNull();
@@ -166,6 +167,8 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", { messages: historyMessages });
       await page.reload();
       await answer.waitFor();
+      await thread.locator(".chat-system-events__summary").click();
+      await notice.waitFor();
       expect(await partialOutput.count()).toBe(1);
       expect(await notice.count()).toBe(1);
       expect(await notice.locator(".chat-notice__body").count()).toBe(0);

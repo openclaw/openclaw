@@ -42,6 +42,7 @@ import {
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
+  runAfterPluginLifecycleCommit,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
 } from "../plugins/plugin-lifecycle-lease.js";
@@ -293,7 +294,8 @@ export function startGatewayConfigReloader(
   });
   const readPluginInstallRecords = opts.readPluginInstallRecords ?? readCurrentInstallRecords;
   const appliedRevision = createConfigAppliedRevisionTracker({
-    onConfigApplied: opts.onConfigApplied,
+    onConfigApplied: (plan, nextConfig) =>
+      runAfterPluginLifecycleCommit(() => opts.onConfigApplied?.(plan, nextConfig)),
     onRevisionApplied: opts.onConfigRevisionApplied,
   });
 
@@ -320,28 +322,6 @@ export function startGatewayConfigReloader(
   const schedule = () => {
     scheduleAfter(pendingInProcessConfig ? 0 : settings.debounceMs);
   };
-  const prepareRestart = async (
-    plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
-    ownership: GatewayConfigReloadTransactionOwnership,
-    sourceConfig: OpenClawConfig,
-  ) => {
-    try {
-      // Every accepted restart candidate validates inside its config
-      // transaction. Only downstream signal delivery may coalesce.
-      await opts.onRestart(plan, nextConfig, ownership, sourceConfig);
-    } catch (err) {
-      if (isConfigReloadSuperseded(err)) {
-        opts.log.info(`config restart superseded: ${String(err)}`);
-      } else {
-        opts.log.error(`config restart failed: ${String(err)}`);
-      }
-      // Failed restart admission must reject the transaction. Otherwise the
-      // persisted snapshot becomes the baseline and the same config cannot retry.
-      throw err;
-    }
-  };
-
   const handleMissingSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.exists) {
       missingConfigRetries = 0;
@@ -456,7 +436,6 @@ export function startGatewayConfigReloader(
     };
     const ownership: GatewayConfigReloadTransactionOwnership = {
       isCurrent,
-      hasNewerConfig: () => source.observation.revision > initialEpoch,
       checkpoint,
       withRestartPreparation: (run) => withRestartPreparation(ownership, checkpointOwned, run),
       assertInvokerOwned,
@@ -483,7 +462,7 @@ export function startGatewayConfigReloader(
         // The next queued config is compared against the runtime actually published here.
         commitPublishedRuntimeEnv();
         onRuntimeCommitted?.();
-        opts.onRuntimeConfigCommitted?.(plan, runtimeConfig);
+        runAfterPluginLifecycleCommit(() => opts.onRuntimeConfigCommitted?.(plan, runtimeConfig));
         committedRuntimeConfig = runtimeConfig;
         acceptedSourceSnapshot = undefined;
         currentConfig = runtimeConfig;
@@ -573,27 +552,30 @@ export function startGatewayConfigReloader(
       await checkpoint();
       // Persisted content changed even when the runtime skipped applying it
       // (writer intent, reload mode off): change listeners still refresh.
-      const notifyCommitted = async () => {
-        opts.log.info(
-          `config source revision ${initialEpoch} accepted (${candidate?.origin ?? "file"})`,
-        );
-        opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
-        if (changedPaths.length > 0) {
-          opts.onConfigCandidateCommitted?.({
-            path: opts.watchPath,
-            persistedHash: persistedHash ?? null,
-            changedPaths,
-          });
-        }
-        if (options.runtimeApplied !== false && (changedPaths.length > 0 || pluginLifecycle)) {
-          try {
-            const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
-            await refreshSkillsDiscovery({ config: currentConfig, reason: "config-change" });
-          } catch (error) {
-            opts.log.warn(`config applied, but skills discovery refresh failed: ${String(error)}`);
+      const notifyCommitted = () =>
+        runAfterPluginLifecycleCommit(async () => {
+          opts.log.info(
+            `config source revision ${initialEpoch} accepted (${candidate?.origin ?? "file"})`,
+          );
+          opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
+          if (changedPaths.length > 0) {
+            opts.onConfigCandidateCommitted?.({
+              path: opts.watchPath,
+              persistedHash: persistedHash ?? null,
+              changedPaths,
+            });
           }
-        }
-      };
+          if (options.runtimeApplied !== false && (changedPaths.length > 0 || pluginLifecycle)) {
+            try {
+              const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
+              await refreshSkillsDiscovery({ config: currentConfig, reason: "config-change" });
+            } catch (error) {
+              opts.log.warn(
+                `config applied, but skills discovery refresh failed: ${String(error)}`,
+              );
+            }
+          }
+        });
       const acceptConfig = async () => {
         await opts.onConfigAccepted?.(
           committedRuntimeConfig ?? nextConfig,
@@ -725,7 +707,8 @@ export function startGatewayConfigReloader(
     }
     if (plan.restartGateway) {
       await opts.onConfigChange?.(plan, nextConfig);
-      await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
+      // Rejection leaves the baseline unchanged so the same config can retry.
+      await opts.onRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       // The accepted restart owns snapshot republication at next startup.
       settleCandidateApplications(candidate, "restart-pending");
@@ -1314,6 +1297,7 @@ export function startGatewayConfigReloader(
         }
       }
     });
+    // Keep the queue usable; the returned operation and tracked shutdown join retain the failure.
     pluginOperationTail = operation.catch(() => {});
     trackReload(operation);
     return operation;
@@ -1492,6 +1476,7 @@ export function startGatewayConfigReloader(
       settleCandidateApplications(retryCandidate, "stopped");
       clearReloadTimer();
       await source.stop();
+      // Startup already observes ready's rejection; shutdown only needs its preparation to settle.
       await ready.catch(() => {});
       // Initial reads and explicit plugin operations share the same transaction unwind.
       await Promise.all(activeReloads);

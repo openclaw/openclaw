@@ -13,6 +13,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { lookupSessionGoalOperation } from "./goals-operations-read.js";
 import { mutateSessionGoal, SessionGoalOperationError } from "./goals-operations.js";
@@ -140,8 +141,13 @@ describe("typed Goal operation persistence", () => {
     const identityMutation = vi.fn();
     const unsubscribe = onSessionIdentityMutation(identityMutation);
     onTestFinished(unsubscribe);
-    const reads = trackSqliteStatementExecutions(database().db, ["sessionNodeSelects"], (sql) =>
-      /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql) ? "sessionNodeSelects" : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database().db),
+      ["sessionNodeSelects"],
+      (sql) =>
+        /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql)
+          ? "sessionNodeSelects"
+          : null,
     );
     let turn: Awaited<ReturnType<typeof admit>>;
     try {
@@ -194,7 +200,7 @@ describe("typed Goal operation persistence", () => {
       objective: editedObjective,
     } satisfies SessionGoalOperation;
     const editReads = trackSqliteStatementExecutions(
-      database().db,
+      requireNativeSqliteDatabase(database().db),
       ["sessionNodeSelects", "receiptStatements"],
       (sql) =>
         /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql)

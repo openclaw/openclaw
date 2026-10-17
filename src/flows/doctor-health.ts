@@ -83,7 +83,11 @@ export async function runDoctorHealthFlow(
           preparedPreflight = guarded ?? preparedPreflight;
         }
         if (!preCaptureRehearsalRoot && preparedPreflight?.updateSchemaRehearsal) {
-          await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
+          await rehearseDeferredUpdateDoctorSchema(
+            preparedPreflight,
+            runtime,
+            options.fullIntegrityCheck,
+          );
           return;
         }
       }
@@ -219,6 +223,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: repairRuntime,
         assertCurrent: writeAuthority?.assertCurrent,
         databaseGenerations: writeAuthority?.databaseGenerations,
+        databasePluginOwners: writeAuthority?.databasePluginOwners,
         beforeStateMutation: createDoctorOriginalCaptureHook({
           root,
           runtime: repairRuntime,
@@ -298,7 +303,10 @@ async function runDoctorHealthFlowWithResult(
           repairOpenClawStateDatabaseIndexesForDoctor,
           repairOpenClawStateDatabaseReadabilityForDoctor,
         ]) {
-          const result = repair({ env: process.env });
+          const result = repair({
+            env: process.env,
+            integrityCheck: options.fullIntegrityCheck ? "full" : "quick",
+          });
           repairedState ||= result.changes.length > 0;
           if (result.warnings.length > 0) {
             throw new Error(result.warnings.join("\n"));
@@ -335,6 +343,7 @@ async function runDoctorHealthFlowWithResult(
         );
         const backups = await prepareDoctorDatabaseMigrations({
           env: process.env,
+          check: options.fullIntegrityCheck ? "full" : "quick",
           databasePaths: databaseTargets?.map((database) => database.path) ?? [],
           agentDatabaseTargets: databaseTargets,
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
@@ -349,7 +358,11 @@ async function runDoctorHealthFlowWithResult(
         }
       }
 
-      const stateSchemaPreparation = await prepareDoctorStateSchema(schemas, prompter.shouldRepair);
+      const stateSchemaPreparation = await prepareDoctorStateSchema(
+        schemas,
+        prompter.shouldRepair,
+        options.fullIntegrityCheck ? "full" : "quick",
+      );
       const { repairDoctorAgentDeletionJournal } =
         await import("../commands/doctor-agent-deletion-journal.js");
       const deletionJournal = await repairDoctorAgentDeletionJournal({

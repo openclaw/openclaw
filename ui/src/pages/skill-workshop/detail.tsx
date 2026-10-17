@@ -464,7 +464,7 @@ function Diff(props: { current: string; version: string }) {
         <div class="sw-diff__lines" role="table">
           <For each={lines() ?? []}>
             {(line) => (
-              <div class={`sw-diff__line sw-diff__line--${line.kind}`} role="row">
+              <div class={["sw-diff__line", `sw-diff__line--${line.kind}`]} role="row">
                 <span class="sw-diff__sign" aria-hidden="true">
                   {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""}
                 </span>

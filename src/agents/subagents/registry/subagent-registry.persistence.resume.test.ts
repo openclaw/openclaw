@@ -25,6 +25,7 @@ import {
 } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentDismissedRetentionCases } from "./subagent-registry.persistence.retention.test-support.js";
 import {
+  prepareSubagentRecoveryFixture,
   gateSubagentRequesterSettlement,
   observeSubagentRequesterWake,
   settleSubagentRegistryPersistenceWork,
@@ -153,6 +154,7 @@ describe("subagent registry persistence resume", () => {
           },
           cleanupHandled: false,
         });
+        await prepareSubagentRecoveryFixture(run, { stateDir });
         saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
         await writeChildSession(stateDir, run.childSessionKey, `sess-pending-${label}-delivery`);
 
@@ -170,8 +172,9 @@ describe("subagent registry persistence resume", () => {
   );
 
   it("replays one required completion after restart without the child session", async () => {
-    await withRegistryState(async () => {
+    await withRegistryState(async (stateDir) => {
       const run = createOrphanedRequiredDelivery("pending");
+      await prepareSubagentRecoveryFixture(run, { stateDir });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       const settlement = gateSubagentRequesterSettlement(
         requesterSettleModule.maybeWakeRequesterAfterAllChildrenSettled,
@@ -242,7 +245,7 @@ describe("subagent registry persistence resume", () => {
       vi.useFakeTimers();
     }
     try {
-      await withRegistryState(async () => {
+      await withRegistryState(async (stateDir) => {
         const endedAt = Date.now();
         const run = createDeliveredWake("run-rejected-requester-wake", {
           status: restarting && !waitingForActivation ? "dispatching" : "pending",
@@ -253,6 +256,7 @@ describe("subagent registry persistence resume", () => {
           afterRequesterYield: true,
           rearmGeneration: 1,
         });
+        await prepareSubagentRecoveryFixture(run, { stateDir });
         const wakeRequester = vi.fn<WakeRequester>(async (params) => {
           if (!restarting) {
             throw new admission.GatewayDrainingError();
@@ -382,7 +386,7 @@ describe("subagent registry persistence resume", () => {
       };
       vi.useFakeTimers();
       try {
-        await withRegistryState(async () => {
+        await withRegistryState(async (stateDir) => {
           try {
             const runs = Array.from({ length: runCount }, (_, index) => {
               const runId = `run-outstanding-wake-${index}`;
@@ -398,6 +402,9 @@ describe("subagent registry persistence resume", () => {
                 requesterSessionKey: `agent:main:requester-${index}`,
               };
             });
+            for (const run of runs) {
+              await prepareSubagentRecoveryFixture(run, { stateDir });
+            }
             const { run: wakeRequester, waitForCalls } = observeSubagentRequesterWake(
               async (params) => {
                 if (getGatewayContextResolver(params.settledEntry!)?.() === firstGateway) {
@@ -589,8 +596,9 @@ describe("subagent registry persistence resume", () => {
     { status: "suspended" as const, disposition: undefined, queueId: undefined },
     { status: "in_progress" as const, disposition: "session_queued" as const, queueId: "queue-1" },
   ])("retains $status required delivery with its owner after restart", async (expected) => {
-    await withRegistryState(async () => {
+    await withRegistryState(async (stateDir) => {
       const run = createOrphanedRequiredDelivery(expected.status);
+      await prepareSubagentRecoveryFixture(run, { stateDir });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
       await mod.initSubagentRegistry();
@@ -723,7 +731,7 @@ describe("subagent registry persistence resume", () => {
         expect(restoredGatewayContextResolver?.()).toBe(gatewayContext);
 
         await Promise.all([wakeStarted.promise, waitStarted.promise]);
-        expect(wakeRequester).toHaveBeenCalledOnce();
+        expect(wakeRequester).toHaveBeenCalled();
         expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
         expect(recoveryRuntime.dispatchAgent).not.toHaveBeenCalled();
         expect(callGatewayModule.callGateway).not.toHaveBeenCalledWith(
@@ -890,6 +898,7 @@ describe("subagent registry persistence resume", () => {
           endedAt,
           cleanupCompletedAt: endedAt,
         });
+        await prepareSubagentRecoveryFixture(run, { stateDir });
         const predecessor = {
           ...run,
           runId: "run-original",

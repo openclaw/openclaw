@@ -6,7 +6,6 @@ import {
   Match,
   Show,
   Switch,
-  createEffect,
   createMemo,
   createSignal,
   getOwner,
@@ -15,7 +14,6 @@ import {
   runWithOwner,
   untrack,
 } from "solid-js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/link-reader-hovercard-registration.ts";
 import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -29,7 +27,7 @@ import {
 } from "../lib/reactive/application.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { projectI18n } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -38,6 +36,7 @@ import { loadFocusDashboard, type FocusDashboardRouteState } from "./app-root-fo
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import type { SolidReadinessShell } from "./control-ui-readiness-solid.ts";
 import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
@@ -45,7 +44,7 @@ import {
   DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
   LOGIN_GATE_ELEMENT,
   type OptionalCustomElement,
   QUESTION_PAGE_ELEMENT,
@@ -72,6 +71,9 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   const rootOwner = getOwner();
   let readiness: ControlUiReadiness | undefined;
   let readinessLoad: Promise<void> | undefined;
+  let shell: SolidReadinessShell | undefined;
+  let login: HTMLElement | undefined;
+  let terminalElement: (HTMLElement & { readonly available?: boolean }) | undefined;
   const translations = projectI18n(i18n);
   const t = translations.t;
   const gateway = projectGateway(context.gateway);
@@ -94,20 +96,31 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   const onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
   const [startupPending, setStartupPending] = createSignal(true);
   // A submitted login keeps ownership until the Gateway admits the connection.
-  const [loginGatePinned, setLoginGatePinned] = createSignal(false);
-  const [loginGatewayUrl, setLoginGatewayUrl] = createSignal(context.gateway.connection.gatewayUrl);
-  const [loginToken, setLoginToken] = createSignal(context.gateway.connection.token);
-  const [loginPassword, setLoginPassword] = createSignal(context.gateway.connection.password);
-  const [loginShowGatewaySecret, setLoginShowGatewaySecret] = createSignal(false);
+  const [loginGatePinned, setLoginGatePinned] = createSignal<boolean>(
+    (previous) => !connected() && (previous ?? false),
+  );
+  // Drafts reset only for a replacement client, not same-client status publications.
+  const loginConnection = createMemo(
+    () => {
+      const current = gateway.read();
+      return { client: current.snapshot.client, ...current.connection };
+    },
+    { equals: (previous, next) => previous.client === next.client },
+  );
+  const [loginGatewayUrl, setLoginGatewayUrl] = createSignal(() => loginConnection().gatewayUrl);
+  const [loginToken, setLoginToken] = createSignal(() => loginConnection().token);
+  const [loginPassword, setLoginPassword] = createSignal(() => loginConnection().password);
+  const [loginShowGatewaySecret, setLoginShowGatewaySecret] = createSignal(() => {
+    loginConnection();
+    return false;
+  });
   const [pendingGatewayUrl, setPendingGatewayUrl] = createSignal(
     runtime.pendingGatewayConnection?.gatewayUrl ?? null,
   );
   const [focusDashboardRoute, setFocusDashboardRoute] = createSignal<FocusDashboardRouteState>({
     kind: "loading",
   });
-  const [lazyRevision, setLazyRevision] = createSignal(0);
   let active = true;
-  let loginConnectionClient: GatewayBrowserClient | null = context.gateway.snapshot.client;
   const focusDashboardAbort = new AbortController();
   const closeDocument = () => {
     if (globalThis.history.length > 1) {
@@ -117,23 +130,11 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     }
   };
   const renderFocusEscape = createLegacyFocusEscape(closeDocument);
-  const lazyHost = {
-    requestUpdate: () => setLazyRevision((value) => value + 1),
-    get updateComplete() {
-      return Promise.resolve();
-    },
-    queryRenderedElement: (tag: string) => host.querySelector(tag),
-  };
-  const loginGateLoader = new LazyCustomElementRequestController(lazyHost);
-  const lazyCustomElements = new LazyCustomElementRequestController(lazyHost, closeDocument);
-  const lazyState = () => {
-    lazyRevision();
-    return lazyCustomElements.visibleState;
-  };
-  const loginLoadState = () => {
-    lazyRevision();
-    return loginGateLoader.visibleState;
-  };
+  const lazyHost = { updateComplete: Promise.resolve() };
+  const loginGateLoader = createLazyCustomElementRequests(lazyHost);
+  const lazyCustomElements = createLazyCustomElementRequests(lazyHost, closeDocument);
+  const lazyState = projectOwner(lazyCustomElements, (owner) => owner.visibleState);
+  const loginLoadState = projectOwner(loginGateLoader, (owner) => owner.visibleState);
   const disconnectViewport = connectShellViewport();
   const disconnectTooltips = installTitleTooltips(host.ownerDocument);
   const embedHost = nativeEmbedHost();
@@ -148,24 +149,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     void import("../styles/native-embed.css");
   }
   void import("../components/session-progress-hovercard-registration.ts");
-
-  createEffect(
-    () => gateway.read(),
-    (current) =>
-      // Nested Lit/Solid mounts can flush this imperative effect under their owner.
-      runWithOwner(null, () => {
-        if (current.snapshot.client !== loginConnectionClient) {
-          loginConnectionClient = current.snapshot.client;
-          setLoginShowGatewaySecret(false);
-          setLoginGatewayUrl(current.connection.gatewayUrl);
-          setLoginToken(current.connection.token);
-          setLoginPassword(current.connection.password);
-        }
-        if (current.snapshot.phase === "connected") {
-          setLoginGatePinned(false);
-        }
-      }),
-  );
 
   const initialConnectPending = () =>
     runtime.documentMode === null &&
@@ -198,22 +181,17 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
       )
     );
   };
-  createEffect(
-    () => !focusTarget && !runtime.focusLocation && !coldPending() && showLoginGate(),
-    (show) => {
-      if (show && !isOptionalElementDefined(LOGIN_GATE_ELEMENT) && !loginGateLoader.visibleState) {
-        loginGateLoader.preload(LOGIN_GATE_ELEMENT, { reportError: true });
-      }
-    },
-  );
-
   const loadReadiness = () => {
     if (active && !readiness && !readinessLoad) {
       readinessLoad = import("./control-ui-readiness-solid.ts")
         .then(({ createSolidControlUiReadiness }) => {
           if (active) {
             readiness = runWithOwner(rootOwner, () =>
-              createSolidControlUiReadiness(host, runtime, trackRoot),
+              createSolidControlUiReadiness(host, runtime, trackRoot, () => ({
+                login,
+                shell,
+                terminal: shell?.element.isConnected ? shell.terminalPanel : terminalElement,
+              })),
             );
           }
         })
@@ -238,7 +216,8 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     gateway.revision();
     router.revision();
     selection.revision();
-    lazyRevision();
+    lazyState.revision();
+    loginLoadState.revision();
     startupPending();
     loginGatePinned();
     loginGatewayUrl();
@@ -298,12 +277,9 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     ) {
       delete window.openclawControlUi;
     }
-    gateway.dispose();
-    config.dispose();
-    selection.dispose();
-    router.dispose();
-    theme.dispose();
-    translations.dispose();
+    for (const projection of [gateway, config, selection, router, theme, translations]) {
+      projection.dispose();
+    }
     disconnectViewport();
     disconnectTooltips();
     focusDashboardAbort.abort();
@@ -330,7 +306,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   }
   function LazyDocument(documentProps: { element: OptionalCustomElement }): SolidJSX.Element {
     return (
-      <Show when={lazyState()?.element === documentProps.element && lazyState()}>
+      <Show when={lazyState.read()?.element === documentProps.element && lazyState.read()}>
         {(state) => (
           <main class="connect-splash">
             <openclaw-route-fragment style={{ display: "contents" }}>
@@ -392,6 +368,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
           }
         >
           <openclaw-terminal-panel
+            ref={(element) => (terminalElement = element)}
             prop:client={connected() ? snapshot().client : null}
             prop:available={available()}
             prop:agentId={agentId()}
@@ -514,12 +491,18 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     );
   }
   function Login(): SolidJSX.Element {
+    onSettled(() => {
+      if (!isOptionalElementDefined(LOGIN_GATE_ELEMENT) && !loginGateLoader.visibleState) {
+        loginGateLoader.preload(LOGIN_GATE_ELEMENT, { reportError: true });
+      }
+    });
     const loadError = () => {
-      const state = loginLoadState();
+      const state = loginLoadState.read();
       return state?.status === "error" ? state : undefined;
     };
     const registered = () => {
-      lazyRevision();
+      lazyState.revision();
+      loginLoadState.revision();
       return isOptionalElementDefined(LOGIN_GATE_ELEMENT);
     };
     return (
@@ -540,6 +523,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
         }
       >
         <openclaw-login-gate
+          ref={(element) => (login = element)}
           prop:props={{
             resourceBasePath: context.resourceBasePath,
             branding: context.theme.branding,
@@ -601,6 +585,10 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
           prop:gateway={context.gateway}
         >
           <ShellLoader
+            onShell={(owner) => {
+              shell = owner;
+              readiness?.invalidate();
+            }}
             runtime={runtime}
             getReadiness={() => readiness}
             onboarding={onboarding}
@@ -648,13 +636,14 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
           </Match>
           <Match when={runtime.documentMode}>
             {(mode) => {
+              // A standalone document keeps its bootstrap mode for this root's lifetime.
               const documentMode = untrack(mode);
               const element =
                 documentMode.kind === "approval" ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;
               return (
                 <Show when={!(documentMode.kind === "approval" && pendingGatewayUrl())}>
                   <Show
-                    when={lazyState()?.element === element}
+                    when={lazyState.read()?.element === element}
                     fallback={
                       documentMode.kind === "approval" ? (
                         <openclaw-approval-page prop:approvalId={documentMode.approvalId ?? ""} />

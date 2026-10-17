@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatStateController } from "../chat-state-controller.ts";
+import { createChatState } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
@@ -57,12 +56,12 @@ describe("completed-work duration", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
-        transcript.hostUpdated();
+        transcript.update();
       };
       try {
         // A fresh pane has never watched this run: restored lifecycle facts suffice.
         rerender();
-        transcript.hostConnected();
+        transcript.start();
         await flushDeferredRowPrune();
         const duration = () => container.querySelector(".chat-activity-group__label");
         expect(duration()?.textContent).toBe("Worked for 27 minutes, 35 seconds");
@@ -95,7 +94,7 @@ describe("completed-work duration", () => {
         expect(duration()?.textContent).toBe("Worked");
         expect(messages[2]?.timestamp).toBe(508_000);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         container.remove();
       }
     },
@@ -127,21 +126,18 @@ describe("completed-work duration", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const rerender = () => {
       render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
+      transcript.update();
     };
-    const host: SolidControllerHost = {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: rerender,
+    const controller = createChatState({
+      invalidate: rerender,
       updateComplete: Promise.resolve(true),
-    };
-    const controller = new ChatStateController(host);
-    controller.hostConnected();
+    });
+    const dispose = controller.dispose;
     const original = controller.createRenderLifecycle();
     props.onRequestUpdate = () => original.invalidate();
     try {
       rerender();
-      transcript.hostConnected();
+      transcript.start();
       await vi.advanceTimersByTimeAsync(0);
       const replacement = controller.createRenderLifecycle();
       props.onRequestUpdate = () => replacement.invalidate();
@@ -159,8 +155,8 @@ describe("completed-work duration", () => {
       expect(container.textContent).not.toContain("read");
       expect(container.textContent).toContain("Inspection complete");
     } finally {
-      controller.hostDisconnected();
-      transcript.hostDisconnected();
+      dispose();
+      transcript.dispose();
       container.remove();
       vi.useRealTimers();
     }
@@ -216,8 +212,8 @@ describe("completed-work duration", () => {
       const container = document.body.appendChild(document.createElement("div"));
       try {
         render(renderChatThread(props, transcript), container);
-        transcript.hostConnected();
-        transcript.hostUpdated();
+        transcript.start();
+        transcript.update();
         await flushDeferredRowPrune();
         const summaries = [...container.querySelectorAll(".chat-work-group")];
         expect(summaries).toHaveLength(steer ? 1 : 2);
@@ -227,7 +223,7 @@ describe("completed-work duration", () => {
           ),
         ).toEqual(steer ? ["Worked for 20 seconds"] : ["Worked", "Worked for 20 seconds"]);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
         container.remove();
       }
     },
@@ -295,8 +291,8 @@ describe("live progress placement", () => {
     const container = document.body.appendChild(document.createElement("div"));
     try {
       render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       flush();
       const progress = container.querySelector(".chat-working-indicator")!;
       const answer = container.querySelector('[data-entry-id="latest-answer"]')!;
@@ -325,7 +321,7 @@ describe("live progress placement", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       container.remove();
     }
   });

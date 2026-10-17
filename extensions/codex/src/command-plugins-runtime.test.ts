@@ -30,7 +30,7 @@ import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
 import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import * as sharedClients from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { resolveCodexCommandDeps } from "./command-handler-deps.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 import * as commandRpc from "./command-rpc.js";
 
@@ -100,7 +100,7 @@ async function fixture(stableAccount = true) {
     plugins: { notes: { marketplaceName: "company-tools", pluginName: "notes", enabled: true } },
   };
   const bindingStore = createCodexTestBindingStore();
-  const deps = resolveCodexCommandDeps({
+  const deps = createCodexCommandHost({
     bindingStore,
     codexPluginsManagementIo: {
       readConfig: async () => structuredClone(current),
@@ -275,7 +275,7 @@ describe("Codex plugin command context", () => {
   it("releases a lease acquired after the deadline without sending a startup RPC", async () => {
     const test = await fixture();
     test.request.mockRestore();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let finishAcquisition!: (client: typeof test.harness.client) => void;
     const acquired = new Promise<typeof test.harness.client>((resolve) => {
       finishAcquisition = resolve;
@@ -297,11 +297,11 @@ describe("Codex plugin command context", () => {
     );
     try {
       await acquiring;
-      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.advanceTimersByTimeAsync(600_001);
       finishAcquisition(test.harness.client);
       await vi.advanceTimersByTimeAsync(0);
       expect(failure).toBeInstanceOf(Error);
-      expect(String(failure)).toContain("timed out");
+      expect(failure).toMatchObject({ name: "AgentHarnessPreflightError" });
       expect(test.harness.writes).toHaveLength(0);
       expect(run).not.toHaveBeenCalled();
       expect(test.release).toHaveBeenCalledOnce();

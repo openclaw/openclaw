@@ -11,6 +11,7 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../agents/cli-execution-auth.js";
 import { resolveConfiguredSetupModelForAgent } from "../agents/utility-model.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -288,7 +289,8 @@ export async function projectInferenceRoute(
   );
   const rawModel =
     route?.modelTarget === "utility"
-      ? (agent?.utilityModel ?? defaults?.utilityModel)
+      ? (resolveAgentModelPrimaryValue(agent?.utilityModel) ??
+        resolveAgentModelPrimaryValue(defaults?.utilityModel))
       : typeof agent?.model === "string"
         ? agent.model
         : agent?.model?.primary ||

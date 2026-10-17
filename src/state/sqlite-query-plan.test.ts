@@ -147,10 +147,14 @@ describe("sqlite hot query plans", () => {
       }
 
       const statements: string[] = [];
-      const tracker = trackSqliteStatementExecutions(db, ["delete"], (sql) => {
-        statements.push(sql);
-        return "delete";
-      });
+      const tracker = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["delete"],
+        (sql) => {
+          statements.push(sql);
+          return "delete";
+        },
+      );
       try {
         db.exec("BEGIN IMMEDIATE");
         deleteOrphanedTranscriptIndexRowsInTransaction(db);

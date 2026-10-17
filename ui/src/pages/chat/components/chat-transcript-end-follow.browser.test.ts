@@ -4,15 +4,19 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 class EndFollowFixture extends TranscriptTestHost {
   followEnabled = true;
-  readonly transcript = new ChatTranscriptController(this, () => "end-follow-browser", {
-    canFollowEnd: () => this.followEnabled,
-  });
+  override readonly transcript = createChatTranscript(
+    () => this.requestRender(),
+    () => "end-follow-browser",
+    {
+      canFollowEnd: () => this.followEnabled,
+    },
+  );
   viewportHeight = 400;
   viewportPadding = 60;
   earlierRowHeight = 400;
@@ -116,7 +120,7 @@ async function commitTask(host: EndFollowFixture, change: () => void) {
   await new Promise<void>((resolve) => {
     setTimeout(() => {
       change();
-      host.requestUpdate();
+      host.requestRender();
       void host.updateComplete.then(() => resolve());
     }, 0);
   });
@@ -409,7 +413,7 @@ it.each([
     }
 
     host.viewportHeight = 500;
-    host.requestUpdate();
+    host.requestRender();
     await expect.poll(() => thread.clientHeight).toBe(500);
     expect(thread.scrollTop).toBe(original - 100);
     if (!beforeClamp) {
@@ -418,13 +422,13 @@ it.each([
     const readerPosition = thread.scrollTop;
 
     host.viewportHeight = 400;
-    host.requestUpdate();
+    host.requestRender();
     await expect.poll(() => thread.clientHeight).toBe(400);
     await settleFrames();
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
 
     host.lastRowHeight += 48;
-    host.requestUpdate();
+    host.requestRender();
     await expect.poll(() => extent.offsetHeight).toBe(1348);
     await settleFrames();
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
@@ -478,7 +482,7 @@ it.each([
     try {
       thread.scrollTop -= 8;
       host.viewportHeight = 500;
-      host.requestUpdate();
+      host.requestRender();
       await expect.poll(() => thread.clientHeight).toBe(500);
       expect(thread.scrollTop).toBe(original - 100);
       const readerPosition = thread.scrollTop;
@@ -486,12 +490,12 @@ it.each([
       // at a temporary end, not after the original viewport has returned.
       await expect.poll(() => idleAtClamp).toBe(true);
       host.viewportHeight = 400;
-      host.requestUpdate();
+      host.requestRender();
       await expect.poll(() => thread.clientHeight).toBe(400);
       await settleFrames();
       expect(thread.scrollTop).toBe(readerPosition);
       host.lastRowHeight += 48;
-      host.requestUpdate();
+      host.requestRender();
       await expect.poll(() => extent.offsetHeight).toBe(1348);
       await settleFrames();
       expect(thread.scrollTop).toBe(readerPosition);
@@ -519,7 +523,7 @@ it("does not expose unmeasured intrinsic overflow as an independent scroll range
   expect(thread.scrollTop).toBe(original);
   thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
   host.lastRowHeight = 1100;
-  host.requestUpdate();
+  host.requestRender();
   await expect.poll(() => extent.offsetHeight).toBe(1500);
   await settleFrames();
   expect(thread.scrollTop).toBe(original);
@@ -534,7 +538,7 @@ it("publishes padding changes when either viewport box stays the same size", asy
   const original = thread.scrollTop;
 
   host.viewportPadding = 40;
-  host.requestUpdate();
+  host.requestRender();
   await expect.poll(() => getComputedStyle(thread).paddingBottom).toBe("40px");
   expect(thread.clientHeight).toBe(400);
   expect(thread.scrollTop).toBe(original - 20);
@@ -542,8 +546,60 @@ it("publishes padding changes when either viewport box stays the same size", asy
   // Border-box growth and matching padding growth leave the observed content box unchanged.
   host.viewportHeight = 420;
   host.viewportPadding = 60;
-  host.requestUpdate();
+  host.requestRender();
   await expect.poll(() => thread.clientHeight).toBe(420);
   expect(getComputedStyle(thread).paddingBottom).toBe("60px");
   expect(distance()).toBe(0);
+});
+
+it("holds the canceled viewport after a smooth journey's automatic final approach", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture(0);
+  const earlier = host.querySelector<HTMLElement>('[data-virtual-row-key="earlier"]')!;
+  const nativeScrollTo = thread.scrollTo.bind(thread);
+  let finalApproach = false;
+  let grewNearEnd = false;
+  let canceledOffset: number | undefined;
+  function observeScroll(options?: ScrollToOptions): void;
+  function observeScroll(x: number, y: number): void;
+  function observeScroll(options: ScrollToOptions | number | undefined, y?: number): void {
+    if (typeof options === "number") {
+      nativeScrollTo(options, y ?? 0);
+    } else {
+      finalApproach ||= grewNearEnd && options?.behavior === "auto";
+      nativeScrollTo(options);
+    }
+  }
+  thread.scrollTo = observeScroll;
+  const listener = new AbortController();
+  const canceled = new Promise<number>((resolve) => {
+    thread.addEventListener(
+      "scroll",
+      () => {
+        if (canceledOffset !== undefined) {
+          return;
+        }
+        if (finalApproach) {
+          canceledOffset = thread.scrollTop;
+          earlier.style.height = "442px";
+          host.transcript.cancelScroll();
+          resolve(canceledOffset);
+        } else if (!grewNearEnd && distance() <= thread.clientHeight) {
+          grewNearEnd = true;
+          host.lastRowHeight += 48;
+          host.requestRender();
+        }
+      },
+      { capture: true, signal: listener.signal },
+    );
+  });
+  try {
+    host.transcript.scrollToEnd({ behavior: "smooth" });
+    const offset = await canceled;
+    await settleFrames();
+    expect(extent.offsetHeight).toBe(1390);
+    expect(thread.scrollTop).toBe(offset);
+  } finally {
+    listener.abort();
+    thread.scrollTo = nativeScrollTo;
+  }
 });

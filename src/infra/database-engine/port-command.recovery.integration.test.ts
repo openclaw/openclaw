@@ -1,3 +1,4 @@
+import "./port-command-worker.test-support.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
 import * as recovery from "../database-port-recovery.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshots from "../sqlite-snapshot.js";
 import {
   canonical,
@@ -28,6 +30,16 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         const before = canonical(source);
         const include = fs.readFileSync(state.statePath("plugins.json"), "utf8");
         const forward = await doctorDatabasePort({ to: "postgres" });
+        const sharedPath = state.statePath("state", "openclaw.sqlite");
+        const sharedAnchor = readBackupEngine(sharedPath);
+        assert(sharedAnchor.engine === "postgres");
+        expect(
+          (
+            await client.query(
+              `SELECT value_json FROM "${sharedAnchor.namespace}".config_machine_state WHERE state_key = 'config.lastTouchedAt'`,
+            )
+          ).rows,
+        ).toEqual([{ value_json: expect.any(String) }]);
         const anchor = readBackupEngine(source);
         assert(anchor.engine === "postgres");
         expect(
@@ -38,6 +50,17 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           ).rows,
         ).toEqual([{ sequence: "9007199254740995" }]);
         const reverse = await doctorDatabasePort({ to: "sqlite" });
+        expect(readBackupEngine(sharedPath)).toEqual({ engine: "sqlite" });
+        {
+          using shared = openNodeSqliteDatabase(sharedPath, { readOnly: true });
+          expect(
+            shared
+              .prepare(
+                "SELECT value_json FROM config_machine_state WHERE state_key = 'config.lastTouchedAt'",
+              )
+              .get(),
+          ).toEqual({ value_json: expect.any(String) });
+        }
         expect(canonical(source)).toEqual(before);
         expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
         const authored = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
@@ -140,7 +163,9 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           error,
           ["config", "config committed", "complete revision"].includes(point)
             ? state.stateDir
-            : source,
+            : point === "initial manifest"
+              ? state.statePath("state", "openclaw.sqlite")
+              : source,
           point === "capture" ? "capture originals" : "Database port",
         );
         vi.restoreAllMocks();
@@ -155,7 +180,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
             expect(canonical(source)).toEqual(before);
             expect(fs.readFileSync(state.configPath, "utf8")).toBe(originalConfig);
           }
-          const rollback = ["config", "config committed", "complete revision"].includes(point);
+          const rollback = ["config", "complete revision"].includes(point);
           await doctorDatabasePort(rollback ? { rollback: active } : { resume: active });
           expect(fs.existsSync(active)).toBe(false);
           if (!rollback) {

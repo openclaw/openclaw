@@ -9,7 +9,7 @@ import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts"
 import { t } from "../../lib/reactive/i18n.ts";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-setup.css";
-import type { ModelProviderLoginController } from "../model-providers/login-controller.ts";
+import type { ModelProviderLogin } from "../model-providers/login-controller.ts";
 import {
   renderMutationMessage,
   ModelProviderConnectAction,
@@ -35,7 +35,7 @@ const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers"
 
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 export type ModelSetupViewProps = CandidateRowsProps & {
-  connection?: ModelProviderLoginController["pageActions"];
+  connection?: ModelProviderLogin["pageActions"];
   login?: JSX.Element;
   revision?: () => unknown;
   onManualInput?: (element: HTMLInputElement) => void;

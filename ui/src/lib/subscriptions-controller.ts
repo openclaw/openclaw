@@ -1,118 +1,16 @@
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
+import type { SolidController, SolidControllerHost } from "./reactive/solid-controller-host.ts";
 
 type Cleanup = () => void;
-type Listener = () => void;
-
-/** Keeps existing synchronous page controllers alive while Solid owns their DOM. */
-export class ControllerHost implements SolidControllerHost {
-  private readonly controllers = new Set<SolidController>();
-  private readonly listeners = new Set<Listener>();
-  private pendingUpdate: Promise<boolean> | null = null;
-  isConnected = false;
-
-  addController(controller: SolidController): void {
-    this.controllers.add(controller);
-    if (this.isConnected) {
-      controller.hostConnected?.();
-    }
-  }
-
-  removeController(controller: SolidController): void {
-    this.controllers.delete(controller);
-  }
-
-  subscribe(listener: Listener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  requestUpdate(): void {
-    if (!this.pendingUpdate) {
-      const pending: Promise<boolean> = Promise.resolve().then(() => {
-        if (this.pendingUpdate === pending) {
-          this.performUpdate();
-        }
-        return true;
-      });
-      this.pendingUpdate = pending;
-    }
-  }
-
-  /** Frame owners can publish before paint without a second queued notification. */
-  performUpdate(): void {
-    if (!this.isConnected) {
-      this.pendingUpdate = null;
-      return;
-    }
-    // Controller publications belong to this update; listeners read their new facts below.
-    this.pendingUpdate ??= Promise.resolve(true);
-    try {
-      for (const controller of this.controllers) {
-        controller.hostUpdate?.();
-      }
-    } finally {
-      this.pendingUpdate = null;
-    }
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
-
-  get updateComplete(): Promise<boolean> {
-    return this.pendingUpdate ?? Promise.resolve(true);
-  }
-
-  connect(): void {
-    this.isConnected = true;
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
-    this.requestUpdate();
-  }
-
-  disconnect(): void {
-    this.pendingUpdate = null;
-    this.isConnected = false;
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
-  }
-}
-
-/** State stays synchronous; the setter only publishes a rendering invalidation. */
-export function viewState() {
-  return (prototype: ControllerHost, key: string): void => {
-    const values = new WeakMap<ControllerHost, unknown>();
-    Object.defineProperty(prototype, key, {
-      configurable: true,
-      get(this: ControllerHost) {
-        return values.get(this);
-      },
-      set(this: ControllerHost, value: unknown) {
-        if (!Object.is(values.get(this), value)) {
-          values.set(this, value);
-          this.requestUpdate();
-        }
-      },
-    });
-  };
-}
-
 type SourceEntry<T> = {
   readonly getSource: () => T | null | undefined;
   readonly connect: (source: T) => Cleanup | undefined;
   readonly invalidateOnConnect: boolean;
   source: T | undefined;
   cleanup: Cleanup | undefined;
-  generation: number;
   frame: number | undefined;
 };
 
-/**
- * Owns subscriptions whose sources can arrive or change after connection.
- * Source identity is checked before every render and all cleanup follows the
- * host lifecycle, so consumers do not need connected/updated retry loops.
- */
+/** Adapts dynamic subscriptions to the sidebar host until it adopts Solid lifetimes. */
 export class SubscriptionsController implements SolidController {
   private readonly entries: SourceEntry<unknown>[] = [];
   private connected = false;
@@ -143,13 +41,8 @@ export class SubscriptionsController implements SolidController {
     return this.addEntry(
       getSource,
       (source, entry) => {
-        const generation = entry.generation;
         const notify = () => {
-          if (
-            !this.connected ||
-            entry.generation !== generation ||
-            !Object.is(entry.source, source)
-          ) {
+          if (!this.connected || !Object.is(entry.source, source)) {
             return;
           }
           synchronize?.(source);
@@ -162,11 +55,7 @@ export class SubscriptionsController implements SolidController {
           } else if (entry.frame === undefined) {
             entry.frame = globalThis.requestAnimationFrame(() => {
               entry.frame = undefined;
-              if (
-                !this.connected ||
-                entry.generation !== generation ||
-                !Object.is(entry.getSource(), source)
-              ) {
+              if (!this.connected || !Object.is(entry.getSource(), source)) {
                 return;
               }
               this.host.requestUpdate();
@@ -226,7 +115,6 @@ export class SubscriptionsController implements SolidController {
       invalidateOnConnect,
       source: undefined,
       cleanup: undefined,
-      generation: 0,
       frame: undefined,
     };
     this.entries.push(entry as SourceEntry<unknown>);
@@ -252,7 +140,6 @@ export class SubscriptionsController implements SolidController {
       return;
     }
     entry.source = source;
-    entry.generation += 1;
     try {
       entry.cleanup = entry.connect(source);
     } catch (error) {
@@ -265,7 +152,6 @@ export class SubscriptionsController implements SolidController {
   }
 
   private disconnectEntry<T>(entry: SourceEntry<T>): void {
-    entry.generation += 1;
     if (entry.frame !== undefined) {
       globalThis.cancelAnimationFrame(entry.frame);
       entry.frame = undefined;
@@ -273,11 +159,8 @@ export class SubscriptionsController implements SolidController {
     entry.source = undefined;
     const cleanup = entry.cleanup;
     entry.cleanup = undefined;
-    if (!cleanup) {
-      return;
-    }
     try {
-      cleanup();
+      cleanup?.();
     } catch (error) {
       console.error("[openclaw] subscription cleanup failed", error);
     }

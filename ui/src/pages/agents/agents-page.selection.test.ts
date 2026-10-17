@@ -8,14 +8,14 @@ import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createBrowserHistory } from "../../app/browser.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
+import { agentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
   agentsCapability,
   agentsList,
   agentsRouteData,
   gateway,
   pageContext,
-  setPageGateway,
+  emitGatewaySnapshot,
   settingsSelection,
   snapshot,
   createAgentsPage,
@@ -38,27 +38,24 @@ describe("AgentsPage routing", () => {
     ({ requestedAgentId, selectedId, expectedAgentId }) => {
       const currentGateway = gateway(snapshot(null, false));
       const selection = settingsSelection(roster, selectedId);
-      const page = createAgentsPage();
-      page.context = {
-        basePath: "",
-        gateway: currentGateway,
+      const agents = agentsCapability(async () => files(selectedId, selectedId));
+      agents.state.agentsList = roster;
+      const context: ApplicationContext = {
+        ...pageContext(currentGateway, agents),
         settingsAgentSelection: selection,
-      } as unknown as ApplicationContext;
-      page.agentsList = roster;
-      page.agentsSelectedId = selectedId;
-      setAgentFileValues(page, "content", { "AGENTS.md": "Previous agent's file" });
-      page.routeData = {
+      };
+      const page = createAgentsPage(context);
+      page.read().agentFiles.onFileDraftChange("AGENTS.md", "Previous agent's file");
+      page.setRouteData({
         ...agentsRouteData(currentGateway, null, requestedAgentId, selection),
         gatewaySnapshot: snapshot(null, false),
         panel: "tools",
-      };
+      });
 
-      page.applyRoute();
-
-      expect(page.agentsPanel).toBe("tools");
-      expect(page.agentsSelectedId).toBe(expectedAgentId);
+      expect(page.read().activePanel).toBe("tools");
+      expect(page.read().selectedAgentId).toBe(expectedAgentId);
       expect(selection.state.selectedId).toBe(expectedAgentId);
-      expect(agentFileValues(page, "content")).toEqual(
+      expect(agentFileValues(page.read().agentFiles, "draft")).toEqual(
         selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
       );
     },
@@ -88,8 +85,7 @@ describe("AgentsPage routing", () => {
       { requireConfiguredAgent: true },
     );
     const currentGateway = gateway(snapshot(null, false));
-    const page = createAgentsPage();
-    page.context = {
+    const context: ApplicationContext = {
       ...pageContext(
         currentGateway,
         agentsCapability(async () => files("main", "main")),
@@ -103,19 +99,18 @@ describe("AgentsPage routing", () => {
           hash: options?.hash ?? "",
         }),
     };
+    const page = createAgentsPage(context);
     try {
       window.history.replaceState({}, "", "/settings");
       history.push({ pathname: "/settings/agents", search: "", hash: "" });
-      page.subscriptions.hostConnected();
-      page.routeData = {
+      page.setRouteData({
         ...agentsRouteData(currentGateway, null, null, selection),
         panel: "overview",
-      };
-      page.applyRoute();
+      });
 
       rosterSource.state.agentsList = roster;
       listeners.forEach((listener) => listener());
-      expect(page.agentsSelectedId).toBe("main");
+      expect(page.read().selectedAgentId).toBe("main");
 
       const back = new Promise<void>((resolve) => {
         window.addEventListener("popstate", () => resolve(), { once: true });
@@ -124,7 +119,7 @@ describe("AgentsPage routing", () => {
       await back;
       expect(window.location.pathname).toBe("/settings");
     } finally {
-      page.subscriptions.hostDisconnected();
+      page.dispose();
       selection.dispose();
       window.history.replaceState(previousState, "", previousUrl);
     }
@@ -151,46 +146,43 @@ describe("AgentsPage routing", () => {
       { requireConfiguredAgent: true },
     );
     const currentGateway = gateway(snapshot(null, false));
-    const page = createAgentsPage();
-    page.context = {
+    const context: ApplicationContext = {
       ...pageContext(
         currentGateway,
         agentsCapability(async () => files("main", "main")),
       ),
       settingsAgentSelection: selection,
     };
-    page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
-    page.subscriptions.hostConnected();
+    const page = createAgentsPage(
+      context,
+      agentsRouteData(currentGateway, roster, "main", selection),
+    );
     try {
-      page.applyRoute();
       rosterSource.state.agentsList = { ...roster, agents: [{ id: "research" }] };
       listeners.forEach((listener) => listener());
 
-      expect(page.agentsSelectedId).toBe("research");
-      expect(page.context.navigate).not.toHaveBeenCalled();
+      expect(page.read().selectedAgentId).toBe("research");
+      expect(context.navigate).not.toHaveBeenCalled();
 
       rosterSource.state.agentsList = roster;
       listeners.forEach((listener) => listener());
-      expect(page.agentsSelectedId).toBe("main");
-      expect(page.context.navigate).not.toHaveBeenCalled();
+      expect(page.read().selectedAgentId).toBe("main");
+      expect(context.navigate).not.toHaveBeenCalled();
 
       selection.set("research");
 
-      expect(page.context.navigate).toHaveBeenCalledExactlyOnceWith("agents", {
+      expect(context.navigate).toHaveBeenCalledExactlyOnceWith("agents", {
         pathname: "/settings/agents/research/files",
       });
     } finally {
-      page.subscriptions.hostDisconnected();
+      page.dispose();
       selection.dispose();
     }
   });
 
-  it.each([
-    { pendingUpdate: false, newerIntent: false },
-    { pendingUpdate: true, newerIntent: true },
-  ])(
-    "preserves Files while a reused page awaits route data (updated: $pendingUpdate, newer intent: $newerIntent)",
-    async ({ pendingUpdate, newerIntent }) => {
+  it.each([false, true])(
+    "preserves Files while a reused page awaits route data (newer intent: %s)",
+    async (newerIntent) => {
       const listeners = new Set<() => void>();
       const request = vi.fn(async () => ({ models: [] }));
       const client = { request } as unknown as GatewayBrowserClient;
@@ -214,60 +206,59 @@ describe("AgentsPage routing", () => {
         undefined,
         { requireConfiguredAgent: true },
       );
-      const page = createAgentsPage();
-      const context = pageContext(currentGateway, agents);
-      page.context = {
-        ...context,
+      const baseContext = pageContext(currentGateway, agents);
+      const context: ApplicationContext = {
+        ...baseContext,
         settingsAgentSelection: selection,
         runtimeConfig: {
-          ...context.runtimeConfig,
+          ...baseContext.runtimeConfig,
           state: { configSnapshot: {}, configLoading: false },
         },
       } as unknown as ApplicationContext;
-      page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
-      setPageGateway(page, client);
-      page.subscriptions.hostConnected();
+      const page = createAgentsPage(
+        context,
+        agentsRouteData(currentGateway, roster, "main", selection),
+      );
       try {
-        page.applyRoute();
-        await waitForFast(() => expect(page.agentFilesList?.workspace).toBe("main"));
+        await waitForFast(() =>
+          expect(page.read().agentFiles.agentFilesList?.workspace).toBe("main"),
+        );
 
         agents.state.agentsList = null;
         listeners.forEach((listener) => listener());
         expect(selection.state.selectedId).toBeNull();
         const nextData = agentsRouteData(currentGateway, roster, "research", selection);
         // The transient outlet reuses this element while the next loader has no data.
-        page.routeData = undefined;
-        if (pendingUpdate) {
-          page.applyRoute();
-        }
+        page.setRouteData(undefined);
         agents.state.agentsList = roster;
         listeners.forEach((listener) => listener());
 
         expect(selection.state.selectedId).toBe("main");
-        expect(page.context.navigate).not.toHaveBeenCalled();
+        expect(context.navigate).not.toHaveBeenCalled();
         expect(request).not.toHaveBeenCalled();
         if (newerIntent) {
           selection.set("main");
         }
-        page.routeData = nextData;
-        page.applyRoute();
+        page.setRouteData(nextData);
 
         const expectedAgentId = newerIntent ? "main" : "research";
         expect(selection.state.selectedId).toBe(expectedAgentId);
-        expect(page.agentsPanel).toBe("files");
-        await waitForFast(() => expect(page.agentFilesList?.workspace).toBe(expectedAgentId));
-        expect(page.context.navigate).not.toHaveBeenCalled();
+        expect(page.read().activePanel).toBe("files");
+        await waitForFast(() =>
+          expect(page.read().agentFiles.agentFilesList?.workspace).toBe(expectedAgentId),
+        );
+        expect(context.navigate).not.toHaveBeenCalled();
         if (newerIntent) {
-          expect(page.context.replace).toHaveBeenCalledWith("agents", {
+          expect(context.replace).toHaveBeenCalledWith("agents", {
             pathname: "/settings/agents/main/files",
             search: "",
             hash: "",
           });
         } else {
-          expect(page.context.replace).not.toHaveBeenCalled();
+          expect(context.replace).not.toHaveBeenCalled();
         }
       } finally {
-        page.subscriptions.hostDisconnected();
+        page.dispose();
         selection.dispose();
       }
     },
@@ -276,22 +267,27 @@ describe("AgentsPage routing", () => {
   it("does not restore a preloaded agent after a newer sidebar choice, including an ABA change", () => {
     const currentGateway = gateway(snapshot(null, false));
     const selection = settingsSelection(roster, "main");
-    const page = createAgentsPage();
     const replace = vi.fn();
-    page.context = {
+    const context: ApplicationContext = {
       basePath: "",
       gateway: currentGateway,
       settingsAgentSelection: selection,
       replace,
     } as unknown as ApplicationContext;
-    page.routeData = agentsRouteData(currentGateway, roster, "research", selection);
+    const preloaded = agentsRouteData(currentGateway, roster, "research", selection);
+    const page = createAgentsPage({
+      ...pageContext(
+        currentGateway,
+        agentsCapability(async () => files("main", "main")),
+      ),
+      ...context,
+    });
     selection.set("research");
     selection.set("main");
-
-    page.applyRoute();
+    page.setRouteData(preloaded);
 
     expect(selection.state.selectedId).toBe("main");
-    expect(page.agentsSelectedId).toBe("main");
+    expect(page.read().selectedAgentId).toBe("main");
     expect(replace).toHaveBeenCalledWith("agents", {
       pathname: "/settings/agents/main/files",
       search: "",
@@ -310,29 +306,29 @@ describe("AgentsPage routing", () => {
         agentId === "main" ? pending.promise : Promise.resolve(files("research", "research")),
       ),
     };
-    const page = createAgentsPage();
-    page.context = {
+    const context: ApplicationContext = {
       ...pageContext(currentGateway, agents),
       settingsAgentSelection: selection,
     };
-    page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
-    setPageGateway(page, client);
-    page.subscriptions.hostConnected();
-    page.routeDataInitialized = true;
-    page.agentsList = roster;
-    const load = page.loadAgentFiles("main");
-    expect(page.agentFilesLoading).toBe(true);
+    const page = createAgentsPage(
+      context,
+      agentsRouteData(currentGateway, roster, "main", selection),
+    );
+
+    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
 
     selection.set("research");
     pending.resolve(files("main", "retired-main-workspace"));
-    await load;
+    await pending.promise;
 
-    expect(page.agentsSelectedId).toBe("research");
-    await waitForFast(() => expect(page.agentFilesList?.workspace).toBe("research"));
-    expect(page.context.navigate).toHaveBeenCalledWith("agents", {
+    expect(page.read().selectedAgentId).toBe("research");
+    await waitForFast(() =>
+      expect(page.read().agentFiles.agentFilesList?.workspace).toBe("research"),
+    );
+    expect(context.navigate).toHaveBeenCalledWith("agents", {
       pathname: "/settings/agents/research/files",
     });
-    page.subscriptions.hostDisconnected();
+    page.dispose();
   });
 
   it.each(["same target", "different target", "excluded target", "profile", "source"])(
@@ -361,39 +357,40 @@ describe("AgentsPage routing", () => {
         undefined,
         { requireConfiguredAgent: true },
       );
-      const page = createAgentsPage();
-      page.context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
-      page.gateway.applySnapshot(currentGateway.snapshot, { initial: true, sourceChanged: false });
-      page.subscriptions.hostConnected();
+      const context: ApplicationContext = {
+        ...pageContext(currentGateway, agents),
+        settingsAgentSelection: selection,
+      };
+      let page = createAgentsPage(context);
       try {
-        page.identityDraft = { name: "Lunar museum guide", emoji: null, avatar: null };
+        page.read().overview.onIdentityFieldChange("name", "Lunar museum guide");
         agents.state.agentsList = null;
         listeners.forEach((listener) => listener());
-        expect(page.agentsSelectedId).toBeNull();
-        expect(page.identityDraft.name).toBeNull();
+        expect(page.read().selectedAgentId).toBeNull();
+        expect(page.read().overview.identityDraft.name).toBeNull();
         if (change === "different target") {
           selection.set("research");
           selection.set("main");
         } else if (change === "profile") {
           currentGateway.snapshot.selfUser = { id: "other-operator" };
-          page.gateway.applySnapshot(currentGateway.snapshot, {
-            initial: false,
-            sourceChanged: false,
-          });
+          emitGatewaySnapshot(currentGateway, currentGateway.snapshot);
         } else if (change === "source") {
-          setPageGateway(page, client, true, true);
+          page.dispose();
+          page = createAgentsPage({ ...context, gateway: gateway(snapshot(client)) });
         }
         agents.state.agentsList =
           change === "excluded target"
             ? { ...roster, agents: roster.agents.filter((agent) => agent.id !== "main") }
             : roster;
         listeners.forEach((listener) => listener());
-        expect(page.agentsSelectedId).toBe(change === "excluded target" ? "research" : "main");
-        expect(page.identityDraft.name).toBe(
+        expect(page.read().selectedAgentId).toBe(
+          change === "excluded target" ? "research" : "main",
+        );
+        expect(page.read().overview.identityDraft.name).toBe(
           change === "same target" ? "Lunar museum guide" : null,
         );
       } finally {
-        page.subscriptions.hostDisconnected();
+        page.dispose();
         selection.dispose();
       }
     },
@@ -428,8 +425,7 @@ describe("AgentsPage routing", () => {
         mutations.push(mutation);
         return mutation;
       };
-      const page = createAgentsPage();
-      page.context = {
+      const mountedContext = {
         ...context,
         agentIdentity: { ...context.agentIdentity, invalidate: vi.fn() },
         runtimeConfig: {
@@ -437,39 +433,38 @@ describe("AgentsPage routing", () => {
           runExternalMutation,
         },
       };
-      setPageGateway(page, client);
-      page.agentsSelectedId = "main";
-      page.identityDraft = { name: "Lunar museum guide", emoji: null, avatar: null };
-      page.saveIdentityDraft();
+      const page = createAgentsPage(mountedContext);
+      page.read().overview.onIdentityFieldChange("name", "Lunar museum guide");
+      page.read().overview.onIdentitySave();
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       if (stage === "roster refresh") {
         oldRequest.resolve();
         await waitForFast(() => expect(agents.refreshList).toHaveBeenCalledOnce());
       }
-      setPageGateway(page, client, false);
-      setPageGateway(page, client);
-      expect(page.identityDraft.name).toBe("Lunar museum guide");
-      expect(page.identitySaving).toBe(false);
+      emitGatewaySnapshot(currentGateway, snapshot(client, false));
+      emitGatewaySnapshot(currentGateway, snapshot(client));
+      expect(page.read().overview.identityDraft.name).toBe("Lunar museum guide");
+      expect(page.read().overview.identitySaving).toBe(false);
 
-      page.identityDraft = { name: "Lunar museum curator", emoji: null, avatar: null };
-      page.saveIdentityDraft();
+      page.read().overview.onIdentityFieldChange("name", "Lunar museum curator");
+      page.read().overview.onIdentitySave();
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
       if (stage === "request") {
         oldRequest.reject(new Error("Retired identity request"));
         await mutations[0]?.catch(() => undefined);
       } else {
         oldRefresh.resolve(agentsList);
-        await waitForFast(() => expect(page.context.agentIdentity.ensure).toHaveBeenCalledOnce());
+        await waitForFast(() => expect(context.agentIdentity.ensure).toHaveBeenCalledOnce());
       }
       await Promise.resolve();
-      expect(page.identitySaving).toBe(true);
-      expect(page.identityDraft.name).toBe("Lunar museum curator");
-      expect(page.identityError).toBeNull();
+      expect(page.read().overview.identitySaving).toBe(true);
+      expect(page.read().overview.identityDraft.name).toBe("Lunar museum curator");
+      expect(page.read().overview.identityError).toBeNull();
 
       newRequest.resolve();
-      await waitForFast(() => expect(page.identitySaving).toBe(false));
-      expect(page.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
-      expect(page.identityError).toBeNull();
+      await waitForFast(() => expect(page.read().overview.identitySaving).toBe(false));
+      expect(page.read().overview.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+      expect(page.read().overview.identityError).toBeNull();
     },
   );
 
@@ -480,7 +475,6 @@ describe("AgentsPage routing", () => {
     const currentGateway = gateway(snapshot(client));
     const selection = settingsSelection(roster, "main");
     const agents = agentsCapability(async () => files("main", "main"));
-    const page = createAgentsPage();
     const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
       async (task, options) => {
         await admission.promise;
@@ -490,27 +484,25 @@ describe("AgentsPage routing", () => {
         return { ok: true, value: await task(client), refresh: { ok: true } };
       },
     );
-    page.context = {
+    const context: ApplicationContext = {
       ...pageContext(currentGateway, agents),
       settingsAgentSelection: selection,
       runtimeConfig: { subscribe: () => () => undefined, runExternalMutation },
     } as unknown as ApplicationContext;
-    page.routeData = {
+    const page = createAgentsPage(context, {
       ...agentsRouteData(currentGateway, roster, "main", selection),
       panel: "memory",
-    };
-    setPageGateway(page, client);
-    page.subscriptions.hostConnected();
-    page.identityDraft = { name: "Main draft", emoji: null, avatar: null };
+    });
+    page.read().overview.onIdentityFieldChange("name", "Main draft");
 
-    page.saveIdentityDraft();
+    page.read().overview.onIdentitySave();
     expect(runExternalMutation).toHaveBeenCalledOnce();
     selection.set("research");
     admission.resolve();
     await runExternalMutation.mock.results[0]?.value;
 
     expect(request).not.toHaveBeenCalled();
-    expect(page.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
-    page.subscriptions.hostDisconnected();
+    expect(page.read().overview.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+    page.dispose();
   });
 });

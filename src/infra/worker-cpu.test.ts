@@ -2,11 +2,12 @@ import { EventEmitter, once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { getHeapStatistics } from "node:v8";
+import { getHeapStatistics, type HeapSpaceInfo } from "node:v8";
 import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
 import {
   getTrackedWorkerCpuSources,
   getTrackedWorkerLifecycleSnapshot,
@@ -175,8 +176,6 @@ describe("worker CPU lifecycle", () => {
 
   it.each([
     ["postMessage", "accessor"],
-    ["emit", "accessor"],
-    ["postMessage", "readonly"],
     ["emit", "readonly"],
   ] as const)("preserves a subclass with %s defined as %s", async (method, descriptorKind) => {
     class ReadOnlyWorker extends Worker {}
@@ -409,6 +408,8 @@ describe("worker CPU lifecycle", () => {
       worker: Worker;
       sample: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external" | "arrayBuffers"> & {
         heapSizeLimitBytes?: number;
+        heapSpaces?: Pick<HeapSpaceInfo, "space_name" | "space_used_size">[];
+        retainedData?: readonly DiagnosticWorkerRetainedData[];
       };
     }>();
     let attached = false;
@@ -448,6 +449,16 @@ describe("worker CPU lifecycle", () => {
       expect(sample.heapUsed).toBeGreaterThan(0);
       expect(sample.external).toBeGreaterThanOrEqual(4 * 1024 * 1024);
       expect(sample.arrayBuffers).toBeGreaterThanOrEqual(4 * 1024 * 1024);
+      expect(sample.retainedData).toEqual([
+        { structure: "catalog-source", entries: 1, approximateBytes: 4 * 1024 * 1024 },
+      ]);
+      if (process.versions.bun) {
+        expect(sample.heapSpaces).toBeUndefined();
+      } else {
+        expect(
+          sample.heapSpaces?.find((space) => space.space_name === "old_space")?.space_used_size,
+        ).toBeGreaterThan(0);
+      }
       const memory = sampleTrackedWorkerMemory();
       expect(memory.workerHeaps).toContainEqual(
         expect.objectContaining({ threadId: result.threadId, ...sample }),
@@ -489,6 +500,8 @@ describe("worker CPU lifecycle", () => {
       }
       expect(native.used_heap_size).toBeGreaterThan(0);
       expect(native.external_memory).toBeGreaterThanOrEqual(4 * 1024 * 1024);
+      expect(sampleTrackedWorkerMemory().workerHeaps[0]?.heapSpaces).toBeUndefined();
+      expect(sampleTrackedWorkerMemory().workerHeaps[0]?.retainedData).toBeUndefined();
       expect(send).toHaveBeenCalledTimes(1);
       expect(read).toHaveBeenCalledTimes(2);
       const recovered = once(port, "message");

@@ -259,9 +259,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     result.sourceReplyDeliveryState === undefined &&
     resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined;
   const assistantFinalText = normalizeAssistantFinalDeliveryText(
-    typeof result.meta?.finalAssistantVisibleText === "string"
-      ? result.meta.finalAssistantVisibleText
-      : "",
+    result.meta?.finalAssistantVisibleText ?? "",
   );
   let payloads = preparePayloads(sourcePayloads, {
     reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,

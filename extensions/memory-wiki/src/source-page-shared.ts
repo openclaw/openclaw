@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { preserveHumanNotesBlock, renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
+import {
+  decodeWikiPageUtf8,
+  preserveHumanNotesBlock,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+} from "./markdown.js";
 import {
   setImportedSourceEntry,
   type MemoryWikiImportedSourceGroup,
@@ -86,7 +91,7 @@ export async function writeImportedSourcePage(params: {
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat
     ? await readExistingWikiPage(
-        () => vault.readText(params.pagePath),
+        async () => decodeWikiPageUtf8(await vault.readBytes(params.pagePath), params.pagePath),
         (error) =>
           error instanceof FsSafeError && (error.code === "not-file" || error.code === "hardlink"),
       )

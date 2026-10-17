@@ -770,6 +770,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
         name: "bash",
         status: "failed",
         isError: true,
+        success: false,
         result: { status: "failed", reason: "missing_tool_result" },
         output: expect.stringContaining("without a matching tool.result"),
       }),

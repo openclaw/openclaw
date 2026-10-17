@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Show } from "solid-js";
 import { vi } from "vitest";
-import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -12,7 +11,7 @@ import {
   type ChatThreadProps,
 } from "../components/chat-thread-interactions.ts";
 import { ChatThread } from "../components/chat-thread-view.tsx";
-import type { ChatTranscriptController } from "../components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "../components/chat-transcript-controller.ts";
 import { TranscriptSearch } from "../components/chat-transcript-search.tsx";
 import type { ChatTranscriptSession } from "../components/chat-transcript-session.ts";
 import {
@@ -23,7 +22,7 @@ import {
 class ThreadFixture {
   constructor(
     readonly props: ChatThreadProps,
-    readonly transcript: ChatTranscriptController,
+    readonly transcript: ChatTranscript,
     readonly search?: () => void,
   ) {}
 }
@@ -76,7 +75,7 @@ function Content(props: { value: NativeContent }) {
 
 export function renderChatThread(
   props: ChatThreadProps,
-  transcript: ChatTranscriptController,
+  transcript: ChatTranscript,
   options?: { search: () => void },
 ) {
   return new ThreadFixture(props, transcript, options?.search);
@@ -111,35 +110,25 @@ export function render(value: NativeContent, container: HTMLElement): void {
   flush();
 }
 
-export class TranscriptTestHost extends HTMLElement implements SolidControllerHost {
+export class TranscriptTestHost extends HTMLElement {
+  transcript?: ChatTranscript;
   readonly transcriptRoot = document.createElement("div");
   renderTranscript: () => NativeContent = () => null;
   committedRenders = 0;
-  private readonly controllers = new Set<SolidController>();
   private pending: Promise<boolean> | undefined;
 
-  addController(controller: SolidController) {
-    this.controllers.add(controller);
-  }
-  removeController(controller: SolidController) {
-    this.controllers.delete(controller);
-  }
   get updateComplete() {
     return this.pending ?? Promise.resolve(true);
   }
 
   connectedCallback() {
     this.append(this.transcriptRoot);
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
-    this.requestUpdate();
+    this.transcript?.start();
+    this.requestRender();
   }
 
   disconnectedCallback() {
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
+    this.transcript?.dispose();
     queueMicrotask(() => {
       if (!this.isConnected) {
         render(null, this.transcriptRoot);
@@ -147,21 +136,16 @@ export class TranscriptTestHost extends HTMLElement implements SolidControllerHo
     });
   }
 
-  requestUpdate() {
+  requestRender() {
     this.pending ??= Promise.resolve().then(() => {
       if (!this.isConnected) {
         this.pending = undefined;
         return true;
       }
-      for (const controller of this.controllers) {
-        controller.hostUpdate?.();
-      }
       this.pending = undefined;
       render(this.renderTranscript(), this.transcriptRoot);
       this.committedRenders += 1;
-      for (const controller of this.controllers) {
-        controller.hostUpdated?.();
-      }
+      this.transcript?.update();
       return true;
     });
   }
@@ -177,7 +161,7 @@ export class TranscriptTestHost extends HTMLElement implements SolidControllerHo
 export async function mountTestTranscript(
   paneId: string,
   initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(paneId),
+  transcript: ChatTranscript = createTestTranscript(paneId),
 ) {
   const container = document.body.appendChild(document.createElement("div"));
   let currentSession: ChatTranscriptSession;
@@ -196,10 +180,10 @@ export async function mountTestTranscript(
       }),
       container,
     );
-    transcript.hostUpdated();
+    transcript.update();
     flush();
   };
-  transcript.hostConnected();
+  transcript.start();
   renderRows(initialRows);
   await flushDeferredRowPrune();
   return {

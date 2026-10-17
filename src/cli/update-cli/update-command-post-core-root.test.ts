@@ -9,6 +9,7 @@ import * as postCoreCapability from "../../infra/update-post-core-capability.js"
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import * as cliOptions from "./update-command-cli-options.js";
 
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, readControlPlaneUpdateSentinelMeta } =
   controlPlaneSentinel;
@@ -49,6 +50,49 @@ afterEach(() => {
 });
 
 describe("post-core child output", () => {
+  it.each([false, true])(
+    "forwards full integrity only to supporting candidates (%s)",
+    async (supported) => {
+      const state = await createOpenClawTestState({ label: "post-core-integrity" });
+      try {
+        const root = state.path("package");
+        await writePackageRoot(root, "9999.0.0");
+        vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(false);
+        const inspect = vi
+          .spyOn(cliOptions, "readUpdateTargetCliOptions")
+          .mockResolvedValue(
+            new Set(["--accept-capabilities", ...(supported ? ["--full-integrity-check"] : [])]),
+          );
+        mocks.spawn.mockImplementation(() => {
+          const child = new EventEmitter();
+          queueMicrotask(() => {
+            child.emit("exit", 0, null);
+            child.emit("close", 0, null);
+          });
+          return child;
+        });
+        expect(
+          await continuePostCoreUpdateInFreshProcess({
+            root,
+            channel: "stable",
+            requestedChannel: null,
+            opts: { fullIntegrityCheck: true, acceptCapabilities: true },
+            pluginInstallRecords: {},
+            updateStartedAtMs: 123,
+            timeoutMs: 5000,
+            nodeRunner: process.execPath,
+          }),
+        ).toEqual({ resumed: true });
+        expect(inspect).toHaveBeenCalledOnce();
+        const argv = mocks.spawn.mock.calls[0]?.[1] as string[];
+        expect(argv).toContain("--accept-capabilities");
+        expect(argv.includes("--full-integrity-check")).toBe(supported);
+      } finally {
+        await state.cleanup();
+      }
+    },
+  );
+
   it.each([
     ["win32", false, "pipe"],
     ["win32", true, "pipe"],

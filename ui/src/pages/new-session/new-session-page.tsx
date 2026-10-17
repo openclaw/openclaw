@@ -1,28 +1,30 @@
-import { createEffect, createMemo, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
+import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
+import { NewSessionDictationView } from "./composer-dictation-view.tsx";
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
@@ -38,6 +40,10 @@ import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
+
+const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
+  export: "CreationComposer",
+});
 
 export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
   // Instant-thread handoff parks and restores this exact registered host across route roots.
@@ -71,7 +77,7 @@ function DraftBlock(props: {
     onNavigate: (route, routeOptions) => props.page().context?.navigate(route, routeOptions),
     onFocusComposer: () =>
       submission().composerTextarea.getTextarea()?.focus({ preventScroll: true }),
-    requestUpdate: () => props.page().changed(),
+    onChange: () => props.page().changed(),
   }));
   const permissionControl = (
     <Show when={!catalog.isTarget(props.page().data)}>
@@ -86,7 +92,7 @@ function DraftBlock(props: {
     </Show>
   );
   const dictationStatus = (
-    <NewSessionDictationStatus control={props.page().dictation} renderRevision={props.revision()} />
+    <ComposerDictationStatus readDictation={() => props.page().dictation.dictation} />
   );
   const voiceControl = (
     <NewSessionDictationView
@@ -120,6 +126,9 @@ function DraftBlock(props: {
         agentSelect={
           <Show when={place().agents().length > 1}>
             <AgentSelect
+              ref={(node) => {
+                props.page().agentPicker = node;
+              }}
               params={{
                 agents: place().agents(),
                 agentId: place().agentId,
@@ -188,21 +197,17 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   const page = pageState.read;
   const revision = createMemo(() => ({ value: pageState.revision() }));
   owner.titlePreparation = createNewSessionTitle(() => ({
-    context: page().context,
-    data: page().data,
-    place: page().place,
-    submission: page().submission,
-    dictating: page().dictation.active,
+    context: owner.context,
+    data: owner.data,
+    place: owner.place,
+    submission: owner.submission,
+    dictating: owner.dictation.active,
   }));
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
-  // Gateway facts must be bound before the first effect adopts draft defaults.
+  // Bind gateway facts before publishing the first reconciled draft snapshot.
   owner.connect();
   onCleanup(() => owner.disconnect());
-  createEffect(revision, () => {
-    owner.synchronize();
-    owner.updated();
-  });
   onSettled(() => {
     const context = owner.context;
     const notify = owner.changed;
@@ -217,19 +222,19 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           context.config,
         ].map((source) => source.subscribe(notify))
       : [];
-    const document = owner.ownerDocument;
-    const window = document.defaultView!;
-    const dismiss = installChatComposerPickerDismissal(document);
-    const keydown = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(host, event);
-    document.addEventListener("keydown", keydown, true);
-    window.addEventListener("beforeunload", owner.flushDraft);
+    const document = host.ownerDocument;
+    stops.push(
+      installChatComposerPickerDismissal(document),
+      listen(
+        document,
+        "keydown",
+        (event) => focusChatComposerFromPrintableKeydown(host, event),
+        true,
+      ),
+      listen(document.defaultView!, "beforeunload", owner.flushDraft),
+    );
     notify();
-    return () => {
-      stops.forEach((stop) => stop());
-      dismiss();
-      document.removeEventListener("keydown", keydown, true);
-      window.removeEventListener("beforeunload", owner.flushDraft);
-    };
+    return () => stops.forEach((stop) => stop());
   });
   const visibilityControl = {
     get visibility() {
@@ -328,11 +333,17 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           )}
           onOpenImage={owner.setImageLightbox}
         />
-        <CreationComposer
-          composer={creationComposer()}
-          onOpenImage={owner.setImageLightbox}
-          renderRevision={revision()}
-        />
+        <Show when={creationComposer()}>
+          {(composer) => (
+            <Errored
+              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
+            >
+              <Loading fallback={<LoadingState />}>
+                <CreationComposer composer={composer()} onOpenImage={owner.setImageLightbox} />
+              </Loading>
+            </Errored>
+          )}
+        </Show>
         <ConnectMachineDialog
           {...page().connectMachine.view(page().place.isAdmin(), () => {
             owner.connectMachine.close();
@@ -390,14 +401,12 @@ defineSolidBridge<
   { data: NewSessionRouteData | undefined },
   {
     focusComposer(): void;
-    requestUpdate(): void;
   }
 >("openclaw-new-session-page", PageContent, {
   properties: { data: { default: undefined, attribute: false } },
   propertyChanged: (host) => pageOwners.get(host)?.changed(),
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
-    requestUpdate: (host) => pageOwners.get(host)?.changed(),
   },
 });
 

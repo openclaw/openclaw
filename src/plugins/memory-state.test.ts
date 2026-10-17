@@ -311,6 +311,7 @@ describe("memory plugin state", () => {
     ["session", { agentSessionKey: "agent:first:other" }],
     ["citations", { citationsMode: "off" as const }],
     ["sandbox", { sandboxed: true }],
+    ["project", { projectKey: "github.com/acme/other" }],
     ["removed tool", { availableTools: new Set<string>() }],
     ["added tool", { availableTools: new Set(["wiki_search", "memory_search"]) }],
     ["replaced tool", { availableTools: new Set(["memory_search"]) }],

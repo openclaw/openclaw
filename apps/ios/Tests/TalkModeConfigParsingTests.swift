@@ -366,7 +366,7 @@ struct TalkModeManagerTests {
 
                 #expect(manager.gatewayTalkConfigLoaded)
                 #expect(manager._test_runtimeRoute() == .realtimeWebRTC)
-                await manager.prefetchRealtimeSessionIfReady(reason: "config-test")
+                await manager.prefetchRealtimeSessionIfReady()
                 let frame = try #require(await requests.next())
                 let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
                 let params = try #require(request["params"] as? [String: Any])

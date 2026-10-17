@@ -261,7 +261,6 @@ async function runCodexSessionAction(
   );
 }
 
-/** Registers the plugin-owned Codex session supervision CLI. */
 export function registerCodexSessionCli(program: Command): void {
   const codex = program
     .command("codex")

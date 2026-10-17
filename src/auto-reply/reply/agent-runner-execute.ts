@@ -146,10 +146,34 @@ type ExecutePreparedReplyAgentRunInput = Omit<
   };
 
 export async function executePreparedReplyAgentRun(
-  input: ExecutePreparedReplyAgentRunInput,
+  context: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  // Preserve the invocation snapshot across preparation; live session state uses its getters.
-  const context = { ...input };
+  const activitySummaryCompletion =
+    !context.isHeartbeat && context.sessionKey && context.storePath
+      ? getGatewayContextResolver(
+          context.replyOperation,
+        )?.()?.sessionActivitySummaries?.beginCompletion(
+          {
+            agentId: context.followupRun.run.agentId,
+            key: context.sessionKey,
+            storePath: context.storePath,
+          },
+          context.getActiveSessionEntry(),
+        )
+      : undefined;
+  try {
+    return await executePreparedReplyAgentRunWithCompletion({
+      ...context,
+      activitySummaryCompletion,
+    });
+  } finally {
+    activitySummaryCompletion?.release();
+  }
+}
+
+async function executePreparedReplyAgentRunWithCompletion(
+  context: ExecutePreparedReplyAgentRunInput,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     activeSessionStore,
     admitUserTurn,
@@ -338,7 +362,7 @@ export async function executePreparedReplyAgentRun(
       traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           ...context,
-          resolveVisibleReplyDelivery: input.resolveVisibleReplyDelivery,
+          resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         }),
       ),

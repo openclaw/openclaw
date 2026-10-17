@@ -67,7 +67,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(["same", "other-client", "other-agent"])(
+it.each(["same", "other-client", "other-agent", "other-session"])(
   "reconciles detail metadata only in the matching %s scope",
   async (scope) => {
     const request = vi.fn((method: string) =>
@@ -77,11 +77,13 @@ it.each(["same", "other-client", "other-agent"])(
     const { host, anchor } = makeProvider();
     host.client = client;
     host.agentId = "main";
+    host.sessionKey = "agent:main:pane-one";
     await hover(anchor);
     expect(badge()).toBe("Open");
     const panel = document.createElement("openclaw-link-reader-panel");
     panel.client = scope === "other-client" ? createTestGatewayClient(request) : client;
     panel.agentId = scope === "other-agent" ? "other" : "main";
+    panel.sessionKey = scope === "other-session" ? "agent:main:pane-two" : "agent:main:pane-one";
     panel.available = true;
     panel.readers = [reader];
     mountSolid(() => panel);
@@ -107,18 +109,27 @@ it.each(["same", "other-client", "other-agent"])(
   },
 );
 
-it("refreshes an explicitly stale response once instead of caching it as fresh", async () => {
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce({ ...open, stale: true })
-    .mockResolvedValue(merged);
-  const { host, anchor } = makeProvider();
-  host.client = createTestGatewayClient(request);
-  await hover(anchor);
-  expect(badge()).toBe("Merged");
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls[1]?.[1]).toEqual({ url, refresh: true });
-});
+it.each([false, true])(
+  "refreshes an explicitly stale response once (session scoped: %s)",
+  async (sessionScoped) => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ...open, stale: true })
+      .mockResolvedValue(merged);
+    const { host, anchor } = makeProvider();
+    host.client = createTestGatewayClient(request);
+    host.sessionKey = "agent:main:pane-one";
+    host.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped } }];
+    await hover(anchor);
+    expect(badge()).toBe("Merged");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toEqual({
+      url,
+      refresh: true,
+      ...(sessionScoped ? { sessionKey: "agent:main:pane-one" } : {}),
+    });
+  },
+);
 
 it("labels still-stale metadata and retries only after short backoff", async () => {
   const request = vi.fn().mockResolvedValue({ ...open, stale: true });
@@ -216,3 +227,49 @@ it.each([false, true])(
     expect(previewReads).toBe(pendingPreview ? 2 : 1);
   },
 );
+
+it("keeps reader facts visible when compact preview enrichment fails", async () => {
+  const pending = Promise.withResolvers<ControlUiLinkReaderDocument>();
+  const request = vi.fn((method: string) =>
+    method === "github.detail" ? Promise.resolve(merged) : pending.promise,
+  );
+  const client = createTestGatewayClient(request);
+  const { host, anchor } = makeProvider();
+  host.client = client;
+  const panel = document.createElement("openclaw-link-reader-panel");
+  panel.client = client;
+  panel.available = true;
+  panel.readers = [reader];
+  mountSolid(() => panel);
+  await panel.updateComplete;
+  panel.handleToggleRequest(
+    new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
+      detail: { url, open: true },
+      cancelable: true,
+    }),
+  );
+  await waitForSolid(() => expect(anchor.getAttribute("aria-description")).toBe("Merged"));
+  await hover(anchor);
+  expect(anchor.getAttribute("aria-description")).toBe("Merged");
+  pending.reject(new Error("Preview rate limited"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(badge()).toBe("Merged");
+  expect(document.querySelector<HTMLElement>(".link-reader-hovercard")?.dataset.cached).toBe(
+    "true",
+  );
+  anchor.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+  );
+  await vi.advanceTimersByTimeAsync(120);
+  await hover(anchor);
+  expect(badge()).toBe("Merged");
+  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(1);
+  anchor.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+  );
+  await vi.advanceTimersByTimeAsync(30_000);
+  await hover(anchor);
+  expect(badge()).toBe("Merged");
+  expect(anchor.getAttribute("aria-description")).toBe("Merged");
+  expect(request.mock.calls.filter(([method]) => method === "github.preview")).toHaveLength(2);
+});

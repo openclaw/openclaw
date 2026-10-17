@@ -8,6 +8,7 @@
  * and retires that binding on every committed navigation or process termination.
  * Commands arrive as openclaw:native-conversation-command CustomEvent.detail.
  * Every requestId receives one command-result; document mismatches fail closed.
+ * Chat owns the queried page, panes, and composer; this bridge observes their committed DOM.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
@@ -17,6 +18,7 @@ import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
@@ -537,18 +539,19 @@ export function createNativeConversationBridge(
       event.preventDefault();
     }
   };
-  window.addEventListener(COMMAND_EVENT, onCommand);
-  document.addEventListener("click", onClick);
+  const stops = [listen(window, COMMAND_EVENT, onCommand), listen(document, "click", onClick)];
   void send({
     ...binding,
     type: "ready",
     surface: "conversation",
     capabilities: ["navigate", "presentation", "focus-composer", ...features],
   });
-  document.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
-  document.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-  const stopStores = (["gateway", "router", "sessions"] as const).map((key) =>
-    context[key].subscribe(refreshConversation),
+  stops.push(
+    listen(document, CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation),
+    listen(document, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation),
+    ...(["gateway", "router", "sessions"] as const).map((key) =>
+      context[key].subscribe(refreshConversation),
+    ),
   );
   refreshConversation();
   return {
@@ -562,12 +565,8 @@ export function createNativeConversationBridge(
     dispose() {
       disposed = true;
       pending.forEach((expire) => expire());
-      document.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
-      document.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-      stopStores.forEach((stop) => stop());
+      stops.forEach((stop) => stop());
       listeners.clear();
-      window.removeEventListener(COMMAND_EVENT, onCommand);
-      document.removeEventListener("click", onClick);
       if (host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] === binding) {
         delete host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"];
       }

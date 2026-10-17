@@ -530,20 +530,22 @@ describe("compaction-safeguard recent-turn preservation", () => {
     },
   );
 
-  it.each(["copilot-headers", "keyless-sdk-auth"] as const)(
+  it.each(["cap-staged-limit", "copilot-headers", "keyless-sdk-auth"] as const)(
     "summarizes with provider-prepared model settings: %s",
     async (mode) => {
       mockSummarizeCompactionHistory.mockResolvedValue("mock summary");
       const model = createAnthropicModelFixture(
-        mode === "copilot-headers"
-          ? {
-              id: "gpt-5.4",
-              name: "gpt-5.4",
-              provider: "github-copilot",
-              api: "openai-responses",
-              baseUrl: "https://api.githubcopilot.com",
-            }
-          : { provider: "amazon-bedrock" },
+        mode === "cap-staged-limit"
+          ? { contextWindow: 1_000_000, maxTokens: 128_000 }
+          : mode === "copilot-headers"
+            ? {
+                id: "gpt-5.4",
+                name: "gpt-5.4",
+                provider: "github-copilot",
+                api: "openai-responses",
+                baseUrl: "https://api.githubcopilot.com",
+              }
+            : { provider: "amazon-bedrock" },
       );
       const sessionManager = configuredSession({ model, recentTurnsPreserve: 0 });
       const headers = {
@@ -562,14 +564,26 @@ describe("compaction-safeguard recent-turn preservation", () => {
               ...(mode === "copilot-headers" ? { headers: { ...headers } } : {}),
             },
       );
-      const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1000 });
+      const event = createCompactionEvent(
+        mode === "cap-staged-limit"
+          ? {
+              preparation: {
+                messagesToSummarize: [userMessage("large history", 1)],
+                tokensBefore: 250_000,
+                settings: { reserveTokens: 80_000 },
+              },
+            }
+          : { messageText: "summarize me", tokensBefore: 1000 },
+      );
       const result = await createCompactionHandler()(
         event,
         createCompactionContext({ sessionManager, getApiKeyAndHeadersMock }),
       );
       expect(requireRecord(result).cancel).not.toBe(true);
       const call = mockSummarizeCompactionHistory.mock.lastCall?.[0];
-      if (mode === "copilot-headers") {
+      if (mode === "cap-staged-limit") {
+        expect(call?.reserveTokens).toBe(20_000);
+      } else if (mode === "copilot-headers") {
         for (const [name, value] of Object.entries(headers)) {
           expect(call?.headers?.[name]).toBe(value);
         }
@@ -683,7 +697,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           model: model.id,
           usage: createZeroUsageFixture(),
           stopReason: "error",
-          errorMessage: "Cannot convert undefined or null to object",
+          errorMessage: "Cannot convert undefined or null to object: synthetic-private-summary",
           timestamp: 1,
         },
       });
@@ -703,6 +717,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(event.preparation.messagesToSummarize).toStrictEqual(transcriptBefore);
     expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toContain(
       "Cannot convert undefined or null to object",
+    );
+    expect(compactionLogger.warn).toHaveBeenCalledExactlyOnceWith(
+      "Compaction summarization failed; cancelling compaction to preserve history.",
+    );
+    expect(JSON.stringify(compactionLogger.warn.mock.calls)).not.toContain(
+      "synthetic-private-summary",
     );
   });
 
@@ -1143,9 +1163,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     "handles provider AbortError according to caller cancellation (aborted=%s)",
     async (aborted) => {
       mockSummarizeCompactionHistory.mockResolvedValue("llm fallback summary");
-      const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
-        name: "AbortError",
-      });
+      const providerAbortErr = Object.assign(
+        new Error("This operation was aborted: synthetic-private-provider"),
+        {
+          name: "AbortError",
+        },
+      );
       installCompactionProviderForTest(
         "aborting-provider",
         vi.fn().mockRejectedValue(providerAbortErr),
@@ -1178,6 +1201,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(result.cancel).not.toBe(true);
         expect(mockSummarizeCompactionHistory).toHaveBeenCalled();
       }
+      expect(JSON.stringify(compactionLogger.warn.mock.calls)).not.toContain(
+        "synthetic-private-provider",
+      );
     },
   );
 

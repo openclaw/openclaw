@@ -184,6 +184,7 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
+    suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),

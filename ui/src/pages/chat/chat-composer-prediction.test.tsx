@@ -19,7 +19,7 @@ function fixture(
 ) {
   let listener: ((event: GatewayEventFrame) => void) | undefined;
   let draft = "";
-  const request = vi.fn((method: string) =>
+  const request = vi.fn((method: string, _params?: unknown, _options?: { signal?: AbortSignal }) =>
     method === "chat.predict" ? response : Promise.resolve({}),
   );
   // SAFETY: This composer fixture exercises only the typed prediction request.
@@ -49,7 +49,6 @@ function fixture(
   const paint = () => {
     renderComposerInto(container, props);
   };
-  props.onRequestUpdate = paint;
   onTestFinished(() => {
     disposeComposer(container);
   });
@@ -93,6 +92,7 @@ it("shows a prediction without changing the draft; Tab accepts but never sends",
   expect(f.input.value).toBe(suggestion);
   expect(f.draft()).toBe(suggestion);
   expect(f.props.onSend).not.toHaveBeenCalled();
+  flush();
   expect(f.container.querySelector(".agent-chat__composer-prediction")).toBeNull();
   f.finish();
   expect(f.predictions()).toHaveLength(1);
@@ -214,6 +214,22 @@ it("drops an in-flight prediction when a new run starts without waiting for a de
   f.finish();
   f.props.runActive = true;
   f.paint();
+  response.resolve({ text: suggestion });
+  await Promise.resolve();
+  flush();
+  expect(f.container.querySelector(".agent-chat__composer-prediction")).toBeNull();
+});
+
+it("retires the event subscription and pending prediction when the composer unmounts", async () => {
+  const response = createDeferred<{ text: string | null }>();
+  const f = fixture(response.promise);
+  f.finish();
+  const signal = f.predictions()[0]?.[2]?.signal;
+  expect(signal?.aborted).toBe(false);
+  disposeComposer(f.container);
+  expect(signal?.aborted).toBe(true);
+  f.finish("run-b");
+  expect(f.predictions()).toHaveLength(1);
   response.resolve({ text: suggestion });
   await Promise.resolve();
   flush();

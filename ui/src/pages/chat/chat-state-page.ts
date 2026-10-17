@@ -308,12 +308,10 @@ export function createPageState(
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Set<string>(),
     chatGoalDraftMode: null,
-    chatSendTimingsByRun: new Map(),
     chatQueue: [],
     chatComposerFallbackByScope: {},
     chatSendingScopeKey: null,
     chatMessagesBySession,
-    eventLogBuffer: [],
     dispatchClientPresentation: (action: CommandClientPresentationAction) =>
       dispatchCommandClientPresentation(context, action),
     basePath: context.basePath,

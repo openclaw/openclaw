@@ -71,11 +71,11 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private resolveRuntime = createDraftAgentRuntimeResolver();
 
   constructor(
-    requestUpdate: () => void,
+    changed: () => void,
     onSelectionChange: ModelSelectionChange = () => undefined,
     private readonly onCatalogTargetSelect: (catalogId: string) => void = () => undefined,
   ) {
-    super(onSelectionChange, requestUpdate);
+    super(onSelectionChange, changed);
     this.catalogTargets = new CatalogTargetDiscovery(this.notify);
     this.metadataReader = new ModelCatalogReader(
       () => {

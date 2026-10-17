@@ -2,8 +2,13 @@
 export const nativeSchtasksIntegrationEnabled =
   process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
 
-// The CLI loads this package-root supervisor by URL instead of bundling it.
-export const vitestWorkerRuntimeAssets = ["cli-invocation.mjs", "node-host-launcher.mjs"];
+// Package-root modules loaded outside the compiled graph retain their bootstrap dependencies.
+export const vitestWorkerRuntimeAssets = [
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
+  "gateway-shutdown-budget.mjs",
+  "node-host-launcher.mjs",
+];
 
 export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
@@ -159,6 +164,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "plugins/loader-sdk-bridge-artifacts.test-support":
     "src/plugins/loader-sdk-bridge-artifacts.test-support.ts",
+  "infra/database-engine/update-preflight.runtime.test-support":
+    "src/infra/database-engine/update-preflight.runtime.test-support.ts",
   "plugins/runtime-retention-entrypoint.test-support":
     "src/plugins/runtime-retention-entrypoint.test-support.ts",
   "system-agent/setup-inference-groq-sdk.test-support":
@@ -185,8 +192,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/skills/library/persistence-runtime.test-support.ts",
   "snapshot/git-backup-command-runtime.test-support":
     "src/snapshot/git-backup-command-runtime.test-support.ts",
-  "state/openclaw-database-verify-runtime.test-support":
-    "src/state/openclaw-database-verify-runtime.test-support.ts",
   "state/openclaw-state-lease-runtime.test-support":
     "src/state/openclaw-state-lease-runtime.test-support.ts",
   "transcripts/library-timezone-runtime.test-support":

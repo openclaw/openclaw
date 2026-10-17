@@ -96,15 +96,9 @@ export default definePluginEntry({
     // cannot identify the owning plugin package or its pinned dependencies.
     setManagedCodexPluginRoot(api.rootDir);
     api.registerProvider(codexProviderDiscovery);
-    const resolveCurrentConfig = () =>
-      api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
-    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
+    const resolveCurrentConfig = () => api.runtime.config.current() as OpenClawConfig;
+    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig) => {
       const liveConfig = resolveConfig();
-      // Codex plugin config can change at runtime. A missing live entry is an
-      // explicit removal, while an unavailable runtime snapshot uses startup config.
-      if (!liveConfig) {
-        return api.pluginConfig;
-      }
       const livePluginConfig = resolveLivePluginConfigObject(
         () => liveConfig,
         "codex",
@@ -273,7 +267,7 @@ export default definePluginEntry({
       nativeCompaction: createCodexAppServerNativeCompaction(agentHarnessOptions),
     });
     api.registerMediaUnderstandingProvider(
-      buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
+      buildCodexMediaUnderstandingProvider({ pluginConfig: registrationConfig }),
     );
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
@@ -341,7 +335,7 @@ export default definePluginEntry({
           codexPluginsManagementIo: {
             readConfig: () => {
               const codexPlugins =
-                resolveCurrentConfig()?.plugins?.entries?.codex?.config?.codexPlugins;
+                resolveCurrentConfig().plugins?.entries?.codex?.config?.codexPlugins;
               if (!codexPlugins || typeof codexPlugins !== "object") {
                 return Promise.resolve({});
               }
@@ -382,7 +376,7 @@ export default definePluginEntry({
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
       }),
     );
-    api.onConversationBindingResolved?.((event) =>
+    api.onConversationBindingResolved((event) =>
       handleCodexConversationBindingResolved(event, { bindingStore }),
     );
     api.on("session_end", async (event, ctx) => {
@@ -421,7 +415,7 @@ export default definePluginEntry({
           sessionId: event.sessionId,
           ...(sessionKey ? { sessionKey } : {}),
           ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-          ...(config ? { config } : {}),
+          config,
         }),
         mode: "retire",
       });

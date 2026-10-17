@@ -51,7 +51,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
   private hadAvailable = false;
   private lifecycleGeneration = 0;
   private lifecycleAbortController = new AbortController();
-  private lifecycleSyncToken = 0;
   private tabSequence = 0;
   private pendingRestore: TerminalRestoreBatch | null = null;
   private intentQueue = terminalIntentQueue;
@@ -97,7 +96,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
         return this.intentHost.canRun();
       },
       hasTabs: () => this.tabs.length > 0,
-      requestUpdate: () => this.host.requestUpdate(),
+      requestUpdate: () => this.host.invalidate(),
       setBooting: (booting) => this.updateControllerState({ booting }),
       timeoutMs: () => this.host.catalogReadyTimeoutMs,
       showTimeout: () => {
@@ -129,7 +128,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
 
   private updateControllerState(state: Partial<TerminalPanelSessionControllerState>): void {
     Object.assign(this, state);
-    this.host.requestUpdate();
+    this.host.invalidate();
   }
 
   setError(text: string | null, retryAction?: TerminalPanelOpenAction): TerminalPanelError | null {
@@ -190,19 +189,12 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
   }
 
   scheduleLifecycleSync(): void {
-    const token = ++this.lifecycleSyncToken;
-    const generation = this.lifecycleGeneration;
     // State teardown during the render commit can schedule a nested update.
-    // Defer it; token + generation reject superseded connection epochs.
+    // Deferred sync reads current facts; repeated callbacks are harmless.
     queueMicrotask(() => {
-      if (
-        token !== this.lifecycleSyncToken ||
-        generation !== this.lifecycleGeneration ||
-        !this.host.isConnected
-      ) {
-        return;
+      if (this.host.isConnected) {
+        this.synchronizeLifecycle();
       }
-      this.synchronizeLifecycle();
     });
   }
 
@@ -325,10 +317,16 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     if (!operation) {
       return null;
     }
-    const sessions = await this.connectionFor(operation)
-      .list()
-      .catch(() => []);
-    return this.isTerminalOperationCurrent(operation) ? sessions : null;
+    this.setError(null);
+    try {
+      const sessions = await this.connectionFor(operation).list();
+      return this.isTerminalOperationCurrent(operation) ? sessions : null;
+    } catch (error) {
+      if (this.isTerminalOperationCurrent(operation)) {
+        throw error;
+      }
+      return null;
+    }
   }
 
   attachSessionById(sessionId: string, agentOwned = false): Promise<void> {

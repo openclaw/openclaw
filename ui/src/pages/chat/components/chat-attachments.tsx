@@ -4,7 +4,6 @@ import "../../../components/tooltip.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
@@ -13,7 +12,7 @@ import { AttachmentRemove, CompactAttachmentFile } from "./chat-attachment-file.
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
 import { ComposerPastedText } from "./chat-composer-pasted-text.tsx";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
-import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
+import { ChatSelectionAnnotations } from "./chat-selection-annotations.tsx";
 
 function AttachmentImage(props: {
   attachment: ChatAttachment;
@@ -307,6 +306,7 @@ function AttachmentPreviewStrip(props: {
 }) {
   const presented = useContext(ContentPresentation);
   let host!: HTMLDivElement;
+  // Observe DOM scroll geometry only while this retained attachment strip is presented.
   createEffect(presented, (active) => {
     if (!active) {
       return undefined;
@@ -329,7 +329,7 @@ function AttachmentPreviewStrip(props: {
         host = element;
       }}
     >
-      <LitContent value={renderChatSelectionAnnotations(props.controls)} />
+      <ChatSelectionAnnotations {...props.controls} />
       <For
         each={props.entries.filter(({ attachment }) => !attachment.selectionAnnotation)}
         keyed={(entry) => entry.attachment.id}

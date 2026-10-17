@@ -1,8 +1,7 @@
-import { createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
-import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
-import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
 import { isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -33,7 +32,6 @@ export function ComposerInputScope(props: {
 }) {
   const state = untrack(() => props.state);
   onCleanup(() => {
-    state.textareaRef?.();
     state.composerInputRef?.();
   });
   return untrack(() => props.children);
@@ -41,16 +39,12 @@ export function ComposerInputScope(props: {
 
 export function ComposerProgress(view: { composer: ChatComposerProps; shown: boolean }) {
   const [revision, setRevision] = createSignal(0);
-  createRenderEffect(
+  createEffect(
     () => view.composer.progressCardVisibility,
-    (binding) => {
-      if (!binding) {
-        return undefined;
-      }
-      const changed = () => setRevision((value) => value + 1);
-      binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);
-      return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, changed);
-    },
+    (binding) =>
+      binding
+        ? listen(binding.owner, PRESENTATION_CHANGED_EVENT, () => setRevision((value) => value + 1))
+        : undefined,
   );
   const presented = () => {
     revision();
@@ -96,58 +90,5 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
         />
       </div>
     </Show>
-  );
-}
-
-export function ComposerGoal(view: {
-  composer: ChatComposerProps;
-  state: ChatComposerState;
-  controller: GoalComposerController;
-  requestUpdate: () => void;
-}) {
-  const resumeRecovery = () => {
-    const recovery = view.composer.goalRecovery;
-    return recovery?.action === "resume" &&
-      !recovery.retired &&
-      recovery.goalId === view.composer.selectedSession?.goal?.id
-      ? recovery
-      : undefined;
-  };
-  return (
-    <>
-      {renderChatGoalRecoverySolid(
-        resumeRecovery() ? undefined : view.composer.goalRecovery,
-        view.composer.connected,
-      )}
-      <Show when={view.composer.selectedSession?.goal} keyed>
-        {(goal) => (
-          <div class="agent-chat__goal-float">
-            <ChatGoal
-              goal={goal}
-              resumeRecovery={resumeRecovery()}
-              connected={view.composer.connected}
-              expanded={view.state.goalExpandedId === goal.id}
-              canAct={
-                view.composer.connected &&
-                view.composer.canSend &&
-                !view.composer.submitDisabledReason &&
-                Boolean(view.composer.currentSessionId) &&
-                !view.composer.goalRecovery
-              }
-              onGoalAction={view.composer.onGoalAction}
-              onGoalEdit={
-                view.composer.onGoalSubmit
-                  ? (selected) => view.controller.begin(selected)
-                  : undefined
-              }
-              onExpandedChange={(expanded) => {
-                view.state.goalExpandedId = expanded ? goal.id : null;
-                view.requestUpdate();
-              }}
-            />
-          </div>
-        )}
-      </Show>
-    </>
   );
 }

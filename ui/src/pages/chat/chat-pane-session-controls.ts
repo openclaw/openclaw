@@ -10,6 +10,7 @@ import {
   readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
@@ -33,7 +34,10 @@ registerModelControlsEnglish();
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
-type SessionActionCallbacks = Pick<ChatProps, "onAbort" | "onForkMessage" | "onRewindMessage">;
+type SessionActionCallbacks = Pick<
+  ChatProps,
+  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage"
+>;
 
 type PendingPermissionChange = {
   expectedSessionId?: string;
@@ -428,7 +432,7 @@ export function createChatPaneSessionActionCallbacks(params: {
   const runId = state.chatRunId ?? null;
   const activeRunIds = runId ? undefined : selectedSession?.activeRunIds?.slice();
   const sessionAbortable = state.chatRunSessionAbortable === true;
-  const ownsAbortTarget = () => {
+  const ownsActionTarget = () => {
     const currentSession = selectedChatSessionRow(state);
     const snapshot = params.getSnapshot();
     const currentRecoveryScope =
@@ -484,10 +488,20 @@ export function createChatPaneSessionActionCallbacks(params: {
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined
         : () => {
-            if (ownsAbortTarget() && requireCurrent("abort")) {
+            if (ownsActionTarget() && requireCurrent("abort")) {
               params.onAbort();
             }
           },
+    onCompact:
+      !params.sessionParticipationBlocked &&
+      !parseCatalogSessionKey(sessionKey) &&
+      access.compact.allowed
+        ? async () => {
+            if (ownsActionTarget() && requireCurrent("compact")) {
+              await state.handleSendChat("/compact");
+            }
+          }
+        : undefined,
     onRewindMessage: access.rewind.allowed
       ? (entryId) => (requireCurrent("rewind") ? params.onRewind(entryId) : false)
       : undefined,

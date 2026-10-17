@@ -73,6 +73,8 @@ Sessions are owned by the gateway, not by clients.
 
 Multiple devices/channels can map to the same session, but history is not fully synced back to every client. Use one primary device for long conversations to avoid divergent context. The Control UI and TUI always show the gateway-backed session transcript, so they are the source of truth.
 
+If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
+
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
 Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.
@@ -216,9 +218,9 @@ A truncated response or an unfinished tool turn is not a successful silent endin
 
 An explicit reply expectation selected by trusted input handling takes precedence over these session defaults. For example, a late peer result can be optional even in WebChat, so consuming it does not demand another acknowledgment or repeat an answer already delivered.
 
-`NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. It does not retract delivered messages or cancel pending work. A literal leading `NO_REPLY\n` removes that one control line and delivers the remaining text unchanged; the remainder stays visible even if it is another `NO_REPLY`. Pending tool media, such as generated TTS audio, still delivers after the silent model text is removed.
+`NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. It does not retract delivered messages or cancel pending work. A literal leading `NO_REPLY\n` removes that one control line and delivers the remaining text unchanged; the remainder stays visible even if it is another `NO_REPLY`. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered. Whitespace around that final line is allowed; lowercase or punctuated tokens are ordinary text. Pending tool media, such as generated TTS audio, still delivers after the silent model text is removed.
 
-The terminal producer prepares the reply once and records whether it is visible or silent. Delivery and clients consume that fact and the full prepared payload without interpreting the text again; an explicit visible fact stays visible even when its text is `NO_REPLY`. Lowercase `no_reply`, `NO_REPLY.`, `"NO_REPLY"`, `{"action":"NO_REPLY"}`, and tokens attached to or trailing ordinary prose are visible text, not silent endings. Stored assistant history uses existing display and final-result facts first, then the same exact check on raw assistant text; user text is never treated as a silence instruction.
+The terminal producer prepares the reply once and records whether it is visible or silent. Delivery and clients consume that fact and the full prepared payload without interpreting the text again; an explicit visible fact stays visible even when its text is `NO_REPLY`. Lowercase `no_reply`, `NO_REPLY.`, `"NO_REPLY"`, `{"action":"NO_REPLY"}`, and tokens attached to or trailing ordinary prose on the same line are visible text, not silent endings. Stored assistant history uses existing display and final-result facts first, then the same exact check on raw assistant text; user text is never treated as a silence instruction.
 
 Conversation policy still controls admission and default reply expectations:
 

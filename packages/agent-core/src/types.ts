@@ -191,6 +191,8 @@ export type ToolLoopRecoveryState = {
 };
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
+  /** @internal Host-resolved small-model repetition policy. */
+  repetitionGuard?: (model: Model) => boolean;
   model: Model;
   /** Logical thinking level retained across model changes before provider mapping. */
   thinkingLevel?: ThinkingLevel;
@@ -310,6 +312,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     message: AssistantMessage;
     toolResults: ToolResultMessage[];
     terminalToolCallIds: ReadonlySet<string>;
+    inputScope: object;
   }) => boolean;
 
   /** @internal Preserves loop safety evidence across Agent.continue() retries. */

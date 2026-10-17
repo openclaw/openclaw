@@ -11,12 +11,12 @@ it("lets browser tasks complete while waiting for a route presentation commit", 
       definePage({
         id: "page",
         path: "/page",
-        component: () => ({ render: () => <p>Previous destination</p> }),
+        component: () => ({ renderSolid: () => <p>Previous destination</p> }),
       }),
       definePage({
         id: "next",
         path: "/next",
-        component: () => ({ render: () => <p>Current destination</p> }),
+        component: () => ({ renderSolid: () => <p>Current destination</p> }),
       }),
     ],
   });

@@ -26,6 +26,7 @@ import { restoreCronLoadError } from "./load-error.js";
 import type {
   CronReadOnlyRequest,
   CronReadOnlyResult,
+  CronRunHistoryCandidates,
   CronRunHistoryBinding,
   CronRunHistorySelector,
 } from "./read-only.types.js";
@@ -180,6 +181,9 @@ async function readCronState({
             Buffer.byteLength(location) +
             Buffer.byteLength(storeKey ?? "") +
             Buffer.byteLength(history?.jobId ?? "") +
+            Buffer.byteLength(history?.query ?? "") +
+            Buffer.byteLength(JSON.stringify(history?.jobNameById ?? {})) +
+            (history?.taskIds?.reduce((bytes, id) => bytes + Buffer.byteLength(id), 0) ?? 0) +
             Buffer.byteLength(history?.transcript?.runId ?? "") +
             (history?.transcript?.runAtMs === undefined ? 0 : 8) +
             Buffer.byteLength(stagingRoot ?? "") +
@@ -211,16 +215,37 @@ async function readCronState({
   );
 }
 
-export async function readCronRunRecords(
+export async function readCronRunHistoryCandidates(
   storeKey: string,
   jobId?: string,
-): Promise<CronRunRecord[]> {
+  query?: string,
+  jobNameById?: Record<string, string>,
+): Promise<CronRunHistoryCandidates> {
   return (
     (
       await readCronState({
         storeKey: cronStoreKey(storeKey),
         env: process.env,
-        history: { jobId },
+        history: { jobId, query, jobNameById },
+      })
+    ).candidates ?? { records: [] }
+  );
+}
+
+export async function readCronRunHistoryRecords(
+  storeKey: string,
+  taskIds: string[],
+  view?: "full" | "summary",
+): Promise<CronRunRecord[]> {
+  if (taskIds.length === 0) {
+    return [];
+  }
+  return (
+    (
+      await readCronState({
+        storeKey: cronStoreKey(storeKey),
+        env: process.env,
+        history: { taskIds, view },
       })
     ).history ?? []
   );

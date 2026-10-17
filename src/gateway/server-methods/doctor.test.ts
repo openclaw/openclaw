@@ -7,6 +7,7 @@ import type { MemoryWorkspaceMaintenance } from "../../../packages/memory-host-s
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import {
   getRuntimeConfig,
   listAgentIds,
@@ -24,7 +25,6 @@ import {
   loadShortTermPromotionDreamingStats,
   DOCTOR_MEMORY_TARGET_METHODS,
   invokeDoctorMemory,
-  expectRecordFields,
   respondPayload,
   mockCallArg,
   findRecordByField,

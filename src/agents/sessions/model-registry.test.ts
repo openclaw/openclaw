@@ -69,6 +69,36 @@ function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfig
 }
 
 describe("ModelRegistry models.json auth", () => {
+  it("names the async unregister replacement once and keeps async unregister silent", async () => {
+    const modelsPath = writeModelsJson({ providers: {} });
+    const registry = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      registry.registerProvider("warning-fixture", oauthProviderConfig("Fixture", "fixture"));
+      await registry.unregisterProviderAsync("warning-fixture");
+      expect(warning).not.toHaveBeenCalled();
+      expect(registry.authStorage.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+        "warning-fixture",
+      );
+
+      registry.registerProvider("warning-fixture", oauthProviderConfig("Fixture", "fixture"));
+      registry.unregisterProvider("warning-fixture");
+      registry.unregisterProvider("warning-fixture");
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "ModelRegistry.unregisterProvider is deprecated; use ModelRegistry.unregisterProviderAsync",
+        ),
+        expect.objectContaining({ type: "DeprecationWarning" }),
+      );
+      expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
+      expect(registry.authStorage.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+        "warning-fixture",
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("accepts Bedrock AWS SDK auth without apiKey", async () => {
     // AWS SDK credential resolution is provider-owned; requiring an apiKey here
     // would make Bedrock catalogs impossible to express in models.json.
@@ -187,7 +217,7 @@ describe("ModelRegistry models.json auth", () => {
     );
   });
 
-  it.each(["persisted", "registered"] as const)("preserves %s prompt budgets", (source) => {
+  it.each(["persisted", "registered"] as const)("preserves %s model metadata", (source) => {
     // Synthetic providers deliberately share an id but not a prompt budget.
     // Native window and output capacity must remain separate from that budget.
     const providers: Record<string, ProviderConfigInput> = Object.fromEntries(
@@ -210,6 +240,7 @@ describe("ModelRegistry models.json auth", () => {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow,
               contextTokens,
+              parameterCount: 4_000_000_000,
               maxTokens: 128_000,
             },
           ],

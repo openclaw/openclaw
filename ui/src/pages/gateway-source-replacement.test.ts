@@ -13,10 +13,12 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import type { ModelProvidersData } from "./model-providers/load.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA } from "./model-providers/load.ts";
 import {
+  createAuthStatus,
   createEmptyModelProvidersRouteData,
   createPage as createModelProvidersPage,
+  drainPageUpdates,
   mountPage as mountModelProvidersPage,
   unmountPage as unmountModelProvidersPage,
 } from "./model-providers/model-providers-page.test-support.tsx";
@@ -423,7 +425,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const request = vi.fn(async (method: string) => {
       if (method === "models.authStatus") {
         authCalls += 1;
-        return authCalls === 1 ? staleAuth.promise : { ts: 2, providers: [] };
+        return authCalls === 1
+          ? staleAuth.promise
+          : createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2);
       }
       if (method === "models.list") {
         return { models: [] };
@@ -461,18 +465,20 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     mountModelProvidersPage(page);
     await page.updateComplete;
-    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
+    await waitForFast(() =>
+      expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider"),
+    );
 
-    staleAuth.resolve({ ts: 1, providers: [] });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(page.state.data?.authStatus?.ts).toBe(2);
+    staleAuth.resolve(createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]));
+    await drainPageUpdates(page);
+    expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider");
+    expect(page.view.props.cards.map((card) => card.displayName)).not.toContain("Retired provider");
   });
 
   it("rejects Model Providers route data from an earlier same-client gateway epoch", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "models.authStatus") {
-        return { ts: 2, providers: [] };
+        return createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2);
       }
       if (method === "models.list") {
         return { models: [] };
@@ -493,7 +499,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
       connected: true,
       selectedAgentId: "main",
     });
-    const staleData = { authStatus: { ts: 1, providers: [] } } as unknown as ModelProvidersData;
+    const staleData = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      authStatus: createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]),
+    };
     const page = createModelProvidersPage(context);
     page.routeData = {
       gateway: context.gateway,
@@ -505,8 +514,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
     };
 
     mountModelProvidersPage(page);
-    await waitForFast(() => expect(page.state.data?.authStatus?.ts).toBe(2));
-    expect(page.state.data).not.toBe(staleData);
+    await waitForFast(() =>
+      expect(page.view.props.cards.map((card) => card.displayName)).toContain("Fresh provider"),
+    );
+    expect(page.view.props.cards.map((card) => card.displayName)).not.toContain("Retired provider");
   });
 
   it("hydrates linked skill verdicts without reloading accepted route data", async () => {

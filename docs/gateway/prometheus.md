@@ -31,7 +31,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install clawhub:@openclaw/diagnostics-prometheus
+    openclaw plugins install @openclaw/diagnostics-prometheus
     ```
   </Step>
   <Step title="Enable the plugin">
@@ -163,6 +163,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_recovery_age_seconds`                   | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_gateway_event_loop_delay_max_seconds`           | histogram | none                                                                                      |
 | `openclaw_gateway_event_loop_observed_seconds_total`      | counter   | none                                                                                      |
+| `openclaw_gateway_main_thread_stall_seconds`              | histogram | `task`                                                                                    |
+| `openclaw_gateway_main_thread_stalls_dropped_total`       | counter   | none                                                                                      |
 | `openclaw_liveness_warning_total`                         | counter   | `reason`                                                                                  |
 | `openclaw_liveness_sessions`                              | gauge     | `state`                                                                                   |
 | `openclaw_liveness_event_loop_delay_p99_seconds`          | histogram | `reason`                                                                                  |
@@ -179,6 +181,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
+| `openclaw_worker_heap_space_used_bytes`                   | gauge     | `script`, `space`                                                                         |
 | `openclaw_worker_external_bytes`                          | gauge     | `script`                                                                                  |
 | `openclaw_worker_array_buffers_bytes`                     | gauge     | `script`                                                                                  |
 | `openclaw_code_mode_worker_memory_bytes`                  | gauge     | `slot`, `kind` (`external`, `array_buffers`)                                              |
@@ -471,6 +474,22 @@ exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
 
+### Main-thread stall attribution
+
+`openclaw_gateway_main_thread_stall_seconds{task}` records individual main-thread
+tasks lasting at least 250 milliseconds. Its `_count` counts recorded tasks;
+`_sum` totals their elapsed seconds. Buckets are 0.25, 0.5, 1, 2.5, 5, and 10
+seconds, plus `+Inf`. The `task` label comes from code-owned work scopes and passes
+through the exporter's normal label sanitizer and series cap. It contains no
+request IDs or message content.
+
+`openclaw_gateway_main_thread_stalls_dropped_total` counts records omitted when
+the attribution buffer fills. It appears only after the first loss; the histogram
+appears only after the first recorded stall. Diagnostic queue drops and exporter
+restarts can also lose observations, so an absent histogram does not establish
+that no stalls occurred. Unlike event-loop window maxima, these observations
+attribute elapsed execution to a work scope; they do not provide CPU profiles.
+
 ### Worker request queues
 
 `openclaw_worker_queue_depth{kind}` reports requests awaiting dispatch across
@@ -513,7 +532,7 @@ retain `open`, `close`, `transcript_read`, `sessions`, `transcripts`,
 `domain_execute`, `plugin_state`, `auth_profiles`, and `cron`. Other commands use a
 fixed operation family, such as `workerInference`, `capture`, or `diagnostic`.
 Audit writer, database lifecycle, and state lease commands have finer labels such
-as `audit.writer.process`, `database.inspectIdle`, and `stateLease.renew`.
+as `audit.writer.process`, `database.walMaintenance`, and `stateLease.renew`.
 Unknown commands retain `execute`; unknown request classes become `other`.
 The allowlists bound cardinality without publishing session IDs, database paths,
 command suffixes, or caller-provided names. The exporter's shared series cap still
@@ -585,6 +604,14 @@ ArrayBuffer bytes are included in external memory; do not add them together.
 Native-only heap samples provide external memory but no ArrayBuffer count, so
 ArrayBuffer totals can cover fewer Workers than the heap sample count. Missing
 counters are omitted, while measured zero bytes are exported as zero.
+On Node, `openclaw_worker_heap_space_used_bytes{script="...",space="..."}` sums
+used bytes by V8 heap space for Workers serving the private memory channel. It
+shares the existing heartbeat, sample expiration, and exit cleanup. Space names
+come from V8's finite native set; labels contain no paths, account details, or
+catalog contents. Compare old, large-object, and code spaces to locate worker
+heap growth without a snapshot. Native-only fallback samples and Bun omit these
+space counters, so their coverage can be smaller than the heap sample count.
+`openclaw_heap_space_bytes` remains the main isolate's separate space breakdown.
 Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
 `.js` in source and packaged runs; unknown, eval, and unwrapped third-party Workers
 use `other`. Full paths and eval source are never recorded. A script's series

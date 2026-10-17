@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { migrateSessionCostUsageRollupStorage } from "./session-cost-usage-cache-migration.js";
@@ -79,9 +80,7 @@ function writeRollup(
 function countRegisteredAgentDatabases(): number {
   const row = openOpenClawStateDatabase()
     .db.prepare("SELECT count(*) AS count FROM agent_databases")
-    .get() as {
-    count: number;
-  };
+    .get() as { count: number };
   return row.count;
 }
 
@@ -355,10 +354,13 @@ describe("session cost usage SQLite cache", () => {
       const newer = encodeUsageCostRollup({ ...entry, scannedAt: 999 });
       insert.run("session-cost-usage-rollup-v3", "newer", newer.valueJson, newer.blob, 999);
       insert.run("other", "valid\0雪", "unchanged", null, 1);
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      const migrate = () =>
+        runOpenClawAgentWriteTransaction(
+          ({ db: current }) =>
+            migrateSessionCostUsageRollupStorage(requireNativeSqliteDatabase(current)),
+          { agentId },
+        );
+      migrate();
       const rows = db
         .prepare(
           "SELECT * FROM cache_entries WHERE scope IN ('session-cost-usage-rollup-v2', 'session-cost-usage-rollup-v3', 'other') ORDER BY scope, key",
@@ -382,10 +384,7 @@ describe("session cost usage SQLite cache", () => {
           migrated.blob as Uint8Array,
         ),
       ).toBeUndefined();
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      migrate();
       expect(
         db
           .prepare(
@@ -400,7 +399,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-cas-payload-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const previousValueJson = JSON.stringify({ history: "雪".repeat(400_000) });
       expect(
         writeRollup(agentId, {
@@ -614,7 +613,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-prune-batch-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const scope = "session-cost-usage-rollup-v3";
       const insert = db.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",

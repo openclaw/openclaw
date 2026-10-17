@@ -1,7 +1,7 @@
 import { createSignal, flush, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import "./app-topbar-solid.tsx";
 import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime-solid.tsx";

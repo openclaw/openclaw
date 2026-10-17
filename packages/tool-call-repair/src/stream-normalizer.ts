@@ -5,7 +5,7 @@ import {
   type PlainTextToolCallProtectedRangeResolver,
 } from "./contracts.js";
 import { skipLineIndentation, skipWhitespace, utf8ByteLengthWithinLimit } from "./grammar.js";
-import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js";
+import { scanPlainTextToolCall } from "./payload.js";
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
 import {
   advanceProtectionScanState,
@@ -13,13 +13,26 @@ import {
   resolveProtectionFastPath,
 } from "./protection-fast-path.js";
 import {
+  createCandidateScanView,
+  createForcedScrubSnapshot,
+  createRangeRemover,
+  extractStandaloneCandidate,
+  findCandidateCallSequences,
+  findPotentialCallStart,
+  findTrailingCallPrefix,
+  nextAtLineStart,
+  scanHasNamedCandidate,
+  type StandalonePlainTextToolCallCandidate,
+  type TextRange,
+} from "./stream-normalizer-snapshot.js";
+import {
   consumeOverCapSuppressor,
-  consumeRemovedLineEnd,
   createOverCapSuppressor,
   MAX_PAYLOAD_BYTES,
   type OverCapSuppressor,
 } from "./stream-normalizer-suppression.js";
 
+export { projectScrubbedPlainTextToolCallMessage } from "./stream-normalizer-snapshot.js";
 export type { PlainTextToolCallNameMatcher } from "./contracts.js";
 
 /** Result of repairing the final message carried by a provider stream `done` event. */
@@ -57,12 +70,6 @@ const MAX_PENDING_EVENTS = 256;
 // Retain bounded visible history only for split Markdown ownership; terminal snapshots stay canonical.
 const MAX_PROTECTION_CONTEXT_CHARS = 1_000_000;
 
-type TextRange = { end: number; start: number };
-type StandalonePlainTextToolCallCandidate = {
-  parts: Array<{ contentIndex: number; end: number; start: number }>;
-  text: string;
-};
-type ScannedCallSequence = TextRange & { activeStart?: number; overCap: boolean };
 type CandidatePendingState = {
   buffer: string;
   bufferBytes: number;
@@ -96,385 +103,6 @@ function eventContentIndex(event: Record<string, unknown>): number {
 
 function isTextStreamEvent(event: Record<string, unknown>): boolean {
   return event.type === "text_start" || event.type === "text_delta" || event.type === "text_end";
-}
-
-function extractStandaloneCandidate(
-  message: unknown,
-  requireAssistantRole = false,
-): StandalonePlainTextToolCallCandidate | undefined {
-  const record = asOptionalObjectRecord(message);
-  if (!record || (requireAssistantRole && record.role !== "assistant")) {
-    return undefined;
-  }
-  if (typeof record.content === "string") {
-    return record.content.trim() ? { text: record.content, parts: [] } : undefined;
-  }
-  if (!Array.isArray(record.content)) {
-    return undefined;
-  }
-  const candidate: StandalonePlainTextToolCallCandidate = { text: "", parts: [] };
-  for (const [contentIndex, block] of record.content.entries()) {
-    const value = asOptionalObjectRecord(block);
-    if (!value) {
-      return undefined;
-    }
-    if (value.type !== "text") {
-      continue;
-    }
-    if (typeof value.text !== "string") {
-      return undefined;
-    }
-    const start = candidate.text.length;
-    candidate.text += value.text;
-    candidate.parts.push({ contentIndex, start, end: candidate.text.length });
-  }
-  return candidate.text.trim() ? candidate : undefined;
-}
-
-function scannedCall(scan: PlainTextToolCallScan) {
-  if (scan.kind === "complete") {
-    return {
-      end: scan.end,
-      incomplete: false,
-      overCap: scan.overCap,
-      payloadStart: scan.payloadStart,
-    };
-  }
-  if (scan.overCap && scan.payloadStart !== undefined) {
-    return {
-      end: scan.kind === "prefix" ? scan.next : scan.at,
-      incomplete: scan.kind === "prefix",
-      overCap: true,
-      payloadStart: scan.payloadStart,
-    };
-  }
-  return null;
-}
-
-function scanHasNamedCandidate(scan: PlainTextToolCallScan): boolean {
-  return [scan.json, scan.xmlish].some((branch) => {
-    const name = (branch.kind === "complete" ? branch : branch.candidate)?.name;
-    return name !== undefined && name.end > name.start;
-  });
-}
-
-function findUtf8OverCapOffset(text: string, start: number): number | null {
-  let bytes = 0;
-  for (let index = start; index < text.length;) {
-    const code = text.codePointAt(index) ?? 0;
-    index += code > 0xffff ? 2 : 1;
-    bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
-    if (bytes > MAX_PAYLOAD_BYTES) {
-      return index;
-    }
-  }
-  return null;
-}
-
-function findCandidateCallSequences(
-  candidate: StandalonePlainTextToolCallCandidate,
-  matcher: PlainTextToolCallNameMatcher,
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
-): ScannedCallSequence[] {
-  const {
-    text,
-    boundaries: structuralBoundaries,
-    structuralLineBreaks,
-  } = createCandidateScanView(candidate);
-  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
-  const sequences: ScannedCallSequence[] = [];
-  const structuralBoundarySet = new Set(structuralBoundaries);
-  let structuralBoundaryIndex = 0;
-  let index = 0;
-  while (index < text.length) {
-    const lineStart =
-      index === 0 ||
-      text[index - 1] === "\n" ||
-      text[index - 1] === "\r" ||
-      structuralBoundarySet.has(index);
-    if (!lineStart) {
-      index += 1;
-      continue;
-    }
-    const sequenceStart = index;
-    let callStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
-      index += 1;
-      continue;
-    }
-    let sequenceEnd = callStart;
-    let hasOverCap = false;
-    let activeStart: number | undefined;
-    let callCount = 0;
-    const first = scanPlainTextToolCall(text, callStart, {
-      matcher,
-      maxPayloadBytes: MAX_PAYLOAD_BYTES,
-      structuralLineBreaks,
-    });
-    let call = scannedCall(first);
-    if (!call && first.kind === "prefix" && scanHasNamedCandidate(first)) {
-      activeStart = callStart;
-      callCount = 1;
-      sequenceEnd = text.length;
-    }
-    while (call && callStart < text.length) {
-      if (call.incomplete && call.overCap) {
-        const overCapOffset = findUtf8OverCapOffset(text, call.payloadStart);
-        while (
-          structuralBoundaryIndex < structuralBoundaries.length &&
-          (structuralBoundaries[structuralBoundaryIndex] ?? 0) < (overCapOffset ?? Infinity)
-        ) {
-          structuralBoundaryIndex += 1;
-        }
-        let boundary: number | undefined;
-        while (structuralBoundaryIndex < structuralBoundaries.length) {
-          const offset = structuralBoundaries[structuralBoundaryIndex];
-          structuralBoundaryIndex += 1;
-          const boundaryScan =
-            offset === undefined
-              ? undefined
-              : scanPlainTextToolCall(text, skipLineIndentation(text, offset), {
-                  matcher,
-                  maxPayloadBytes: MAX_PAYLOAD_BYTES,
-                  structuralLineBreaks,
-                });
-          if (boundaryScan && scannedCall(boundaryScan)) {
-            boundary = offset;
-            break;
-          }
-        }
-        if (boundary !== undefined) {
-          call.end = boundary;
-          call.incomplete = false;
-        }
-      }
-      callCount += 1;
-      hasOverCap ||= call.overCap;
-      sequenceEnd = consumeRemovedLineEnd(text, call.end);
-      if (call.incomplete) {
-        activeStart = callStart;
-        break;
-      }
-      const nextStart = skipWhitespace(text, call.end);
-      if (nextStart >= text.length) {
-        break;
-      }
-      if (isOffsetInProtectedRanges(nextStart, protectedRanges)) {
-        break;
-      }
-      const nextScan = scanPlainTextToolCall(text, nextStart, {
-        matcher,
-        maxPayloadBytes: MAX_PAYLOAD_BYTES,
-        structuralLineBreaks,
-      });
-      const next = scannedCall(nextScan);
-      if (!next) {
-        if (nextScan.kind === "prefix" && scanHasNamedCandidate(nextScan)) {
-          activeStart = nextStart;
-          sequenceEnd = text.length;
-        }
-        break;
-      }
-      callStart = nextStart;
-      call = next;
-    }
-    if (callCount > 0) {
-      const aggregateOverCap =
-        utf8ByteLengthWithinLimit(text, sequenceStart, sequenceEnd, MAX_PAYLOAD_BYTES) === null;
-      sequences.push({
-        start: sequenceStart,
-        end: sequenceEnd,
-        ...(activeStart === undefined ? {} : { activeStart }),
-        overCap: hasOverCap || aggregateOverCap,
-      });
-      index = Math.max(sequenceEnd, index + 1);
-      continue;
-    }
-    index = Math.max(index + 1, first.next);
-  }
-  return sequences;
-}
-
-/** Finds an unfinished marker at a candidate boundary; its suffix stays private. */
-function findTrailingCallPrefix(
-  candidate: StandalonePlainTextToolCallCandidate,
-  matcher: PlainTextToolCallNameMatcher,
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
-  start = 0,
-): { named: boolean; start: number } | undefined {
-  const { text, boundaries, structuralLineBreaks } = createCandidateScanView(candidate);
-  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
-  const boundarySet = new Set(boundaries);
-  let tail: { named: boolean; start: number } | undefined;
-  let index = start;
-  while (index < text.length) {
-    if (
-      index !== start &&
-      text[index - 1] !== "\n" &&
-      text[index - 1] !== "\r" &&
-      !boundarySet.has(index)
-    ) {
-      index += 1;
-      continue;
-    }
-    const callStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
-      index += 1;
-      continue;
-    }
-    const scan = scanPlainTextToolCall(text, callStart, {
-      matcher,
-      maxPayloadBytes: MAX_PAYLOAD_BYTES,
-      structuralLineBreaks,
-    });
-    if (scan.kind === "prefix" && !scannedCall(scan)) {
-      tail = { named: scanHasNamedCandidate(scan), start: index };
-    }
-    index = Math.max(index + 1, scan.next);
-  }
-  return tail;
-}
-
-function createCandidateScanView(candidate: StandalonePlainTextToolCallCandidate) {
-  const boundaries = candidate.parts.slice(1).map((part) => part.start);
-  return {
-    boundaries,
-    text: candidate.text,
-    ...(boundaries.length > 0
-      ? { structuralLineBreaks: { lineBreakOffsets: new Set(boundaries) } }
-      : {}),
-  };
-}
-
-function createRangeRemover(ranges: readonly TextRange[]) {
-  let rangeIndex = 0;
-  return (text: string, offset = 0): string => {
-    let result = "";
-    let cursor = 0;
-    const endOffset = offset + text.length;
-    while ((ranges[rangeIndex]?.end ?? Infinity) <= offset) {
-      rangeIndex += 1;
-    }
-    for (
-      let range = ranges[rangeIndex];
-      range && range.start < endOffset;
-      range = ranges[rangeIndex]
-    ) {
-      const start = Math.max(0, range.start - offset);
-      const end = Math.min(text.length, range.end - offset);
-      if (end > start) {
-        result += text.slice(cursor, Math.max(cursor, start));
-        cursor = Math.max(cursor, end);
-      }
-      if (range.end > endOffset) {
-        break;
-      }
-      rangeIndex += 1;
-    }
-    return cursor ? result + text.slice(cursor) : text;
-  };
-}
-
-function projectRangesOntoMessage(
-  record: Record<string, unknown>,
-  candidate: StandalonePlainTextToolCallCandidate,
-  ranges: readonly TextRange[],
-  preserveEmptyTextBlocks: boolean,
-): PlainTextToolCallMessageProjection {
-  const removeRanges = createRangeRemover(ranges);
-  if (typeof record.content === "string") {
-    return {
-      message: { ...record, content: removeRanges(record.content) },
-      sourceToProjectedContentIndex: new Map([[0, 0]]),
-    };
-  }
-  if (!Array.isArray(record.content)) {
-    return { message: record, sourceToProjectedContentIndex: new Map() };
-  }
-  const parts = new Map(candidate.parts.map((part) => [part.contentIndex, part]));
-  const content: unknown[] = [];
-  const sourceToProjectedContentIndex = new Map<number, number>();
-  for (const [index, block] of record.content.entries()) {
-    const part = parts.get(index);
-    const blockRecord = asOptionalObjectRecord(block);
-    if (!part || blockRecord?.type !== "text" || typeof blockRecord.text !== "string") {
-      sourceToProjectedContentIndex.set(index, content.length);
-      content.push(block);
-      continue;
-    }
-    const text = removeRanges(blockRecord.text, part.start);
-    if (text || preserveEmptyTextBlocks) {
-      sourceToProjectedContentIndex.set(index, content.length);
-      content.push({ ...blockRecord, text });
-    }
-  }
-  return { message: { ...record, content }, sourceToProjectedContentIndex };
-}
-
-/** Scrubs unsafe or mixed calls and maps each retained source content block. */
-export function projectScrubbedPlainTextToolCallMessage(params: {
-  forceIncompleteCandidates?: boolean;
-  forceKnownCandidates?: boolean;
-  matcher: PlainTextToolCallNameMatcher;
-  message: unknown;
-  preserveEmptyTextBlocks?: boolean;
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
-  requireAssistantRole?: boolean;
-}): PlainTextToolCallMessageProjection | undefined {
-  const record = asOptionalObjectRecord(params.message);
-  const candidate = extractStandaloneCandidate(
-    params.message,
-    params.requireAssistantRole === true,
-  );
-  if (!record || !candidate) {
-    return undefined;
-  }
-  const sequences = findCandidateCallSequences(
-    candidate,
-    params.matcher,
-    params.resolveProtectedRanges,
-  );
-  const visibleOutsideCalls = Boolean(createRangeRemover(sequences)(candidate.text).trim());
-  const ranges = sequences.filter(
-    (sequence) =>
-      params.forceKnownCandidates ||
-      sequence.overCap ||
-      visibleOutsideCalls ||
-      (params.forceIncompleteCandidates && sequence.activeStart !== undefined),
-  );
-  return ranges.length > 0
-    ? projectRangesOntoMessage(record, candidate, ranges, params.preserveEmptyTextBlocks === true)
-    : undefined;
-}
-
-function findPotentialCallStart(
-  text: string,
-  atLineStart: boolean,
-  matcher: PlainTextToolCallNameMatcher,
-  isProtected?: (offset: number) => boolean,
-): number | null {
-  for (let index = 0; index < text.length;) {
-    const lineStart =
-      (index === 0 && atLineStart) || text[index - 1] === "\n" || text[index - 1] === "\r";
-    if (!lineStart) {
-      index += 1;
-      continue;
-    }
-    const start = skipLineIndentation(text, index);
-    if (isProtected?.(start)) {
-      index += 1;
-      continue;
-    }
-    const scan = scanPlainTextToolCall(text, start, {
-      matcher,
-      maxPayloadBytes: MAX_PAYLOAD_BYTES,
-    });
-    if (scan.kind === "prefix" || scannedCall(scan)) {
-      return index;
-    }
-    index = Math.max(index + 1, scan.next);
-  }
-  return null;
 }
 
 /** A confirmed preceding-context verdict, keyed by the partial's own reported length. */
@@ -545,13 +173,6 @@ function resolvePartialProtectionCheck(params: {
   const protectedRanges = params.resolveProtectedRanges(candidate.text);
   return (offset) =>
     isOffsetInProtectedRanges(blockStart + incomingStart + offset, protectedRanges);
-}
-
-function nextAtLineStart(previous: boolean, text: string): boolean {
-  if (!text) {
-    return previous;
-  }
-  return text.endsWith("\n") || text.endsWith("\r");
 }
 
 function eventTemplate(event: Record<string, unknown>): Record<string, unknown> {
@@ -979,19 +600,15 @@ export async function* normalizePlainTextToolCallStreamEvents(
     return result.slice(0, length);
   };
 
+  const forcedScrubSnapshot = createForcedScrubSnapshot(options);
+
   const scrubSnapshot = (
     value: unknown,
     preserveEmptyTextBlocks = false,
     forceKnownCandidates = false,
   ) => {
     const forced = forceKnownCandidates
-      ? projectScrubbedPlainTextToolCallMessage({
-          forceKnownCandidates: true,
-          matcher: options.matcher,
-          message: value,
-          preserveEmptyTextBlocks,
-          resolveProtectedRanges: options.resolveProtectedRanges,
-        })
+      ? forcedScrubSnapshot(value, preserveEmptyTextBlocks)
       : undefined;
     if (forced) {
       return forced;

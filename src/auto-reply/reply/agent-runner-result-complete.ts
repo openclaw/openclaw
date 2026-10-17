@@ -98,7 +98,7 @@ export async function completeReplyAgentRun(input: {
     }
 
     if (verboseEnabled) {
-      const suffix = typeof count === "number" ? ` (count ${count})` : "";
+      const suffix = count !== undefined ? ` (count ${count})` : "";
       prefixNotices.push(
         setReplyPayloadMetadata(
           { text: `🧹 Auto-compaction complete${suffix}.` },
@@ -156,9 +156,7 @@ export async function completeReplyAgentRun(input: {
       opts,
     });
     const assistantFinalText = normalizeAssistantFinalDeliveryText(
-      typeof runResult.meta?.finalAssistantVisibleText === "string"
-        ? runResult.meta.finalAssistantVisibleText
-        : (rawAssistantText ?? ""),
+      runResult.meta?.finalAssistantVisibleText ?? rawAssistantText ?? "",
     );
     // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
     // recovering here would duplicate that message.

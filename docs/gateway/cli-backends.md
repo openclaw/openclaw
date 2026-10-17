@@ -126,6 +126,11 @@ plugin code registered with `api.registerCliBackend(...)`.
 
 Claude CLI startup hook events are consumed in order while initialization completes, so a burst of `SessionStart` hooks does not stall the first turn. Restricted runs continue to disable native hooks.
 
+With `tools.fs.workspaceOnly: true`, agent turns use OpenClaw tools through the
+MCP bridge so file access follows the workspace policy. The backend must support
+bundled MCP and exact tool selection; otherwise OpenClaw refuses to start the
+turn. An agent's `tools.fs.workspaceOnly` setting overrides the global setting.
+
 Claude stream-json backends also emit live line-count progress while `write`,
 `edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
 name, and added/removed line counts, with at most four updates per second per
@@ -274,7 +279,8 @@ restrictions still override broader global policy. OpenClaw-owned MCP tools
 remain authorized by the Gateway rather than receiving duplicate native
 approval. Other MCP tools stay host-permission controlled.
 
-Claude's native `AskUserQuestion` uses OpenClaw's structured question flow. When
+Claude's native `AskUserQuestion` uses OpenClaw's structured question flow and
+the canonical `ask_user` tool capability. When
 OpenClaw rejects malformed questions, it reports the failed field and
 constraint without repeating the submitted text, and asks Claude to correct
 the field and retry. Invalid questions do not prompt the user. If the user
@@ -369,7 +375,8 @@ register a small wrapper backend plugin.
 - Forking a session (Control UI "Fork conversation", `sessions.create` with `fork: true`, `sessions_spawn` with `context: "fork"`) branches the stored CLI session with the transcript. The child's first turn resumes the parent's native session with the backend's fork flag (`--fork-session` for `claude-cli`), pinned to the parent's last recorded checkpoint, then keeps the new native id. The copied binding is validated like any other before it is resumed, so a changed auth profile or environment starts the child fresh instead. The parent's binding is unchanged. Backends without fork and checkpoint-resume support, or bindings without a recorded checkpoint, start a fresh native session in the child. Per-message forks from the chat pane start a fresh CLI session because they cut the transcript at an earlier point.
 - Stopping or timing out a resumed turn preserves its existing native session, including when it already sent a progress message through a Gateway tool. The next turn can resume that history without replaying the interrupted request. A provider-reported expired session or an aborted fork replacement still clears the binding; normal account, workspace, and tool compatibility checks still apply.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default. `/reset` and explicit daily or idle `session.reset` policies still cut them.
-- Fresh CLI sessions can recover OpenClaw history from the session SQLite database when its independent account boundary matches the selected credential. Compacted recovery includes the latest summary, retained messages, and subsequent turns on the active branch. A backend can opt in to bounded recovery before compaction with `reseedFromRawTranscriptWhenUncompacted: true`, including after its native session binding is cleared. Recovery includes saved tool-result text and error markers. It does not execute past tools. The current user turn is sent once, outside the recovered history.
+- Fresh CLI sessions can recover OpenClaw history from the session SQLite database when its independent account boundary matches the selected credential. Compacted recovery includes the latest summary, retained messages, and subsequent turns on the active branch. A backend can opt in to bounded recovery before compaction with `reseedFromRawTranscriptWhenUncompacted: true`, including after its native session binding is cleared and on every turn of a `sessionMode: "none"` backend. Recovery includes saved tool-result text and error markers. It does not execute past tools. The current user turn is sent once, outside the recovered history.
+- Compaction preserves that account boundary only when it covers the entire source transcript. The next fresh CLI turn receives the compacted view once: the summary and retained recent messages, not a second copy of the pre-compaction conversation. Compaction does not make unknown or mixed-account history eligible for recovery.
 - Helper runs with a caller-owned in-memory transcript use that history for hooks, bounded session notes, and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume. Resumed turns send the current prompt and bounded session notes without replaying the conversation history.
 
 Warm processes belong to the conversation, including when turns alternate between a channel and `chat.send`. A different inbound account or auth profile retires the previous process and waits for cleanup before starting its replacement. Account-private standing approvals do not carry into the replacement.

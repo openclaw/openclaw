@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
-import { requireNodeTool } from "../../../test/helpers/node-toolchain.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -12,12 +11,11 @@ it.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arc
   "retires A/B and failed startup with real kernel-denied group signals and complete output",
   async () => {
     const fixture = resolveRuntimeWorkerUrl(processProbeEntrypoints.serviceChildSubreaper);
-    const node = requireNodeTool("node");
-    const { stdout } = await promisify(execFile)(node, resolveRuntimeWorkerArgv(fixture, node), {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      timeout: 10_000,
-    });
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      resolveRuntimeWorkerArgv(fixture),
+      { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 },
+    );
     expect(JSON.parse(stdout)).toEqual([
       ...["A", "B"].map((label) => ({
         label,

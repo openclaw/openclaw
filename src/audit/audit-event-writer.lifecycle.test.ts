@@ -16,13 +16,20 @@ import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 
 const { execute } = vi.hoisted(() => ({
   execute:
-    vi.fn<(command: SqliteWorkerCommand<AuditWriterOperations>) => Promise<AuditWriterResult>>(),
+    vi.fn<
+      (
+        command: SqliteWorkerCommand<AuditWriterOperations>,
+      ) => Promise<AuditWriterResult | AuditWriterResult[]>
+    >(),
 }));
 
+// mock-isolation: Exercise FIFO scheduling without opening the shared-state worker.
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: (
     _context: OpenClawStateWorkerContext,
-    operation: (scope: { execute: typeof execute }) => Promise<AuditWriterResult>,
+    operation: (scope: {
+      execute: typeof execute;
+    }) => Promise<AuditWriterResult | AuditWriterResult[] | undefined>,
   ) => operation({ execute }),
 }));
 
@@ -55,7 +62,7 @@ function mockEventRequests(handler: (sourceId: string) => Promise<AuditWriterRes
   const requests: string[] = [];
   execute.mockImplementation(async (command) => {
     if (command.type === "audit.writer.prune") {
-      return { status: "settled" };
+      return [];
     }
     if (command.input.type !== "record-event") {
       throw new Error("Unexpected audit request in event lifecycle test");
@@ -77,7 +84,7 @@ describe("audit writer async settlement", () => {
     vi.useRealTimers();
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
-    execute.mockResolvedValue({ status: "settled" });
+    execute.mockResolvedValue([]);
     const writer = createAuditEventWriter({
       scheduler,
       stateDir: tempDirs.make("audit-writer-maintenance-"),
@@ -87,8 +94,9 @@ describe("audit writer async settlement", () => {
       execute.mockClear();
       const pruned = createDeferred();
       execute.mockImplementation(async (command) => {
-        if (command.type === "audit.writer.prune" && command.input === "progress") {
+        if (command.type === "audit.writer.prune") {
           pruned.resolve();
+          return [];
         }
         return { status: "settled" };
       });
@@ -97,9 +105,7 @@ describe("audit writer async settlement", () => {
       await clock.advanceBy(2 * 60 * 60_000 + 1);
       await pruned.promise;
       expect(
-        execute.mock.calls.filter(
-          ([command]) => command.type === "audit.writer.prune" && command.input === "events",
-        ),
+        execute.mock.calls.filter(([command]) => command.type === "audit.writer.prune"),
       ).toHaveLength(1);
 
       await writer.stop();
@@ -109,6 +115,75 @@ describe("audit writer async settlement", () => {
     } finally {
       await writer.stop();
       await scheduler.stop();
+    }
+  });
+
+  it("reports maintenance errors before backing off contention and draining queued writes", async () => {
+    const requests = mockEventRequests(async () => ({ status: "settled" }));
+    execute.mockResolvedValueOnce([
+      { status: "settled", deleted: 1 },
+      { status: "settled", error: "synthetic identity prune failure" },
+      { status: "retry" },
+    ]);
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-maintenance-retry-"),
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await advanceDispatch();
+      await writer.ready;
+      expect(errors).toEqual(["synthetic identity prune failure"]);
+      expect(writer.record(event("after-maintenance"))).toBe(true);
+      await vi.advanceTimersByTimeAsync(23);
+      expect(requests).toEqual([]);
+      expect(execute).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(requests).toEqual(["after-maintenance"]);
+      expect(errors).toEqual(["synthetic identity prune failure"]);
+    } finally {
+      const stopping = writer.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await stopping;
+    }
+  });
+
+  it("joins a submitted maintenance pass after shutdown drops waiting metadata", async () => {
+    const finish = createDeferred<AuditWriterResult[]>();
+    execute.mockReturnValue(finish.promise);
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-maintenance-settlement-"),
+      onError: (error) => errors.push(error),
+    });
+    try {
+      expect(writer.record(event("waiting"))).toBe(true);
+      await advanceDispatch();
+      expect(execute).toHaveBeenCalledTimes(1);
+      let stopped = false;
+      const stopping = writer.stop();
+      void stopping.then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(stopped).toBe(false);
+      expect(errors).toEqual([
+        "audit event writer shutdown timed out; pending metadata may be lost",
+      ]);
+      finish.resolve([{ status: "settled", deleted: 1 }]);
+      await stopping;
+      await writer.ready;
+      expect(stopped).toBe(true);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(errors).toHaveLength(1);
+    } finally {
+      finish.resolve([]);
+      const stopping = writer.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await stopping;
     }
   });
 

@@ -168,18 +168,10 @@ function decodeInlineDataImage(
 
   // Validation above guarantees whitespace-free base64 for this allocation-free size check.
   const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
-  if (
-    estimatedBytes <= 0 ||
-    (typeof maxBytes === "number" &&
-      (estimatedBytes > maxBytes || totalBytes + estimatedBytes > maxBytes))
-  ) {
+  if (estimatedBytes <= 0 || estimatedBytes > maxBytes || totalBytes + estimatedBytes > maxBytes) {
     return null;
   }
-  try {
-    return { data: Buffer.from(canonicalPayload, "base64"), contentType, estimatedBytes };
-  } catch {
-    return null;
-  }
+  return { data: Buffer.from(canonicalPayload, "base64"), contentType, estimatedBytes };
 }
 
 async function resolveInlineDataImageMime(inline: {
@@ -282,7 +274,7 @@ export async function downloadMSTeamsAttachments(params: {
   /** Already-acquired Graph token for reference attachments from a Graph message. */
   graphReferenceToken?: string;
 }): Promise<MSTeamsInboundMedia[]> {
-  const list = Array.isArray(params.attachments) ? params.attachments : [];
+  const list = params.attachments ?? [];
   if (list.length === 0) {
     return [];
   }

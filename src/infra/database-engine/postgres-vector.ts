@@ -37,10 +37,7 @@ export function bindPostgresVector(
         /* sqlite-allow-raw: PostgreSQL projection lookup uses its admitted identity. */ db.prepare(
           `SELECT id FROM ${pgSearchName(index.table)} WHERE id = ?`,
         );
-      return (id) => {
-        own(index);
-        return Boolean(statement.get(id));
-      };
+      return (id) => Boolean(statement.get(id));
     },
     async nearest(request) {
       const source = own(request.index);
@@ -103,8 +100,7 @@ export function bindPostgresVector(
           ),
       });
     },
-    drop(index) {
-      write(index);
+    drop() {
       throw new Error(
         "PostgreSQL vector DDL belongs to store schema admission; rebuild the projection instead",
       );
@@ -122,12 +118,9 @@ export function bindPostgresVector(
       // Refresh from authoritative bytes, never re-encode a caller's possibly rounded embedding.
       const statement =
         /* sqlite-allow-raw: PostgreSQL projection refresh derives from canonical source bytes. */ db.prepare(
-          `INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE ${pgSearchName(source.key)} = ? AND ${pgSearchName(source.embedding)} IS NOT NULL ON CONFLICT (id) DO UPDATE SET embedding = excluded.embedding`,
+          `INSERT INTO ${pgSearchName(index.table)}(id, embedding) SELECT ${pgSearchName(source.key)}, openclaw_vector(${pgSearchName(source.embedding)}, ${source.dimensions}) FROM ${pgSearchName(source.source)} WHERE ${pgSearchName(source.key)} = ? AND octet_length(${pgSearchName(source.embedding)}) > 0 ON CONFLICT (id) DO UPDATE SET embedding = excluded.embedding`,
         );
       for (const row of rows) {
-        if (row.embedding.length !== source.dimensions) {
-          throw new Error("PostgreSQL embedding dimension mismatch");
-        }
         statement.run(row.id);
       }
     },

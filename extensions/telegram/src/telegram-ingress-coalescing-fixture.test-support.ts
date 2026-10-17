@@ -23,7 +23,6 @@ import {
   resolveFlushTimerForDelay,
 } from "./bot-media-timers.test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
 import * as messageDispatchDedupe from "./message-dispatch-dedupe.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -31,7 +30,7 @@ import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
   createBotApiTransport,
-  createTelegramDeps,
+  configureTelegramModuleMocks,
   photoUpdate,
 } from "./telegram-ingress-coalescing.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
@@ -218,11 +217,12 @@ export async function createIngressMonitor(
 ) {
   const telegramTransport = options.telegramTransport ?? createBotApiTransport();
   const abortController = new AbortController();
+  configureTelegramModuleMocks(stateDir, cfg);
+  const { createTelegramBot } = await import("./bot.js");
   const bot = await createTelegramBot({
     token: "tok",
     botInfo: telegramBotInfoForTest,
     config: cfg,
-    telegramDeps: createTelegramDeps(stateDir, cfg),
     telegramTransport,
     fetchAbortSignal: abortController.signal,
     mediaAbortSignal: abortController.signal,

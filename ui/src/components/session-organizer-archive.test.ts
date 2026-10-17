@@ -60,7 +60,8 @@ describe("session organizer nested archive choice", () => {
         const pending = modal.track(archiveSessionWithUndo(harness.host, root, harness.scope));
         const actions = await waitForConfirmDialogActions();
         expect(document.body.textContent).toContain(
-          '"Batch 0" has 2 nested sessions. Archive only this one and they move to the top level.',
+          // Only the direct child moves up; the grandchild stays nested beneath it.
+          '"Batch 0" has a nested session. Archive only this one and it moves to the top level.',
         );
         expect(document.body.textContent).toContain(t("sessionsView.archiveRunningSessions"));
         expect(actions.textContent).toContain("Archive 3 sessions");

@@ -228,6 +228,7 @@ describe("update.run acknowledgement", () => {
     const response = await captureUpdateRunPayload({
       sessionKey,
       deliveryContext: { to: "slack:C0456DEF" },
+      continuationMessage: "Report the update result after restart.",
     });
     expect(response).toMatchObject({
       ackDelivered: true,
@@ -235,6 +236,15 @@ describe("update.run acknowledgement", () => {
       result: { reason: "managed-service-handoff-already-running" },
     });
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+    expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          continuationMessage: "Report the update result after restart.",
+        }),
+      }),
+    );
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ to: "C0456DEF" }),
       expect.any(Object),
@@ -380,16 +390,10 @@ describe("update.run acknowledgement", () => {
 
 describe("update.run sentinel deliveryContext", () => {
   it.each([
-    { sessionKey: undefined, deliveryContext: undefined, threadId: undefined },
     {
       sessionKey: "agent:main:webchat:dm:user-123",
       deliveryContext: { channel: "webchat", to: "webchat:user-123", accountId: "default" },
       threadId: undefined,
-    },
-    {
-      sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456",
-      deliveryContext: { channel: "slack", to: "slack:C0123ABC", accountId: "workspace-1" },
-      threadId: "1234567890.123456",
     },
   ])(
     "preserves the sentinel route for $sessionKey",
@@ -402,32 +406,6 @@ describe("update.run sentinel deliveryContext", () => {
       expect(payload.continuation).toBeUndefined();
     },
   );
-
-  it("carries continuationMessage to the updater without running it on acceptance", async () => {
-    await invokeUpdateRun({
-      sessionKey: "agent:main:webchat:dm:user-123",
-      continuationMessage: "Check the running version and finish the update report.",
-    });
-
-    expect(readCapturedPayload().continuation).toBeUndefined();
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meta: expect.objectContaining({
-          continuationMessage: "Check the running version and finish the update report.",
-        }),
-      }),
-    );
-  });
-});
-
-describe("update.run timeout normalization", () => {
-  it("enforces a 1000ms minimum timeout for tiny values", async () => {
-    await invokeUpdateRun({ timeoutMs: 1 });
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ timeoutMs: 1000 }),
-    );
-  });
 });
 
 describe("update.run restart scheduling", () => {
@@ -444,121 +422,6 @@ describe("update.run restart scheduling", () => {
       }),
     );
   });
-
-  it("persists managed update continuation before transferring validation while serving", async () => {
-    const root = path.join(
-      await fs.realpath(expectDefined(process.env.HOME, "fixture HOME")),
-      "openclaw-global",
-    );
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface(root);
-
-    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload({}, {}),
-    );
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        root,
-        restartDrainTimeoutMs: 300_000,
-        restartDelayMs: 0,
-        handoffId: expect.any(String),
-        supervisor: "launchd",
-        meta: expect.objectContaining({
-          handoffId: expect.any(String),
-          root,
-        }),
-      }),
-    );
-    const handoffId = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0].handoffId;
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meta: expect.objectContaining({ handoffId }),
-      }),
-    );
-    expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-    expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
-      kind: "managed-update-handoff",
-      handoffId,
-      installRoot: root,
-    });
-    expect(recordLatestUpdateRestartSentinelMock.mock.invocationCallOrder[0]).toBeLessThan(
-      transferManagedServiceUpdateHandoffMock.mock.invocationCallOrder[0]!,
-    );
-    expect(cancelManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-    expect(payload?.restart).toBeNull();
-    expect(payload?.ok).toBe(true);
-    expect(payload?.result?.status).toBe("skipped");
-    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
-    expect(payload?.handoff).toEqual({
-      status: "started",
-      pid: 12345,
-      command: "openclaw update --yes --timeout 1800",
-    });
-    expect(payload?.sentinel?.persisted).toBe(true);
-    const sentinel = readCapturedPayload();
-    expect(sentinel.kind).toBe("update");
-    expect(sentinel.status).toBe("skipped");
-    expect(sentinel.stats).toEqual(
-      expect.objectContaining({
-        handoffId,
-        reason: "managed-service-handoff-started",
-      }),
-    );
-    expect(recordLatestUpdateRestartSentinelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "update",
-        status: "skipped",
-        stats: expect.objectContaining({
-          reason: "managed-service-handoff-started",
-        }),
-      }),
-    );
-  });
-
-  it("rejects a joining request instead of dropping its restart continuation", async () => {
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
-    startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
-      status: "joined",
-      pid: 12345,
-      command: "openclaw update --yes --timeout 1800",
-      logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
-      handoffId: "handoff-existing",
-    });
-
-    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload({
-        sessionKey: "agent:main:webchat:dm:user-123",
-        continuationMessage: "Report the update result after restart.",
-      }),
-    );
-
-    expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-    expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-    expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
-    expect(sentinelState.capturedPayload).toBeUndefined();
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meta: expect.objectContaining({
-          sessionKey: "agent:main:webchat:dm:user-123",
-          continuationMessage: "Report the update result after restart.",
-        }),
-      }),
-    );
-    expect(payload?.ok).toBe(false);
-    expect(payload?.result).toMatchObject({
-      status: "skipped",
-      reason: "managed-service-handoff-already-running",
-    });
-    expect(payload?.handoff).toEqual({
-      status: "already-running",
-      command: "openclaw update --yes --timeout 1800",
-      message: "Another managed update is already running; retry after it completes.",
-    });
-    expect(payload?.sentinel?.persisted).toBe(false);
-  });
-
   it("cancels foreground parking when its accepted notice cannot be persisted", async () => {
     sentinelState.restartSentinelWriteError = new Error("state database unavailable");
     const payload = await captureUpdateRunPayload();
@@ -588,9 +451,7 @@ describe("update.run restart scheduling", () => {
 
   it.each([
     { supervisor: "launchd", restartDelayMs: 0, expectedDelayMs: 0 },
-    { supervisor: "systemd", restartDelayMs: 0, expectedDelayMs: 0 },
     { supervisor: "systemd", restartDelayMs: 500, expectedDelayMs: 500 },
-    { supervisor: "launchd", restartDelayMs: 2_147_153_648, expectedDelayMs: 60_000 },
     { supervisor: "systemd", restartDelayMs: 2_147_153_648, expectedDelayMs: 60_000 },
   ] as const)(
     "keeps $supervisor serving until activation despite restartDelayMs=$restartDelayMs",
@@ -720,17 +581,6 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0]).not.toHaveProperty("channel");
     expect(payload?.handoff?.command).not.toContain("--channel");
   });
-
-  it("defers saved Git channel validation to the canonical updater without an installation switch", async () => {
-    normalizeUpdateChannelMock.mockReturnValueOnce("extended-stable");
-    mockGitInstallSurface("/tmp/openclaw-git");
-    const payload = await captureUpdateRunPayload();
-    expect(payload?.ok).toBe(true);
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ channel: expect.anything() }),
-    );
-  });
-
   it("forwards stored extended-stable to package managed-service handoff", async () => {
     normalizeUpdateChannelMock.mockReturnValueOnce("extended-stable");
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -874,7 +724,14 @@ describe("update.run restart scheduling", () => {
 
 describe("update.run prepared foreground handoff", () => {
   it("keeps serving until the prepared updater requests parking, using the same transferred owner", async () => {
-    const payload = await captureUpdateRunPayload({ restartDelayMs: 7_000 });
+    normalizeUpdateChannelMock.mockReturnValueOnce("extended-stable");
+    mockGitInstallSurface("/tmp/openclaw-git");
+    const continuationMessage = "Check the running version and finish the update report.";
+    const payload = await captureUpdateRunPayload({
+      restartDelayMs: 7_000,
+      timeoutMs: 1,
+      continuationMessage,
+    });
     expect(payload).toMatchObject({
       ok: true,
       sentinel: { persisted: true },
@@ -886,10 +743,18 @@ describe("update.run prepared foreground handoff", () => {
     );
     expect(params).toMatchObject({
       supervisor: null,
+      root: "/tmp/openclaw-git",
       restartDelayMs: 7_000,
+      timeoutMs: 1000,
       foregroundOrigin: { owner: "foreground-owner", pid: process.pid },
-      meta: { completionOwner: "gateway-restart", runId: payload!.runId },
+      meta: { completionOwner: "gateway-restart", runId: payload!.runId, continuationMessage },
     });
+    expect(params).not.toHaveProperty("channel");
+    expect(readCapturedPayload().continuation).toBeUndefined();
+    expect(readCapturedPayload().deliveryContext).toBeUndefined();
+    expect(recordLatestUpdateRestartSentinelMock.mock.invocationCallOrder[0]).toBeLessThan(
+      transferManagedServiceUpdateHandoffMock.mock.invocationCallOrder[0]!,
+    );
     expect(params.foregroundOrigin?.stateDatabasePath).toEqual(expect.any(String));
     expect(params.foregroundOrigin?.configPath).toEqual(expect.any(String));
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();

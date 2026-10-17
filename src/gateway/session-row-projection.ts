@@ -22,7 +22,7 @@ import {
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
-import { createSessionRowGenerationObservations } from "./session-row-projection-generation.js";
+import { createSessionRowGenerationMutations } from "./session-row-projection-generation.js";
 import { createSessionRowCreatorIndex } from "./session-row-projection-identities.js";
 import * as rowReads from "./session-row-projection-materialize.js";
 import {
@@ -490,11 +490,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       void ensureMaterialized().catch(() => {});
     },
   });
-  const generations = createSessionRowGenerationObservations({
-    config: () => inOwnerContext(() => params.getConfig?.() ?? cfg),
-    isActive: () => !disposed,
+  const generationMutations = createSessionRowGenerationMutations({
     stores: () => stores,
-    isCurrent,
     matching,
     markRelated,
     put,
@@ -512,7 +509,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     publishTranscript: (change) => transcriptUpdates.publish(change),
     invalidateMembership: membership.invalidate,
     mark,
-    mutateGeneration: generations.mutate,
+    mutateGeneration: generationMutations.mutate,
   });
   function isCurrent(row: records.Row) {
     return row.privateSource
@@ -545,7 +542,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     disposed = true;
     revisions.dispose();
     registryRead.dispose();
-    generations.invalidate();
     disposeRefresh();
     metadata.dispose();
     catalog.dispose();
@@ -628,7 +624,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }),
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
-    observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
     readPreparedSpawnedBy,
@@ -690,6 +685,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         modelCatalog: catalog.current,
         rowContext: metadata.current,
         scope: scope.select,
+        physicalStorePaths: scope.physicalPaths,
       };
     },
     isCurrent,

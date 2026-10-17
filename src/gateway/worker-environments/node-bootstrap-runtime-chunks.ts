@@ -16,12 +16,15 @@ export async function resolveNodeBootstrapRuntimeChunks(
   packageRoot: string,
   files: string[],
   packageFiles: readonly string[],
+  omittedPluginDirs?: ReadonlySet<string>,
 ) {
   const ownership = readRuntimeDependencyOwnership(packageRoot);
-  const omittedPlugins = new Set([
-    ...NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-    ...collectRootPackageExcludedExtensionDirs({ files: packageFiles }),
-  ]);
+  const omittedPlugins =
+    omittedPluginDirs ??
+    new Set([
+      ...NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+      ...collectRootPackageExcludedExtensionDirs({ files: packageFiles }),
+    ]);
   const privateChunks = new Map(
     files.flatMap((file) => {
       if (

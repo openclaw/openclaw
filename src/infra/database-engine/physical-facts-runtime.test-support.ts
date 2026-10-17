@@ -14,7 +14,6 @@ export type PhysicalFactsTestResult = {
   writtenName: unknown;
   reusedAdmissionId: string;
   renewedAdmissionId: string;
-  identityError: string;
   versionError: string;
   missingError: string;
 };

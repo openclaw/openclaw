@@ -101,7 +101,6 @@ function buildCompat(
   };
 }
 
-/** Maps one llama-server model row plus optional runtime properties into OpenClaw config. */
 export function mapLlamaServerModel(
   row: LlamaServerModelWire,
   props?: LlamaServerPropsWire,

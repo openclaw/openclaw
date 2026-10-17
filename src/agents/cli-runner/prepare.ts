@@ -18,7 +18,6 @@ import {
   activateMcpLoopbackClientGrantCapture,
   bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
@@ -137,6 +136,7 @@ import {
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
+import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
@@ -315,6 +315,8 @@ async function prepareCliRunContextWithinReadFence(
     backendId: backendResolved.id,
     bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
+    projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
+    sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
     skipsTurnPreparation,
   });
@@ -943,9 +945,9 @@ async function prepareCliRunContextWithinReadFence(
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
-    const mcpClientGrant =
+    const mcpClient =
       mcpLoopbackRuntime && mcpGrant
-        ? mintMcpLoopbackClientGrant({
+        ? await mintCliMcpClientGrant({ ...params, config: runConfig }, sessionAgentId, {
             ...mcpGrant,
             sessionEventSourcePolicy,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
@@ -955,6 +957,10 @@ async function prepareCliRunContextWithinReadFence(
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
+    const mcpClientGrant = mcpClient?.grant;
+    // The grant's cleanup also releases the memory audience leased for this turn.
+    const cleanupMcpClientGrant = mcpClient?.cleanup;
+    cleanupPreparedResources = cleanupMcpClientGrant;
     const bindMcpClientGrantAdmission = (
       admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]>,
     ) => {
@@ -1051,17 +1057,6 @@ async function prepareCliRunContextWithinReadFence(
             };
           })()
         : undefined;
-    let mcpClientGrantRevoked = false;
-    const cleanupMcpClientGrant = mcpClientGrant
-      ? async () => {
-          if (mcpClientGrantRevoked) {
-            return;
-          }
-          mcpClientGrantRevoked = true;
-          revokeMcpLoopbackClientGrant(mcpClientGrant.token);
-        }
-      : undefined;
-    cleanupPreparedResources = cleanupMcpClientGrant;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
       ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined;
@@ -1474,11 +1469,13 @@ async function prepareCliRunContextWithinReadFence(
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
     const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
     // Native compatibility and transcript account ownership are independent gates.
+    // A session-less backend starts every turn fresh, so the account-owned transcript is
+    // its only continuity; the backend's raw-reseed opt-in still decides delivery.
     const rawTranscriptReseedReason = !historyAllowed
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
-        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
+        : (invalidatedReason ?? (ignoreCliSessionCandidate ? "stateless" : "missing-transcript"));
     const sessionPromptContext =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined

@@ -16,10 +16,10 @@ memory adapter contracts that sit on top of them. Part of the
 
 ## Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive all current host fields. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                |
+| Method                                     | What it registers                                                                                                                                                                                                                                          |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive current host fields except opt-in compaction `onProgress`. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                                                  |
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and
@@ -336,6 +336,14 @@ Dreaming is not a provider runtime capability. Selecting another memory plugin c
 still activate Memory Core as a dreaming sidecar under the existing loader policy.
 Explicitly disabling Memory Core prevents that sidecar. The Dreams UI and file-backed
 maintenance methods do not imply that the selected provider implements dreaming.
+
+## Memory host event diagnostics
+
+`readMemoryHostEventRecords` from `openclaw/plugin-sdk/memory-host-events`
+accepts an optional `type` filter. Storage applies it before `limit`, so a
+diagnostic can request the latest `memory.dream.completed` event with `limit: 1`
+without loading unrelated recall history. Omitting `type` preserves the full
+retained event stream.
 
 ## Bundled Memory Core workers
 

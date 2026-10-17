@@ -239,7 +239,12 @@ export function createSessionActorMemoryStorage(options: {
           // No await follows admission; a callback's reentrant close may race this accepted install.
           authority.assertCurrent();
           // Detach before installation: an uncloneable result cannot leave a partial commit.
-          const committed = structuredClone({ kind: "committed" as const, value, changes });
+          const committed = structuredClone({
+            kind: "committed" as const,
+            value,
+            changes,
+            ...(context.entryPatchEffects ? { entryPatchEffects: context.entryPatchEffects } : {}),
+          });
           observer?.beforeCommit?.(structuredClone(committed));
           for (const [sessionKey, state] of changed) {
             const previous = sessions.get(sessionKey);

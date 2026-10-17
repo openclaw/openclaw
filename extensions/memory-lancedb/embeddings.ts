@@ -171,7 +171,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
   constructor(private api: OpenClawPluginApi) {}
 
   private getProvider(agentId: string, embedding: EmbeddingConfig): AgentEmbeddingProvider {
-    const config = (this.api.runtime.config?.current?.() ?? this.api.config) as OpenClawConfig;
+    const config = this.api.runtime.config.current() as OpenClawConfig;
     const agentDir = this.api.runtime.agent.resolveAgentDir(config, agentId);
     const existing = this.providers.get(agentId);
     if (existing?.config === config && existing.agentDir === agentDir) {

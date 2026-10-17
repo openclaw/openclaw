@@ -90,7 +90,6 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       );
     }
   }
-  assertCurrent();
   // Own one sibling file; cleanup must never recurse into substituted staging contents.
   const temporaryPath = buildRandomTempFilePath({
     rootDir: mediaRoot.rootReal,
@@ -274,11 +273,6 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     }
     handedOff = true;
     return result;
-  } catch (error) {
-    // Also covers publication that completed before a failed post-check, and
-    // an already-issued move settling after its enclosing scope closed.
-    await settleChannelReadResource(resource, false);
-    throw error;
   } finally {
     if (!handedOff) {
       await settleChannelReadResource(resource, false);

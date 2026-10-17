@@ -14,7 +14,7 @@ export function buildTlonAccountFields(input: TlonAccountFieldsInput) {
     ...(input.ship ? { ship: input.ship } : {}),
     ...(input.url ? { url: input.url } : {}),
     ...(input.code ? { code: input.code } : {}),
-    ...(typeof input.dangerouslyAllowPrivateNetwork === "boolean"
+    ...(input.dangerouslyAllowPrivateNetwork !== undefined
       ? {
           network: {
             dangerouslyAllowPrivateNetwork: input.dangerouslyAllowPrivateNetwork,
@@ -23,7 +23,7 @@ export function buildTlonAccountFields(input: TlonAccountFieldsInput) {
       : {}),
     ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
     ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),
-    ...(typeof input.autoDiscoverChannels === "boolean"
+    ...(input.autoDiscoverChannels !== undefined
       ? { autoDiscoverChannels: input.autoDiscoverChannels }
       : {}),
     ...(input.ownerShip ? { ownerShip: input.ownerShip } : {}),

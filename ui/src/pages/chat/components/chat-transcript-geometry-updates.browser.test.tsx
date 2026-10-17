@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -11,6 +10,9 @@ import { saveChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
+
+// mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
+vi.mock("../chat-pane-layout-view.tsx", () => import("../chat-pane-layout.test-support.tsx"));
 
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
@@ -38,7 +40,7 @@ class GeometryPane extends ChatPaneRuntime {
     });
   }
 
-  override render() {
+  renderGeometry() {
     const layout = this.transcript.renderSession(this.sessionKey, (session) => {
       if (!(session instanceof ChatSessionVirtualizerHost)) {
         throw new Error("Expected the session virtualizer owner");
@@ -57,9 +59,10 @@ class GeometryPane extends ChatPaneRuntime {
       };
     });
     return {
-      layout: solidContent(GeometryLayout, layout),
+      layout: { component: GeometryLayout, props: layout },
       dialog: undefined,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     };
   }
 }
@@ -102,6 +105,7 @@ async function mountPane(followEnd = false) {
     client: null,
   });
   pane = createPaneTestHost("test-transcript-geometry-pane", GeometryPane);
+  Object.assign(pane, { render: pane.renderGeometry.bind(pane) });
   pane.initialize(fixture.context, followEnd);
   pane.style.cssText = "display: block; width: 800px";
   document.body.append(pane.element);
@@ -178,13 +182,13 @@ it.each(["pending", "committed"] as const)(
     const frame = requestAnimationFrame(paint);
     const measure = () => virtualizer.resizeItem(0, 180);
     if (phase === "committed") {
-      const commit = host.commitRender.bind(host);
-      vi.spyOn(host, "commitRender").mockImplementationOnce(() => {
+      const commit = host.chatState.commitRender.bind(host.chatState);
+      vi.spyOn(host.chatState, "commitRender").mockImplementationOnce(() => {
         commit();
         measure();
       });
     }
-    host.requestUpdate();
+    host.invalidate();
     if (phase === "pending") {
       measure();
     }
@@ -225,7 +229,7 @@ it.each([
       const rect = { width: Math.round(width), height: Math.round(height) };
       expect(session["virtualizer"].scrollRect).toEqual(rect);
       await host.updateComplete;
-      const requests = vi.spyOn(host, "requestUpdate");
+      const requests = vi.spyOn(host, "invalidate");
       await settleLayout();
       expect(observed).toEqual([{ width, height }]);
       expect(session["virtualizer"].scrollRect).toEqual(rect);
