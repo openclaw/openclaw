@@ -566,8 +566,8 @@ describe("createAcpxRuntimeService", () => {
   it.each([{ parallelism: 64, expected: "8" }])(
     "bounds default ACPX Tokio workers at host parallelism $parallelism",
     async ({ parallelism, expected }) => {
-      process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
-      delete process.env.TOKIO_WORKER_THREADS;
+      vi.stubEnv("OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE", "0");
+      vi.stubEnv("TOKIO_WORKER_THREADS", undefined);
       availableParallelismMock.mockReturnValue(parallelism);
       const ctx = createServiceContext(testWorkspace.dir);
       const service = createAcpxRuntimeService(ctx, { openKeyedStore: createEmptyAcpxKeyedStore });
