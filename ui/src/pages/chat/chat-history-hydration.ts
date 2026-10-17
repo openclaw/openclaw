@@ -100,11 +100,18 @@ export async function hydrateChatHistory(
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  const request = (cursor?: string) =>
-    requestSharedHistory(
+  const requests = chatHistoryRequests(state);
+  const request = (cursor?: string) => {
+    const key = `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}`;
+    const load = requests.historyLoad;
+    // Keep pane-level coalescing aligned with the cursor actually sent.
+    if (load.phase === "in-flight") {
+      load.key = key;
+    }
+    return requestSharedHistory(
       sessions,
       client,
-      `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}`,
+      key,
       method,
       sessionKey,
       requestAgentId,
@@ -121,8 +128,8 @@ export async function hydrateChatHistory(
       cursor,
       inputRunIds,
     );
+  };
   try {
-    const requests = chatHistoryRequests(state);
     let admission = requests.subscriptionReady;
     while (admission) {
       const ready = await admission;

@@ -321,16 +321,18 @@ describe("first chat startup snapshot ordering", () => {
     );
   });
 
-  it("uses the restored cursor when the cache settles during stream admission", async () => {
+  it("shares the restored cursor request when the cache settles during stream admission", async () => {
     const h = mountPane();
     const admission = createDeferred<boolean>();
     chatHistoryRequests(h.state).subscriptionReady = admission.promise;
-    h.request.mockResolvedValueOnce({
-      kind: "delta",
+    const delta = {
+      kind: "delta" as const,
       messages: [],
       sessionInfo: h.liveResult.sessionInfo,
       deltaCursor: "live-cursor",
-    });
+    };
+    const response = createDeferred<typeof delta>();
+    h.request.mockReturnValueOnce(response.promise);
     h.connect();
     const loading = h.start();
     h.read.resolve(stored);
@@ -338,12 +340,16 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages).toEqual(stored.messages);
     expect(h.request).not.toHaveBeenCalled();
     admission.resolve(true);
-    await loading;
+    await vi.advanceTimersByTimeAsync(0);
     expect(h.request).toHaveBeenCalledExactlyOnceWith(
       "chat.startup",
       expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
+    const shared = h.start();
+    response.resolve(delta);
+    await Promise.all([loading, shared]);
+    expect(h.request).toHaveBeenCalledTimes(1);
     expect(h.state.chatMessages).toEqual(stored.messages);
   });
 
