@@ -22,6 +22,9 @@ import {
 import type { PluginStateOperation } from "./plugin-state-store.types.js";
 import * as workerClient from "./plugin-state-worker-client.js";
 
+const invalid = (promise: Promise<unknown>) =>
+  expect(promise).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
+
 const modulePath = fileURLToPath(
   new URL("./plugin-state-operation.test-support.ts", import.meta.url),
 );
@@ -37,32 +40,21 @@ describe("plugin state worker operations", () => {
     await closeOpenClawStateDatabaseAsync();
     await state.cleanup();
   });
-  const open = (
-    namespace: string,
-    options: {
-      maxEntries?: number;
-      env?: NodeJS.ProcessEnv;
-      overflowPolicy?: "reject-new" | "evict-oldest";
-    } = {},
-  ) =>
-    createPluginStateKeyedStore<string>(
-      "operation-test",
-      {
-        namespace,
-        maxEntries: options.maxEntries ?? 10,
-        env: options.env ?? state.env,
-        overflowPolicy: options.overflowPolicy ?? "reject-new",
-      },
-      undefined,
-      {
-        resolve: () => ({
-          modulePath,
-          boundaryRoot: path.dirname(modulePath),
-          origin: "bundled",
-          pluginId: "operation-test",
-        }),
-      },
-    );
+  const options = (namespace: string, env = state.env) => ({
+    namespace,
+    maxEntries: 10,
+    env,
+    overflowPolicy: "reject-new" as const,
+  });
+  const open = (namespace: string, env = state.env) =>
+    createPluginStateKeyedStore<string>("operation-test", options(namespace, env), undefined, {
+      resolve: () => ({
+        modulePath,
+        boundaryRoot: path.dirname(modulePath),
+        origin: "bundled",
+        pluginId: "operation-test",
+      }),
+    });
 
   const read = (operation: PluginStateOperation<FixtureOperations>, store = 0) =>
     operation.execute({ type: "read", input: { store, key: "key" } }, { writeStores: [] });
@@ -84,9 +76,7 @@ describe("plugin state worker operations", () => {
 
   it("moves rows across namespaces in one worker command and rolls back undeclared writes", async () => {
     const { first, second, operation } = await pair("move");
-    await expect(move(operation, "moved", [0])).rejects.toMatchObject({
-      code: "PLUGIN_STATE_INVALID_INPUT",
-    });
+    await invalid(move(operation, "moved", [0]));
     expect(await first.lookup("key")).toBe("original");
     expect(await second.lookup("key")).toBeUndefined();
     const dispatch = vi.spyOn(workerClient, "executePluginStateOperationInWorker");
@@ -125,7 +115,7 @@ describe("plugin state worker operations", () => {
 
   it("keeps read-only absent sources noncreating and uses only an explicit missing value", async () => {
     const env = { ...state.env, OPENCLAW_STATE_DIR: state.path("absent") };
-    const store = open("absent", { env });
+    const store = open("absent", env);
     const operation = store.createOperation<FixtureOperations>([store], handler);
     const command = { type: "read", input: { store: 0, key: "key" } } as const;
     const receipt = await operation.execute(command, {
@@ -140,29 +130,6 @@ describe("plugin state worker operations", () => {
     expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
   });
 
-  it("invalidates receipts before asynchronous writes queue and after synchronous adapter writes", async () => {
-    const store = open("receipts");
-    await store.register("key", "allowed");
-    const operation = store.createOperation<FixtureOperations>([store], handler);
-
-    const before = await read(operation);
-    before.assertCurrent();
-    const pending = store.register("key", "revoked");
-    expect(before.assertCurrent).toThrow("no longer current");
-    await pending;
-    const current = await read(operation);
-    expect(current.value.value).toBe("revoked");
-    current.assertCurrent();
-    createPluginStateSyncKeyedStore<string>("operation-test", {
-      namespace: "receipts",
-      maxEntries: 10,
-      overflowPolicy: "reject-new",
-      env: state.env,
-    }).delete("key");
-    expect(current.assertCurrent).toThrow("no longer current");
-    expect((await read(operation)).value.value).toBeUndefined();
-  });
-
   it("expires receipts without querying SQLite or waiting for a timer", async () => {
     const store = open("ttl");
     await store.register("key", "allowed", { ttlMs: 60_000 });
@@ -174,33 +141,47 @@ describe("plugin state worker operations", () => {
     expect(result.assertCurrent).toThrow("no longer current");
   });
 
-  it("invalidates canonical receipts for sync and async writes through a source alias", async () => {
-    const store = open("alias-authority");
-    await store.register("key", "original");
-    const alias = state.path("state-directory-alias");
-    symlinkSync(state.stateDir, alias, process.platform === "win32" ? "junction" : "dir");
-    const aliasEnv = { ...state.env, OPENCLAW_STATE_DIR: alias };
-    const operation = store.createOperation<FixtureOperations>([store], handler);
-
-    const original = await read(operation);
-    original.assertCurrent();
-    createPluginStateSyncKeyedStore<string>("operation-test", {
-      namespace: "alias-authority",
-      maxEntries: 10,
-      overflowPolicy: "reject-new",
-      env: aliasEnv,
-    }).register("key", "sync successor");
-    expect(original.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
-    const current = await read(operation);
-    expect(current.value.value).toBe("sync successor");
-    current.assertCurrent();
-    const pending = open("alias-authority", { env: aliasEnv }).register("key", "async successor");
-    expect(current.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
-    await pending;
-    const latest = await read(operation);
-    expect(latest.value.value).toBe("async successor");
-    latest.assertCurrent();
-  });
+  it.each([false, true])(
+    "invalidates receipts at async admission and sync commit (alias: %s)",
+    async (alias) => {
+      const namespace = alias ? "alias-authority" : "receipts";
+      const store = open(namespace);
+      await store.register("key", alias ? "original" : "allowed");
+      let env = state.env;
+      if (alias) {
+        const directory = state.path("state-directory-alias");
+        symlinkSync(state.stateDir, directory, process.platform === "win32" ? "junction" : "dir");
+        env = { ...env, OPENCLAW_STATE_DIR: directory };
+      }
+      const operation = store.createOperation<FixtureOperations>([store], handler);
+      const native = createPluginStateSyncKeyedStore<string>(
+        "operation-test",
+        options(namespace, env),
+      );
+      const invalidation = alias ? PluginStateOperationInvalidatedError : "no longer current";
+      let current = await read(operation);
+      current.assertCurrent();
+      if (alias) {
+        native.register("key", "sync successor");
+        expect(current.assertCurrent).toThrow(invalidation);
+        current = await read(operation);
+        expect(current.value.value).toBe("sync successor");
+        current.assertCurrent();
+      }
+      const nextValue = alias ? "async successor" : "revoked";
+      const pending = open(namespace, env).register("key", nextValue);
+      expect(current.assertCurrent).toThrow(invalidation);
+      await pending;
+      current = await read(operation);
+      expect(current.value.value).toBe(nextValue);
+      current.assertCurrent();
+      if (!alias) {
+        native.delete("key");
+        expect(current.assertCurrent).toThrow(invalidation);
+        expect((await read(operation)).value.value).toBeUndefined();
+      }
+    },
+  );
 
   it("keeps scalar and receipt reads behind earlier unfinished mutations", async () => {
     const { second, operation } = await pair("fifo", "old");
@@ -262,34 +243,22 @@ describe("plugin state worker operations", () => {
 
   it("brands recovery receipts and rejects composing a captured source with retargeted stores", async () => {
     const env = { ...state.env, OPENCLAW_STATE_DIR: state.path("source-original") };
-    const store = open("source", { env });
+    const store = open("source", env);
     await store.register("key", "original");
     const operation = store.createOperation<FixtureOperations>([store], handler);
     const source = await read(operation);
-    expect(() =>
+    const recover = (sourceReceipt = source) =>
       store.createOperation<FixtureOperations>([store], handler, {
         assertCurrent() {},
-        sourceReceipt: { ...source },
-      }),
-    ).toThrow("another source or plugin");
-    const same = store.createOperation<FixtureOperations>([store], handler, {
-      assertCurrent() {},
-      sourceReceipt: source,
-    });
-    expect(
-      (await same.execute({ type: "read", input: { store: 0, key: "key" } }, { writeStores: [] }))
-        .value.value,
-    ).toBe("original");
+        sourceReceipt,
+      });
+    expect(() => recover({ ...source })).toThrow("another source or plugin");
+    expect((await read(recover())).value.value).toBe("original");
     env.OPENCLAW_STATE_DIR = state.path("source-successor");
     await store.register("key", "successor");
     source.assertCurrent();
     expect((await read(operation)).value.value).toBe("original");
-    expect(() =>
-      store.createOperation<FixtureOperations>([store], handler, {
-        assertCurrent() {},
-        sourceReceipt: source,
-      }),
-    ).toThrow("another source or plugin");
+    expect(() => recover()).toThrow("another source or plugin");
   });
 
   it.each(["transaction", "commit"] as const)(
@@ -330,16 +299,14 @@ describe("plugin state worker operations", () => {
     await store.register("key", "original");
     const operation = store.createOperation<FixtureOperations>([store], handler);
     await operation.execute({ type: "escape", input: undefined }, { writeStores: [] });
-    await expect(
-      operation.execute({ type: "escape", input: undefined }, { writeStores: [] }),
-    ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
+    await invalid(operation.execute({ type: "escape", input: undefined }, { writeStores: [] }));
     const asynchronous = store.createOperation<{ invalid: { input: undefined; output: void } }>(
       [store],
       { ...handler, exportName: "asynchronousHandler" },
     );
-    await expect(
+    await invalid(
       asynchronous.execute({ type: "invalid", input: undefined }, { writeStores: [0] }),
-    ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
+    );
     expect(await store.lookup("key")).toBe("original");
   });
 

@@ -1,29 +1,22 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { useState } from "./plugin-state-fixtures.test-support.js";
 import { runWriteTransaction } from "./plugin-state-store.database.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   registerPluginStateSequencedJournalEntry,
-  resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
 import { PLUGIN_STATE_EXPIRY_BATCH_ROWS } from "./plugin-state-store.kernel.js";
 import {
   readPluginStateRetention,
   registerPluginStateEntry,
 } from "./plugin-state-store.retention.js";
-import {
-  clearPluginStateStoreForTests,
-  seedPluginStateEntriesForTests,
-} from "./plugin-state-store.test-helpers.js";
+import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
-let testState: OpenClawTestState;
+useState("plugin-state-retention");
 const syncStore = (namespace: string, maxEntries: number, rejectNew = false) =>
   createPluginStateSyncKeyedStore<number>("discord", {
     namespace,
@@ -31,29 +24,9 @@ const syncStore = (namespace: string, maxEntries: number, rejectNew = false) =>
     overflowPolicy: rejectNew ? "reject-new" : "evict-oldest",
   });
 
-beforeAll(async () => {
-  testState = await createOpenClawTestState({ label: "plugin-state-retention" });
-});
-
-beforeEach(() => {
-  testState.applyEnv();
-  clearPluginStateStoreForTests();
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-  resetPluginStateStoreForTests({ closeDatabase: false });
-});
-
-afterAll(async () => {
-  resetPluginStateStoreForTests();
-  await testState.cleanup();
-});
-
 describe("plugin state keyed store", () => {
   it("shares quota and expiry facts while refreshing time and preserving sibling rows", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+    vi.useFakeTimers({ now: 1_000 });
     const scope = { pluginId: "discord", namespace: "operation-retention" };
     const params = { ...scope, maxEntries: 2, overflowPolicy: "reject-new" as const };
     seedPluginStateEntriesForTests([
@@ -119,8 +92,7 @@ describe("plugin state keyed store", () => {
   });
 
   it("evicts oldest live entries over maxEntries with bounded database calls", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
+    vi.useFakeTimers({ now: 1000 });
     seedPluginStateEntriesForTests(
       Array.from({ length: 64 }, (_, index) => ({
         pluginId: "discord",
@@ -153,8 +125,7 @@ describe("plugin state keyed store", () => {
   });
 
   it("keeps the just-registered key when namespace eviction timestamps tie", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
+    vi.useFakeTimers({ now: 1000 });
     const store = syncStore("evict-tie-register", 1);
 
     store.register("z", 1);
@@ -165,8 +136,7 @@ describe("plugin state keyed store", () => {
   });
 
   it("replaces an expired claim beyond the bounded cleanup batch", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000);
+    vi.useFakeTimers({ now: 2_000 });
     const scope = { pluginId: "discord", namespace: "claim-expiry-batch" };
     seedPluginStateEntriesForTests([
       ...Array.from({ length: PLUGIN_STATE_EXPIRY_BATCH_ROWS }, (_, index) => ({
@@ -210,31 +180,25 @@ describe("plugin state keyed store", () => {
 
   it("sheds sequenced journal rows without evicting durable sibling state", async () => {
     const durableEntryCount = 37;
+    const row = (namespace: string, key: string, value: unknown) => ({
+      pluginId: "memory-core",
+      namespace,
+      key,
+      value,
+    });
+    const store = (namespace: string, maxEntries: number, rejectNew = false) =>
+      createPluginStateKeyedStore("memory-core", {
+        namespace,
+        maxEntries,
+        overflowPolicy: rejectNew ? "reject-new" : "evict-oldest",
+      });
     seedPluginStateEntriesForTests([
-      ...Array.from({ length: durableEntryCount }, (_, entryIndex) => ({
-        pluginId: "memory-core",
-        namespace: "durable-state",
-        key: `durable-${entryIndex}`,
-        value: { entryIndex },
-      })),
-      {
-        pluginId: "memory-core",
-        namespace: "memory-host.event-migration-checkpoints",
-        key: "generation",
-        value: { kind: "raw-checkpoint" },
-      },
-      {
-        pluginId: "memory-core",
-        namespace: "memory-host.event-cursors",
-        key: "workspace",
-        value: { kind: "cursor", lastSequence: 9 },
-      },
-      {
-        pluginId: "memory-core",
-        namespace: "memory-host.events",
-        key: "event-0000000000000009",
-        value: { sequence: 9 },
-      },
+      ...Array.from({ length: durableEntryCount }, (_, entryIndex) =>
+        row("durable-state", `durable-${entryIndex}`, { entryIndex }),
+      ),
+      row("memory-host.event-migration-checkpoints", "generation", { kind: "raw-checkpoint" }),
+      row("memory-host.event-cursors", "workspace", { kind: "cursor", lastSequence: 9 }),
+      row("memory-host.events", "event-0000000000000009", { sequence: 9 }),
     ]);
 
     expect(
@@ -249,23 +213,10 @@ describe("plugin state keyed store", () => {
       }),
     ).toBe(10);
 
-    const durable = createPluginStateKeyedStore("memory-core", {
-      namespace: "durable-state",
-      maxEntries: durableEntryCount,
-    });
-    const checkpoints = createPluginStateKeyedStore("memory-core", {
-      namespace: "memory-host.event-migration-checkpoints",
-      maxEntries: 10_000,
-      overflowPolicy: "reject-new",
-    });
-    const journal = createPluginStateKeyedStore("memory-core", {
-      namespace: "memory-host.events",
-      maxEntries: 1,
-    });
-    const cursor = createPluginStateKeyedStore("memory-core", {
-      namespace: "memory-host.event-cursors",
-      maxEntries: 1_000,
-    });
+    const durable = store("durable-state", durableEntryCount);
+    const checkpoints = store("memory-host.event-migration-checkpoints", 10_000, true);
+    const journal = store("memory-host.events", 1);
+    const cursor = store("memory-host.event-cursors", 1_000);
     await expect(durable.lookup("durable-0")).resolves.toEqual({ entryIndex: 0 });
     await expect(checkpoints.lookup("generation")).resolves.toEqual({ kind: "raw-checkpoint" });
     await expect(journal.lookup("event-0000000000000009")).resolves.toBeUndefined();
