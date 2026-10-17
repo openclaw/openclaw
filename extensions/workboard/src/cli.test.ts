@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
 import type { WorkboardStore } from "./store.js";
+import { createAmbiguousPrefix } from "./test/interaction-fixtures.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
@@ -38,19 +39,6 @@ function createProgram(store: WorkboardStore): Command {
   });
   registerWorkboardCli({ program, withStore: async (action) => action(store) });
   return program;
-}
-
-async function createAmbiguousPrefix(store: WorkboardStore): Promise<string> {
-  const seen = new Map<string, string>();
-  for (let index = 0; index < 40; index += 1) {
-    const card = await store.create({ title: `Card ${index}` });
-    const prefix = card.id.slice(0, 1);
-    if (seen.has(prefix)) {
-      return prefix;
-    }
-    seen.set(prefix, card.id);
-  }
-  throw new Error("could not create cards with a shared prefix");
 }
 
 async function captureStdout(run: () => Promise<void>): Promise<string> {

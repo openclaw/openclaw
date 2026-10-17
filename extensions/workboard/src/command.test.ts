@@ -4,30 +4,32 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardCommand } from "./command.js";
 import type { WorkboardStore } from "./store.js";
+import {
+  createAmbiguousPrefix,
+  createSandboxRuntime,
+  createWorktreeRuntime,
+} from "./test/interaction-fixtures.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 import { resolveCommandWorkboardWorkspaceAccess } from "./workspace-access.js";
+
+function ownerContext(isCurrent: () => boolean) {
+  return {
+    senderIsOwner: true,
+    assertOwnerCurrent: () => {
+      if (!isCurrent()) {
+        throw new Error("owner revoked");
+      }
+    },
+  };
+}
 
 function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): OpenClawPluginApi {
   return {
     registerCommand: vi.fn(),
     runtime: {
       subagent: { run },
-      worktrees: {
-        resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
-        create: vi.fn(),
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
-      },
-      sandbox: {
-        resolveWorkspaceAuthority: vi.fn(() => ({
-          sandboxed: false,
-          workspaceAccess: "rw",
-        })),
-        prepareWorkspaceAuthority: vi.fn(async () => ({
-          sandboxed: false,
-          workspaceAccess: "rw",
-        })),
-      },
+      worktrees: createWorktreeRuntime(),
+      sandbox: createSandboxRuntime(false),
     },
   } as unknown as OpenClawPluginApi;
 }
@@ -51,27 +53,11 @@ async function runWorkboardCommand(params: {
   });
   registerWorkboardCommand({ api: params.api, store: params.store });
   return await expectDefined(command, "registered Workboard command").handler({
-    channel: "test",
-    isAuthorizedSender: true,
-    commandBody: "/workboard",
     config: {},
     sessionKey: "agent:main:main",
     args: params.args,
     ...params.context,
   } as never);
-}
-
-async function createAmbiguousPrefix(store: WorkboardStore): Promise<string> {
-  const seen = new Map<string, string>();
-  for (let index = 0; index < 40; index += 1) {
-    const card = await store.create({ title: `Card ${index}` });
-    const prefix = card.id.slice(0, 1);
-    if (seen.has(prefix)) {
-      return prefix;
-    }
-    seen.set(prefix, card.id);
-  }
-  throw new Error("could not create cards with a shared prefix");
 }
 
 describe("handleWorkboardCommand", () => {
@@ -87,12 +73,10 @@ describe("handleWorkboardCommand", () => {
     text: string,
     isError?: boolean,
   ) => {
-    expect(await result).toEqual(
-      expect.objectContaining({
-        text: expect.stringContaining(text),
-        ...(isError === undefined ? {} : { isError }),
-      }),
-    );
+    expect(await result).toMatchObject({
+      text: expect.stringContaining(text),
+      ...(isError === undefined ? {} : { isError }),
+    });
   };
   it("requires an explicit agent workspace for multi-agent local commands", () => {
     const config = {
@@ -149,16 +133,9 @@ describe("handleWorkboardCommand", () => {
       workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-assigned-agent" });
-    const prepareWorkspaceAuthority = vi.fn().mockResolvedValue({
-      sandboxed: true,
-      workspaceAccess: "rw" as const,
-    });
     api = createApi(run);
-    vi.mocked(api.runtime.sandbox.resolveWorkspaceAuthority).mockReturnValue({
-      sandboxed: true,
-      workspaceAccess: "rw",
-    });
-    api.runtime.sandbox.prepareWorkspaceAuthority = prepareWorkspaceAuthority;
+    api.runtime.sandbox = createSandboxRuntime(true);
+    const prepareWorkspaceAuthority = vi.mocked(api.runtime.sandbox.prepareWorkspaceAuthority);
     await command("dispatch", {
       senderIsOwner: true,
       config: {
@@ -252,14 +229,7 @@ describe("handleWorkboardCommand", () => {
       },
     });
     const card = await store.create({ title: "Keep original", status: "ready" });
-    const context = {
-      senderIsOwner: true,
-      assertOwnerCurrent: () => {
-        if (!ownerCurrent) {
-          throw new Error("owner revoked");
-        }
-      },
-    };
+    const context = ownerContext(() => ownerCurrent);
     const list = store.list.bind(store);
     vi.spyOn(store, "list").mockImplementationOnce(async (...args) => {
       const cards = await list(...args);
@@ -304,14 +274,7 @@ describe("handleWorkboardCommand", () => {
       api: createApi(run),
       store,
       args: "dispatch",
-      context: {
-        senderIsOwner: true,
-        assertOwnerCurrent: () => {
-          if (!ownerCurrent) {
-            throw new Error("owner revoked");
-          }
-        },
-      },
+      context: ownerContext(() => ownerCurrent),
     });
     expect(result).toEqual({ text: expect.stringContaining("started=1 failures=1") });
     expect(run).toHaveBeenCalledOnce();
@@ -337,14 +300,8 @@ describe("handleWorkboardCommand", () => {
       scheduledAt: 1,
       position: 1,
     });
-    let secondReadEntered!: () => void;
-    const secondRead = new Promise<void>((resolve) => {
-      secondReadEntered = resolve;
-    });
-    let resumeSecondRead!: () => void;
-    const readResumed = new Promise<void>((resolve) => {
-      resumeSecondRead = resolve;
-    });
+    const { promise: secondRead, resolve: secondReadEntered } = Promise.withResolvers<void>();
+    const { promise: readResumed, resolve: resumeSecondRead } = Promise.withResolvers<void>();
     const get = store.get.bind(store);
     vi.spyOn(store, "get").mockImplementation(async (id) => {
       const card = await get(id);
@@ -355,14 +312,10 @@ describe("handleWorkboardCommand", () => {
       return card;
     });
     let ownerCurrent = true;
-    const dispatch = command("dispatch", {
-      senderIsOwner: true,
-      assertOwnerCurrent: () => {
-        if (!ownerCurrent) {
-          throw new Error("owner revoked");
-        }
-      },
-    });
+    const dispatch = command(
+      "dispatch",
+      ownerContext(() => ownerCurrent),
+    );
     const rejected = expect(dispatch).rejects.toThrow("owner revoked");
     try {
       await secondRead;
@@ -401,7 +354,7 @@ describe("handleWorkboardCommand", () => {
       path: "/state/worktrees/fingerprint/wb-card",
       branch: "openclaw/wb-card",
     });
-    await store.create({
+    const denied = await store.create({
       title: "Denied checkout",
       status: "ready",
       agentId: "main",
@@ -417,14 +370,7 @@ describe("handleWorkboardCommand", () => {
         },
       },
     };
-    vi.mocked(api.runtime.sandbox.resolveWorkspaceAuthority).mockReturnValue({
-      sandboxed: true,
-      workspaceAccess: "rw",
-    });
-    vi.mocked(api.runtime.sandbox.prepareWorkspaceAuthority).mockResolvedValue({
-      sandboxed: true,
-      workspaceAccess: "rw",
-    });
+    api.runtime.sandbox = createSandboxRuntime(true);
     await expectReply(
       command("dispatch", {
         gatewayClientScopes: ["operator.write"],
@@ -434,9 +380,8 @@ describe("handleWorkboardCommand", () => {
       "outside the caller",
     );
     expect(createWorktree).not.toHaveBeenCalled();
-    const denied = (await store.list()).find((card) => card.title === "Denied checkout");
-    expect(denied).toMatchObject({ status: "ready" });
-    await store.update(denied!.id, { status: "blocked" });
+    await expect(store.get(denied.id)).resolves.toMatchObject({ status: "ready" });
+    await store.update(denied.id, { status: "blocked" });
 
     const restricted = await store.create({
       title: "Workspace checkout",
@@ -464,14 +409,7 @@ describe("handleWorkboardCommand", () => {
       workspace: { kind: "worktree", path: "/repo-allowed" },
       workspaceAccess: { unrestricted: true },
     });
-    vi.mocked(api.runtime.sandbox.resolveWorkspaceAuthority).mockReturnValue({
-      sandboxed: false,
-      workspaceAccess: "rw",
-    });
-    vi.mocked(api.runtime.sandbox.prepareWorkspaceAuthority).mockResolvedValue({
-      sandboxed: false,
-      workspaceAccess: "rw",
-    });
+    api.runtime.sandbox = createSandboxRuntime(false);
     await command("dispatch", {
       gatewayClientScopes: ["operator.admin"],
       config: { agents: { entries: { admin: { workspace: "/repo-allowed" } } } },

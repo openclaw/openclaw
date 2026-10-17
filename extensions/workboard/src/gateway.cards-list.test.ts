@@ -7,6 +7,12 @@ import { createWorkboardSqliteStores } from "./test/database-config.js";
 import { createGatewayMethodCapture } from "./test/gateway-method-capture.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
+const createStores = (dbPath: string) =>
+  createWorkboardSqliteStores({
+    dbPath,
+    workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
+  });
+
 function captureCardsList(store: WorkboardStore) {
   const { api, invoke } = createGatewayMethodCapture();
   registerWorkboardGatewayMethods({ api, store });
@@ -20,7 +26,7 @@ function captureCardsList(store: WorkboardStore) {
 describe("workboard card list revisions", () => {
   it("bounds card pages and invalidates the first page after a committed update", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
-    for (let index = 0; index < 105; index++) {
+    for (let index = 0; index < 101; index++) {
       const id = `card-${String(index).padStart(3, "0")}`;
       await stores.cards.register(id, {
         version: 1,
@@ -43,11 +49,9 @@ describe("workboard card list revisions", () => {
     expect(first.nextCursor).toEqual({ position: 0, createdAt: 1, id: "card-099" });
     expect(first.cards[99].metadata.comments[0].body).toBe("Comment 99");
     const second = await list({ after: first.nextCursor, sinceRevision: first.revision });
-    expect(second.cards.map((card: { id: string }) => card.id)).toEqual(
-      Array.from({ length: 5 }, (_, index) => `card-${100 + index}`),
-    );
+    expect(second.cards.map((card: { id: string }) => card.id)).toEqual(["card-100"]);
     expect(second.nextCursor).toBeUndefined();
-    expect(second.boards[0].total).toBe(105);
+    expect(second.boards[0].total).toBe(101);
     await store.update("card-000", { title: "Changed on the Gateway" });
     const refreshed = await list({ sinceRevision: first.revision });
     expect(refreshed.cards[0].title).toBe("Changed on the Gateway");
@@ -81,10 +85,7 @@ describe("workboard card list revisions", () => {
 
   it("refreshes retained lists and session revisions after sibling worker commits", async () => {
     const { store: reader, dbPath } = createWorkboardSqliteTestHarness();
-    const stores = createWorkboardSqliteStores({
-      dbPath,
-      workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
-    });
+    const stores = createStores(dbPath);
     const writer = new WorkboardStore(stores.cards, stores);
     try {
       const before = await reader.listCards(undefined);
@@ -119,7 +120,8 @@ describe("workboard card list revisions", () => {
     const changes = vi.fn();
     store.subscribeChanges(changes);
     const listCards = captureCardsList(store);
-    const list = (boardId?: string) => listCards({ boardId });
+    const list = (boardId?: string, sinceRevision?: unknown) =>
+      listCards({ boardId, sinceRevision });
     const [first, second] = await Promise.all([list("ops"), list(" OPS ")]);
     expect(second).toBe(first);
     expect(await list("ops")).toBe(first);
@@ -138,8 +140,7 @@ describe("workboard card list revisions", () => {
     expect(await list("ops")).toBe(first);
     const unchanged = await listCards({ boardId: "ops", sinceRevision: first.revision });
     expect(unchanged).toEqual({ unchanged: true, revision: first.revision });
-    const otherScope = await listCards({ sinceRevision: first.revision });
-    expect(otherScope.cards).toEqual(first.cards);
+    expect((await list(undefined, first.revision)).cards).toEqual(first.cards);
     changes.mockClear();
 
     await store.update(card.id, { title: "After" });
@@ -147,15 +148,10 @@ describe("workboard card list revisions", () => {
     const next = await list("ops");
     expect(next).not.toBe(first);
     expect(next.revision.revision).toBeGreaterThan(first.revision.revision);
-    const changed = await listCards({ boardId: "ops", sinceRevision: first.revision });
-    expect(changed).toBe(next);
-    const previousEpoch = await listCards({
-      boardId: "ops",
-      sinceRevision: { ...next.revision, epoch: "retired" },
-    });
-    expect(previousEpoch).toBe(next);
-    expect(next.cards[0].title).toBe("After");
-    expect(first.cards[0].title).toBe("Before");
+    for (const revision of [first.revision, { ...next.revision, epoch: "retired" }]) {
+      expect(await list("ops", revision)).toBe(next);
+    }
+    expect([next.cards[0].title, first.cards[0].title]).toEqual(["After", "Before"]);
     expect(await list("ops")).toBe(next);
 
     await store.upsertBoard({ id: "empty", name: "Empty board" });
@@ -191,10 +187,7 @@ describe("workboard card list revisions", () => {
     let unsettled = false;
     const { store } = createWorkboardSqliteTestHarness({
       createStores: (dbPath) => {
-        const stores = createWorkboardSqliteStores({
-          dbPath,
-          workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
-        });
+        const stores = createStores(dbPath);
         return {
           ...stores,
           readWriteToken: () => (unsettled ? undefined : stores.readWriteToken()),

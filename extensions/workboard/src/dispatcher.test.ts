@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
+import { createWorktreeRuntime } from "./test/interaction-fixtures.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 import type { WorkboardTargetWorkspaceRuntime } from "./workspace-access.js";
 
@@ -10,15 +11,7 @@ const targetOptions = (runtime: WorkboardTargetWorkspaceRuntime, root = "/worksp
   resolveAgentWorkspace: () => root,
   resolveAgentWorkspaceRuntime: () => runtime,
 });
-function makeWorktrees(overrides: Partial<NonNullable<DispatchParams["worktrees"]>> = {}) {
-  return {
-    resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
-    create: vi.fn(),
-    release: vi.fn(),
-    removeIfLossless: vi.fn(),
-    ...overrides,
-  };
-}
+
 function expectRejected(
   result: Awaited<ReturnType<typeof dispatchAndStartWorkboardCards>>,
   cardId: string,
@@ -107,16 +100,14 @@ describe("dispatchAndStartWorkboardCards", () => {
       workspaceAccess: { unrestricted: true },
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-worktree" });
-    const worktrees = {
-      resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
+    const worktrees = createWorktreeRuntime({
       create: vi.fn().mockResolvedValue({
         id: "managed-id",
         path: "/state/worktrees/fingerprint/wb-card",
         branch: `openclaw/wb-${card.id}`,
       }),
-      release: vi.fn(),
       removeIfLossless: vi.fn().mockResolvedValue(true),
-    };
+    });
 
     await dispatch(
       run,
@@ -193,7 +184,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         sandboxed: false,
         workspaceAccess: { unrestricted: true },
       }),
-      makeWorktrees(),
+      createWorktreeRuntime(),
     );
   });
 
@@ -208,7 +199,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         sandboxed: true,
         workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
       }),
-      makeWorktrees(),
+      createWorktreeRuntime(),
     );
   });
 
@@ -243,7 +234,7 @@ describe("dispatchAndStartWorkboardCards", () => {
           workspaceAccess: writable,
         }),
       },
-      makeWorktrees(),
+      createWorktreeRuntime(),
     );
   });
 
@@ -259,7 +250,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         workspaceAccess: writable,
         confinementError: "target sandbox routes shell execution outside the sandbox.",
       }),
-      makeWorktrees(),
+      createWorktreeRuntime(),
     );
   });
 
@@ -282,7 +273,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         },
         "/repo/workspace",
       ),
-      makeWorktrees({ resolveCheckoutRoot: vi.fn().mockResolvedValue("/repo") }),
+      createWorktreeRuntime({ resolveCheckoutRoot: vi.fn().mockResolvedValue("/repo") }),
     );
   });
 
@@ -305,7 +296,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         materializeWorktree: true,
         workspaceAccess: { unrestricted: true },
       },
-      makeWorktrees({
+      createWorktreeRuntime({
         resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
         hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(true),
         create,
@@ -336,7 +327,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         sandboxed: true,
         workspaceAccess: writable,
       }),
-      makeWorktrees({
+      createWorktreeRuntime({
         resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
         hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(false),
       }),
@@ -363,7 +354,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     await dispatch(
       vi.fn().mockResolvedValue({ runId: "run-retry" }),
       { maxStarts: 1, materializeWorktree: true },
-      makeWorktrees({ create }),
+      createWorktreeRuntime({ create }),
     );
 
     expect(create).toHaveBeenCalledWith(
