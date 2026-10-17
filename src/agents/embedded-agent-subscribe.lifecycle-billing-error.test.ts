@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -14,8 +14,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderFailoverErrorContext } from "../plugins/types.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
-import { createAttemptNestedToolActivityState } from "./embedded-agent-runner/run/attempt-nested-tool-activity.js";
-import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attempt-stream-prepare.js";
+import { prepareCatalogExecutor } from "./embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
 import { clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import {
   createSubscribedSessionHarness,
@@ -44,6 +43,10 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
     const runId = "run-response-model";
     const emitted = vi.fn();
     const unlisten = onAgentEventForRun(runId, emitted);
+    onTestFinished(() => {
+      unlisten();
+      clearAgentRunContext(runId);
+    });
     registerAgentRunContext(runId, {
       agentId: "main",
       sessionKey: "agent:main:response-model",
@@ -56,23 +59,18 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
     });
     const requested = createAssistant(testModel, []);
     const rerouted = { ...requested, responseModel: "provider-executing-model" };
-    try {
-      emit({ type: "message_start", message: requested });
-      emit({
-        type: "message_update",
-        message: rerouted,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" },
-      });
-      emit({ type: "message_end", message: rerouted });
+    emit({ type: "message_start", message: requested });
+    emit({
+      type: "message_update",
+      message: rerouted,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" },
+    });
+    emit({ type: "message_end", message: rerouted });
 
-      expect(lifecycleData(emitted, "model")).toEqual([
-        { phase: "model", provider: testModel.provider, model: testModel.id },
-        { phase: "model", provider: testModel.provider, model: "provider-executing-model" },
-      ]);
-    } finally {
-      unlisten();
-      clearAgentRunContext(runId);
-    }
+    expect(lifecycleData(emitted, "model")).toEqual([
+      { phase: "model", provider: testModel.provider, model: testModel.id },
+      { phase: "model", provider: testModel.provider, model: "provider-executing-model" },
+    ]);
   });
 
   it("defers error terminal ownership while preserving diagnostics", () => {
@@ -148,8 +146,14 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             errorCode: "FIXTURE_REFUSAL",
           }),
         );
-        const { session, modelRegistry } = await createTestSession({ model });
-        const stream = prepareEmbeddedAttemptStream({
+        const { session } = await createTestSession({ model });
+        const stream = prepareCatalogExecutor({
+          activeSession: session,
+          diagnosticOwner,
+          streamReplies: false,
+          abortRun: () => {
+            void session.abort();
+          },
           attempt: {
             runId,
             sessionId,
@@ -159,48 +163,10 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
             model,
             provider: model.provider,
             modelId: model.id,
-            workspaceDir: process.cwd(),
-            prompt: "exercise terminal provider failure",
-            timeoutMs: 30_000,
             thinkLevel: "off",
             admittedRunContext: createTestAdmittedRunContext(runId),
-            authStorage: modelRegistry.authStorage,
-            modelRegistry,
-            authProfileStore: { version: 1, profiles: {} },
             onAgentEvent,
           },
-          agentSession: {
-            activeSession: session,
-            hookRunner: null,
-            clientToolCallSlots: [],
-            hasDeliveredSourceReply: () => false,
-            markSourceReplyDelivered: () => {},
-            trustedLocalMediaToolNames: new Set(),
-            builtinToolNames: new Set(),
-            coreBuiltinToolNames: new Set(),
-            replaySafeToolNames: new Set(),
-            codeModeExecToolNames: new Set(),
-            sourceReplyCapableToolNames: new Set(),
-            sideEffectToolOwners: new Map(),
-          },
-          hookAgentId: "main",
-          diagnosticTrace: { traceId: "11111111111111111111111111111111" },
-          diagnosticOwner,
-          nestedToolActivityState: createAttemptNestedToolActivityState(),
-          isReplaySafeTool: () => false,
-          runAbortController: new AbortController(),
-          abortRun: () => {
-            void session.abort();
-          },
-          markExternalAbort: () => {},
-          getRunState: () => ({
-            aborted: false,
-            promptError: undefined,
-            timedOut: false,
-            yieldDetected: false,
-          }),
-          onBlockReply: undefined,
-          onBlockReplyFlush: undefined,
         });
         try {
           await session.prompt("exercise terminal provider failure");

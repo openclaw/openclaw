@@ -333,34 +333,22 @@ describe("createModelExecAutoReviewer", () => {
     },
   );
 
-  it("normalizes model preparation failures containing terminal controls", async () => {
-    const message = "first\n\u001b[31msecond\u001b[0m\u202e";
-    const reviewer = withCompletion(vi.fn(async () => ({ error: message })));
-    expectSanitizedFailure(await reviewer(input), "exec reviewer model unavailable:");
-  });
-
-  it("normalizes complete model errors containing terminal controls", async () => {
-    const message = "first\n\u001b[31msecond\u001b[0m\u202e";
-    const { prepare } = createReviewerHarness();
-    const reviewer = withCompletion(
-      prepare,
-      vi.fn(async () => ({
-        stopReason: "error" as const,
-        errorMessage: message,
-        content: [],
-      })),
-    );
-    expectSanitizedFailure(await reviewer(input), "exec reviewer completion failed:");
-  });
-
-  it("normalizes thrown provider failures containing terminal controls", async () => {
+  it.each([
+    ["preparation", "exec reviewer model unavailable:"],
+    ["completion", "exec reviewer completion failed:"],
+    ["throw", "exec reviewer failed:"],
+  ])("normalizes terminal controls from %s failures", async (stage, prefix) => {
     const message = "first\n\u001b[31msecond\u001b[0m\u202e";
     const reviewer = withCompletion(
       vi.fn(async () => {
-        throw new Error(message);
+        if (stage === "throw") {
+          throw new Error(message);
+        }
+        return stage === "preparation" ? { error: message } : preparedModel();
       }),
+      vi.fn(async () => ({ stopReason: "error", errorMessage: message, content: [] })),
     );
-    expectSanitizedFailure(await reviewer(input), "exec reviewer failed:");
+    expectSanitizedFailure(await reviewer(input), prefix);
   });
 
   it.each(["toolUse"] as const)(
@@ -487,21 +475,21 @@ describe("createModelExecAutoReviewer", () => {
     }
   });
 
-  it("keeps repeated gateway reviews bound to one-shot approval", async () => {
-    const { reviewer, prepare, complete } = createReviewerHarness();
-
-    await expect(reviewer(input)).resolves.toMatchObject({
-      decision: "allow-once",
-      risk: "low",
-    });
-    await expect(reviewer(input)).resolves.toMatchObject({
-      decision: "allow-once",
-      risk: "low",
-    });
-
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(complete).toHaveBeenCalledTimes(2);
-  });
+  it.each([true, false])(
+    "does not cache repeated reviews (bound executable: %s)",
+    async (bound) => {
+      const { reviewer, prepare, complete } = createReviewerHarness();
+      const request = { ...input, resolvedPath: bound ? input.resolvedPath : undefined };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(reviewer(request)).resolves.toMatchObject({
+          decision: "allow-once",
+          risk: "low",
+        });
+      }
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(complete).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("keeps simultaneous gateway approvals one-shot under concurrency", async () => {
     const { reviewer, prepare, complete } = createReviewerHarness();
@@ -517,17 +505,6 @@ describe("createModelExecAutoReviewer", () => {
     );
     expect(prepare).toHaveBeenCalledTimes(24);
     expect(complete).toHaveBeenCalledTimes(24);
-  });
-
-  it("never caches reviews without a bound gateway executable", async () => {
-    const { reviewer, prepare, complete } = createReviewerHarness();
-    const unbound = { ...input, resolvedPath: undefined };
-
-    await reviewer(unbound);
-    await reviewer(unbound);
-
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it("uses systemAgent.agentId when agentId is omitted in multi-agent explicit mode", async () => {
@@ -555,15 +532,13 @@ describe("createModelExecAutoReviewer", () => {
     expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ agentId: "agent-a" }));
   });
 
-  describe("completion token budget", () => {
-    it("clamps completion maxTokens to model advertised cap when smaller", async () => {
-      const { reviewer, complete } = createReviewerHarness({ maxTokens: 500 });
-      await expect(reviewer(input)).resolves.toMatchObject({ decision: "allow-once" });
-      expect(complete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          options: expect.objectContaining({ maxTokens: 500 }),
-        }),
-      );
-    });
+  it("clamps completion maxTokens to model advertised cap when smaller", async () => {
+    const { reviewer, complete } = createReviewerHarness({ maxTokens: 500 });
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "allow-once" });
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ maxTokens: 500 }),
+      }),
+    );
   });
 });

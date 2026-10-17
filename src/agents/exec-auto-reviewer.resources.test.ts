@@ -184,12 +184,17 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               );
             });
           }
-          const acquire = () =>
-            acquireSimpleCompletionModelForAgent({
+          const acquire = async () => {
+            const prepared = await acquireSimpleCompletionModelForAgent({
               cfg,
               agentId: "main",
               allowMissingApiKeyModes: ["aws-sdk"],
             });
+            if ("error" in prepared) {
+              throw new Error("Fixture preparation failed");
+            }
+            return prepared;
+          };
           try {
             const reviewer = createModelExecAutoReviewer({
               cfg,
@@ -234,9 +239,6 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               });
             }
             const second = await acquire();
-            if ("error" in second) {
-              throw new Error("Second fixture preparation failed");
-            }
             try {
               expect.soft(create.mock.calls.length).toBe(builds);
               if (mode !== "overlap") {
@@ -256,9 +258,6 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               expect(requests.length).toBe(0);
             }
             const after = await acquire();
-            if ("error" in after) {
-              throw new Error("Final fixture preparation failed");
-            }
             try {
               expect(create.mock.calls.length).toBe(builds + 1);
             } finally {
