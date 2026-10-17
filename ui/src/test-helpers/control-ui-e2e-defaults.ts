@@ -3,12 +3,14 @@ import type {
   EnvironmentsListResult,
   UserProfile,
   ProjectsCheckoutOptionsResult,
+  PresenceEntry,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type {
   PluginsCatalogBrowseResult,
   PluginsCatalogCategoriesResult,
 } from "../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
+import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
 import type { DoctorMemoryStatusPayload } from "../../../src/gateway/server-methods/doctor.ts";
 import type { ChannelsPairingListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
@@ -99,6 +101,9 @@ export function createControlUiDefaultResponses(scenario: {
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "node.list": { ts: 0, nodes: [] },
+    "device.pair.list": { pending: [], paired: [] } satisfies DevicePairingList,
+    "system-presence": [] satisfies PresenceEntry[],
     "environments.list": {
       environments: [],
       profiles: [],
