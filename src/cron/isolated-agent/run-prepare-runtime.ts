@@ -77,9 +77,6 @@ export async function resolveCronAuthSelection(params: {
   provider: string;
   modelId: string;
   configuredProfileId?: string;
-  harnessRuntime: Parameters<
-    CronAuthProfileRuntime["resolveSessionAuthSelection"]
-  >[0]["harnessRuntime"];
   agentDir: string;
   cronSession: MutableCronSession;
   sessionKey: string;
@@ -100,7 +97,6 @@ export async function resolveCronAuthSelection(params: {
     provider: params.provider,
     modelId: params.modelId,
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
-    harnessRuntime: params.harnessRuntime,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,
     sessionStore: params.cronSession.store,
@@ -109,8 +105,6 @@ export async function resolveCronAuthSelection(params: {
     isNewSession: params.isNewSession,
   });
 }
-
-type CronAuthProfileRuntime = typeof import("./run-auth-profile.runtime.js");
 
 export async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;

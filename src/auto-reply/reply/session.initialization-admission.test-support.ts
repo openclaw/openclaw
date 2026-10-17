@@ -1,5 +1,5 @@
 import { setImmediate as yieldImmediate } from "node:timers/promises";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -33,126 +33,133 @@ export function telegramTurn(sessionKey: string, body: string, from: string) {
   };
 }
 
+type Scope = { agentId: string; storePath: string; sessionKey: string };
+
+async function admit(scope: Scope, sessionId: string, resetTriggered: boolean) {
+  const admitted = await admitReplyTurn({ ...scope, sessionId, kind: "visible", resetTriggered });
+  if (admitted.status !== "owned" || !admitted.databaseClaim) {
+    throw new Error("Fixture requires a retained reply admission");
+  }
+  return {
+    ...admitted,
+    databaseClaim: admitted.databaseClaim,
+    async [Symbol.asyncDispose]() {
+      admitted.operation.complete();
+      await waitForReplyRunSuccessorAdmission(scope.sessionKey, null);
+    },
+  };
+}
+
+function initialize(
+  scope: Scope,
+  admitted: Awaited<ReturnType<typeof admit>>,
+  body: string,
+  reset?: { mode: "idle"; idleMinutes: number },
+) {
+  return runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
+    initSessionState({
+      cfg: { session: { store: scope.storePath, ...(reset ? { reset } : {}) } },
+      ctx: telegramTurn(scope.sessionKey, body, "initialization-user"),
+      replyOperation: admitted.operation,
+    }),
+  );
+}
+
 export function registerSessionInitializationAdmissionTests({
   makeStorePath,
 }: {
   makeStorePath: (prefix: string, agentId?: string) => Promise<string>;
 }) {
+  const makeScope = async (name: string, sessionKey = `agent:main:${name}`) => ({
+    agentId: "main",
+    storePath: await makeStorePath(`openclaw-${name}-`, "main"),
+    sessionKey,
+  });
+  const seed = (scope: Scope, sessionId: string, lifecycleRevision: string) =>
+    upsertSessionEntryCore(scope, {
+      sessionId,
+      lifecycleRevision,
+      updatedAt: Date.now(),
+      sessionStartedAt: Date.now(),
+    });
   it.each(["same-id", "new-id", "created", "reset-before-read"] as const)(
     "hands the acknowledged %s initialization to a fresh view of its original admission",
     async (kind) => {
-      const storePath = await makeStorePath("openclaw-initialization-admission-", "main");
       const sessionKey = kind === "new-id" ? "agent:main:acp:handoff" : "agent:main:handoff";
-      const scope = { agentId: "main", storePath, sessionKey };
+      const scope = await makeScope("initialization-admission", sessionKey);
       const originalId = "before-initialization";
       if (kind !== "created") {
-        await upsertSessionEntryCore(scope, {
-          sessionId: originalId,
-          lifecycleRevision: "before-initialization",
-          updatedAt: Date.now(),
-          sessionStartedAt: Date.now(),
-        });
+        await seed(scope, originalId, "before-initialization");
       }
-      const admitted = await admitReplyTurn({
-        ...scope,
-        sessionId: originalId,
-        kind: "visible",
-        resetTriggered: kind !== "created",
-      });
-      if (admitted.status !== "owned" || !admitted.databaseClaim) {
-        throw new Error("Fixture requires a retained reply admission");
-      }
+      await using admitted = await admit(scope, originalId, kind !== "created");
       const previousReader = getReplyOperationSessionReader(admitted.operation);
-      try {
-        const initialized = await runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
-          initSessionState({
-            cfg: { session: { store: storePath } },
-            ctx: telegramTurn(sessionKey, kind === "created" ? "hello" : "/new", "handoff-user"),
-            replyOperation: admitted.operation,
-          }),
-        );
-        expect(initialized.sessionEntry.lifecycleRevision).not.toBe("before-initialization");
-        expect(initialized.sessionId === originalId).toBe(
-          kind === "same-id" || kind === "reset-before-read",
-        );
-        expect(admitted.databaseClaim.isCurrent()).toBe(false);
-        if (previousReader) {
-          await expect(
-            previousReader.withRead(
-              { sessionKeys: [sessionKey] },
-              () => {},
-              () => "obsolete",
-            ),
-          ).rejects.toThrow("released");
-        }
-        const reader = getReplyOperationSessionReader(admitted.operation);
-        if (!reader) {
-          throw new Error("Acknowledged initialization must retain its new reader");
-        }
-        const read = () =>
-          reader.withRead(
+      const initialized = await initialize(scope, admitted, kind === "created" ? "hello" : "/new");
+      expect(initialized.sessionEntry.lifecycleRevision).not.toBe("before-initialization");
+      expect(initialized.sessionId === originalId).toBe(
+        kind === "same-id" || kind === "reset-before-read",
+      );
+      expect(admitted.databaseClaim.isCurrent()).toBe(false);
+      if (previousReader) {
+        await expect(
+          previousReader.withRead(
             { sessionKeys: [sessionKey] },
             () => {},
-            (cohort) => cohort.entries.find((row) => row.sessionKey === sessionKey)?.entry,
-          );
-        if (kind === "reset-before-read") {
-          await upsertSessionEntryCore(scope, {
-            ...initialized.sessionEntry,
-            lifecycleRevision: "later-reset-after-acknowledgment",
-          });
-          await expect(read()).rejects.toThrow("Session entry changed during read");
-        } else {
-          await expect(read()).resolves.toMatchObject({
-            sessionId: initialized.sessionId,
-            lifecycleRevision: initialized.sessionEntry.lifecycleRevision,
-          });
-        }
-      } finally {
-        admitted.operation.complete();
-        await waitForReplyRunSuccessorAdmission(sessionKey, null);
+            () => "obsolete",
+          ),
+        ).rejects.toThrow("released");
+      }
+      const reader = getReplyOperationSessionReader(admitted.operation);
+      if (!reader) {
+        throw new Error("Acknowledged initialization must retain its new reader");
+      }
+      const read = () =>
+        reader.withRead(
+          { sessionKeys: [sessionKey] },
+          () => {},
+          (cohort) => cohort.entries.find((row) => row.sessionKey === sessionKey)?.entry,
+        );
+      if (kind === "reset-before-read") {
+        await upsertSessionEntryCore(scope, {
+          ...initialized.sessionEntry,
+          lifecycleRevision: "later-reset-after-acknowledgment",
+        });
+        await expect(read()).rejects.toThrow("Session entry changed during read");
+      } else {
+        await expect(read()).resolves.toMatchObject({
+          sessionId: initialized.sessionId,
+          lifecycleRevision: initialized.sessionEntry.lifecycleRevision,
+        });
       }
     },
   );
   it.for(["prepared", "retiring"] as const)(
     "joins reply close while the initialization handoff is %s",
     async (stage, { signal }) => {
-      const storePath = await makeStorePath("openclaw-initialization-close-", "main");
-      const sessionKey = "agent:main:initialization-close";
-      const scope = { agentId: "main", storePath, sessionKey };
+      const scope = await makeScope("initialization-close");
+      const { sessionKey } = scope;
       const sessionId = "initialization-close";
-      await upsertSessionEntryCore(scope, {
-        sessionId,
-        lifecycleRevision: "before-close",
-        updatedAt: Date.now(),
-        sessionStartedAt: Date.now(),
-      });
-      const admitted = await admitReplyTurn({
-        ...scope,
-        sessionId,
-        kind: "visible",
-        resetTriggered: true,
-      });
-      if (admitted.status !== "owned" || !admitted.databaseClaim) {
-        throw new Error("Fixture requires a retained reply admission");
-      }
+      await seed(scope, sessionId, "before-close");
+      await using admitted = await admit(scope, sessionId, true);
       const previous = admitted.databaseClaim;
       if (!("kind" in previous) || !previous.afterTransition) {
-        admitted.operation.complete();
-        await waitForReplyRunSuccessorAdmission(sessionKey, null);
         throw new Error("Fixture requires the worker initialization handoff");
       }
       const prepare = previous.afterTransition.bind(previous);
       const prepared = createDeferred<Awaited<ReturnType<typeof prepare>>>();
-      const retired = createDeferred();
+      const paused = createDeferred();
       const continueHandoff = createDeferred();
+      const pause = async (currentStage: typeof stage) => {
+        if (stage === currentStage) {
+          paused.resolve();
+          await continueHandoff.promise;
+        }
+      };
       const prepareSpy = vi
         .spyOn(previous, "afterTransition")
         .mockImplementation(async (...args) => {
           const next = await prepare(...args);
           prepared.resolve(next);
-          if (stage === "prepared") {
-            await continueHandoff.promise;
-          }
+          await pause("prepared");
           return next;
         });
       const release = previous.release.bind(previous);
@@ -160,39 +167,23 @@ export function registerSessionInitializationAdmissionTests({
         stage === "retiring"
           ? vi.spyOn(previous, "release").mockImplementation(async () => {
               await release();
-              retired.resolve();
-              await continueHandoff.promise;
+              await pause("retiring");
             })
           : undefined;
       let initialization: ReturnType<typeof initSessionState> | undefined;
       let closing: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
       try {
-        initialization = runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
-          initSessionState({
-            cfg: { session: { store: storePath } },
-            ctx: telegramTurn(sessionKey, "/new", "close-user"),
-            replyOperation: admitted.operation,
-          }),
-        );
+        initialization = initialize(scope, admitted, "/new");
         void initialization.catch(() => {});
-        const next = await withinTest(
+        await withinTest(
           awaitGateBeforeSettlement(
-            prepared.promise,
+            paused.promise,
             initialization,
-            "Initialization settled before preparing its real successor claim",
+            `Initialization settled before its ${stage} handoff`,
           ),
           signal,
         );
-        if (stage === "retiring") {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              retired.promise,
-              initialization,
-              "Initialization settled before its original claim release",
-            ),
-            signal,
-          );
-        }
+        const next = await prepared.promise;
         admitted.operation.complete();
         expect(previous.isCurrent()).toBe(false);
         if (stage === "retiring") {
@@ -219,18 +210,16 @@ export function registerSessionInitializationAdmissionTests({
         releaseSpy?.mockRestore();
         admitted.operation.complete();
         await Promise.allSettled([initialization, closing]);
-        await waitForReplyRunSuccessorAdmission(sessionKey, null);
       }
     },
   );
 
   it("recovers initialization start time in its admitted cohort without a second header phase", async () => {
-    const storePath = await makeStorePath("openclaw-initialization-header-", "main");
-    const sessionKey = "agent:main:initialization-header";
+    const scope = await makeScope("initialization-header");
+    const { storePath, sessionKey } = scope;
     const sessionId = "initialization-header";
-    const scope = { agentId: "main", storePath, sessionKey, sessionId };
     const startedAt = 1_700_000_000_123;
-    await replaceTranscriptEvents(scope, [
+    await replaceTranscriptEvents({ ...scope, sessionId }, [
       { type: "session", version: 3, id: sessionId, timestamp: new Date(startedAt).toISOString() },
     ]);
     await writeSessionStoreFast(storePath, {
@@ -242,35 +231,20 @@ export function registerSessionInitializationAdmissionTests({
       },
     });
     expect(loadSessionEntry(scope)?.sessionStartedAt).toBeUndefined();
-    const admitted = await admitReplyTurn({
-      ...scope,
-      kind: "visible",
-      resetTriggered: false,
-    });
-    if (admitted.status !== "owned" || !admitted.databaseClaim) {
-      throw new Error("Fixture requires a retained reply admission");
-    }
+    await using admitted = await admit(scope, sessionId, false);
     const separateHeaderPhase = vi.spyOn(lifecycleReads, "resolveSessionLifecycleTimestampsAsync");
-    try {
-      const initialized = await runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
-        initSessionState({
-          cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } } },
-          ctx: telegramTurn(sessionKey, "hello", "header-user"),
-          replyOperation: admitted.operation,
-        }),
-      );
-      expect(initialized.isNewSession).toBe(false);
-      expect(initialized.sessionEntry).toMatchObject({
-        sessionId,
-        lifecycleRevision: "header-generation",
-        sessionStartedAt: startedAt,
-      });
-      expect(admitted.databaseClaim.isCurrent()).toBe(true);
-      expect(separateHeaderPhase).not.toHaveBeenCalled();
-    } finally {
-      separateHeaderPhase.mockRestore();
-      admitted.operation.complete();
-      await waitForReplyRunSuccessorAdmission(sessionKey, null);
-    }
+    onTestFinished(() => separateHeaderPhase.mockRestore());
+    const initialized = await initialize(scope, admitted, "hello", {
+      mode: "idle",
+      idleMinutes: 60,
+    });
+    expect(initialized.isNewSession).toBe(false);
+    expect(initialized.sessionEntry).toMatchObject({
+      sessionId,
+      lifecycleRevision: "header-generation",
+      sessionStartedAt: startedAt,
+    });
+    expect(admitted.databaseClaim.isCurrent()).toBe(true);
+    expect(separateHeaderPhase).not.toHaveBeenCalled();
   });
 }

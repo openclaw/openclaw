@@ -267,7 +267,8 @@ into the entry.
 ## Consumers
 
 The Control UI opts into [presence deltas](/gateway/protocol/presence#opt-in-presence-deltas)
-to avoid retransmitting the whole roster for each changed connection. Its Gateway
+to send changed fields, including heartbeat timestamps, without retransmitting
+each connection's metadata. Its Gateway
 store reconstructs the same ordered presence list and requests a fresh snapshot
 if an update does not match its current version. Native clients keep full
 presence events. Recipient visibility and the best-effort freshness policy are

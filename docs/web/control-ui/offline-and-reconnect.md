@@ -95,6 +95,9 @@ inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 up to 80 recent rows (plus rows from the same history entry) for a warm reload.
+The snapshot also retains the slash-command catalog and its revision. Warm
+startup reuses that list when the Gateway confirms it is unchanged; config,
+plugin, and skill changes refresh it through the existing metadata owner.
 Older history loads from the Gateway as you scroll up. Cache upgrades discard
 older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history
@@ -235,7 +238,7 @@ rejection clear that presentation. Canvas capability URLs retain their separate
 live-connection lease and are not kept by this policy.
 
 Model Providers, Plugins, Devices, Skills, Profile, Channels, Cloud Workers,
-GitHub connection editors, memory search, and Session Storage keep loaded data
+GitHub connection editors, and Session Storage keep loaded data
 and unsaved in-memory drafts through a temporary loss of the same Gateway
 connection. Editors stay open; actions that require the Gateway remain unavailable
 until it is connected. Reconnect refreshes the loaded data without

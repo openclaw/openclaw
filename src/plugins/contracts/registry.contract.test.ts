@@ -7,9 +7,13 @@ import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capabilit
 import { pluginRegistrationContractRegistry, providerContractLoadError } from "./registry.js";
 
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
-const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET = new Set<string>(
-  ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
-);
+function registeredPluginIds(key: "webFetchProviderIds" | "webSearchProviderIds") {
+  return sortUniqueStrings(
+    pluginRegistrationContractRegistry
+      .filter((entry) => entry[key].length > 0)
+      .map((entry) => entry.pluginId),
+  );
+}
 
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
@@ -168,13 +172,7 @@ describe("plugin contract registry", () => {
       origin: "bundled",
     });
 
-    expect(
-      sortUniqueStrings(
-        pluginRegistrationContractRegistry
-          .filter((entry) => entry.webFetchProviderIds.length > 0)
-          .map((entry) => entry.pluginId),
-      ),
-    ).toEqual(bundledWebFetchPluginIds);
+    expect(registeredPluginIds("webFetchProviderIds")).toEqual(bundledWebFetchPluginIds);
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
@@ -187,17 +185,13 @@ describe("plugin contract registry", () => {
     }).filter(
       (pluginId) =>
         snapshotPluginIds.has(pluginId) &&
-        !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET.has(pluginId),
+        !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS.some((id) => id === pluginId),
     );
     const expectedPluginIds = sortUniqueStrings([
       ...bundledWebSearchPluginIds,
       ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
     ]);
-    const actualPluginIds = sortUniqueStrings(
-      pluginRegistrationContractRegistry
-        .filter((entry) => entry.webSearchProviderIds.length > 0)
-        .map((entry) => entry.pluginId),
-    );
+    const actualPluginIds = registeredPluginIds("webSearchProviderIds");
 
     expect(actualPluginIds).toEqual(expectedPluginIds);
     expect(

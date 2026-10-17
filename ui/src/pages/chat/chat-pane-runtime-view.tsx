@@ -205,6 +205,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const sources = [
       runtime.context.plugins,
       runtime.context.navigation,
+      runtime.context.placementStartup,
       nativeGatewaysCapability(),
       lazySidebarElements,
     ].map((source) => source && projectOwner(source, (capability) => capability));

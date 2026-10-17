@@ -320,19 +320,19 @@ describe("chat pane connection lifecycle", () => {
     ]);
   });
 
-  it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
+  it("renders once while initially hidden, then presents current owner state on reveal", async () => {
     let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
-    const { pane, requestUpdate, state } = createTestChatPane({
+    const { pane, state } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
     const lifecycle = pane;
-    lifecycle.render = () => ({
-      layout: null,
-      capabilityDialogs: undefined,
-      providerReviewSource: undefined,
-    });
+    const renderedNames: string[] = [];
+    lifecycle.render = () => {
+      renderedNames.push(state.assistantName);
+      return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
+    };
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;
     const performUpdate = vi.spyOn(lifecycle, "render");
@@ -342,9 +342,8 @@ describe("chat pane connection lifecycle", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
     expect(state.chatStreamRenderFrame).toBeNull();
-    expect(requestUpdate).toHaveBeenCalledOnce();
-    lifecycle.invalidate();
-    lifecycle.invalidate();
+    state.assistantName = "First hidden update";
+    state.assistantName = "Current hidden update";
     await Promise.resolve();
     expect(performUpdate).not.toHaveBeenCalled();
 
@@ -352,11 +351,12 @@ describe("chat pane connection lifecycle", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     await lifecycle.updateComplete;
     expect(performUpdate).toHaveBeenCalledOnce();
+    expect(renderedNames.at(-1)).toBe("Current hidden update");
 
     const addVisibilityListener = vi.spyOn(document, "addEventListener");
     const removeVisibilityListener = vi.spyOn(document, "removeEventListener");
     visibilityState = "hidden";
-    lifecycle.invalidate();
+    state.assistantName = "Disconnected hidden update";
     await Promise.resolve();
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
@@ -375,7 +375,7 @@ describe("chat pane connection lifecycle", () => {
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
     addVisibilityListener.mockClear();
-    lifecycle.invalidate();
+    state.assistantName = "Detached update";
     await lifecycle.updateComplete;
     expect(addVisibilityListener).not.toHaveBeenCalledWith(
       "visibilitychange",

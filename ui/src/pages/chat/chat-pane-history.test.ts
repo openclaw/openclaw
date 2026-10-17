@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { createComponent, createMemo, createSignal, getOwner, merge } from "solid-js";
+import { createComponent, createMemo, merge } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -185,23 +185,17 @@ it.each(["pending", "resolved"] as const)(
     document.body.append(container);
     let view: ReturnType<typeof mountSolid> | undefined;
     try {
-      pane.render();
-      const [current, update] = createSignal({ ...pane.chatProps!, renderRevision: {} });
-      const renderCurrent = () => {
-        pane.render();
-        update({ ...pane.chatProps!, renderRevision: {} });
-        if (!getOwner()) {
-          flush();
-        }
-      };
-      state.requestUpdate = renderCurrent;
-      view = mountSolid(() => createComponent(ChatComposer, merge(current)), {
-        container,
-        wrapper: createSolidApplicationContextProvider(context).wrapper,
-      });
-      if (!getOwner()) {
-        flush();
-      }
+      view = mountSolid(
+        () => {
+          const current = createMemo(() => {
+            pane.render();
+            return pane.chatProps!;
+          });
+          return createComponent(ChatComposer, merge(current));
+        },
+        { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
+      );
+      flush();
       const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       for (const character of "@Bo") {
         const input = { bubbles: true, inputType: "insertText", data: character };
@@ -237,10 +231,10 @@ it.each(["pending", "resolved"] as const)(
         ],
         1,
       );
-      renderCurrent();
       response.resolve(people);
       await vi.advanceTimersByTimeAsync(0);
       expect(selectedName()).toBe("Bob");
+      expect(container.querySelector("textarea")).toBe(textarea);
       textarea.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
       );

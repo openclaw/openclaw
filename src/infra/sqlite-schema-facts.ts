@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
-import type { EngineConnection } from "./sql-connection.js";
+import type { EngineConnection, PostgresSqlConnection } from "./sql-connection.js";
 import { isPostgresSqlConnection } from "./sql-connection.js";
 import {
   beginSqliteDatabaseAdmissionOperation,
@@ -23,6 +24,7 @@ import {
   type NativeSqlite,
 } from "./sqlite-native-observer.js";
 import { getSqlitePinnedReadSnapshot } from "./sqlite-pinned-read-snapshot.js";
+import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
 import {
   captureTrackedSqliteSchemaFacts as captureFacts,
   invalidateTrackedSqliteSchemaFacts as invalidate,
@@ -38,6 +40,7 @@ import {
   type SchemaMutationListener,
   type SqliteReadOperationRevision,
   type SqliteReadScopeRevision,
+  type PostgresReadSnapshotRevision,
 } from "./sqlite-schema-scope.js";
 import {
   prepareSqliteTempTrackingSchema,
@@ -54,6 +57,59 @@ const owners = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSchemaFacts"),
   () => new WeakMap<DatabaseSync, SchemaOwner>(),
 );
+
+const postgresReadSnapshots = resolveGlobalSingleton(
+  Symbol.for("openclaw.postgresReadSnapshots"),
+  () => new WeakMap<PostgresSqlConnection, PostgresReadSnapshotRevision>(),
+);
+
+/** The transaction owner supplies one admitted lifetime immediately after read-only BEGIN. */
+export function beginPostgresReadSnapshotScope(database: PostgresSqlConnection): () => void {
+  const schema = getPostgresPhysicalFacts(database);
+  // These readers declare no key dependencies, so capture the whole-store receipt.
+  const writeRevision = readSqliteDatabaseWriteRevision(database);
+  if (schema && writeRevision !== undefined) {
+    postgresReadSnapshots.set(database, {
+      schema,
+      writeRevision,
+      mutationRevision: database.mutationRevision,
+      snapshot: {},
+    });
+  }
+  return () => postgresReadSnapshots.delete(database);
+}
+
+function isPostgresReadReceiptCurrent(
+  database: PostgresSqlConnection,
+  revision: PostgresReadSnapshotRevision,
+): boolean {
+  const schema = getPostgresPhysicalFacts(database);
+  return (
+    database.isOpen &&
+    schema?.namespace === revision.schema.namespace &&
+    schema.storeId === revision.schema.storeId &&
+    schema.admissionId === revision.schema.admissionId &&
+    database.mutationRevision === revision.mutationRevision &&
+    readSqliteDatabaseWriteRevision(database) === revision.writeRevision
+  );
+}
+
+/** A historical read may reuse local rows but cannot replace newer committed writer facts. */
+export function publishSqliteReadOperationFacts(
+  database: EngineConnection,
+  revision: SqliteReadOperationRevision,
+  publish: () => void,
+): void {
+  if (isPostgresSqlConnection(database) && revision.snapshot) {
+    deferSqlitePostCommitPublication(database, () => {
+      if (isPostgresReadReceiptCurrent(database, revision)) {
+        publish();
+      }
+    });
+    return;
+  }
+  publish();
+}
 
 /** Schema publications outside DDL (such as a deferred version marker) share this revision. */
 export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
@@ -443,12 +499,15 @@ export function canReuseSqliteSchemaInTransaction(database: EngineConnection): b
   return owner !== undefined && !owner.authorizerActive && database.isTransaction;
 }
 
-/** Reuse row facts only inside admitted reads, never during a native write or snapshot. */
+/** Current committed-row revision; historical snapshots keep their facts local to the read scope. */
 export function getSqliteReadOperationRevision(
   database: EngineConnection,
 ): SqliteReadOperationRevision | undefined {
   if (isPostgresSqlConnection(database)) {
-    return undefined;
+    const revision = postgresReadSnapshots.get(database);
+    return revision && database.isTransaction && isPostgresReadReceiptCurrent(database, revision)
+      ? revision
+      : undefined;
   }
   if (database.isTransaction || getSqlitePinnedReadSnapshot(database)) {
     return undefined;
@@ -457,12 +516,17 @@ export function getSqliteReadOperationRevision(
   return revision?.snapshot === undefined ? revision : undefined;
 }
 
-/** Stable identity for row facts in the admitted operation's current SQLite snapshot. */
+/** Stable identity for row facts in the admitted operation's current snapshot. */
 export function getSqliteReadScopeRevision(
   database: EngineConnection,
 ): SqliteReadScopeRevision | undefined {
   if (isPostgresSqlConnection(database)) {
-    return undefined;
+    const revision = postgresReadSnapshots.get(database);
+    return database.isOpen &&
+      database.isTransaction &&
+      revision?.mutationRevision === database.mutationRevision
+      ? revision
+      : undefined;
   }
   const owner = owners.get(database);
   if (owner) {

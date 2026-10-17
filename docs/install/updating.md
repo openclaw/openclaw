@@ -41,6 +41,11 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+If the retained verifier cannot authenticate to the restarted Gateway, it stops
+retrying that rejection. Local HTTP readiness and runtime version/build identity
+can verify activation instead, with an RPC authentication warning recorded in
+the update result. This does not change Gateway authentication or pairing.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema

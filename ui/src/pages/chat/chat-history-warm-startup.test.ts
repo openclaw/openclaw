@@ -3,6 +3,7 @@ import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings } from "../../app/settings.ts";
+import { parseSlashCommand, SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../../lib/session-progress-cards.ts";
 import {
@@ -27,7 +28,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { refreshPageChat } from "./chat-state-refresh.ts";
+import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import {
   observeChatCache,
@@ -354,7 +355,20 @@ describe("first chat startup snapshot ordering", () => {
         total: 1,
         queuedCount: 1,
       };
-      const stateRevision = { pendingInputs: "pending-1", sessionInfo: "session-1" };
+      const commands = [
+        {
+          name: "fixture_skill",
+          description: "Run the fixture skill",
+          source: "skill" as const,
+          scope: "text" as const,
+          acceptsArgs: true,
+        },
+      ];
+      const stateRevision = {
+        pendingInputs: "pending-1",
+        sessionInfo: "session-1",
+        commands: "commands-1",
+      };
       const initialInfo = { ...initial.liveResult.sessionInfo, snapshotAt: 100 };
       initial.read.resolve(null);
       initial.request.mockResolvedValueOnce({
@@ -362,6 +376,7 @@ describe("first chat startup snapshot ordering", () => {
         pendingInputs,
         stateRevision,
         sessionInfo: initialInfo,
+        metadata: { commands },
       });
       initial.connect();
       await initial.start();
@@ -376,15 +391,22 @@ describe("first chat startup snapshot ordering", () => {
         stateRevision,
         pendingInputs,
         sessionInfo: initialInfo,
+        commands,
       });
 
       const warm = mountPane();
       warm.read.resolve(snapshot);
       await vi.advanceTimersByTimeAsync(0);
       const response = createDeferred<unknown>();
-      warm.request.mockReturnValueOnce(response.promise);
+      warm.request.mockImplementation(async (method) =>
+        method === "chat.startup" ? response.promise : { models: [] },
+      );
       warm.connect();
-      const loading = warm.start();
+      const loading = refreshPageChat(warm.state, {
+        startup: true,
+        awaitHistory: true,
+        deferBranches: true,
+      });
       expect(warm.request).toHaveBeenCalledWith(
         "chat.startup",
         expect.objectContaining({ cursor: "live-cursor", knownState: stateRevision }),
@@ -416,7 +438,16 @@ describe("first chat startup snapshot ordering", () => {
           : {
               pendingInputs: "pending-2",
               sessionInfo: change === "replacement" ? "session-2" : "session-1",
+              commands: change === "changed" || change === "empty" ? "commands-2" : "commands-1",
             };
+      const nextCommands =
+        change === "empty"
+          ? []
+          : change === "changed"
+            ? [{ ...commands[0]!, name: "replacement_skill" }]
+            : commands;
+      const metadata =
+        nextRevision.commands === stateRevision.commands ? {} : { commands: nextCommands };
       // A sibling may publish a newer cache while this request still owns its earlier receipts.
       if (snapshot) {
         cacheChatSessionSnapshot(
@@ -433,8 +464,9 @@ describe("first chat startup snapshot ordering", () => {
           },
         );
       }
-      response.resolve(
-        change === "replacement"
+      response.resolve({
+        metadata,
+        ...(change === "replacement"
           ? {
               ...warm.liveResult,
               sessionInfo: nextInfo,
@@ -448,9 +480,23 @@ describe("first chat startup snapshot ordering", () => {
               stateRevision: nextRevision,
               sessionInfoSnapshotAt: nextInfo.snapshotAt,
               ...(change === "unchanged" ? {} : { pendingInputs: nextInputs }),
-            },
-      );
+            }),
+      });
       await loading;
+      await refreshChatCommands(warm.state);
+      expect(warm.request.mock.calls.some(([method]) => method === "commands.list")).toBe(false);
+      expect(SLASH_COMMANDS.some((command) => command.name === "fixture_skill")).toBe(
+        nextCommands === commands,
+      );
+      expect(SLASH_COMMANDS.some((command) => command.name === "replacement_skill")).toBe(
+        change === "changed",
+      );
+      if (nextCommands.length) {
+        expect(parseSlashCommand(`/${nextCommands[0]!.name} fixture argument`)).toMatchObject({
+          command: { name: nextCommands[0]!.name },
+          args: "fixture argument",
+        });
+      }
       expect(warm.state.chatPendingInputs?.page).toEqual(nextInputs);
       expect(warm.state.chatPendingInputs?.queuedInputs).toEqual(nextInputs.items);
       expect(warm.state.currentSessionId).toBe(nextInfo.sessionId);
@@ -461,9 +507,23 @@ describe("first chat startup snapshot ordering", () => {
         stateRevision: nextRevision,
         pendingInputs: nextInputs,
         sessionInfo: nextInfo,
+        commands: nextCommands,
       });
     },
   );
+
+  it("does not advertise a command revision without the retained catalog", async () => {
+    const h = mountPane();
+    h.read.resolve({ ...stored, historyState: { stateRevision: { commands: "commands-1" } } });
+    await vi.advanceTimersByTimeAsync(0);
+    h.connect();
+    await h.start();
+    expect(h.request).toHaveBeenCalledWith(
+      "chat.startup",
+      expect.objectContaining({ cursor: "stored-cursor", knownState: {} }),
+      expect.anything(),
+    );
+  });
 
   it("shares the restored cursor request when the cache settles during stream admission", async () => {
     const h = mountPane();

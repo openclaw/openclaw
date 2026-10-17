@@ -671,7 +671,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
               }
             : undefined,
           onManage: () => options.context?.navigate("profile"),
-          onRequestUpdate: this.notify,
         }),
       activeRunId: null,
       connected: snapshot?.phase === "connected",
@@ -734,7 +733,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         }
         this.catalogTargets.retry(metadataClient, this.agentId);
       },
-      onRequestUpdate: this.notify,
     };
   }
 }

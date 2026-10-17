@@ -216,36 +216,32 @@ describe("exec-policy CLI", () => {
     mocks.updateExecApprovals.mockClear();
   });
 
-  it.each([false])("explains offline tool policy with partial allowance=%s", async (partial) => {
+  it("explains offline tool policy when the agent profile excludes terminal tools", async () => {
     const config: OpenClawConfig = {
-      ...(!partial && { tools: { profile: "full", exec: { host: "gateway", mode: "ask" } } }),
+      tools: { profile: "full", exec: { host: "gateway", mode: "ask" } },
       agents: {
         entries: {
-          main: { tools: { profile: "messaging", ...(partial && { alsoAllow: ["exec"] }) } },
+          main: { tools: { profile: "messaging" } },
         },
       },
     };
     mocks.setConfig(config);
 
-    await runExecPolicyCommand(["exec-policy", "show", ...(partial ? ["--agent", "main"] : [])]);
+    await runExecPolicyCommand(["exec-policy", "show"]);
 
     const output = readOutput();
-    expect(output).toContain(`TERMINAL ACCESS · main — ${partial ? "PARTIAL" : "OFF"}`);
-    expect(output).toContain(
-      partial ? "exec: Allowed by configuration; execution unverified" : "exec: Excluded by policy",
-    );
+    expect(output).toContain("TERMINAL ACCESS · main — OFF");
+    expect(output).toContain("exec: Excluded by policy");
     expect(output).toContain("process: Excluded by policy");
-    if (!partial) {
-      for (const text of [
-        "Global: full",
-        "└─ Agent: messaging ← active",
-        "agents.entries.main.tools.profile",
-        "agents.entries.main.tools.alsoAllow",
-        "COMMAND APPROVALS (LOCAL)",
-        "Based on: local configuration",
-      ]) {
-        expect(output).toContain(text);
-      }
+    for (const text of [
+      "Global: full",
+      "└─ Agent: messaging ← active",
+      "agents.entries.main.tools.profile",
+      "agents.entries.main.tools.alsoAllow",
+      "COMMAND APPROVALS (LOCAL)",
+      "Based on: local configuration",
+    ]) {
+      expect(output).toContain(text);
     }
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
@@ -360,7 +356,7 @@ describe("exec-policy CLI", () => {
     });
   });
 
-  it.each([true])("explains explicit session denials with legacy preview=%s", async (legacy) => {
+  it("explains explicit session denials from a legacy preview", async () => {
     mocks.callGateway.mockResolvedValueOnce({
       agentId: "main",
       profile: "full",
@@ -370,17 +366,6 @@ describe("exec-policy CLI", () => {
           tools: ["exec", "process"].map((id) => ({ id, deniedBySession: true })),
         },
       ],
-      ...(!legacy && {
-        toolAccess: {
-          checked: "live-session",
-          profiles: [{ profile: "full", source: "tools.profile", active: true }],
-          tools: ["exec", "process"].map((id) => ({
-            id,
-            status: "excluded",
-            reasons: [{ kind: "session", label: "Denied by this session's tool restrictions" }],
-          })),
-        },
-      }),
     });
 
     await runExecPolicyCommand(["exec-policy", "show", "--session", "agent:main:main"]);
@@ -687,16 +672,10 @@ describe("exec-policy CLI", () => {
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each(["configuration"])("rejects a node host from %s without writing", async (source) => {
-    if (source === "configuration") {
-      mocks.setConfig({ tools: { exec: { host: "node", mode: "ask" } } });
-    }
+  it("rejects a node host from configuration without writing", async () => {
+    mocks.setConfig({ tools: { exec: { host: "node", mode: "ask" } } });
     await expect(
-      runExecPolicyCommand([
-        "exec-policy",
-        "set",
-        ...(source === "argument" ? ["--host", "node"] : ["--security", "full"]),
-      ]),
+      runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.runtimeErrors).toEqual([
@@ -710,7 +689,7 @@ describe("exec-policy CLI", () => {
     name: string;
     args: string[];
     originalDefaults?: ExecApprovalsFile["defaults"];
-    concurrent?: Pick<ExecApprovalsFile, "defaults" | "agents">;
+    concurrent: Pick<ExecApprovalsFile, "defaults" | "agents">;
     expectedDefaults?: ExecApprovalsFile["defaults"];
     rollbackError?: boolean;
   }>([
@@ -761,19 +740,17 @@ describe("exec-policy CLI", () => {
         file: originalApprovals,
       };
       mockRollbackApprovalSnapshots(originalSnapshot);
-      if (concurrent) {
-        mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
-          const next = structuredClone(mocks.getApprovals());
-          next.defaults = { ...next.defaults, ...concurrent.defaults };
-          next.agents = { ...next.agents, ...concurrent.agents };
-          mocks.setApprovals(next);
-          mocks.setApprovalsHash("concurrent-write-hash");
-          if (rollbackError) {
-            mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval rollback failed"));
-          }
-          return false;
-        });
-      }
+      mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+        const next = structuredClone(mocks.getApprovals());
+        next.defaults = { ...next.defaults, ...concurrent.defaults };
+        next.agents = { ...next.agents, ...concurrent.agents };
+        mocks.setApprovals(next);
+        mocks.setApprovalsHash("concurrent-write-hash");
+        if (rollbackError) {
+          mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval rollback failed"));
+        }
+        return false;
+      });
       mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config write failed"));
 
       await expect(runExecPolicyCommand(["exec-policy", ...args])).rejects.toThrow("__exit__:1");
@@ -784,12 +761,12 @@ describe("exec-policy CLI", () => {
         expect.anything(),
         expect.any(Function),
       );
-      expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(concurrent ? 2 : 1);
+      expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(2);
       if (!rollbackError) {
         expect(mocks.getApprovals()).toEqual({
           ...originalApprovals,
-          defaults: expectedDefaults ?? originalApprovals.defaults,
-          agents: { ...originalApprovals.agents, ...concurrent?.agents },
+          defaults: expectedDefaults,
+          agents: { ...originalApprovals.agents, ...concurrent.agents },
         });
       }
       expect(mocks.runtimeErrors).toEqual([
