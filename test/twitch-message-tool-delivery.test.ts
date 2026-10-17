@@ -56,24 +56,20 @@ describe("Twitch message-tool delivery", () => {
     ["literal horizontal rule", false, "`---`", "---"],
   ])("sends %s", async (_name, explicit, message, expected, mode) => {
     await withOpenClawTestState({ prefix: "twitch-message-delivery-" }, async (state) => {
-      manager.sendMessage.mockReset();
+      const send = manager.sendMessage.mockReset();
       const singleAccount = mode === "singleAccount";
       const sameSource = mode === "sameSource";
       const bareTarget = mode === "bareTarget";
       const accountId = singleAccount ? "default" : explicit && !sameSource ? "other" : "secondary";
       const target = explicit && !sameSource ? "overridechannel" : "sourcechannel";
       const account = makeAccount();
+      const accounts = { secondary: account, [accountId]: account };
       const cfg = installConfig(
-        singleAccount
-          ? account
-          : {
-              defaultAccount: "secondary",
-              accounts: { secondary: account, [accountId]: account },
-            },
+        singleAccount ? account : { defaultAccount: "secondary", accounts },
       );
       const sent = expected.length > 0;
       const custodyAtSend: Awaited<ReturnType<typeof loadUnfinishedDeliveries>>[] = [];
-      manager.sendMessage.mockImplementation(async () => {
+      send.mockImplementation(async () => {
         custodyAtSend.push(await loadUnfinishedDeliveries(state.stateDir));
         return { ok: true, messageId: "fixture-sent-1" };
       });
@@ -122,21 +118,16 @@ describe("Twitch message-tool delivery", () => {
       const unsubscribeTranscript = onSessionTranscriptUpdate(transcriptUpdated);
       try {
         const result = await tool.execute("twitch-send", args);
-        expect.soft(manager.sendMessage).toHaveBeenCalledTimes(sent ? 1 : 0);
+        expect.soft(send).toHaveBeenCalledTimes(sent ? 1 : 0);
         if (sent) {
-          expect
-            .soft(manager.sendMessage)
-            .toHaveBeenCalledWith(account, target, expected, cfg, accountId);
-          expect.soft(custodyAtSend).toEqual([
-            [
-              expect.objectContaining({
-                channel: "twitch",
-                ...(explicit ? { accountId } : {}),
-                to: target,
-                recoveryState: "send_attempt_started",
-              }),
-            ],
-          ]);
+          expect.soft(send).toHaveBeenCalledWith(account, target, expected, cfg, accountId);
+          const pendingDelivery = {
+            channel: "twitch",
+            ...(explicit ? { accountId } : {}),
+            to: target,
+            recoveryState: "send_attempt_started",
+          };
+          expect.soft(custodyAtSend).toEqual([[expect.objectContaining(pendingDelivery)]]);
           expect.soft(result.details).toMatchObject({
             deliveryStatus: "sent",
             messageDelivery: { status: "settled", primaryPlatformMessageId: "fixture-sent-1" },
@@ -145,33 +136,27 @@ describe("Twitch message-tool delivery", () => {
               receipt: { platformMessageIds: ["fixture-sent-1"] },
             },
           });
-          expect.soft(transcriptUpdated).toHaveBeenCalledTimes(1);
         } else {
           expect.soft(result.details).toMatchObject({
             deliveryStatus: "suppressed",
             suppressionReason: "adapter_returned_no_send",
             messageDelivery: { status: "suppressed" },
           });
-          expect.soft(transcriptUpdated).not.toHaveBeenCalled();
         }
+        expect.soft(transcriptUpdated).toHaveBeenCalledTimes(sent ? 1 : 0);
         expect.soft(isDeliveredMessagingToolResult({ args, result })).toBe(sent);
         const actionResult = await runAction.mock.results[0]?.value;
         expect.soft(actionResult).toMatchObject({ handledBy: "core", to: target });
         const output = formatMessageCliText(actionResult).join("\n");
-        expect
-          .soft(output)
-          .toContain(sent ? "fixture-sent-1" : "send suppressed: adapter_returned_no_send");
-        expect
-          .soft(
-            audits.filter((event) => event.outcome === "sent" || event.outcome === "suppressed"),
-          )
-          .toEqual([
-            expect.objectContaining(
-              sent
-                ? { outcome: "sent", resultCount: 1 }
-                : { outcome: "suppressed", resultCount: 0, reasonCode: "no_visible_payload" },
-            ),
-          ]);
+        const expectedOutput = sent
+          ? "fixture-sent-1"
+          : "send suppressed: adapter_returned_no_send";
+        expect.soft(output).toContain(expectedOutput);
+        const completed = audits.filter((e) => e.outcome === "sent" || e.outcome === "suppressed");
+        const expectedAudit = sent
+          ? { outcome: "sent", resultCount: 1 }
+          : { outcome: "suppressed", resultCount: 0, reasonCode: "no_visible_payload" };
+        expect.soft(completed).toEqual([expect.objectContaining(expectedAudit)]);
         expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
 
         const agent = {} as Agent;

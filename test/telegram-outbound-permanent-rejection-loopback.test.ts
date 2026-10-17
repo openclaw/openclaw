@@ -1,6 +1,5 @@
 // Root-owned integration may combine the public Telegram plugin with the durable queue runtime.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,
@@ -21,6 +20,7 @@ import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../src/infra/outbound/delivery-queue-media-staging.js";
+import { listenLoopback, readBody, replyJson } from "./telegram-http.test-support.js";
 
 const MIGRATION_DESCRIPTION = "Bad Request: group chat was upgraded to a supergroup chat";
 const DELIVERY_INTENT_ID = "telegram-loopback-permanent-rejection";
@@ -53,29 +53,6 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
-
-async function listen(server: Server) {
-  const sockets = new Set<Socket>();
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
-  };
-}
 
 async function configureTelegram(connection: { apiRoot?: string; proxy?: string }) {
   const { telegramPlugin } = await import("../extensions/telegram/api.js");
@@ -127,26 +104,25 @@ function recoveryDrain(cfg: OpenClawConfig, stateDir: string) {
 async function startTelegramMigrationLoopback() {
   const requests: Array<{ body: string; method: string | undefined; url: string }> = [];
   const server: Server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => chunks.push(chunk));
-    request.on("end", () => {
+    readBody(request, (body) => {
       requests.push({
-        body: Buffer.concat(chunks).toString("utf8"),
+        body,
         method: request.method,
         url: request.url ?? "",
       });
-      response.writeHead(400, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
+      replyJson(
+        response,
+        {
           ok: false,
           error_code: 400,
           description: MIGRATION_DESCRIPTION,
           parameters: { migrate_to_chat_id: -1_001_234_567_890 },
-        }),
+        },
+        400,
       );
     });
   });
-  const { url, close } = await listen(server);
+  const { url, close } = await listenLoopback(server);
   return { apiRoot: url, requests, close };
 }
 
@@ -225,7 +201,7 @@ async function startRefusingProxy() {
       "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
     );
   });
-  return { ...(await listen(server)), connectTargets };
+  return { ...(await listenLoopback(server)), connectTargets };
 }
 
 describe("Telegram proxy tunnel refusal over the real proxy transport", () => {

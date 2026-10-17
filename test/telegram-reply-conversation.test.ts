@@ -58,22 +58,11 @@ function entry(to: string, topic: number, overrides: Partial<SessionEntry> = {})
   };
 }
 function policy(topic: number, parentMention: boolean, topicMention: boolean) {
-  return {
-    channels: {
-      telegram: {
-        accounts: {
-          work: {
-            groups: {
-              "-1001": {
-                requireMention: parentMention,
-                topics: { [String(topic)]: { requireMention: topicMention } },
-              },
-            },
-          },
-        },
-      },
-    },
+  const group = {
+    requireMention: parentMention,
+    topics: { [String(topic)]: { requireMention: topicMention } },
   };
+  return { channels: { telegram: { accounts: { work: { groups: { "-1001": group } } } } } };
 }
 
 describe("prepared reply conversation", () => {
@@ -82,9 +71,7 @@ describe("prepared reply conversation", () => {
       createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
     );
   });
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
+  afterEach(() => resetPluginRuntimeStateForTest());
   it.each([
     { name: "matching topic", topic: 77, account: "work", mention: false, inherits: true },
     { name: "different topic", topic: 88, account: "work", mention: true, inherits: false },
@@ -117,7 +104,18 @@ describe("prepared reply conversation", () => {
     },
   );
 
-  it.each<[string, number, boolean, number, string, boolean, boolean, "always" | undefined]>([
+  it.each<
+    [
+      name: string,
+      topic: number,
+      parentMention: boolean,
+      storedTopic: number,
+      storedGroupId: string,
+      liveRoute: boolean,
+      inherits: boolean,
+      sessionActivation: "always" | undefined,
+    ]
+  >([
     ["split topic 88", 88, false, 77, "-1001:topic:77", true, false, "always"],
     ["General topic 1", 1, true, 77, "-1001:topic:77", true, false, "always"],
     ["matched bare topic 88", 88, false, 88, "-1001", true, true, undefined],
@@ -216,10 +214,8 @@ describe("prepared reply conversation", () => {
     { name: "bare current and encoded stored", currentEncoded: false },
     { name: "encoded current and bare stored", currentEncoded: true },
   ])("preserves stored Telegram topic context for $name", ({ currentEncoded }) => {
-    const bare = target();
-    const encoded = target(77);
-    const currentTo = currentEncoded ? encoded : bare;
-    const persistedTo = currentEncoded ? bare : encoded;
+    const currentTo = currentEncoded ? target(77) : target();
+    const persistedTo = currentEncoded ? target() : target(77);
     const conversation = prepareReplyConversation({
       ctx: { InternalTurnSource: "exec", ...route(currentTo, 77) },
       sessionEntry: entry(persistedTo, 77, { subject: "Stored topic" }),

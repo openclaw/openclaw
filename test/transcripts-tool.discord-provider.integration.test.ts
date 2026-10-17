@@ -22,12 +22,6 @@ type DiscordTranscriptsVoiceManager = NonNullable<
 
 const tempDirs = createTempDirTracker();
 
-const resolveAccessTarget = async (channelId: string) => ({
-  channelName: channelId,
-  channelSlug: channelId,
-  scope: "channel" as const,
-});
-
 function createTool(
   stateDir: string,
   config: OpenClawConfig,
@@ -73,6 +67,17 @@ function storeFor(stateDir: string): TranscriptsStore {
   });
 }
 
+async function expectHidden(tool: ReturnType<typeof createTool>, label: string, actions: string[]) {
+  await expect(tool.execute(`status-${label}`, { action: "status" })).resolves.toMatchObject({
+    details: { active: [] },
+  });
+  for (const action of actions) {
+    await expect(
+      tool.execute(`${action}-${label}`, { action, sessionId: "account-bound" }),
+    ).rejects.toThrow("transcripts session not found: account-bound");
+  }
+}
+
 describe("transcripts tool with the registered Discord provider", () => {
   beforeEach(() => {
     const registry = createEmptyPluginRegistry();
@@ -93,7 +98,11 @@ describe("transcripts tool with the registered Discord provider", () => {
       startTranscriptsCapture: join,
       stopTranscriptsCapture: leave,
       watchChannelOccupancy: () => () => {},
-      resolveAccessTarget: ({ channelId }) => resolveAccessTarget(channelId),
+      resolveAccessTarget: async ({ channelId }) => ({
+        channelName: channelId,
+        channelSlug: channelId,
+        scope: "channel",
+      }),
     };
     managers.set(accountId, manager);
     setDiscordTranscriptsVoiceManager({ accountId, manager });
@@ -146,32 +155,10 @@ describe("transcripts tool with the registered Discord provider", () => {
       metadata: { agentId: "main" },
     });
 
-    await expect(
-      otherAccountTool.execute("status-other-account", { action: "status" }),
-    ).resolves.toMatchObject({ details: { active: [] } });
-    await expect(
-      otherAccountTool.execute("stop-other-account", {
-        action: "stop",
-        sessionId: "account-bound",
-      }),
-    ).rejects.toThrow("transcripts session not found: account-bound");
+    await expectHidden(otherAccountTool, "other-account", ["stop"]);
     expect(accountBLeave).not.toHaveBeenCalled();
 
-    await expect(
-      deniedSameAccountTool.execute("status-denied-sender", { action: "status" }),
-    ).resolves.toMatchObject({ details: { active: [] } });
-    await expect(
-      deniedSameAccountTool.execute("summarize-denied-sender", {
-        action: "summarize",
-        sessionId: "account-bound",
-      }),
-    ).rejects.toThrow("transcripts session not found: account-bound");
-    await expect(
-      deniedSameAccountTool.execute("stop-denied-sender", {
-        action: "stop",
-        sessionId: "account-bound",
-      }),
-    ).rejects.toThrow("transcripts session not found: account-bound");
+    await expectHidden(deniedSameAccountTool, "denied-sender", ["summarize", "stop"]);
     expect(accountALeave).not.toHaveBeenCalled();
 
     await expect(
