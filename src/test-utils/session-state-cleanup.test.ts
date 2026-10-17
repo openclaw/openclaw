@@ -12,7 +12,6 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { describeAdmittedDatabaseStores } from "../infra/database-engine/admitted-diagnostics.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { resetFileLockStateForTest } from "../plugin-sdk/file-lock.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -173,9 +172,6 @@ describe("cleanupSessionStateForTest", () => {
         expect(() => owner.assertCurrent()).not.toThrow();
       }
 
-      // Diagnostics project admitted facts; pooled readers may reuse transferred schema facts.
-      admitSqliteSchema(selected);
-      admitSqliteSchema(unrelated);
       expect(describeAdmittedDatabaseStores({}).map(({ path: storePath }) => storePath)).toEqual(
         expect.arrayContaining(targets.map(({ databasePath }) => databasePath)),
       );
