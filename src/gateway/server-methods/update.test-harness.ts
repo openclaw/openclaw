@@ -68,12 +68,17 @@ const getUpdateScheduleMock = vi.fn<
   () => import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState | null
 >(() => null);
 const refreshGatewayUpdateStatusMock = vi.fn(async () => {});
-type UpdateCampaignAdoption = ReturnType<
+export const adoptUpdateCampaignMock = vi.fn<
   import("../../infra/update-campaign.js").UpdateCampaignController["adopt"]
->;
-export const adoptUpdateCampaignMock = vi.fn<() => UpdateCampaignAdoption>(() => ({
+>(() => ({
   status: "absent",
 }));
+export const getUpdateCampaignStateMock =
+  vi.fn<import("../../infra/update-campaign.js").UpdateCampaignController["getState"]>();
+export const clearUpdateCampaignMock =
+  vi.fn<import("../../infra/update-campaign.js").UpdateCampaignController["clear"]>();
+export const bindUpdateCampaignRunMock =
+  vi.fn<import("../../infra/update-campaign.js").UpdateCampaignController["bindRun"]>();
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 export const startManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
@@ -353,7 +358,9 @@ vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => {
       ...actual.currentUpdateCheckLifecycle(),
       campaign: {
         adopt: adoptUpdateCampaignMock,
-        bindRun: vi.fn(),
+        bindRun: bindUpdateCampaignRunMock,
+        getState: getUpdateCampaignStateMock,
+        clear: clearUpdateCampaignMock,
         getRunId: () => undefined,
         reconcileRun: () => {},
       },
@@ -376,20 +383,24 @@ vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
   readGatewayOwnerLease: readGatewayOwnerLeaseMock,
 }));
 
+// mock-isolation: Keep the broad protocol barrel outside this updater fixture.
 vi.mock("../../../packages/gateway-protocol/src/index.js", async () => {
   const { ErrorCodes, errorShape } =
     await import("../../../packages/gateway-protocol/src/schema/error-codes.js");
-  const { validateUpdateRunResult: validateResult } =
+  const { validateUpdateRunResult: validateResult, validateUpdateRunParams } =
     await import("../../../packages/gateway-protocol/src/validator-registry.js");
+  const { formatValidationErrors } =
+    await import("../../../packages/gateway-protocol/src/validation-errors.js");
   return {
     ErrorCodes,
     errorShape,
+    formatValidationErrors,
     validateUpdateRunResult: validateResult,
     validateUpdateRunsGetParams: () => true,
     validateUpdateRunsListParams: () => true,
     validateUpdateStatusParams: () => true,
     validateUpdateStatusResult: () => true,
-    validateUpdateRunParams: () => true,
+    validateUpdateRunParams,
   };
 });
 
@@ -421,10 +432,6 @@ vi.mock("../../infra/update-managed-service-handoff.js", async () => ({
   cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
-vi.mock("./validation.js", () => ({
-  assertValidParams: () => true,
-}));
-
 beforeAll(async () => {
   await import("./update.js");
 });
@@ -449,6 +456,9 @@ beforeEach(() => {
   getUpdateScheduleMock.mockReturnValue(null);
   adoptUpdateCampaignMock.mockReset();
   adoptUpdateCampaignMock.mockReturnValue({ status: "absent" });
+  getUpdateCampaignStateMock.mockReset();
+  clearUpdateCampaignMock.mockReset();
+  bindUpdateCampaignRunMock.mockReset();
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",

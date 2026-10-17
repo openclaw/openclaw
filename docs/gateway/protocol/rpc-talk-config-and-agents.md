@@ -71,6 +71,35 @@ providers ignore barge-in and end the session on an explicit output stop.
 - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
   Each answered step uses the current `wizard.next` caller's authority through inference verification, including after progress replies. Device revocation still rejects the probe.
 
+### Exact update targets
+
+For an npm-owned global installation on the stable or beta channel, an operator
+can pin `update.run` to an exact package version:
+
+```json
+{ "target": { "kind": "package", "version": "2026.9.5" } }
+```
+
+`version` must be an exact three-part numeric version (at most 64 characters),
+without a `v` prefix, prerelease, build suffix, whitespace, range, tag, or package
+URL. This is a one-operation target, not a channel change. Other native package
+managers, Git installations, and the dev channel return `unsupported-update-target`;
+extended-stable returns `extended-stable-tag-unsupported`. Host-owned, immutable,
+and externally supervised installations retain their existing owner refusals.
+OCM rejects explicit targets rather than silently selecting its default release.
+
+An existing campaign must match the requested version exactly. A mismatch returns
+`update-target-campaign-mismatch` without changing that campaign; an applying
+campaign returns `update-campaign-applying`. These refusals happen before update
+handoff. The existing npm updater still owns metadata, integrity, schema, service,
+and recovery checks. Handoff acceptance is not completed installation: retain
+the returned `runId` and read `update.runs.get` and `update.status` after
+reconnecting. Do not blindly replay a request whose outcome is unknown.
+
+The optional Git target and omitted-target behavior are unchanged. Older
+Gateways reject package targets; clients must report unsupported targeting instead
+of retrying without the target, which could install a different version.
+
 ## Agent and workspace helpers
 
 - `agent` accepts image attachments and offloads them by default when the selected model is text-only, using the same [image-understanding pipeline](/nodes/media-understanding) as `chat.send`. The configured image-understanding model receives the image, and the selected primary receives its description. The primary model, per-request model selection, and prompt/context overrides are preserved. Image-capable primaries continue receiving images inline. The shared attachment limits and per-attachment outcome markers still apply. If no image description can be produced, the request returns a clear error; configure `agents.defaults.imageModel` or an image-capable entry in `tools.media.models`, or repair the configured provider before retrying.
