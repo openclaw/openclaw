@@ -4,7 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
@@ -387,6 +387,23 @@ async function buildAndPublishUi(
   toolCall: UiSpawnCall,
   env: NodeJS.ProcessEnv,
 ): Promise<UiSpawnResult> {
+  const validation = runSpawnCallSync(
+    resolveSpawnCall(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(path.join(here, "tsx.mjs")).href,
+        path.join(here, "generate-control-ui-validators.mts"),
+        "--check",
+      ],
+      env,
+      { cwd: repoRoot },
+    ),
+    "Control UI protocol validators",
+  );
+  if (validation.signal || validation.status !== 0) {
+    return validation;
+  }
   // Prepare before cache input capture: presenter source edits must change the
   // canonical bytes and inventory even when the UI bundle can otherwise be reused.
   await prepareControlUiSettings(repoRoot);

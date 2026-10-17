@@ -1160,8 +1160,9 @@ sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
 
-The build also checks generated browser protocol validators. After changing a
-schema used by the Control UI, run `pnpm ui:validators:gen` and commit the generated
+Every production UI build checks generated protocol validators before building
+or reusing cached output. After changing a schema used by the Control UI, run
+`pnpm ui:validators:gen` and commit the generated
 JavaScript and declarations. The generator compiles the canonical Gateway schemas
 without shipping their compiler or schema builders to the browser;
 `pnpm ui:validators:check` verifies that the output is current.

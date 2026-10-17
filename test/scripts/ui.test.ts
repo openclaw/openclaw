@@ -77,6 +77,11 @@ function copyUiFixture(root: string): void {
   // Resolve native optional dependencies from their installed package owner.
   fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+  fs.writeFileSync(path.join(root, "scripts/tsx.mjs"), "export {};\n");
+  fs.writeFileSync(
+    path.join(root, "scripts/generate-control-ui-validators.mts"),
+    'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
+  );
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
@@ -392,7 +397,7 @@ process.exitCode = ${expectedExit};\n`,
     `control-ui.build-${process.pid}-live`,
     `control-ui.build-${process.pid}-live.retired`,
   ];
-  it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
+  it("checks source prerequisites before reusing a warm UI build", () => {
     // Preload module URLs must preserve spaces and URL fragment characters.
     const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache #"));
     copyUiFixture(root);
@@ -417,7 +422,6 @@ process.exitCode = ${expectedExit};\n`,
     fs.mkdirSync(path.join(root, "extensions"));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
-    fs.writeFileSync(path.join(root, "scripts/tsx.mjs"), "export {};\n");
     fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
     writeUiPackageBin(modules, "dompurify", "export {};\n");
     writeUiPackageBin(
@@ -444,7 +448,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ]) {
       fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
     }
-    const run = () => {
+    const run = (expectedExit = 0) => {
       const result = spawnSync(testNodeExecPath, ["scripts/ui.js", "build"], {
         cwd: root,
         encoding: "utf8",
@@ -461,7 +465,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         },
       });
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stderr).toBe(expectedExit);
       return result.stdout;
     };
     expect(run()).toContain("fixture-bundler-ran");
@@ -480,6 +484,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       JSON.stringify({ id: "new-board" }),
     );
     expect(run()).toContain("fixture-bundler-ran");
+    const output = path.join(root, "dist/control-ui/index.html");
+    const published = fs.readFileSync(output, "utf8");
+    fs.writeFileSync(
+      path.join(root, "scripts/generate-control-ui-validators.mts"),
+      "process.exitCode = 23;\n",
+    );
+    const refused = run(23);
+    expect(refused).not.toContain("fixture-bundler-ran");
+    expect(refused).not.toContain("reused content cache");
+    expect(fs.readFileSync(output, "utf8")).toBe(published);
   });
 
   it.each([
@@ -867,6 +881,9 @@ const validators = ${JSON.stringify(validators)};
 assert.equal(process.env.TSX_DISABLE_CACHE, undefined);
 assert.equal(process.env.npm_execpath, ${JSON.stringify(pnpm)});
 childProcess.spawnSync = function(command, args, options) {
+  if (args.includes(path.join(${JSON.stringify(root)}, "scripts/generate-control-ui-validators.mts"))) {
+    return spawnSync(command, args, options);
+  }
   if (args[0] === ${JSON.stringify(vite)}) {
     assert.deepEqual(args.slice(1, 3), ["build", "--outDir"]);
     assert.equal(path.dirname(args[3]), ${JSON.stringify(path.join(root, "dist"))});
