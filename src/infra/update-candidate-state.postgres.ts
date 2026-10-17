@@ -1,14 +1,21 @@
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { readBackupEngine } from "../snapshot/database-backup.js";
 import { admitStatePostgres, stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { databaseEngineAdapters } from "./database-engine/adapters.js";
-import { resolveDatabaseEngineInput } from "./database-engine/config.js";
+import { resolveDatabaseEngineSelection } from "./database-engine/config.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+  getScopedDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "./database-engine/context.js";
 import {
   admitPostgresPhysicalFacts,
   getPostgresPhysicalFacts,
 } from "./database-engine/physical-facts.js";
+import { readBackupEngine } from "./database-engine/physical-store.js";
+import { withPostgresStoreMetadata } from "./database-engine/postgres-store-metadata.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import {
@@ -21,10 +28,10 @@ import { collectRegisteredPaths, type StateInput } from "./update-candidate-stat
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
 type Input = StateInput;
-type Task = { input: Input; files: [string, StateDatabaseDiscovery][] };
+type Task = { input: Input; files: [string, StateDatabaseDiscovery][]; sourcePath?: string };
 type Reply = {
   files: Task["files"];
-  version: Omit<UpdateStateSchemaVersion, "path">;
+  version: Omit<UpdateStateSchemaVersion, "path"> & { userVersion: number };
   pluginIndex?: UpdateCandidatePluginIndex;
 };
 
@@ -32,6 +39,7 @@ type Reply = {
 export async function readUpdatePostgresState(
   input: Input,
   files: Map<string, StateDatabaseDiscovery>,
+  sourcePath?: string,
 ): Promise<Reply> {
   const pool = new WorkerTaskPool<Task, Reply>({
     workerUrl: new URL(import.meta.url),
@@ -40,24 +48,52 @@ export async function readUpdatePostgresState(
   });
   try {
     const { stateDir, config, env, includeRetainedAgentPaths } = input;
-    return await pool.run(
-      { input: { stateDir, config, env, includeRetainedAgentPaths }, files: [...files] },
-      {},
+    const selection =
+      getScopedDatabaseEngineSelection() ??
+      (await resolveDatabaseEngineSelection(config, { ...process.env, ...env }));
+    return await withDatabaseEngineSelection(selection, () =>
+      pool.run(
+        {
+          input: { stateDir, config, env, includeRetainedAgentPaths },
+          files: [...files],
+          sourcePath,
+        },
+        {},
+      ),
     );
   } finally {
     await pool.close();
   }
 }
 
+/** Retained agents and plugin stores use their physical provider, independent of state. */
+export async function readUpdatePostgresStoreVersion(
+  input: Input,
+  sourcePath: string,
+): Promise<number> {
+  return (await readUpdatePostgresState(input, new Map(), sourcePath)).version.userVersion;
+}
+
 if (parentPort && workerData?.updatePostgresState === true) {
   const { serveWorkerTasks } = await import("./worker-task-server.js");
   serveWorkerTasks<Reply>(async (value) => {
     // SAFETY: The private one-shot host is the sole producer of this typed task.
-    const { input, files: entries } = value as Task;
-    const inputEngine = await resolveDatabaseEngineInput(input.config, {
-      ...process.env,
-      ...input.env,
-    });
+    const { input, files: entries, sourcePath } = value as Task;
+    if (sourcePath) {
+      const anchor = readBackupEngine(sourcePath);
+      if (anchor.engine !== "postgres") {
+        throw new Error("PostgreSQL update inspection requires a PostgreSQL anchor.");
+      }
+      const postgres = getDatabaseEngineSelection()?.postgres;
+      if (!postgres) {
+        throw new Error("PostgreSQL update inspection requires the captured connection.");
+      }
+      return withPostgresStoreMetadata(postgres, anchor, async (_client, metadata) => ({
+        files: entries,
+        version: { userVersion: metadata.version },
+      }));
+    }
+    const inputEngine = getDatabaseEngineInput("state");
     if (!inputEngine) {
       throw new Error("PostgreSQL update preflight requires the configured state connection.");
     }

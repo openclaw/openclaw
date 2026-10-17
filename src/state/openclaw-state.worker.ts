@@ -358,7 +358,6 @@ function createSharedStateWorkerBackend(
         });
       }
       if (
-        commandType === "database.inspectIdle" ||
         commandType === "database.walMaintenance" ||
         commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
@@ -474,21 +473,6 @@ function createSharedStateWorkerBackend(
             ),
           ) ?? { reclaimedPages: 0 }
         );
-      }
-      if (command.type === "database.inspectIdle") {
-        // Idle maintenance must never materialize a connection for an artifact-preserving reader.
-        if (
-          !nativeDatabase?.db.isOpen ||
-          openClawStateDatabaseCache.getCachedOpenClawStateDatabase(nativeDatabase.path) !==
-            nativeDatabase
-        ) {
-          if (!nativeDatabase && updateRunWriter) {
-            updateRunWriter.assertSettled();
-            return "healthy";
-          }
-          return "retire";
-        }
-        return nativeDatabase.walMaintenance.inspectIdle?.() ?? "retire";
       }
       if (isPluginStateWorkerCommand(command)) {
         if (!pluginState) {

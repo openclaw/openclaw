@@ -38,6 +38,7 @@ type SessionNavigationTarget<TRouteId extends string> = {
   isCurrent: () => boolean;
 };
 
+/** Chat owns this mounted capability; session menus do not own its DOM. */
 export function canSplitSessionView(): boolean {
   return (
     document.querySelector<SessionSplitHost>("openclaw-chat-page")?.sessionSplitAvailable === true

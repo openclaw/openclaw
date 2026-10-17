@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
   createComposerContainer,
@@ -61,7 +61,6 @@ describe("composer question takeover", () => {
         draft: "Keep this draft",
         gatewayQuestionPrompts: [],
         composerControls: createComposerControlsFixture(),
-        onRequestUpdate: vi.fn(),
       });
       composerProps.onDraftChange = (next) => {
         composerProps.draft = next;

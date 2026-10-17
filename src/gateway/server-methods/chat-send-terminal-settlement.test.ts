@@ -21,6 +21,7 @@ import {
 import { broadcastChatFinal } from "./chat-broadcast.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import * as workAdmission from "./chat-send-work-admission.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import * as settlementOwner from "./session-run-settlement.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
@@ -40,17 +41,23 @@ function createMutation(fixture: Awaited<ReturnType<typeof createFixture>>, acti
   const method = `sessions.${action}`;
   return (respond: RespondFn) =>
     Promise.resolve(
-      (action === "compact" ? sessionCompactHandlers : sessionRewindHandlers)[method]!({
-        req: { type: "req", id: action, method },
-        params:
-          action === "compact"
-            ? { key: fixture.scope.sessionKey, maxLines: 1 }
-            : { sessionKey: fixture.scope.sessionKey, entryId },
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-        context: fixture.context,
-      }),
+      (action === "compact" ? sessionCompactHandlers : sessionRewindHandlers)[method]!(
+        bindInProcessRequestMutationAuthority(
+          {
+            req: { type: "req", id: action, method },
+            params:
+              action === "compact"
+                ? { key: fixture.scope.sessionKey, maxLines: 1 }
+                : { sessionKey: fixture.scope.sessionKey, entryId },
+            client: null,
+            isWebchatConnect: () => false,
+            respond,
+            context: fixture.context,
+          },
+          undefined,
+          undefined,
+        ),
+      ),
     );
 }
 

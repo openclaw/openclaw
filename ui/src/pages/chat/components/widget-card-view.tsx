@@ -345,7 +345,7 @@ const loadMcpAppView = async () => {
   await import("../../../components/mcp-app-view-registration.ts");
 };
 
-const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
+const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
 const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function WidgetContent(props: {
@@ -456,10 +456,10 @@ function handleWidgetExportAction(
     const toggle = host?.querySelector<HTMLButtonElement>(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
+    // Solid commits the toggle after this handler; derive its next label before clicking.
+    const willExpand = toggle?.getAttribute("aria-expanded") !== "true";
     toggle?.click();
-    return toggle && toggle.getAttribute("aria-expanded") === "true"
-      ? "chat.toolCards.hideRawDetails"
-      : "chat.toolCards.showRawDetails";
+    return toggle && willExpand ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
   }
   const frame = dropdown
     .closest(".chat-tool-card__preview")

@@ -968,6 +968,12 @@
       ],
       "openclaw/plugin-sdk/meeting-config": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/meeting-config.d.ts"
+      ],
+      "openclaw/plugin-sdk/collection-input-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/collection-input-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/http-response-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/http-response-runtime.d.ts"
       ]
     }
   }

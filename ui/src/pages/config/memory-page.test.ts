@@ -35,7 +35,7 @@ function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | 
   if (panel.querySelector("openclaw-agent-memory-panel")) {
     return "dreams";
   }
-  if (panel.querySelector("openclaw-memory-memories")) {
+  if (panel.querySelector('[data-settings-view="memory/memories"]')) {
     return "memories";
   }
   return panel.querySelector('[data-settings-view="memory/overview"]') ? "overview" : "settings";
@@ -404,7 +404,7 @@ describe("MemorySettingsPage tab routing", () => {
 
       element.routeData = memoryTabRoute("memories");
       flush();
-      expect(visibleTab(element)).toBe("memories");
+      await waitForSolid(() => expect(visibleTab(element)).toBe("memories"));
 
       element.routeData = memoryTabRoute("dreams");
       flush();
@@ -607,13 +607,21 @@ describe("MemorySettingsPage tab routing", () => {
     }
   });
 
-  it.each(["plugin publication", "boot", "client"])(
-    "retires callbacks and pending RPCs synchronously after %s changes",
-    async (change) => {
+  it.each([
+    { tab: "overview", change: "plugin publication" },
+    { tab: "overview", change: "boot" },
+    { tab: "overview", change: "client" },
+    { tab: "memories", change: "method catalog" },
+    { tab: "memories", change: "agent" },
+  ] as const)(
+    "retires $tab callbacks and pending RPCs synchronously after $change changes",
+    async ({ tab, change }) => {
       const pending = deferred<unknown>();
       const fixture = createPage({
         configObject: {},
-        routeData: memoryTabRoute("overview"),
+        routeData: memoryTabRoute(tab),
+        agents: [{ id: "main" }, { id: "research" }],
+        methods: ["memory.search", "agents.workspace.get"],
         settingsRequest: () => pending.promise,
       });
       const { element, settingsViews, request } = fixture;
@@ -621,11 +629,16 @@ describe("MemorySettingsPage tab routing", () => {
       try {
         await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
         const old = settingsViews.at(-1)!.context;
+        expect(old.props.advertisedMethods).toContain("memory.search");
         const result = old.request("settings.test");
         if (change === "plugin publication") {
           fixture.publishPluginGeneration(1);
         } else if (change === "boot") {
           fixture.setBootId("memory-boot-b");
+        } else if (change === "method catalog") {
+          fixture.setMethods(["agents.workspace.get"]);
+        } else if (change === "agent") {
+          fixture.settingsAgentSelection.set("research");
         } else {
           fixture.replaceClient();
         }

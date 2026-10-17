@@ -191,14 +191,12 @@ function createRelayHealthTracker() {
       const total = s.successCount + s.failureCount;
       const successRate = s.successCount / total;
 
-      // Recency bonus (prefer recently successful relays)
       const now = Date.now();
       const recencyBonus =
         s.lastSuccess > s.lastFailure
           ? Math.max(0, 1 - (now - s.lastSuccess) / HEALTH_WINDOW_MS) * 0.2
           : 0;
 
-      // Latency penalty (lower is better)
       const avgLatency = s.successCount > 0 ? s.latencySum / s.successCount : 1000;
       const latencyPenalty = Math.min(0.2, avgLatency / 10000);
 

@@ -312,7 +312,7 @@ function InspectTooltip(props: ControllerProps) {
 function NativeViewport(props: ControllerProps) {
   let stage!: HTMLDivElement;
   // Native geometry retains this viewport’s synchronous presentation owner.
-  onSettled(() => untrack(() => props.controller.native.presentation).mountStage(stage));
+  onSettled(() => props.controller.native.presentation.mountStage(stage));
   return (
     <div
       ref={(element) => (stage = element)}
@@ -332,9 +332,7 @@ function ViewportContent(props: ControllerProps) {
   // Input queues belong to this viewport’s synchronous browser owner.
   const input = untrack(() => props.controller.input);
   const remoteInput = () => (props.controller.native.activeTab ? undefined : input);
-  onCleanup(() => {
-    input.elements = {};
-  });
+  onCleanup(() => (input.elements = {}));
   return (
     <Switch>
       <Match
@@ -448,8 +446,8 @@ export function BrowserPanelChrome(
   // Resource callbacks retain this viewport's synchronous browser owner.
   const controller = untrack(() => props.controller);
   const remoteInput = () => (controller.native.activeTab ? undefined : controller.input);
-  let viewport!: HTMLDivElement;
   onSettled(() => {
+    const viewport = controller.input.elements.viewport!;
     const observer =
       typeof ResizeObserver === "function"
         ? new ResizeObserver(([entry]) => {
@@ -519,7 +517,7 @@ export function BrowserPanelChrome(
         </div>
       ) : null}
       <div
-        ref={(element) => (viewport = element)}
+        ref={(element) => (controller.input.elements.viewport = element)}
         id={panelId}
         class="bp-viewport"
         role="tabpanel"

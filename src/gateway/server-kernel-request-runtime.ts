@@ -40,7 +40,11 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   } = runtime;
   const [chatMetadataLifecycle, configRevisionProjector] = await Promise.all([
     startupTrace.measure("gateway.chat-metadata-lifecycle", () =>
-      createGatewayChatMetadataLifecycle({ getConfig: getRuntimeConfig, log }),
+      createGatewayChatMetadataLifecycle({
+        getConfig: getRuntimeConfig,
+        log,
+        getPluginMetadataSnapshot: runtime.getPluginMetadataSnapshot,
+      }),
     ),
     startupTrace.measure("gateway.config-revision-key", async () => {
       const { loadGatewayConfigRevisionProjector } = await import("./config-revision-token.js");

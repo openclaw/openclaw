@@ -45,7 +45,7 @@ import {
   subscribeModelCatalogCache,
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   loadAgentFileContent,
@@ -94,10 +94,6 @@ type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
     sessionKey: string;
     agentsPanel: AgentsPanel;
   };
-type AgentsOwnerView = Omit<AgentsProps, "agentSkills"> & {
-  agentSkills: Omit<AgentsProps["agentSkills"], "filter">;
-};
-
 export function createAgentsPageState(
   context: ApplicationContext,
   initialRouteData?: AgentsRouteData,
@@ -106,6 +102,10 @@ export function createAgentsPageState(
   let active = true;
   let publish = () => {};
   const [skillsFilter, setSkillsFilter] = createSignal("");
+  const applicationConfig = projectOwner(context.config, (config) => config);
+  const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
+  const channels = projectOwner(context.channels, (source) => source.state);
+  const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
   const state = new Proxy<AgentsPageData>(
     {
@@ -811,9 +811,9 @@ export function createAgentsPageState(
     void runCronTask((cronState) => runCronJob(cronState, jobId, "force"));
   }
 
-  function viewProps(): AgentsOwnerView {
+  function viewProps(): AgentsProps {
     const configState = context.runtimeConfig.state;
-    const channels = context.channels.state;
+    const channelState = channels.read();
     const agentsState = context.agents.state;
     const selectedAgentId = state.agentsSelectedId;
     const canEditIdentity = () =>
@@ -841,10 +841,10 @@ export function createAgentsPageState(
       activePanel: state.agentsPanel,
       config: configState,
       channels: {
-        snapshot: channels.channelsSnapshot,
-        loading: channels.channelsLoading,
-        error: channels.channelsError,
-        lastSuccess: channels.channelsLastSuccess,
+        snapshot: channelState.channelsSnapshot,
+        loading: channelState.channelsLoading,
+        error: channelState.channelsError,
+        lastSuccess: channelState.channelsLastSuccess,
         onRefresh: () => void context.channels.refresh(false),
       },
       cron: {
@@ -910,10 +910,10 @@ export function createAgentsPageState(
         },
       },
       agentIdentityById: Object.fromEntries(
-        context.agentIdentity.entries().map((entry) => [entry.agentId, entry]),
+        identities.read().map((entry) => [entry.agentId, entry]),
       ),
       overview: {
-        applicationConfig: context.config,
+        applicationConfig: applicationConfig.read(),
         identityDraft: state.identityDraft,
         identitySaving: state.identitySaving,
         identityError: state.identityError,
@@ -943,6 +943,7 @@ export function createAgentsPageState(
         onModelCatalogOpen: () => ensureModelCatalog({ refresh: true }),
       },
       agentSkills: {
+        filter: skillsFilter(),
         report: state.agentSkillsReport,
         loading: state.agentSkillsLoading,
         error: state.agentSkillsError,
@@ -973,7 +974,7 @@ export function createAgentsPageState(
         runtimeSessionMatchesSelectedAgent: selectedAgentId === chatAgentId(),
         ...createAgentToolActions(configEditor),
       },
-      pinnedAgentIds: context.navigation.snapshot.pinnedAgentIds,
+      pinnedAgentIds: navigation.read().pinnedAgentIds,
       onTogglePinnedAgent: (agentId) => togglePinnedAgent(context.navigation, agentId),
       onRefresh: () => void refreshAgents(),
       onCreateAgent: () => {
@@ -992,7 +993,7 @@ export function createAgentsPageState(
     };
   }
   const projection = projectSource(context, {
-    read: viewProps,
+    read: () => state,
     subscribe: (_source, notify) => {
       publish = notify;
       return () => {
@@ -1008,7 +1009,7 @@ export function createAgentsPageState(
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
-      context.config.subscribe(() => publish()),
+      // Selection receipts transfer draft custody and retire prior-agent work synchronously.
       selection.subscribe(() => {
         const explicitSelection = selection.intentRevision !== intentRevision;
         intentRevision = selection.intentRevision;
@@ -1030,19 +1031,19 @@ export function createAgentsPageState(
         loadActivePanelData();
         publish();
       }),
+      // Roster and file publications adopt metadata before dependent file reads can settle.
       context.agents.subscribe(() => {
         syncAgentState();
         ensureAgentIdentities();
         loadActivePanelData();
         publish();
       }),
-      context.agentIdentity.subscribe(() => publish()),
-      context.channels.subscribe(() => publish()),
-      context.navigation.subscribe(() => publish()),
+      // Config receipts retire obsolete GitHub authorization before the next tool action.
       context.runtimeConfig.subscribe(() => {
         syncGitHubIdentity(state.agentsSelectedId);
         publish();
       }),
+      // Session model receipts replace the tools.effective request key before older results settle.
       context.sessions.subscribe(() => {
         void refreshVisibleToolsEffectiveForCurrentSession(state);
         publish();
@@ -1062,8 +1063,8 @@ export function createAgentsPageState(
   });
   return {
     read(): AgentsProps {
-      const view = projection.read();
-      return { ...view, agentSkills: { ...view.agentSkills, filter: skillsFilter() } };
+      projection.read();
+      return viewProps();
     },
     setRouteData(next?: AgentsRouteData) {
       if (next === routeData) {

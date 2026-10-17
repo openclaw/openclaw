@@ -33,11 +33,8 @@ import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import {
-  DiffStatChips,
-  createDiffPresentation,
-  type DiffPresentation,
-} from "./chat-diff-render.solid.tsx";
+import { createDiffPresentation, type DiffPresentation } from "./chat-diff-render.solid.tsx";
+import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import {
   SessionDiffMenu,
   type SessionDiffMenuAction,
@@ -129,6 +126,7 @@ function SessionDiffContent(props: SessionDiffProps) {
   const unavailableFileText = new WeakSet<FileSource>();
   let generation = 0;
   const nativeGateways = nativeGatewaysCapability();
+  // Dismiss the menu at native-owner replacement before another menu action can run.
   const unsubscribe = nativeGateways?.subscribe(() => setMenu(null));
   onCleanup(() => {
     generation += 1;

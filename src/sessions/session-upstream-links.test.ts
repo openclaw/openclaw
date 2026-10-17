@@ -10,6 +10,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -230,9 +231,13 @@ describe("session upstream links", () => {
     ).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "initializes and rolls back only its own link without caller-thread SQL (replaced: %s)",
-    async (replaced) => {
+  it.each([
+    ["async", false],
+    ["async", true],
+    ["legacy", false],
+  ] as const)(
+    "%s initializer rolls back only its own link (replaced: %s)",
+    async (mode, replaced) => {
       const database = createDatabaseOptions();
       const input = {
         sessionKey: "agent:main:adopted:initialization",
@@ -270,7 +275,29 @@ describe("session upstream links", () => {
           identity,
           prepareCleanup: () => cleanup,
         });
-        await initialization.linkAsync(input);
+        using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+        await withPluginRuntimePluginScope(
+          { pluginId: `native-initializer-${mode}-${replaced}` },
+          async () => {
+            if (mode === "legacy") {
+              initialization.link(input);
+            } else {
+              await initialization.linkAsync(input);
+            }
+          },
+        );
+        const notices = warning.mock.calls.filter(([message]) =>
+          String(message).includes("createNativeSessionInitializationOwner.prepare.link"),
+        );
+        expect(notices).toHaveLength(mode === "legacy" ? 1 : 0);
+        if (mode === "legacy") {
+          expect(notices[0]?.[0]).toContain(
+            "createNativeSessionInitializationOwner.prepare.linkAsync",
+          );
+          expect(notices[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
+          expect(notices[0]?.[0]).toContain("first January 2027 stable release");
+          sql.clear();
+        }
         const readSource = captureSessionUpstreamLinkReadSource(
           captureOpenClawStateWorkerContext(database),
         );

@@ -5,12 +5,14 @@ import {
   readWorkerPlacementMovesReadOnly,
 } from "./placement-move-intent.js";
 import {
+  isCurrentPlacementTurnClaim,
   nextGeneration,
   normalizeEpoch,
   projectPlacementTurnClaim,
   projectWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementTransitionPatch,
+  type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import {
   fromRow,
@@ -113,6 +115,8 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
       ownerEpoch: number;
       expectedGeneration: number;
       forceLocalClaim?: true;
+      requireUnclaimed?: true;
+      expectedTurnClaim?: WorkerSessionTurnClaim;
     }): PlacementTurnClaimReceipt {
       const sessionId = required(input.sessionId, "session id");
       const environmentId = required(input.environmentId, "environment id");
@@ -126,6 +130,14 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
           current.activeOwnerEpoch !== ownerEpoch
         ) {
           throw new Error(`Cannot reconcile stale worker placement for session ${sessionId}`);
+        }
+        // A same-generation claim replacement must not inherit this caller's teardown.
+        if (
+          (input.requireUnclaimed && current.turnClaim) ||
+          (input.expectedTurnClaim &&
+            !isCurrentPlacementTurnClaim(current, input.expectedTurnClaim))
+        ) {
+          throw new Error(`Cannot reconcile stale worker turn for session ${sessionId}`);
         }
         if (hasWorkerWorkspacePendingResult(db, sessionId)) {
           throw new Error(

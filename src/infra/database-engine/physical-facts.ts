@@ -3,10 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
+  getOrLoadSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
-import { assertEngineStoreExecutionAllowed } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
 import {
   assertPostgresCatalog,
@@ -89,6 +89,11 @@ export function getPostgresPhysicalFacts(db: EngineConnection) {
   return getSqliteDatabaseAdmission(db, admissionKey);
 }
 
+/** Operator projections consume admission evidence without opening or probing a store. */
+export function getPostgresPhysicalFactsForPath(path: string) {
+  return getOrLoadSqliteDatabaseAdmissionForPath(path, admissionKey, () => undefined);
+}
+
 /** The anchor carries PG admission facts without treating its native catalog as application data. */
 export function admitPostgresPhysicalFacts(params: {
   anchor: DatabaseSync;
@@ -103,17 +108,8 @@ export function admitPostgresPhysicalFacts(params: {
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
-    if (
-      retained.store !== params.store ||
-      retained.namespace !== params.namespace ||
-      retained.storeId !== params.storeId ||
-      retained.version !== params.version
-    ) {
-      throw new Error(`PostgreSQL admission identity or version mismatch. ${recovery}`);
-    }
     return retained;
   }
-  assertEngineStoreExecutionAllowed();
   const capabilities = admitPostgresCapabilities(params.db);
   let snapshot;
   try {

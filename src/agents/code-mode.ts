@@ -207,6 +207,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       terminalBatchStatus: result.status,
       compact: true,
     });
+    runtime?.sourceReplyCell.attach(controlResult, result.status);
     return recordCodeModeToolOutcome(
       copyInternalToolResultState(controlResult, {
         ...controlResult,

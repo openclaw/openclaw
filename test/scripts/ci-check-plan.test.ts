@@ -289,6 +289,38 @@ it.each(["check-plan", "additional-checks"] as const)(
 );
 
 it.each([
+  ["hybrid", [1, 2, 4, 5], ["test-root-e2e"]],
+  ["hybrid", [1, 2, 4, 5], ["test-root-tooling", "test-root-other"]],
+  ["hybrid", [1, 2, 5], ["test-root-e2e"]],
+  ["blacksmith", [1, 2, 3, 4, 5], ["test-root-e2e"]],
+] as const)(
+  "preserves selected root partition identity on %s (%j, %j)",
+  async (runnerProfile, stripes, roots) => {
+    const core = ["agents-root", "agents-other", "agents-tools", "gateway-root", "gateway-server"];
+    typeSelection.graphs = resolveCiTsgoGraphs([
+      ...stripes.map((stripe) => `core-test-${core[stripe - 1]}`),
+      "scripts",
+      ...roots,
+    ]);
+    const plan = await createPlan({ runnerProfile });
+    const moved = runnerProfile === "hybrid" && stripes.length >= 4;
+    expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(
+      runnerProfile === "hybrid" ? stripes : [],
+    );
+    expect(plan.core_type_matrix.include.flatMap((row) => row.root_type_stripe ?? [])).toEqual(
+      moved ? (roots.some((name) => name === "test-root-e2e") ? ["3/4"] : ["1/4", "4/4"]) : [],
+    );
+    expect(JSON.parse(plan.check_matrix.include[0]!.type_graph_names_json!)).toEqual(
+      moved
+        ? ["scripts"]
+        : runnerProfile === "hybrid"
+          ? ["scripts", ...roots]
+          : [...roots, "scripts"],
+    );
+  },
+);
+
+it.each([
   ["hybrid", [1, 2, 4, 5]],
   ["hybrid", [1, 2, 5]],
   ["blacksmith", [1, 2, 3, 4, 5]],

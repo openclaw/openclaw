@@ -167,6 +167,31 @@ describe("sandbox backend registry", () => {
     }
   });
 
+  it("restores distinct entries when the same registration object is installed twice", () => {
+    const backendId = "test-repeated-registration";
+    const shared = createGenerationRegistration("shared");
+    const middle = createGenerationRegistration("middle");
+    const first = registerSandboxBackend(backendId, shared);
+    const second = registerSandboxBackend(backendId, middle);
+    const third = registerSandboxBackend(backendId, shared);
+    try {
+      third();
+      expect(getSandboxBackendFactory(backendId)).toBe(middle.factory);
+      expect(getSandboxBackendManager(backendId)).toBe(middle.manager);
+      expect(getSandboxBackendWorkdirResolver(backendId)).toBe(middle.resolveWorkdir);
+      first();
+      expect(getSandboxBackendFactory(backendId)).toBe(middle.factory);
+      second();
+      expect(getSandboxBackendFactory(backendId)).toBeNull();
+      third();
+      expect(getSandboxBackendFactory(backendId)).toBeNull();
+    } finally {
+      third();
+      second();
+      first();
+    }
+  });
+
   it.each([
     {
       scenario: "older registration retires first",

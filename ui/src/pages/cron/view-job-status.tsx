@@ -100,7 +100,7 @@ export function LastRunCell(props: { job: CronJob }) {
   const status = () => resolveCronJobLastRunStatus(props.job);
   const relative = () => {
     const time = props.job.state?.lastRunAtMs;
-    return typeof time === "number" && Number.isFinite(time) ? formatRelativeTimestamp(time) : null;
+    return time === undefined ? null : formatRelativeTimestamp(time);
   };
   return (
     <>

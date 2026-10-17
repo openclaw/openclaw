@@ -17,7 +17,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -250,10 +249,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             const trimResult = await trimSessionTranscriptForManualCompact(transcriptScope, {
               maxLines,
               authority: {
-                source: composeSessionSourceAssertion([
+                // Router authorization already includes the request's live authority.
+                source:
+                  options.sessionMutationAuthorization?.assertCurrent ??
                   requestAuthority.assertCurrent,
-                  options.sessionMutationAuthorization?.assertCurrent,
-                ]),
                 assertHostCurrent: () => {
                   signal?.throwIfAborted();
                   if (!hasPreparedGatewayDeviceAuthority(client, hasCurrentClientAuthority)) {

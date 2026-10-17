@@ -395,6 +395,11 @@ function hasImportantTail(text: string): boolean {
   const tail = normalizeLowercaseStringOrEmpty(sliceUtf16Safe(text, -2000));
   return (
     /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
+    // Exec/process append terminal facts after output; they may not contain
+    // "error" or "failed", but dropping them makes a failed command look successful.
+    /\b(exited with (?:code|signal)|timed out|aborted|stopped by request|not found|not executable)\b/.test(
+      tail,
+    ) ||
     /\}\s*$/.test(tail.trim()) ||
     /\b(total|summary|result|complete|finished|done)\b/.test(tail)
   );

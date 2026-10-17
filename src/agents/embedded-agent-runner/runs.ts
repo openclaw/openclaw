@@ -903,13 +903,6 @@ export async function preemptAndDrainEmbeddedHeartbeatRun(
   return (await drainPromise) ? "drained" : "timed-out";
 }
 
-function logActiveRunCheck(sessionId: string, active: boolean, label: string): boolean {
-  if (active) {
-    diag.debug(`${label}: sessionId=${sessionId} active=true`);
-  }
-  return active;
-}
-
 export function prepareEmbeddedAgentRunCompletionClaim(sessionId: string, runId: string) {
   const { promise: registered, resolve: settleRegistration } = createDeferredCore<
     EmbeddedRunCompletionRegistration | undefined
@@ -1085,13 +1078,11 @@ export function isEmbeddedAgentSessionHeldByOtherRun(sessionId: string, runId: s
 }
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId);
-  return logActiveRunCheck(sessionId, active, "run handle active check");
+  return ACTIVE_EMBEDDED_RUNS.has(sessionId);
 }
 
 export function isEmbeddedAgentRunAbortableForCompaction(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
-  return logActiveRunCheck(sessionId, active, "run compact coordination check");
+  return ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
 }
 
 export function isEmbeddedAgentRunStreaming(sessionId: string): boolean {
@@ -1448,9 +1439,6 @@ export function setActiveEmbeddedRun(
     runId: handle.runId,
     owner: handle.diagnosticOwner,
   });
-  if (!sessionId.startsWith("probe-")) {
-    diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
-  }
   const completionClaim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
   if (
     completionClaim &&
@@ -1507,11 +1495,6 @@ export function clearActiveEmbeddedRun(
     removeActiveEmbeddedRun({ sessionId, sessionKey, sessionFile }, handle, reason, {
       retainFinalizing: true,
     });
-    if (!sessionId.startsWith("probe-")) {
-      diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
-    }
-  } else if (activeHandle !== undefined) {
-    diag.debug(`run clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
   EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(handle);
   // Exact-handle waiters own teardown even after another run takes the session slot.

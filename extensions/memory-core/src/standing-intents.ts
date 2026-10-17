@@ -52,14 +52,7 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
   );
   try {
     await worker.prepare();
-    let result = await worker.execute(capturedCommand, () => assertCurrent?.());
-    if (result.kind === "schema-prepared") {
-      // Only confirmed schema-only completion permits the separate business dispatch.
-      result = await worker.execute(capturedCommand, () => assertCurrent?.());
-    }
-    if (result.kind === "schema-prepared") {
-      throw new Error("Standing-intent schema changed before its business operation");
-    }
+    const result = await worker.execute(capturedCommand, () => assertCurrent?.());
     for (const listener of lifecycleListeners) {
       listener(options.path, result.nextDueAt);
     }

@@ -908,10 +908,9 @@ describe("server-channels auto restart", () => {
         const monitor = startChannelHealthMonitor({
           scheduler: createTestGatewayScheduler("fake-timers"),
           channelManager: manager,
-          timing: { monitorStartupGraceMs: 2, channelConnectGraceMs: 0, staleEventThresholdMs: 1 },
         });
         try {
-          await vi.advanceTimersByTimeAsync(2);
+          await vi.advanceTimersByTimeAsync(31 * 60_000);
           await monitor.waitForIdle();
         } finally {
           monitor.shutdown();
@@ -963,11 +962,6 @@ describe("server-channels auto restart", () => {
           ? startChannelHealthMonitor({
               scheduler: createTestGatewayScheduler("fake-timers"),
               channelManager: manager,
-              timing: {
-                monitorStartupGraceMs: 2,
-                channelConnectGraceMs: 0,
-                staleEventThresholdMs: 1,
-              },
             })
           : undefined;
       const thaw =
@@ -979,7 +973,7 @@ describe("server-channels auto restart", () => {
           : undefined;
       try {
         if (monitor) {
-          await vi.advanceTimersByTimeAsync(2);
+          await vi.advanceTimersByTimeAsync(31 * 60_000);
         }
         await stopStarted.promise;
         accountIds = [];
@@ -3064,10 +3058,9 @@ describe("server-channels auto restart", () => {
     const monitor = startChannelHealthMonitor({
       scheduler: createTestGatewayScheduler("fake-timers"),
       channelManager: manager,
-      timing: { monitorStartupGraceMs: 2, channelConnectGraceMs: 0, staleEventThresholdMs: 1 },
     });
     try {
-      await vi.advanceTimersByTimeAsync(2);
+      await vi.advanceTimersByTimeAsync(31 * 60_000);
       await monitor.waitForIdle();
       expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy", {
         reason: "health-monitor",

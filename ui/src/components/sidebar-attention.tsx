@@ -93,7 +93,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (disposed || !host.isConnected || generation !== panelGeneration) {
       return;
     }
-    context.scopeUpgrade.activate(runtime.ScopeUpgradeController);
+    context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;

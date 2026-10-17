@@ -356,7 +356,7 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
       name: "unclosed fence",
       text: "```text\nMEDIA:https://example.com/a.png",
       final: "```text\nMEDIA:https://example.com/a.png",
-      texts: ["```text\nMEDIA:https://example.com/a.png"],
+      texts: ["```text\nMEDIA:https://example.com/a.png\n```"],
       media: [],
       early: true,
     },

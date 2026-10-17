@@ -1,4 +1,3 @@
-/** Baseten session affinity and model-specific thinking policy. */
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {

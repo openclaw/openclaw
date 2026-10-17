@@ -389,8 +389,6 @@ export class ChatComposerCapabilityHost {
     state: ChatPageHost,
     session: GatewaySessionRow | undefined,
     agentId: string,
-    toolAccessOpen = false,
-    skillsOpen = false,
   ): ChatComposerCapabilityMenuProps {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
@@ -414,9 +412,6 @@ export class ChatComposerCapabilityHost {
         ? { client, connectionEpoch, sessionKey, agentId, isCurrent: current }
         : null,
     );
-    if (skillsOpen && !this.library.result && !this.library.loading && !this.library.error) {
-      void this.library.load();
-    }
     const canWriteLibrary = canCallGatewayMethod(
       context.gateway.snapshot,
       "skills.library.activate",
@@ -430,11 +425,6 @@ export class ChatComposerCapabilityHost {
     const gatewayAvailable = state.connected && Boolean(state.client);
     const effectiveToolsAvailable =
       isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
-    // Start before projecting loading state; a notification during render
-    // cannot schedule the second render that the old menu callback relied on.
-    if (effectiveToolsAvailable && toolAccessOpen) {
-      this.loadEffectiveTools(context, state, agentId);
-    }
     const effectiveToolsKey = effectiveToolsAvailable
       ? this.effectiveToolsKeys(context, state, agentId)
       : null;
@@ -527,6 +517,22 @@ export class ChatComposerCapabilityHost {
             state.connected && state.client === skillClient && state.connectionEpoch === skillEpoch,
         );
         void this.library.load(true);
+      },
+      onLoadView: (view) => {
+        if (!current()) {
+          return;
+        }
+        if (
+          (view === "skills" || view.startsWith("library:")) &&
+          !this.library.result &&
+          !this.library.loading &&
+          !this.library.error
+        ) {
+          void this.library.load();
+        }
+        if (effectiveToolsAvailable && view.startsWith("tools:")) {
+          this.loadEffectiveTools(context, state, agentId);
+        }
       },
       onPatchToolOverrides: (next) => void this.patch(context, state, next),
       onNavigate: (routeId, options) => context.navigate(routeId, options),

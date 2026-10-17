@@ -310,11 +310,19 @@ not grant update ownership.
 Preparation resolves official `main` once, or accepts an exact
 `--sha <40-hex-commit>`, builds off-path, verifies and seals the candidate, and
 records its preparation. Preparation failure leaves the serving generation in
-place; an already-current target skips the build. Existing adoption records
-remain preparation-only. Native activation requires explicit
+place; an already-current target skips the build. Default update builds include
+the Plugin SDK declarations required by the sealed generation's package exports.
+Existing adoption records remain preparation-only. Native activation requires explicit
 `adopt-immutable --enable-activation` consent recorded in the installation's
 control database. No `openclaw.json` option enables it. `--no-restart` keeps an
 enabled installation preparation-only for that invocation.
+
+Preparation reuses Git objects from the verified current release while fetching
+official `main`, so the network transfer contains only missing objects. A failed
+fetch retries once in the same staging repository, with a separate five-minute
+budget per attempt. Interrupted pack transfers restart the missing pack, not the
+installed history. Before building, preparation copies the reused objects into
+its own store; the prepared release retains independent Git objects.
 
 Immutable preparation requires a separately adopted build account and toolchain.
 The build account must differ from the runtime account, have no supplementary
@@ -583,10 +591,20 @@ change `updateAdmissionProtocol: 1` or its comparison rules. An absent field mea
 the installed driver checks the selected package or Git target for `postgres`
 before mutation. A target that lacks it is refused with `database-engine-preflight`:
 reverse-port to SQLite with the current compatible binary before updating, or
-stay on the current version. See [Database engines](/reference/database-engines);
-the port command remains disabled until its release prerequisites are met.
+stay on the current version. See [Database engines](/reference/database-engines).
 SQLite-only installations keep the existing admission path and do not require
 the field. Candidate admission cannot override this installed-driver protection.
+
+Targets also declare supported PostgreSQL families in
+`openclaw.postgresFamilies`. Mixed installations and explicit family overrides
+require the candidate's existing admission checks to accept the complete family
+selection before mutation; `databaseEngines: ["postgres"]` alone is insufficient.
+Preflight uses the effective shared-state engine for registry and plugin facts,
+and each agent store's physical engine for its schema inspection, including
+retained stores and disabled plugins. Updates preserve the default and family
+overrides; they never implicitly port a family. `openclaw update --dry-run`
+previews the flow using installed checks; it does not stage a package or run
+candidate admission, so candidate family compatibility remains pending.
 
 | Owner                                | Checks and operations                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

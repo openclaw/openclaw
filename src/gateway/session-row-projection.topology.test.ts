@@ -23,7 +23,6 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { applyOpenClawDatabaseVerificationResults } from "../state/openclaw-database-verify.impl.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -508,7 +507,7 @@ it.for([
   },
 );
 
-it.for(["dispose", "source", "integrity confirmation"] as const)(
+it.for(["dispose", "source", "owner close"] as const)(
   "does not publish a topology snapshot after its %s changes while reading",
   async (change, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -524,9 +523,7 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
         modelCatalog: [],
       });
       const verifiedDatabase =
-        change === "integrity confirmation"
-          ? openOpenClawStateDatabase({ env: state.env })
-          : undefined;
+        change === "owner close" ? openOpenClawStateDatabase({ env: state.env }) : undefined;
       const { entered, release } = holdTopologyRead();
       const captured = projection.capture(query);
       sessionChanges.emit({ all: true, scope: "stores" });
@@ -542,26 +539,8 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
         expect(projection.capture(query)).toBe(captured);
         if (change === "dispose") {
           projection.dispose();
-        } else if (change === "integrity confirmation") {
-          await applyOpenClawDatabaseVerificationResults({
-            env: state.env,
-            targets: [
-              {
-                kind: "state",
-                label: "OpenClaw state database",
-                path: verifiedDatabase!.path,
-                check: "quick",
-              },
-            ],
-            results: [
-              {
-                path: verifiedDatabase!.path,
-                ok: false,
-                error: "stale terminal result",
-                terminal: true,
-              },
-            ],
-          });
+        } else if (change === "owner close") {
+          await closeOpenClawStateDatabaseByPathAsync(verifiedDatabase!.path);
           expect(verifiedDatabase!.db.isOpen).toBe(false);
         } else {
           const database = openOpenClawStateDatabase({ env: state.env });
@@ -572,9 +551,9 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
           openOpenClawStateDatabase({ env: state.env });
         }
         release.resolve();
-        if (change === "source" || change === "integrity confirmation") {
+        if (change === "source" || change === "owner close") {
           expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
-          if (change === "integrity confirmation") {
+          if (change === "owner close") {
             await expect(projection.prepareMembership()).resolves.toBeUndefined();
             await projection.prepareSelection();
             expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([

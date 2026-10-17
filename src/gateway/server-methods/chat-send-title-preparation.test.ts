@@ -20,6 +20,7 @@ import {
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sessionTitleRequests } from "../session-title-state.js";
 import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 
 const generate = vi.hoisted(() =>
@@ -195,14 +196,20 @@ it("compacts after the reply releases its admission while its title is still gen
       });
       const compact = async () => {
         const respond = vi.fn();
-        await sessionCompactHandlers["sessions.compact"]!({
-          req: { type: "req", id: "compact", method: "sessions.compact" },
-          params: { key: scope.sessionKey, maxLines: 2 },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-          context,
-        });
+        await sessionCompactHandlers["sessions.compact"]!(
+          bindInProcessRequestMutationAuthority(
+            {
+              req: { type: "req", id: "compact", method: "sessions.compact" },
+              params: { key: scope.sessionKey, maxLines: 2 },
+              client: null,
+              isWebchatConnect: () => false,
+              respond,
+              context,
+            },
+            undefined,
+            undefined,
+          ),
+        );
         return respond;
       };
       try {

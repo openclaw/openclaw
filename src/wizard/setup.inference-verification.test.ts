@@ -13,7 +13,6 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ActivateSetupInferenceDeps } from "../system-agent/setup-inference-core.js";
 import type { SetupInferenceConfigTarget } from "../system-agent/setup-inference-transition.js";
 import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -22,7 +21,7 @@ import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
 const mocks = vi.hoisted(() => ({
   repair: vi.fn(),
   verify: vi.fn(),
-  runEmbedded: vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(),
+  runEmbedded: vi.fn<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>(),
 }));
 
 vi.mock("../system-agent/setup-inference.js", () => ({
@@ -219,7 +218,7 @@ describe("offerLiveModelVerification", () => {
       };
     });
     mocks.verify.mockImplementation((params: Parameters<typeof verifySetupInferenceConfig>[0]) =>
-      verifySetupInferenceConfig({ ...params, deps: { ...params.deps, runEmbeddedAgent } }),
+      verifySetupInferenceConfig(params),
     );
     const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
     const persistAuthProfiles = vi.fn(async () => {});

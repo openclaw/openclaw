@@ -19,7 +19,7 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
+import { GitHubPublicationOwner } from "../../lib/sessions/github-publication-owner.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
@@ -62,7 +62,6 @@ import {
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
@@ -264,7 +263,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
             navigateToModelProvider(this.context, currentAgentId, provider),
           onModelAccounts: () => this.context.navigate("profile"),
         });
-    const composerState = getChatComposerState(this.presentationId);
     const projectCatalog = projectsForGateway(this.context.gateway).snapshot;
     const publicationScope = this.captureConnectionScope();
     const readPublicationRow = () => {
@@ -292,7 +290,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.githubPublication = this.context.sessions.githubPublication.attach(
           publicationRow,
           this.notify,
-          GitHubPublicationController,
+          GitHubPublicationOwner,
         );
       }
       const publication = this.githubPublication;
@@ -447,6 +445,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      draftSource: this.chatState.composerDraft,
       composerPredictions: {
         enabled: this.context.config.current.composerPredictionsEnabled === true,
         active: !catalogKey && this.active && this.presented,
@@ -528,16 +527,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
-        : this.composerCapabilities.props(
-            this.context,
-            state,
-            selectedSession,
-            currentAgentId,
-            composerState.capabilityMenuView.startsWith("tools:"),
-            composerState.capabilityMenuOpen &&
-              (composerState.capabilityMenuView === "skills" ||
-                composerState.capabilityMenuView.startsWith("library:")),
-          ),
+        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
       ...childRoster,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,

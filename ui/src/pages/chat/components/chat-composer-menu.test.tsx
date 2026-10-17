@@ -256,3 +256,103 @@ it("retains attachment choices while the native menu closes and reopens", async 
   flush();
   expect(view.container.querySelector('[data-value="test-toggle"]')).toBe(choice);
 });
+
+it.each(["item", "external", "closed"] as const)(
+  "preserves newer %s focus after changing capability views",
+  async (target) => {
+    type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
+    const [currentView, setView] = createSignal<Menu["view"]>(
+      target === "closed" ? "connectors" : "tools:docs",
+    );
+    const [open, setOpen] = createSignal(true);
+    const view = mountSolid(() => (
+      <>
+        <input aria-label="Newer focus" />
+        <ChatComposerPlusMenu
+          menu={{
+            attachments: {},
+            disabled: false,
+            open: open(),
+            view: currentView(),
+            toolOverrides: null,
+            onOpenChange: setOpen,
+            onViewChange: setView,
+            capabilityMenu: {
+              basePath: "/control",
+              skills: [],
+              skillsLoading: false,
+              skillsError: false,
+              mcpServers: [
+                {
+                  name: "docs",
+                  enabled: true,
+                  transport: "stdio",
+                  target: "docs-server",
+                  auth: null,
+                  signIn: null,
+                  toolFilter: false,
+                  parallel: false,
+                  tls: null,
+                },
+              ],
+              toolsEffectiveResult: null,
+              toolsEffectiveLoading: false,
+              toolsEffectiveError: false,
+              toolAccessMutationBlockedReason: null,
+              webSearchBaseEnabled: true,
+              mutationBlockedReason: null,
+              canAdmin: true,
+              adminBlockedReason: null,
+              onLoadSkills: vi.fn(),
+              onPatchToolOverrides: vi.fn(),
+              onNavigate: vi.fn(),
+            },
+          }}
+        />
+      </>
+    ));
+    const back = view.getByRole("menuitem", { name: "Back", hidden: true });
+    await waitForSolid(() =>
+      expect(back.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
+    );
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      back.focus();
+      back.click();
+      let focused: HTMLElement;
+      if (target === "item") {
+        flush();
+        expect(document.activeElement).toBe(back);
+        focused = view.getByRole("menuitemcheckbox", { name: "docs Enabled", hidden: true });
+      } else if (target === "closed") {
+        setOpen(false);
+        focused = document.body;
+      } else {
+        focused = view.getByRole("textbox", { name: "Newer focus" });
+      }
+      if (target !== "closed") {
+        focused.focus();
+      }
+      flush();
+      for (const callback of frames) {
+        callback(0);
+      }
+      expect(document.activeElement).toBe(focused);
+      if (target === "item") {
+        back.focus();
+        back.click();
+        flush();
+        expect(back.isConnected).toBe(false);
+        expect(document.activeElement).toBe(
+          view.getByRole("menuitem", { name: "Take photo", hidden: true }),
+        );
+      }
+    } finally {
+      raf.mockRestore();
+    }
+  },
+);

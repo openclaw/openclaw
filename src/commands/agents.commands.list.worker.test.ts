@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import {
@@ -42,26 +43,19 @@ function instrumentParentSql() {
 
 function instrumentProvenanceWorkerRequests() {
   const commands: string[] = [];
-  // oxlint-disable-next-line typescript/unbound-method -- Every intercepted call supplies the original Worker receiver.
-  const originalPostMessage = Worker.prototype.postMessage;
-  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    message,
-    transferList,
-  ) {
-    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
-      const command: unknown = deserialize(message.input);
+  const restore = onInternalDiagnosticEvent(
+    (event) => {
       if (
-        isRecord(command) &&
-        typeof command.type === "string" &&
-        command.type.startsWith("agentProvenance.")
+        event.type === "worker.request" &&
+        event.phase === "queued" &&
+        event.requestClass === "agentProvenance"
       ) {
-        commands.push(command.type);
+        commands.push(event.kind);
       }
-    }
-    originalPostMessage.call(this, message, transferList);
-  });
-  return { commands, restore: () => spy.mockRestore() };
+    },
+    { include: ["worker.request"] },
+  );
+  return { commands, restore };
 }
 
 it("does not create provenance storage for an empty JSON roster", async () => {
@@ -86,7 +80,7 @@ it("does not create provenance storage for an empty JSON roster", async () => {
   );
 });
 
-it("creates an empty provenance database on the worker and closes without parent SQL", async () => {
+it("reads an absent provenance database without creating state or executing parent SQL", async () => {
   await withOpenClawTestState({ layout: "state-only", label: "provenance-cold" }, async (state) => {
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     expect(existsSync(databasePath)).toBe(false);
@@ -100,7 +94,7 @@ it("creates an empty provenance database on the worker and closes without parent
       options.path = laterPath;
       options.env.OPENCLAW_STATE_DIR = path.join(state.stateDir, "later");
       expect(await reading).toEqual([]);
-      expect(existsSync(databasePath)).toBe(true);
+      expect(existsSync(databasePath)).toBe(false);
       expect(existsSync(laterPath)).toBe(false);
       await closeOpenClawStateDatabaseAsync();
       sql.expectIdle();
@@ -156,7 +150,8 @@ it("serves actual JSON and tree command output from worker provenance through re
       if (Array.isArray(output)) {
         expect(output[2]).not.toHaveProperty("createdVia");
       }
-      expect(requests.commands).toHaveLength(1);
+      await waitForDiagnosticEventsDrained();
+      expect(requests.commands).toEqual(["stateRead"]);
       await agentsListCommand({ tree: true }, runtime);
       expect(runtime.log).toHaveBeenCalledWith("Agents:\n- main\n  - child\n- legacy");
       await closeOpenClawStateDatabaseAsync();
@@ -207,7 +202,8 @@ it("enriches a growing configured roster with bounded worker requests in configu
             expect.objectContaining({ id, createdVia: "operator", createdAt: index }),
           ),
         );
-        expect(requests.commands).toHaveLength(2);
+        await waitForDiagnosticEventsDrained();
+        expect(requests.commands).toEqual(["stateRead", "stateRead"]);
       } finally {
         requests.restore();
         await closeOpenClawStateDatabaseAsync();

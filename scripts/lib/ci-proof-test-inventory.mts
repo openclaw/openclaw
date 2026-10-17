@@ -3600,7 +3600,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/state/openclaw-database-preflight.startup-index.test.ts",
   "src/state/openclaw-database-preflight.test.ts",
   "src/state/openclaw-database-verify.process.test.ts",
-  "src/state/openclaw-database-verify.shutdown.test.ts",
   "src/state/openclaw-database-verify.test.ts",
   "src/state/openclaw-memory-write-admission.test.ts",
   "src/state/openclaw-quarantine-store.test.ts",
