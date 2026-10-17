@@ -114,6 +114,7 @@ export function createMatrixDraftStream(params: {
     resetMessage,
   } = createFinalizableDraftLifecycle({
     throttleMs: DEFAULT_THROTTLE_MS,
+    coalesceInFlight: true,
     state: streamState,
     sendOrEditStreamMessage: sendOrEdit,
     readMessageId: () => currentEventId,

@@ -1,4 +1,5 @@
 // Matrix tests cover draft stream plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMatrixDraftStream } from "./draft-stream.js";
 
@@ -211,6 +212,114 @@ describe("createMatrixDraftStream", () => {
     expect(sentContentAt(0).msgtype).toBe("m.notice");
     expect(sentContentAt(1).msgtype).toBe("m.notice");
     expect(sentContentAt(1)["m.new_content"]).toEqual({ msgtype: "m.notice", body: "ABC" });
+  });
+
+  it.each([
+    ["partial", "create"],
+    ["quiet", "create"],
+    ["partial", "edit"],
+    ["quiet", "edit"],
+  ] as const)("coalesces %s updates arriving during an in-flight %s", async (mode, operation) => {
+    vi.setSystemTime(10_000);
+    const pendingRequest = createDeferred<string>();
+    const stream = createStream({ mode });
+    try {
+      if (operation === "edit") {
+        stream.update("A");
+        await stream.flush();
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      sendMessageMock.mockReturnValueOnce(pendingRequest.promise);
+      stream.update("AB");
+      await vi.advanceTimersByTimeAsync(1500);
+      stream.update("ABC");
+      await vi.advanceTimersByTimeAsync(1000);
+      stream.update("ABCD");
+      pendingRequest.resolve(operation === "create" ? "$evt1" : "$edit1");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const inFlightCalls = operation === "create" ? 1 : 2;
+      expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls + 1);
+      expect(sentContentAt(inFlightCalls)["m.new_content"]).toMatchObject({ body: "ABCD" });
+      expect(sentContentAt(inFlightCalls)["m.relates_to"]).toEqual({
+        rel_type: "m.replace",
+        event_id: "$evt1",
+      });
+    } finally {
+      pendingRequest.resolve("$evt1");
+      await stream.seal();
+    }
+  });
+
+  it.each(["partial", "quiet"] as const)(
+    "flushes final %s text without waiting for the background throttle",
+    async (mode) => {
+      vi.setSystemTime(10_000);
+      const stream = createStream({ mode });
+      stream.update("A");
+      await stream.flush();
+      stream.update("Final answer");
+
+      await expect(stream.stop()).resolves.toBe("$evt1");
+      expect(sendMessageMock).toHaveBeenCalledTimes(2);
+      expect(sentContentAt(1)["m.new_content"]).toMatchObject({ body: "Final answer" });
+
+      stream.update("Late delta");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    ["partial", "create"],
+    ["quiet", "create"],
+    ["partial", "edit"],
+    ["quiet", "edit"],
+  ] as const)("flushes final %s text during an in-flight %s", async (mode, operation) => {
+    vi.setSystemTime(10_000);
+    const pendingRequest = createDeferred<string>();
+    const stream = createStream({ mode });
+    try {
+      if (operation === "edit") {
+        stream.update("A");
+        await stream.flush();
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      sendMessageMock.mockReturnValueOnce(pendingRequest.promise);
+      stream.update(operation === "create" ? "A" : "AB");
+      stream.update("Final answer");
+
+      const onStopped = vi.fn();
+      const stopping = stream.stop().then(onStopped);
+      stream.update("Delta while stopping");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const inFlightCalls = operation === "create" ? 1 : 2;
+      expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls);
+      expect(onStopped).not.toHaveBeenCalled();
+      pendingRequest.resolve(operation === "create" ? "$evt1" : "$edit1");
+
+      await stopping;
+      expect(onStopped).toHaveBeenCalledWith("$evt1");
+      expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls + 1);
+      expect(sentContentAt(inFlightCalls)["m.new_content"]).toMatchObject({ body: "Final answer" });
+      expect(sentContentAt(inFlightCalls)["m.relates_to"]).toEqual({
+        rel_type: "m.replace",
+        event_id: "$evt1",
+      });
+
+      stream.update("Late delta");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls + 1);
+    } finally {
+      pendingRequest.resolve("$evt1");
+      await stream.seal();
+    }
   });
 
   it("skips no-op updates", async () => {
