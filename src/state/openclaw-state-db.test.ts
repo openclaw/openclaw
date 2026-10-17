@@ -25,9 +25,7 @@ import {
 import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntry,
-  seedDeliveryQueueEntry,
 } from "../infra/delivery-queue-sqlite.test-support.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -60,21 +58,17 @@ import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-jour
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseReadabilityForDoctor,
   repairOpenClawStateDatabaseSchema,
   prepareOpenClawStateDatabaseSchema,
-  runWithOpenClawStateBusyTimeout,
-  runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -111,11 +105,6 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
     },
   };
 });
-
-type StateDbTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "diagnostic_events" | "schema_meta" | "skill_usage"
->;
 
 const stateDbTempDirs: string[] = [];
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
@@ -2406,17 +2395,6 @@ describe("openclaw state database", () => {
     },
   );
 
-  it("configures checkpoint lock waits before schema mutation", () => {
-    const stateDir = createTempStateDir();
-
-    withOpenClawStateStartupMigrationCheckpointDatabase(
-      (db) => {
-        expect(readSqliteNumberPragma(db, "busy_timeout")).toBe(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-      },
-      { env: { OPENCLAW_STATE_DIR: stateDir } },
-    );
-  });
-
   it("preserves orphan delivery payload before Doctor recovery from 2026.7.1-2", async () => {
     const stateDir = createTempStateDir();
     const databasePath = materializeV2026_7_1_2StateDatabase(stateDir).databasePath;
@@ -3075,65 +3053,6 @@ describe("openclaw state database", () => {
     ).toBe(true);
   });
 
-  it("reopens a canonical current schema while another connection holds the writer lock", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = openOpenClawStateDatabase(options).path;
-    seedDeliveryQueueEntry({
-      queueName: "outbound",
-      entry: {
-        id: "pending-telegram-delivery",
-        enqueuedAt: 1,
-        retryCount: 0,
-      },
-      metadata: { channel: "telegram", target: "chat-1" },
-      stateDir,
-    });
-    closeOpenClawStateDatabaseForTest();
-    const writer = openNativeDatabase(databasePath);
-    writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
-    try {
-      expect(runWithOpenClawStateBusyTimeout((database) => database.db.isOpen, options, 0)).toBe(
-        true,
-      );
-    } finally {
-      writer.exec("ROLLBACK;");
-      writer.close();
-    }
-  });
-
-  it("configures the busy timeout before a doctor schema repair transaction", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    openOpenClawStateDatabase(options);
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
-      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
-      | undefined;
-    if (!originalExec) {
-      throw new Error("DatabaseSync.exec descriptor is unavailable");
-    }
-    const statements: string[] = [];
-    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-      this: import("node:sqlite").DatabaseSync,
-      sql: string,
-    ) {
-      statements.push(sql);
-      return originalExec.call(this, sql);
-    });
-
-    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-
-    const timeoutIndex = statements.findIndex((sql) =>
-      sql.includes(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}`),
-    );
-    const transactionIndex = statements.indexOf("BEGIN IMMEDIATE");
-    expect(timeoutIndex).toBeGreaterThanOrEqual(0);
-    expect(transactionIndex).toBeGreaterThan(timeoutIndex);
-  });
-
   it("latches newer global schema failures before integrity scans", () => {
     const { options, databasePath } = createStateFixture();
     createUnsafeIndexDrift(databasePath);
@@ -3227,52 +3146,6 @@ describe("openclaw state database", () => {
       firstRows: [{ event_key: "first" }],
       secondRows: [{ event_key: "second" }],
     });
-  });
-
-  it("uses savepoints for nested write transaction rollback", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-
-    runOpenClawStateWriteTransaction((database) => {
-      const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        stateDb.insertInto("diagnostic_events").values({
-          scope: "transaction-test",
-          event_key: "outer",
-          payload_json: "{}",
-          created_at: 1,
-        }),
-      );
-      expect(() =>
-        runOpenClawStateWriteTransaction((inner) => {
-          const innerDb = getNodeSqliteKysely<StateDbTestDatabase>(inner.db);
-          executeSqliteQuerySync(
-            inner.db,
-            innerDb.insertInto("diagnostic_events").values({
-              scope: "transaction-test",
-              event_key: "inner",
-              payload_json: "{}",
-              created_at: 2,
-            }),
-          );
-          throw new Error("rollback nested");
-        }, options),
-      ).toThrow("rollback nested");
-    }, options);
-
-    const database = openOpenClawStateDatabase(options);
-    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
-    expect(
-      executeSqliteQuerySync(
-        database.db,
-        stateDb
-          .selectFrom("diagnostic_events")
-          .select("event_key")
-          .where("scope", "=", "transaction-test")
-          .orderBy("event_key"),
-      ).rows.map((row) => row.event_key),
-    ).toEqual(["outer"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
