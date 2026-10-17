@@ -52,6 +52,25 @@ it.afterAll(() => receipts.close());
 const compilerModule = "scripts/lib/vitest-worker-run.mts";
 const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
+function readGenerations(directory: string): string[] {
+  return fs
+    .readFileSync(path.join(directory, "generations.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+function isolatedEnv(directory: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot,
+    WINDIR: process.env.WINDIR,
+    HOME: directory,
+    USERPROFILE: directory,
+    TMPDIR: directory,
+    TMP: directory,
+    TEMP: directory,
+  };
+}
 
 function heldWorkerBorrowingProbe(directory: string) {
   const observed = path.join(directory, "generations.jsonl");
@@ -150,17 +169,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               native,
             ],
             relocated,
-            {
-              PATH: process.env.PATH,
-              SystemRoot: process.env.SystemRoot,
-              WINDIR: process.env.WINDIR,
-              HOME: relocated,
-              USERPROFILE: relocated,
-              TMPDIR: relocated,
-              TMP: relocated,
-              TEMP: relocated,
-              OPENCLAW_FS_SAFE_NATIVE_MODE: mode,
-            },
+            { ...isolatedEnv(relocated), OPENCLAW_FS_SAFE_NATIVE_MODE: mode },
           );
           expect(result.code, result.stderr + result.stdout).toBe(0);
           console.log(name, result.stdout.trim());
@@ -605,10 +614,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       ]);
       expect(result.code, result.stderr + result.stdout).toBe(0);
       expect(result.stderr).not.toContain("[vitest-workers] prepared");
-      const generation = JSON.parse(
-        fs.readFileSync(path.join(directory, "generations.jsonl"), "utf8").trim(),
-      );
-      expect(fileURLToPath(generation)).toBe(
+      const [generation] = readGenerations(directory);
+      expect(fileURLToPath(generation!)).toBe(
         path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
       );
     }));
@@ -700,6 +707,10 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             }};
           `,
             );
+            const runtimeModule = (source: string, compiled: string) =>
+              owner
+                ? pathToFileURL(path.join(owner.descriptor.directory, "dist", compiled)).href
+                : pathToFileURL(path.join(root, source)).href;
             const probe = writeFixture(
               directory,
               owner ? "provider-hook.mjs" : "provider-hook.mts",
@@ -710,16 +721,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               createEmptyPluginRegistry,getPluginRegistryState,withPluginRuntimeRegistryScope,
               clearActivePluginRegistry,setActivePluginRegistry,withPluginRuntimeGenerationScope,
               createPluginMetadataSnapshot,loadOpenClawPlugins,getPluginRuntimeLoadContext,
-            } from ${JSON.stringify(
-              pathToFileURL(
-                owner
-                  ? path.join(
-                      owner.descriptor.directory,
-                      "dist/test-support/provider-hook-scope.js",
-                    )
-                  : path.join(root, "test/scripts/provider-hook-scope.test-support.ts"),
-              ).href,
-            )};
+            } from ${JSON.stringify(runtimeModule("test/scripts/provider-hook-scope.test-support.ts", "test-support/provider-hook-scope.js"))};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
@@ -813,23 +815,17 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));
           `,
             );
-            const url = pathToFileURL(
-              owner
-                ? path.join(
-                    owner.descriptor.directory,
-                    "dist/agents/embedded-agent-runner/run/payloads.js",
-                  )
-                : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
-            );
             const result = await node(
               (workerArgv) => [
                 ...workerArgv(pathToFileURL(probe)),
-                url.href,
-                pathToFileURL(
-                  owner
-                    ? path.join(owner.descriptor.directory, "dist/plugins/provider-hook-runtime.js")
-                    : path.join(root, "src/plugins/provider-hook-runtime.ts"),
-                ).href,
+                runtimeModule(
+                  "src/agents/embedded-agent-runner/run/payloads.ts",
+                  "agents/embedded-agent-runner/run/payloads.js",
+                ),
+                runtimeModule(
+                  "src/plugins/provider-hook-runtime.ts",
+                  "plugins/provider-hook-runtime.js",
+                ),
               ],
               root,
               {
@@ -906,11 +902,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
             expect(result.code, result.stderr + result.stdout).toBe(0);
             expect(JSON.parse(fs.readFileSync(budgetReceipt, "utf8"))).toEqual(["2", "2"]);
             expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
-            const generations = fs
-              .readFileSync(path.join(directory, "generations.jsonl"), "utf8")
-              .trim()
-              .split("\n")
-              .map((line) => JSON.parse(line) as string);
+            const generations = readGenerations(directory);
             expect(generations).toHaveLength(2);
             expect(new Set(generations).size).toBe(1);
             expect(fs.existsSync(new URL(generations[0]!))).toBe(false);
@@ -945,11 +937,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
           const first = await results[0]!;
           expect(first.code, first.stderr + first.stdout).toBe(0);
           expect(secondFinished).toBe(false);
-          const generations = fs
-            .readFileSync(path.join(directory, "generations.jsonl"), "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line) as string);
+          const generations = readGenerations(directory);
           expect(new Set(generations).size).toBe(1);
           generation = generations[0]!;
           expect(fs.existsSync(new URL(generation))).toBe(true);
@@ -1000,9 +988,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
             "first",
           ]).result;
           expect(first.code, first.stderr + first.stdout).toBe(0);
-          generation = JSON.parse(
-            fs.readFileSync(path.join(directory, "generations.jsonl"), "utf8").trim(),
-          );
+          [generation] = readGenerations(directory);
           fs.rmSync(path.join(owner.descriptor.directory, "dist", missingEntry));
           const refused = await startBorrower(owner, [
             "run",
@@ -1240,33 +1226,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         "-e",
         `await import(${JSON.stringify(pathToFileURL(config).href)});`,
       ]);
-      expect(
-        imported.error === undefined,
-        JSON.stringify({
-          errors: [
-            imported.error,
-            imported.error instanceof Error ? imported.error.cause : undefined,
-          ]
-            .filter((error) => error !== undefined)
-            .map((error) =>
-              error instanceof Error
-                ? {
-                    name: error.name.slice(0, 128),
-                    message: error.message.slice(0, 2_048),
-                    code:
-                      "code" in error && typeof error.code === "string"
-                        ? error.code.slice(0, 128)
-                        : undefined,
-                  }
-                : {
-                    type: typeof error,
-                    message: typeof error === "string" ? error.slice(0, 2_048) : undefined,
-                  },
-            ),
-          stdout: imported.stdout.slice(-4_096),
-          stderr: imported.stderr.slice(-4_096),
-        }),
-      ).toBe(true);
+      expect(imported.error, imported.stderr + imported.stdout).toBeUndefined();
       expect(imported.code, imported.stderr).toBe(0);
       expect(imported.stderr).not.toContain("[vitest-workers] prepared");
       for (const args of [
@@ -1410,17 +1370,7 @@ export default class {
         const cli = await node(
           [path.join(initialDirectory, "dist/entry.js"), "--version"],
           fixture,
-          {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: fixture,
-            USERPROFILE: fixture,
-            TMPDIR: fixture,
-            TMP: fixture,
-            TEMP: fixture,
-            OPENCLAW_NO_RESPAWN: "1",
-          },
+          { ...isolatedEnv(fixture), OPENCLAW_NO_RESPAWN: "1" },
         );
         expect(cli.code, cli.stderr + cli.stdout).toBe(0);
         expect(cli.stdout).toContain(
@@ -1469,16 +1419,7 @@ export default class {
             path.join(initialDirectory, "dist/plugin-sdk/file-access-runtime.js"),
           ],
           fixture,
-          {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: fixture,
-            USERPROFILE: fixture,
-            TMPDIR: fixture,
-            TMP: fixture,
-            TEMP: fixture,
-          },
+          isolatedEnv(fixture),
         );
         expect(policy.code, policy.stderr + policy.stdout).toBe(0);
         const directories = new Map<string, Promise<string | undefined>>();

@@ -130,23 +130,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                   controlled.env,
                 );
             if (result.code !== 0) {
-              // Read the fixture's existing evidence before its assertion unwinds cleanup.
-              // The inner owner may already have removed a joined compiler's generation.
-              const manifests = (() => {
-                try {
-                  return controlled.read().map(({ directory: generation, ...receipt }) =>
-                    Object.assign(receipt, {
-                      generation: path.basename(generation),
-                      manifest:
-                        path.dirname(generation) === path.join(root, ".artifacts", "vitest-workers")
-                          ? readCompilerEvidence(path.join(generation, "manifest.json"))
-                          : { readError: "outside-worker-root" },
-                    }),
-                  );
-                } catch (error) {
-                  return { readError: (error as NodeJS.ErrnoException).code ?? "invalid-receipt" };
-                }
-              })();
+              // Capture existing receipts before fixture cleanup, without replacing the failure.
               console.error(
                 "Controlled compiler failure context",
                 JSON.stringify({
@@ -154,13 +138,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                   mode,
                   reuse,
                   code: result.code,
-                  runtime: {
-                    executable: path.basename(process.execPath),
-                    version: process.version,
-                    uv: process.versions.uv,
-                  },
                   receipts: readCompilerEvidence(path.join(directory, "fixture-compilers.jsonl")),
-                  manifests,
                 }),
               );
             }

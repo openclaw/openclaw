@@ -88,65 +88,44 @@ const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 
 it.for([
-  { name: "ordinary infra", args: ["src/infra/node-sqlite.test.ts"], prepare: false },
-  { name: "root config", config: "vitest.config.ts", args: [coreWorker], prepare: true },
-  { name: "custom config", config: "custom.config.ts", args: [coreWorker], prepare: false },
-  { name: "full channels", config: channelsConfig, args: [], prepare: true },
-  {
-    name: "focused channels",
-    config: channelsConfig,
-    args: ["src/channels/chat-type.test.ts"],
-    prepare: false,
-  },
-  { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
-  { name: "full gateway methods", config: gatewayMethodsConfig, args: [], prepare: true },
-  {
-    name: "focused gateway methods",
-    config: gatewayMethodsConfig,
-    args: ["src/gateway/server-methods/health.test.ts"],
-    prepare: false,
-  },
-  {
-    name: "empty gateway methods",
-    config: gatewayMethodsConfig,
-    args: [],
-    include: [],
-    prepare: false,
-  },
-  {
-    name: "code-mode all agents",
-    config: agentVitestProjectOwners.all.config,
-    args: [codeModeWorker],
-    prepare: true,
-  },
-  {
-    name: "code-mode full agentic config",
-    config: "test/vitest/vitest.full-agentic.config.ts",
-    args: [codeModeWorker],
-    prepare: true,
-  },
-  {
-    name: "code-mode excluded from its scoped project",
-    config: agentsCoreConfig,
-    args: [codeModeWorker, "--exclude", path.basename(codeModeWorker)],
-    prepare: false,
-  },
-  {
-    name: "code-mode omitted by include",
-    config: agentsCoreConfig,
-    args: [codeModeWorker],
-    include: ["src/agents/code-mode.test.ts"],
-    prepare: false,
-  },
-  {
-    name: "code-mode selection leaves unrelated agents lazy",
-    config: agentsCoreConfig,
-    args: ["src/agents/code-mode-runtime.test.ts"],
-    prepare: false,
-  },
-])(
-  "selects eager worker preparation for $name",
-  async ({ config = infraConfig, args, include, prepare }) => {
+  ["ordinary infra", infraConfig, ["src/infra/node-sqlite.test.ts"], false],
+  ["root config", "vitest.config.ts", [coreWorker], true],
+  ["custom config", "custom.config.ts", [coreWorker], false],
+  ["full channels", channelsConfig, [], true],
+  ["focused channels", channelsConfig, ["src/channels/chat-type.test.ts"], false],
+  ["empty channels", channelsConfig, [], false, []],
+  ["full gateway methods", gatewayMethodsConfig, [], true],
+  [
+    "focused gateway methods",
+    gatewayMethodsConfig,
+    ["src/gateway/server-methods/health.test.ts"],
+    false,
+  ],
+  ["empty gateway methods", gatewayMethodsConfig, [], false, []],
+  ["code-mode all agents", agentVitestProjectOwners.all.config, [codeModeWorker], true],
+  [
+    "code-mode full agentic config",
+    "test/vitest/vitest.full-agentic.config.ts",
+    [codeModeWorker],
+    true,
+  ],
+  [
+    "code-mode excluded",
+    agentsCoreConfig,
+    [codeModeWorker, "--exclude", path.basename(codeModeWorker)],
+    false,
+  ],
+  [
+    "code-mode omitted by include",
+    agentsCoreConfig,
+    [codeModeWorker],
+    false,
+    ["src/agents/code-mode.test.ts"],
+  ],
+  ["unrelated agents stay lazy", agentsCoreConfig, ["src/agents/code-mode-runtime.test.ts"], false],
+] satisfies Array<[string, string, string[], boolean, string[]?]>)(
+  "selects eager worker preparation for %s",
+  async ([, config, args, prepare, include]) => {
     const { shouldPrepareVitestCoreWorkers } =
       await import("../../scripts/lib/vitest-runtime-selection.mts");
     expect(shouldPrepareVitestCoreWorkers(config, ["run", ...args], {}, include)).toBe(prepare);
