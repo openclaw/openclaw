@@ -65,14 +65,17 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
+import {
+  buildRelatedPageIndex,
+  selectRelatedPages,
+  type RelatedPageIndex,
+} from "./related-pages.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
-const MAX_RELATED_PAGES_PER_SECTION = 12;
-const MAX_SHARED_SOURCE_FANOUT = 24;
 
 type DashboardPageDefinition = {
   title: string;
@@ -627,29 +630,6 @@ function formatClaimContradictionClusterLine(
   return `- \`${cluster.label}\`: ${entries.join(" | ")}`;
 }
 
-function normalizeComparableTarget(value: string): string {
-  return normalizeLowercaseStringOrEmpty(
-    value
-      .trim()
-      .replace(/\\/g, "/")
-      .replace(/\.md$/i, "")
-      .replace(/^\.\/+/, "")
-      .replace(/\/+$/, ""),
-  );
-}
-
-function uniquePages(pages: WikiPageSummary[]): WikiPageSummary[] {
-  const seen = new Set<string>();
-  return pages.filter((page) => {
-    const key = page.id ?? page.relativePath;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
 function renderWikiPageLinks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
@@ -667,48 +647,9 @@ function renderWikiPageLinks(params: {
 function buildRelatedBlockBody(
   config: ResolvedMemoryWikiConfig,
   page: WikiPageSummary,
-  candidates: WikiPageSummary[],
-  pagesById: Map<string, WikiPageSummary>,
+  index: RelatedPageIndex,
 ): string {
-  const otherPages = candidates.filter((candidate) => candidate.relativePath !== page.relativePath);
-  const sourceIds = new Set(page.sourceIds);
-  const sourceFanout = countBy(
-    otherPages.flatMap((candidate) => candidate.sourceIds.filter((id) => sourceIds.has(id))),
-  );
-  const sourcePages = uniquePages(page.sourceIds.flatMap((id) => pagesById.get(id) ?? []));
-  const backlinkKeys = new Set(
-    [
-      page.relativePath,
-      path.posix.basename(page.relativePath),
-      page.title,
-      ...(page.id ? [page.id] : []),
-    ].map(normalizeComparableTarget),
-  );
-  const backlinks = uniquePages(
-    otherPages.filter(
-      (candidate) =>
-        candidate.sourceIds.includes(page.id ?? "") ||
-        candidate.linkTargets.some((target) =>
-          backlinkKeys.has(normalizeComparableTarget(target.split("#")[0] ?? "")),
-        ),
-    ),
-  );
-  const backlinkPages =
-    backlinks.length <= MAX_SHARED_SOURCE_FANOUT
-      ? backlinks.slice(0, MAX_RELATED_PAGES_PER_SECTION)
-      : [];
-  const excluded = new Set([...sourcePages, ...backlinkPages].map((entry) => entry.relativePath));
-  const relatedPages = uniquePages(
-    otherPages.filter(
-      (candidate) =>
-        !excluded.has(candidate.relativePath) &&
-        page.sourceIds.some(
-          (id) =>
-            candidate.sourceIds.includes(id) &&
-            (sourceFanout.get(id) ?? 0) <= MAX_SHARED_SOURCE_FANOUT,
-        ),
-    ),
-  ).slice(0, MAX_RELATED_PAGES_PER_SECTION);
+  const { sourcePages, backlinkPages, relatedPages } = selectRelatedPages(page, index);
   const groups: Array<[string, WikiPageSummary[]]> = [
     ["Sources", sourcePages],
     ["Referenced By", backlinkPages],
@@ -735,10 +676,7 @@ async function refreshPageRelatedBlocks(params: {
   }
   const root = await fsRoot(params.config.vault.path);
   const updatedFiles: string[] = [];
-  const candidates = params.pages.filter((page) => page.kind !== "report");
-  const pagesById = new Map(
-    candidates.flatMap((page) => (page.id ? [[page.id, page] as const] : [])),
-  );
+  const index = buildRelatedPageIndex(params.pages);
   for (const page of params.pages) {
     params.signal?.throwIfAborted();
     if (page.kind === "report") {
@@ -757,7 +695,7 @@ async function refreshPageRelatedBlocks(params: {
         heading: "## Related",
         startMarker: WIKI_RELATED_START_MARKER,
         endMarker: WIKI_RELATED_END_MARKER,
-        body: buildRelatedBlockBody(params.config, page, candidates, pagesById),
+        body: buildRelatedBlockBody(params.config, page, index),
       }),
     );
     if (updated === original) {
