@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../api.js";
+import type { OpenClawConfig, ReplyPayload } from "../api.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
 import { createRuntime } from "./channel.sendPayload.test-support.js";
@@ -29,14 +29,17 @@ function pushReply(chat: string) {
   rememberInboundMessage(`inbound-${chat}`, `token-${chat}`, `C${chat}`, "default");
   const { runtime, mocks } = createRuntime();
   setLineRuntime(runtime);
+  const context = {
+    cfg: { channels: { line: {} } } as OpenClawConfig,
+    to: `line:group:C${chat}`,
+    replyToId: `inbound-${chat}`,
+    accountId: "default",
+  };
   return {
     mocks,
-    context: {
-      cfg: { channels: { line: {} } } as OpenClawConfig,
-      to: `line:group:C${chat}`,
-      replyToId: `inbound-${chat}`,
-      accountId: "default",
-    },
+    context,
+    send: (payload: ReplyPayload) =>
+      lineOutboundAdapter.sendPayload!({ ...context, text: payload.text ?? "", payload }),
   };
 }
 
@@ -90,14 +93,10 @@ describe("the reply-token delivery path", () => {
 
 describe("the push delivery path", () => {
   it("quotes the first chunk of a reply that answers a message", async () => {
-    const { context, mocks } = pushReply("push");
+    const { send, mocks } = pushReply("push");
     mocks.chunkMarkdownText.mockImplementation((text: string) => text.split("|"));
 
-    await lineOutboundAdapter.sendPayload!({
-      ...context,
-      text: "first|second",
-      payload: { text: "first|second" },
-    });
+    await send({ text: "first|second" });
 
     expect(mocks.pushMessageLine.mock.calls.map((args) => [args[1], args[2].quoteToken])).toEqual([
       ["first", "token-push"],
@@ -106,13 +105,8 @@ describe("the push delivery path", () => {
   });
 
   it("quotes the text that carries the quick replies when that is the only text", async () => {
-    const { context, mocks } = pushReply("quick");
-
-    await lineOutboundAdapter.sendPayload!({
-      ...context,
-      text: "pick one",
-      payload: { text: "pick one", channelData: { line: { quickReplies: ["Yes", "No"] } } },
-    });
+    const { send, mocks } = pushReply("quick");
+    await send({ text: "pick one", channelData: { line: { quickReplies: ["Yes", "No"] } } });
 
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledExactlyOnceWith(
       "line:group:Cquick",
@@ -125,10 +119,7 @@ describe("the push delivery path", () => {
   it("quotes a plain-text send routed through the message adapter", async () => {
     const { context, mocks } = pushReply("adapter");
 
-    await lineMessageAdapter.send!.text!({
-      ...context,
-      text: "answering you",
-    });
+    await lineMessageAdapter.send!.text!({ ...context, text: "answering you" });
 
     expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
       "line:group:Cadapter",
@@ -161,18 +152,14 @@ describe("the push delivery path", () => {
   });
 
   it("quotes the first text of a reply whose leading part cannot carry a quote", async () => {
-    const { context, mocks } = pushReply("ordered");
+    const { send, mocks } = pushReply("ordered");
     mocks.resolveTextChunkLimit.mockReturnValue(5000);
     mocks.chunkMarkdownText.mockImplementation((text: string) =>
       chunkMarkdownTextForLine(text, 5000),
     );
     const markdown = "```js\nfirst()\n```\n\nAfter the card";
 
-    await lineOutboundAdapter.sendPayload!({
-      ...context,
-      text: markdown,
-      payload: { text: markdown },
-    });
+    await send({ text: markdown });
 
     expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
     expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(

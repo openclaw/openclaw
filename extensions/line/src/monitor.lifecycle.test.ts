@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { webhook } from "@line/bot-sdk";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -21,7 +22,7 @@ const { createLineBotMock, registerWebhookTargetWithPluginRouteMock, unregisterH
     createLineBotMock: vi.fn((_options: LineBotOptions) => ({
       account: { accountId: "default" },
       handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
-      stop: vi.fn(),
+      stop: vi.fn(async () => undefined),
     })),
     registerWebhookTargetWithPluginRouteMock: vi.fn(),
     unregisterHttpMock: vi.fn(),
@@ -29,76 +30,46 @@ const { createLineBotMock, registerWebhookTargetWithPluginRouteMock, unregisterH
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
 
-type RegisteredRoute = {
-  accountId?: string;
-  auth?: string;
-  handler?: LineNodeWebhookHandler;
-};
-
-type RegisteredTarget = {
-  accountId?: string;
-  path: string;
-};
-
 type WebhookRegistration = {
-  route: RegisteredRoute;
-  target: RegisteredTarget;
+  route: { accountId?: string; auth?: string; handler?: LineNodeWebhookHandler };
+  target: { accountId?: string; path: string };
 };
 
 function requireWebhookRegistration(): WebhookRegistration {
   const registration = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0] as
     | WebhookRegistration
     | undefined;
-  if (!registration) {
-    throw new Error("expected registered LINE webhook target");
-  }
-  return registration;
+  return expectDefined(registration, "registered LINE webhook target");
 }
 
 function requireRegisteredRoute(): { handler: LineNodeWebhookHandler } {
-  const route = requireWebhookRegistration().route;
-  if (!route.handler) {
-    throw new Error("expected registered LINE webhook route");
-  }
-  return { handler: route.handler };
+  return {
+    handler: expectDefined(requireWebhookRegistration().route.handler, "LINE webhook route"),
+  };
 }
 
 function requireBot(index = 0) {
-  const bot = createLineBotMock.mock.results[index]?.value;
-  if (!bot) {
-    throw new Error("expected registered LINE webhook bot");
-  }
-  return bot;
+  return expectDefined(createLineBotMock.mock.results[index]?.value, "registered LINE webhook bot");
 }
 
-vi.mock("./bot.js", () => ({
-  createLineBot: createLineBotMock,
-}));
+vi.mock("./bot.js", () => ({ createLineBot: createLineBotMock }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
-    "openclaw/plugin-sdk/runtime-env",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
     danger: (value: unknown) => String(value),
     logVerbose: vi.fn(),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-ingress")>(
-    "openclaw/plugin-sdk/webhook-ingress",
-  );
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
     registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
   };
 });
 
-vi.mock("./auto-reply-delivery.js", () => ({
-  deliverLineAutoReply: vi.fn(),
-}));
+vi.mock("./auto-reply-delivery.js", () => ({ deliverLineAutoReply: vi.fn() }));
 
 function startMonitor(options: Partial<Parameters<typeof monitorLineProvider>[0]> = {}) {
   return monitorLineProvider({
@@ -112,17 +83,26 @@ function startMonitor(options: Partial<Parameters<typeof monitorLineProvider>[0]
 
 type OnMessage = LineBotOptions["onMessage"];
 type InboundFixture = Partial<
-  Pick<Parameters<OnMessage>[0], "ctxPayload" | "replyToken" | "isGroup" | "userId" | "skillFilter">
-> & { route?: Pick<Parameters<OnMessage>[0]["route"], "accountId" | "agentId" | "sessionKey"> };
-function dispatchInbound(input: InboundFixture, cfg: OpenClawConfig = {}) {
-  const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
-  if (!onMessage) {
-    throw new Error("expected the LINE inbound message handler");
-  }
+  Pick<Parameters<OnMessage>[0], "replyToken" | "isGroup" | "userId" | "skillFilter">
+> & { from?: string; body?: string; agentId?: string; sessionKey?: string };
+function dispatchInbound(
+  {
+    from = "line:U1",
+    body = "hi",
+    agentId = "main",
+    sessionKey = "line:C1",
+    ...input
+  }: InboundFixture,
+  cfg: OpenClawConfig = {},
+) {
+  const onMessage = expectDefined(
+    createLineBotMock.mock.calls[0]?.[0]?.onMessage,
+    "LINE inbound handler",
+  );
   return onMessage(
     {
-      ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
-      route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+      ctxPayload: { From: from, MessageSid: "m1", RawBody: body },
+      route: { accountId: "default", agentId, sessionKey },
       isGroup: false,
       accountId: "default",
       turn: { record: {} },
@@ -149,6 +129,7 @@ async function captureTurn() {
 }
 
 const webhookPayload = JSON.stringify({ events: [{ type: "message" }] });
+const directUserId = "U0123456789abcdef0123456789abcdef";
 const sign = (body: string, secret = "secret") =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
 function signedRequest(secret = "secret") {
@@ -156,6 +137,19 @@ function signedRequest(secret = "secret") {
     method: "POST",
     headers: { "x-line-signature": sign(webhookPayload, secret) },
   }) as unknown as IncomingMessage;
+}
+
+async function expectWebhookResponse(
+  response: Response,
+  status: number,
+  body: unknown,
+  marker: string | null = null,
+) {
+  expect({
+    status: response.status,
+    marker: response.headers.get("x-openclaw-delivery-accepted"),
+    body: await response.json(),
+  }).toEqual({ status, marker, body });
 }
 
 describe("monitorLineProvider lifecycle", () => {
@@ -172,12 +166,7 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   beforeEach(() => {
-    createLineBotMock.mockReset();
-    createLineBotMock.mockImplementation(() => ({
-      account: { accountId: "default" },
-      handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
-      stop: vi.fn(async () => undefined),
-    }));
+    createLineBotMock.mockClear();
     unregisterHttpMock.mockReset();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
       const withLeadingSlash = params.target.path.startsWith("/")
@@ -269,24 +258,13 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("registers the configured defaultAccount when accountId is omitted", async () => {
     const monitor = await startMonitor({
-      config: {
-        channels: {
-          line: {
-            defaultAccount: "work",
-            accounts: {
-              work: {
-                channelAccessToken: "work-token",
-                channelSecret: "work-secret",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: { channels: { line: { defaultAccount: "work", accounts: { work: {} } } } },
     });
 
-    const registration = requireWebhookRegistration();
-    expect(registration.target.accountId).toBe("work");
-    expect(registration.route.accountId).toBe("work");
+    expect(requireWebhookRegistration()).toMatchObject({
+      target: { accountId: "work" },
+      route: { accountId: "work" },
+    });
 
     await monitor.stop();
   });
@@ -308,29 +286,20 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it.each([
-    { from: "line:U0123456789abcdef0123456789abcdef", question: true, prompt: true, native: true },
-    {
-      from: "line:U0123456789abcdef0123456789abcdef",
-      question: true,
-      prompt: false,
-      native: false,
-    },
-    { from: "unknown", question: true, prompt: true, native: false },
-    {
-      from: "line:group:C0123456789abcdef0123456789abcdef",
-      question: false,
-      prompt: false,
-      native: true,
-    },
-  ])(
-    "prepares native=$native question=$question prompt=$prompt replies for $from",
-    async ({ from, question, prompt, native }) => {
+    [`line:${directUserId}`, true, true, true],
+    [`line:${directUserId}`, true, false, false],
+    ["unknown", true, true, false],
+    ["line:group:C0123456789abcdef0123456789abcdef", false, false, true],
+  ] as const)(
+    "prepares replies for %s (question=%s, prompt=%s, native=%s)",
+    async (from, question, prompt, native) => {
       const resolvedTurn = await captureTurn();
       const monitor = await startMonitor();
 
       try {
         await dispatchInbound({
-          ctxPayload: { From: from, MessageSid: "m1", RawBody: "approve?" },
+          from,
+          body: "approve?",
           replyToken: "reply-token",
           isGroup: !from.startsWith("line:U"),
         });
@@ -409,25 +378,13 @@ describe("monitorLineProvider lifecycle", () => {
     const monitor = await startMonitor();
     vi.useFakeTimers();
     const task = dispatchInbound(
-      {
-        ctxPayload: {
-          From: "line:U0123456789abcdef0123456789abcdef",
-          MessageSid: "m1",
-          RawBody: "hi",
-        },
-        route: {
-          accountId: "default",
-          agentId: "main",
-          sessionKey: "line:U0123456789abcdef0123456789abcdef",
-        },
-        userId: "U0123456789abcdef0123456789abcdef",
-      },
+      { from: `line:${directUserId}`, sessionKey: `line:${directUserId}`, userId: directUserId },
       { channels: { line: { channelAccessToken: "token" } } },
     );
     try {
       await entered.promise;
       expect(loading).toHaveBeenCalledWith({
-        chatId: "U0123456789abcdef0123456789abcdef",
+        chatId: directUserId,
         loadingSeconds: 20,
       });
       await vi.advanceTimersByTimeAsync(18_000);
@@ -445,47 +402,30 @@ describe("monitorLineProvider lifecycle", () => {
     }
   });
 
-  it("paces block replies with the humanDelay the turn's own config carries", async () => {
+  it.each<[string, InboundFixture, OpenClawConfig, unknown]>([
+    [
+      "dispatcherOptions.humanDelay",
+      { replyToken: "reply-token", agentId: "ops", sessionKey: "line:U1" },
+      {
+        agents: {
+          defaults: { humanDelay: { mode: "natural" } },
+          entries: { ops: { humanDelay: { mode: "custom", minMs: 3_000, maxMs: 4_000 } } },
+        },
+      },
+      { mode: "custom", minMs: 3_000, maxMs: 4_000 },
+    ],
+    [
+      "replyOptions.skillFilter",
+      { from: "line:group:C1", isGroup: true, skillFilter: ["triage"] },
+      {},
+      ["triage"],
+    ],
+  ])("carries %s into the turn", async (path, input, cfg, expected) => {
     const resolvedTurn = await captureTurn();
     const monitor = await startMonitor();
-
     try {
-      await dispatchInbound(
-        {
-          ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
-          replyToken: "reply-token",
-          route: { accountId: "default", agentId: "ops", sessionKey: "line:U1" },
-        },
-        {
-          agents: {
-            defaults: { humanDelay: { mode: "natural" } },
-            entries: { ops: { humanDelay: { mode: "custom", minMs: 3_000, maxMs: 4_000 } } },
-          },
-        },
-      );
-
-      expect(resolvedTurn()?.dispatcherOptions?.humanDelay).toEqual({
-        mode: "custom",
-        minMs: 3_000,
-        maxMs: 4_000,
-      });
-    } finally {
-      await monitor.stop();
-    }
-  });
-
-  it("carries a group's skill scope into the turn that answers it", async () => {
-    const resolvedTurn = await captureTurn();
-    const monitor = await startMonitor();
-
-    try {
-      await dispatchInbound({
-        ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "hi" },
-        isGroup: true,
-        skillFilter: ["triage"],
-      });
-
-      expect(resolvedTurn()?.replyOptions?.skillFilter).toEqual(["triage"]);
+      await dispatchInbound(input, cfg);
+      expect(resolvedTurn()).toHaveProperty(path, expected);
     } finally {
       await monitor.stop();
     }
@@ -493,20 +433,17 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("dispatches shared-path webhook posts to the account matching the signature", async () => {
     const firstMonitor = await startMonitor({
-      channelAccessToken: "first-token",
       channelSecret: "first-secret", // pragma: allowlist secret
       accountId: "first",
       webhookPath: "/Line//Webhook/",
     });
     const secondMonitor = await startMonitor({
-      channelAccessToken: "second-token",
       channelSecret: "second-secret", // pragma: allowlist secret
       accountId: "second",
     });
 
     const registration = requireWebhookRegistration();
-    expect(registration.target.path).toBe("/Line//Webhook");
-    expect(registration.target.accountId).toBe("first");
+    expect(registration.target).toMatchObject({ path: "/Line//Webhook", accountId: "first" });
     expect(registration.route).toMatchObject({
       accountId: "first",
       auth: "plugin",
@@ -560,27 +497,18 @@ describe("monitorLineProvider lifecycle", () => {
               body,
             });
           const rejected = await post(webhookPayload, "invalid-signature");
-          expect(rejected.status).toBe(401);
-          expect(rejected.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-          expect(await rejected.json()).toEqual({ error: "Invalid signature" });
+          await expectWebhookResponse(rejected, 401, { error: "Invalid signature" });
 
           const bot = requireBot();
           expect(bot.handleWebhook).not.toHaveBeenCalled();
 
           const verificationPayload = JSON.stringify({ events: [] });
           const verification = await post(verificationPayload);
-          expect(verification.status).toBe(200);
-          expect(verification.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-          expect(await verification.json()).toEqual({ status: "ok" });
+          await expectWebhookResponse(verification, 200, { status: "ok" });
           expect(bot.handleWebhook).not.toHaveBeenCalled();
 
-          let releaseAdmission: (() => void) | undefined;
-          bot.handleWebhook.mockImplementationOnce(
-            () =>
-              new Promise<Awaited<ReturnType<LineHandleWebhook>>>((resolve) => {
-                releaseAdmission = () => resolve("durable");
-              }),
-          );
+          const admission = createDeferred<Awaited<ReturnType<LineHandleWebhook>>>();
+          bot.handleWebhook.mockReturnValueOnce(admission.promise);
           let acceptedResponseReceived = false;
           const acceptedRequest = post().then((response) => {
             acceptedResponseReceived = true;
@@ -590,14 +518,9 @@ describe("monitorLineProvider lifecycle", () => {
             expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
           });
           expect(acceptedResponseReceived).toBe(false);
-          if (!releaseAdmission) {
-            throw new Error("expected pending LINE durable admission");
-          }
-          releaseAdmission();
+          admission.resolve("durable");
           const accepted = await acceptedRequest;
-          expect(accepted.status).toBe(200);
-          expect(accepted.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-          expect(await accepted.json()).toEqual({ status: "ok" });
+          await expectWebhookResponse(accepted, 200, { status: "ok" }, "durable");
 
           const bearerToken = "test_line_access_token_1234567890";
           bot.handleWebhook.mockRejectedValueOnce({
@@ -607,9 +530,7 @@ describe("monitorLineProvider lifecycle", () => {
           });
           const response = await post();
 
-          expect(response.status).toBe(500);
-          expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-          expect(await response.json()).toEqual({ error: "Internal server error" });
+          await expectWebhookResponse(response, 500, { error: "Internal server error" });
           expect(bot.handleWebhook).toHaveBeenCalledTimes(2);
           expect(runtimeError).toHaveBeenCalledTimes(1);
           const message = String(runtimeError.mock.calls[0]?.[0]);
@@ -660,10 +581,8 @@ describe("monitorLineProvider lifecycle", () => {
               ] as const) {
                 const body = JSON.stringify({ destination: "fixture-bot", events });
                 const admittedResponse = await post(body);
-                expect(admittedResponse.status).toBe(200);
                 expect((await queue.listPending()).map((entry) => entry.id)).toEqual(expectedIds);
-                expect(admittedResponse.headers.get("x-openclaw-delivery-accepted")).toBe(marker);
-                expect(await admittedResponse.json()).toEqual({ status: "ok" });
+                await expectWebhookResponse(admittedResponse, 200, { status: "ok" }, marker);
               }
               spool.start();
               await vi.waitFor(() => expect(delivered).toEqual([active]));
@@ -680,12 +599,10 @@ describe("monitorLineProvider lifecycle", () => {
 
   it("rejects ambiguous shared-path webhook signatures", async () => {
     const firstMonitor = await startMonitor({
-      channelAccessToken: "first-token",
       channelSecret: "shared-secret", // pragma: allowlist secret
       accountId: "first",
     });
     const secondMonitor = await startMonitor({
-      channelAccessToken: "second-token",
       channelSecret: "shared-secret", // pragma: allowlist secret
       accountId: "second",
     });

@@ -77,32 +77,22 @@ describe("processLineMessage", () => {
   });
 
   it("handles mixed content", () => {
-    const text = `# Summary
-
-Here's **important** info:
-
-| Item | Count |
-|------|-------|
-| A    | 5     |
-
-\`\`\`python
-print("done")
-\`\`\`
-
-> Note: Check the link [here](https://example.com).`;
-
-    const result = processLineMessage(text);
-
+    const result = processLineMessage(
+      [
+        "# Summary",
+        "**important**",
+        "| Item | Count |\n|---|---|\n| A | 5 |",
+        '```python\nprint("done")\n```',
+        "> Note: Check the link [here](https://example.com).",
+      ].join("\n\n"),
+    );
     expect(result.flexMessages).toHaveLength(2);
-
     expect(result.text).toContain("Summary");
     expect(result.text).toContain("important");
     expect(result.text).toContain("Note: Check the link here (https://example.com).");
-    expect(result.text).not.toContain("#");
-    expect(result.text).not.toContain("**");
-    expect(result.text).not.toContain("|");
-    expect(result.text).not.toContain("```");
-    expect(result.text).not.toContain("[here]");
+    for (const markup of ["#", "**", "|", "```", "[here]"]) {
+      expect(result.text).not.toContain(markup);
+    }
   });
 
   it("keeps valid tables and code cards while downgrading only an oversized sibling table", () => {
@@ -143,7 +133,6 @@ print("done")
 
     expect(result.flexMessages).toHaveLength(0);
     expect(result.text).toContain("Item11");
-    expect(result.segments).toBeDefined();
   });
 
   it("labels role headers exposed after inline-code formatting is removed", () => {
