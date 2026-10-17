@@ -1,4 +1,3 @@
-// Agent session command tests cover session resolution, agent scoping, and temp-home session stores.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
@@ -41,15 +40,36 @@ function mockConfig(
   };
 }
 
-async function writeSessionStoreSeed(
-  storePath: string,
-  sessions: Record<string, SessionEntry>,
-): Promise<void> {
-  await Promise.all(
-    Object.entries(sessions).map(([sessionKey, entry]) =>
-      replaceSessionEntry({ sessionKey, storePath }, entry),
-    ),
+async function seedTerminalSession(home: string, mainKey: string, status?: SessionEntry["status"]) {
+  const storePath = path.join(home, "sessions.json");
+  const sessionKey = `agent:main:${mainKey}`;
+  const sessionId = "stale-terminal-main";
+  const updatedAt = Date.now() - 10_000;
+  const entry: SessionEntry = {
+    sessionId,
+    sessionFile: path.join(home, "terminal-main.jsonl"),
+    updatedAt,
+    ...(status ? { status } : {}),
+    sessionStartedAt: updatedAt - 60_000,
+    lastInteractionAt: updatedAt - 30_000,
+    startedAt: updatedAt - 1_000,
+    endedAt: updatedAt - 100,
+    runtimeMs: 900,
+    cliSessionBindings: {
+      "claude-cli": { sessionId: "old-claude-cli-session" },
+      "codex-cli": { sessionId: "old-codex-cli-session" },
+    },
+    cliSessionIds: { "claude-cli": "old-claude-cli-session", "codex-cli": "old-codex-cli-session" },
+    claudeCliSessionId: "old-claude-cli-session",
+  };
+  await replaceSessionEntry({ sessionKey, storePath }, entry);
+  await appendTranscriptEvent(
+    { agentId: "main", sessionId, sessionKey, storePath },
+    { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
   );
+  const cfg = mockConfig(home, storePath);
+  cfg.session = { ...cfg.session, mainKey };
+  return { cfg, sessionId, updatedAt };
 }
 
 async function withCrossAgentResumeFixture(
@@ -74,9 +94,7 @@ async function withCrossAgentResumeFixture(
 
 beforeEach(() => {
   clearSessionStoreCacheForTest();
-  // Freshness fixtures seed times relative to Date.now(); near the 04:00
-  // local daily-reset boundary the seeded window straddles it and reuse
-  // scenarios flip to new sessions. Pin local noon so no timezone can hit it.
+  // Keep freshness fixtures away from the local 04:00 daily-reset boundary.
   vi.useFakeTimers({ toFake: ["Date"] });
   const localNoon = new Date();
   localNoon.setHours(12, 0, 0, 0);
@@ -161,8 +179,9 @@ describe("agent session resolution", () => {
   it("uses origin.provider for channel-specific session reset overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      await writeSessionStoreSeed(store, {
-        "agent:main:main": {
+      await replaceSessionEntry(
+        { storePath: store, sessionKey: "agent:main:main" },
+        {
           sessionId: "origin-provider-reset",
           updatedAt: Date.now() - 30 * 60_000,
           delivery: normalizeSessionDeliveryState({
@@ -170,7 +189,7 @@ describe("agent session resolution", () => {
             origin: { provider: "quietchat" },
           }),
         },
-      });
+      );
       const cfg = mockConfig(home, store);
       cfg.session = {
         ...cfg.session,
@@ -182,68 +201,27 @@ describe("agent session resolution", () => {
 
       const resolution = await resolveSession({ cfg, sessionKey: "main" });
 
-      expect(resolution.sessionId).toBe("origin-provider-reset");
-      expect(resolution.isNewSession).toBe(false);
+      expect(resolution).toMatchObject({ sessionId: "origin-provider-reset", isNewSession: false });
     });
   });
 
-  it("uses explicit outcomes when a main transcript is newer than the registry", async () => {
-    const scenarios = [
+  it.each([
       ["canonical done main", "done"],
       ["raw done main alias", "done", "main", "main"],
       ["custom done main alias", "done", "work"],
       ["killed main", "killed"],
       ["endedAt-only main", undefined],
-    ] as const;
-    for (const [
-      label,
-      status,
-      mainKey = "main",
-      requestedSessionKey = "agent:main:main",
-    ] of scenarios) {
+  ] as const)(
+    "uses explicit outcomes for %s with a newer transcript",
+    async (label, status, mainKey = "main", requestedSessionKey = "agent:main:main") => {
       const storedSessionKey = `agent:main:${mainKey}`;
       const expectNewSession = status === "killed";
       await withTempHome(async (home) => {
-        const store = path.join(home, "sessions.json");
-        const sessionFile = path.join(home, `session-${label.replaceAll(" ", "-")}.jsonl`);
-        const sessionId = `stale-terminal-${label.replaceAll(" ", "-")}`;
-        const registryUpdatedAt = Date.now() - 10_000;
-        await writeSessionStoreSeed(store, {
-          [storedSessionKey]: {
-            sessionId,
-            sessionFile,
-            updatedAt: registryUpdatedAt,
-            ...(status ? { status } : {}),
-            sessionStartedAt: registryUpdatedAt - 60_000,
-            lastInteractionAt: registryUpdatedAt - 30_000,
-            startedAt: registryUpdatedAt - 1_000,
-            endedAt: registryUpdatedAt - 100,
-            cliSessionBindings: {
-              "claude-cli": { sessionId: "old-claude-cli-session" },
-              "codex-cli": { sessionId: "old-codex-cli-session" },
-            },
-            cliSessionIds: {
-              "claude-cli": "old-claude-cli-session",
-              "codex-cli": "old-codex-cli-session",
-            },
-            claudeCliSessionId: "old-claude-cli-session",
-          },
-        });
-        await appendTranscriptEvent(
-          {
-            agentId: "main",
-            sessionId,
-            sessionKey: storedSessionKey,
-            storePath: store,
-          },
-          { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
-        );
-        const cfg = mockConfig(home, store);
-        cfg.session = { ...cfg.session, mainKey };
+        const { cfg, sessionId, updatedAt } = await seedTerminalSession(home, mainKey, status);
 
         const resolution = await resolveSession({ cfg, sessionKey: requestedSessionKey });
 
-        expect(resolution).toMatchObject({
+        expect(resolution, label).toMatchObject({
           sessionKey: storedSessionKey,
           isNewSession: expectNewSession,
         });
@@ -251,7 +229,7 @@ describe("agent session resolution", () => {
           expect(resolution.sessionId).toBe(sessionId);
           expect(resolution.sessionEntry?.status).toBe(status);
           if (status === undefined) {
-            expect(resolution.sessionEntry?.endedAt).toBe(registryUpdatedAt - 100);
+            expect(resolution.sessionEntry?.endedAt).toBe(updatedAt - 100);
           }
           return;
         }
@@ -271,36 +249,12 @@ describe("agent session resolution", () => {
           expect(resolution.sessionEntry?.[key], key).toBeUndefined();
         }
       });
-    }
-  });
+    },
+  );
 
   it("preserves explicit session-id resumes for stale terminal main rows", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const sessionFile = path.join(home, "explicit-terminal-main.jsonl");
-      const sessionId = "explicit-terminal-main";
-      const registryUpdatedAt = Date.now() - 10_000;
-      await writeSessionStoreSeed(store, {
-        "agent:main:main": {
-          sessionId,
-          sessionFile,
-          updatedAt: registryUpdatedAt,
-          status: "done",
-          startedAt: registryUpdatedAt - 1_000,
-          endedAt: registryUpdatedAt - 100,
-          runtimeMs: 900,
-        },
-      });
-      await appendTranscriptEvent(
-        {
-          agentId: "main",
-          sessionId,
-          sessionKey: "agent:main:main",
-          storePath: store,
-        },
-        { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
-      );
-      const cfg = mockConfig(home, store);
+      const { cfg, sessionId, updatedAt } = await seedTerminalSession(home, "main", "done");
 
       const resolution = await resolveSession({ cfg, sessionId });
 
@@ -320,8 +274,8 @@ describe("agent session resolution", () => {
         expect(entry).toMatchObject({
           sessionId,
           status: "done",
-          startedAt: registryUpdatedAt - 1_000,
-          endedAt: registryUpdatedAt - 100,
+          startedAt: updatedAt - 1_000,
+          endedAt: updatedAt - 100,
           runtimeMs: 900,
         });
       }

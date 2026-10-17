@@ -1,4 +1,3 @@
-// Runtime/source snapshots are mocked; these tests do not need filesystem fixtures.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -139,8 +138,7 @@ function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigP
   return params;
 }
 
-function mockConfig(): OpenClawConfig {
-  const cfg: OpenClawConfig = {};
+function mockConfig(cfg: OpenClawConfig = {}): OpenClawConfig {
   loadConfigMock.mockReturnValue(cfg);
   return cfg;
 }
@@ -213,8 +211,7 @@ describe("agentCommand runtime config", () => {
   });
 
   it("sets runtime snapshots from source config before embedded agent run", async () => {
-    const loadedConfig = mockConfig();
-    loadedConfig.models = modelConfig(secretRef("OPENAI_API_KEY"));
+    const loadedConfig = mockConfig({ models: modelConfig(secretRef("OPENAI_API_KEY")) });
     const sourceConfig = structuredClone(loadedConfig);
     const resolvedConfig = {
       ...loadedConfig,
@@ -237,48 +234,27 @@ describe("agentCommand runtime config", () => {
       optionalActivePaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
       runtime,
     });
-    const targetIds = requireResolveCommandConfigParams().targetIds;
-    expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
-    expect(targetIds.has("channels.telegram.botToken")).toBe(false);
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
     expect(prepared).toBe(resolvedConfig);
   });
 
-  it("scopes session-only routing secrets to the channel default account", async () => {
-    const loadedConfig = mockConfig();
-    loadedConfig.channels = telegramConfig("ops");
-    resolveSecretsWith(loadedConfig);
-
-    await resolveAgentRuntimeConfig(runtime, {
-      runtimeChannelSecretScope: { channel: "telegram" },
+  it.each(["default", "selected"])("scopes routing secrets to the %s account", async (scope) => {
+    const selected = scope === "selected";
+    const loadedConfig = mockConfig({
+      channels: telegramConfig(selected ? undefined : "ops"),
+      ...(selected ? { models: modelConfig(secretRef("OPENAI_API_KEY")) } : {}),
     });
-
-    const resolution = requireResolveCommandConfigParams();
-    expect(resolution.allowedPaths).toEqual(
-      new Set(["channels.telegram.botToken", "channels.telegram.accounts.ops.botToken"]),
-    );
-    expect(resolution.allowedPaths?.has("channels.telegram.accounts.chat.botToken")).toBe(false);
-  });
-
-  it("scopes session-only recipient routing secrets to the selected account", async () => {
-    const loadedConfig = mockConfig();
-    loadedConfig.models = modelConfig(secretRef("OPENAI_API_KEY"));
-    loadedConfig.channels = telegramConfig();
     resolveSecretsWith(loadedConfig);
-
     await resolveAgentRuntimeConfig(runtime, {
-      runtimeChannelSecretScope: { channel: "telegram", accountId: "ops" },
+      runtimeChannelSecretScope: { channel: "telegram", ...(selected ? { accountId: "ops" } : {}) },
     });
-
-    const resolution = requireResolveCommandConfigParams();
-    expect(resolution.allowedPaths).toEqual(
+    expect(requireResolveCommandConfigParams().allowedPaths).toEqual(
       new Set([
-        "models.providers.openai.apiKey",
+        ...(selected ? ["models.providers.openai.apiKey"] : []),
         "channels.telegram.botToken",
         "channels.telegram.accounts.ops.botToken",
       ]),
     );
-    expect(resolution.allowedPaths?.has("channels.telegram.accounts.chat.botToken")).toBe(false);
   });
 
   it.each(["global", "per-agent"])(

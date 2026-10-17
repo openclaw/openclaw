@@ -1,13 +1,11 @@
-// Agent delivery tests cover command result delivery to reply payloads and CLI dependencies.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverAgentCommandResult } from "../agents/command/delivery.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async (_params: DeliveryCall) => []),
@@ -19,27 +17,18 @@ const mocks = vi.hoisted(() => ({
 }));
 
 type DeliveryCall = {
-  accountId?: string;
-  session?: {
-    agentId?: string;
-    key?: string;
-  };
+  session?: { agentId?: string; key?: string };
 };
 
 type ResolveTargetCall = {
   accountId?: string;
   channel?: string;
-  mode?: string;
   to?: string;
 };
 
 function onlyCall<T>(mock: { mock: { calls: [T][] } }): T {
   expect(mock).toHaveBeenCalledOnce();
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected call");
-  }
-  return call[0];
+  return mock.mock.calls[0]?.[0] ?? expect.fail("Expected call");
 }
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -72,34 +61,25 @@ describe("deliverAgentCommandResult", () => {
     };
   }
 
-  function createRuntime(): RuntimeEnv {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-    } as unknown as RuntimeEnv;
-  }
-
   async function runDelivery(params: {
-    opts: Record<string, unknown>;
+    opts?: Partial<Parameters<typeof deliverAgentCommandResult>[0]["opts"]>;
     outboundSession?: { key?: string; agentId?: string };
     sessionEntry?: SessionEntry;
     runtime?: RuntimeEnv;
     resultText?: string;
     payloads?: ReplyPayload[];
   }) {
-    const cfg = {} as OpenClawConfig;
-    const deps = {} as CliDeps;
-    const runtime = params.runtime ?? createRuntime();
+    const runtime = params.runtime ?? createTestRuntime();
     const result = {
       payloads: params.payloads ?? [{ text: params.resultText ?? "hi" }],
       meta: { durationMs: 1 },
     };
 
     const deliveryResult = await deliverAgentCommandResult({
-      cfg,
-      deps,
+      cfg: {},
+      deps: {},
       runtime,
-      opts: params.opts as never,
+      opts: { message: "hello", ...params.opts },
       outboundSession: params.outboundSession,
       sessionEntry: params.sessionEntry,
       result,
@@ -115,14 +95,7 @@ describe("deliverAgentCommandResult", () => {
   });
 
   it("stays silent for intentional empty payloads", async () => {
-    const runtime = createRuntime();
-
-    await runDelivery({
-      opts: { message: "hello" },
-      runtime,
-      payloads: [],
-    });
-
+    const { runtime } = await runDelivery({ payloads: [] });
     expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
@@ -130,7 +103,6 @@ describe("deliverAgentCommandResult", () => {
   it("uses runContext turn source over stale session last route", async () => {
     await runDelivery({
       opts: {
-        message: "hello",
         deliver: true,
         runContext: {
           messageChannel: "whatsapp",
@@ -151,26 +123,21 @@ describe("deliverAgentCommandResult", () => {
   it("does not reuse session lastTo when runContext source omits currentChannelId", async () => {
     await runDelivery({
       opts: {
-        message: "hello",
         deliver: true,
         runContext: { messageChannel: "whatsapp" },
       },
       sessionEntry: sessionEntry({ channel: "slack", to: "U_WRONG" }),
     });
 
-    const targetCall = onlyCall(mocks.resolveOutboundTarget);
-    expect(targetCall.channel).toBe("whatsapp");
-    expect(targetCall.to).toBeUndefined();
+    expect(onlyCall(mocks.resolveOutboundTarget)).toMatchObject({
+      channel: "whatsapp",
+      to: undefined,
+    });
   });
 
   it("uses caller-provided outbound session context when opts.sessionKey is absent", async () => {
     await runDelivery({
-      opts: {
-        message: "hello",
-        deliver: true,
-        channel: "whatsapp",
-        to: "+15551234567",
-      },
+      opts: { deliver: true, channel: "whatsapp", to: "+15551234567" },
       outboundSession: { key: "agent:exec:hook:gmail:thread-1", agentId: "exec" },
     });
 
@@ -183,19 +150,15 @@ describe("deliverAgentCommandResult", () => {
   it.each(["nested", "nested:agent:main:child"])(
     "retains %s replies without logging them",
     async (lane) => {
-      const runtime = createRuntime();
-      const { deliveryResult } = await runDelivery({
-        runtime,
+      const { runtime, deliveryResult } = await runDelivery({
         resultText: "Private child reply\nsecond private line",
         opts: {
-          message: "hello",
           deliver: false,
           lane,
           sessionKey: "agent:ebao-next:quietchat:channel:1",
           runId: "run-announce",
           messageChannel: "webchat",
         },
-        sessionEntry: undefined,
       });
 
       expect(deliveryResult.payloads).toEqual([
@@ -206,12 +169,8 @@ describe("deliverAgentCommandResult", () => {
   );
 
   it("prints interactive CLI replies through the output writer", async () => {
-    const runtime = { ...createRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
-    const { deliveryResult } = await runDelivery({
-      runtime,
-      resultText: "CLI reply",
-      opts: { message: "hello" },
-    });
+    const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
+    const { deliveryResult } = await runDelivery({ runtime, resultText: "CLI reply" });
 
     expect(deliveryResult.payloads).toEqual([expect.objectContaining({ text: "CLI reply" })]);
     expect(runtime.writeStdout).toHaveBeenCalledWith("CLI reply");
