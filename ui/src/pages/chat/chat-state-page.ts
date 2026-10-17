@@ -653,9 +653,8 @@ export function createPageState(
       item.release?.();
       return;
     }
-    const video = item.kind === "video";
     const resolveSrc = (src: string) =>
-      video
+      item.kind === "video"
         ? safeMediaAttachmentHref(src, "video")
         : resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
     const safeSrc = resolveSrc(item.src);
