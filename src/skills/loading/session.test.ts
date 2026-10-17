@@ -7,63 +7,60 @@ import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function writeRawSkill(dir: string, raw: string) {
+  await fs.mkdir(dir, { recursive: true });
+  const filePath = path.join(dir, "SKILL.md");
+  await fs.writeFile(filePath, raw, "utf-8");
+  return filePath;
+}
+
 function loadSkillsFromPath(dir: string) {
   return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir], includeDefaults: false });
 }
 
 describe("loadSingleSkillDirectory", () => {
-  it.each([false])(
-    "keeps cached content isolated from caller mutations, paths and read limits (declared name: %s)",
-    async (declaredName) => {
-      const root = tempDirs.make("openclaw-skill-content-cache-");
-      const raw = [
-        "---",
-        ...(declaredName ? ["name: shared-cache-facts"] : []),
-        "description: Cached instructions",
-        "---",
-        "Instructions without a heading.",
-      ].join("\n");
-      for (const name of ["first-copy", "second-copy"]) {
-        const dir = path.join(root, name);
-        await fs.mkdir(dir);
-        await fs.writeFile(path.join(dir, "SKILL.md"), raw);
-      }
-      const firstParams = {
-        skillDir: path.join(root, "first-copy"),
-        rootRealPath: await fs.realpath(root),
-        source: "openclaw-bundled",
-      };
-      const first = loadSingleSkillDirectory(firstParams)!;
-      const hash = first.skill.contentHash;
-      first.frontmatter.description = "Caller mutation";
-      first.skill.description = "Caller mutation";
-      first.skill.sourceInfo.scope = "temporary";
-      expect(loadSingleSkillDirectory({ ...firstParams, maxBytes: 1 })).toBeNull();
+  it("keeps cached content isolated from caller mutations, paths and read limits", async () => {
+    const root = tempDirs.make("openclaw-skill-content-cache-");
+    const raw = "---\ndescription: Cached instructions\n---\nInstructions without a heading.";
+    for (const name of ["first-copy", "second-copy"]) {
+      const dir = path.join(root, name);
+      await writeRawSkill(dir, raw);
+    }
+    const firstParams = {
+      skillDir: path.join(root, "first-copy"),
+      rootRealPath: await fs.realpath(root),
+      source: "openclaw-bundled",
+    };
+    const first = loadSingleSkillDirectory(firstParams)!;
+    const hash = first.skill.contentHash;
+    first.frontmatter.description = "Caller mutation";
+    first.skill.description = "Caller mutation";
+    first.skill.sourceInfo.scope = "temporary";
+    expect(loadSingleSkillDirectory({ ...firstParams, maxBytes: 1 })).toBeNull();
 
-      const skillDir = path.join(root, "second-copy");
-      const second = loadSingleSkillDirectory({
-        ...firstParams,
-        skillDir,
-        source: "openclaw-workspace",
-      });
-      expect(second?.frontmatter.description).toBe("Cached instructions");
-      expect(second?.skill).toMatchObject({
-        name: declaredName ? "shared-cache-facts" : "second-copy",
-        displayName: declaredName ? "Shared Cache Facts" : "Second Copy",
-        description: "Cached instructions",
-        contentHash: hash,
-        filePath: path.join(skillDir, "SKILL.md"),
+    const skillDir = path.join(root, "second-copy");
+    const second = loadSingleSkillDirectory({
+      ...firstParams,
+      skillDir,
+      source: "openclaw-workspace",
+    });
+    expect(second?.frontmatter.description).toBe("Cached instructions");
+    expect(second?.skill).toMatchObject({
+      name: "second-copy",
+      displayName: "Second Copy",
+      description: "Cached instructions",
+      contentHash: hash,
+      filePath: path.join(skillDir, "SKILL.md"),
+      baseDir: skillDir,
+      source: "openclaw-workspace",
+      sourceInfo: {
+        path: path.join(skillDir, "SKILL.md"),
         baseDir: skillDir,
         source: "openclaw-workspace",
-        sourceInfo: {
-          path: path.join(skillDir, "SKILL.md"),
-          baseDir: skillDir,
-          source: "openclaw-workspace",
-          scope: "project",
-        },
-      });
-    },
-  );
+        scope: "project",
+      },
+    });
+  });
 });
 
 describe("loadSkills", () => {
@@ -76,22 +73,24 @@ describe("loadSkills", () => {
       const skillRoot =
         source === "user" ? path.join(agentDir, "skills") : path.join(cwd, ".openclaw", "skills");
       const skillDir = path.join(skillRoot, " padded-name");
-      const filePath = path.join(skillDir, "SKILL.md");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        filePath,
+      const filePath = await writeRawSkill(
+        skillDir,
         '---\ndescription: "  Padded metadata.  "\ndisable-model-invocation: true\n---\n# Shared Title\n',
       );
 
       const session = loadSkills({ cwd, agentDir, skillPaths: [filePath], includeDefaults: false });
+      const sharedSkill = {
+        displayName: "Shared Title",
+        description: "Padded metadata.",
+        contentHash: expect.any(String),
+        filePath,
+        baseDir: skillDir,
+        disableModelInvocation: true,
+      };
       expect(session.skills).toEqual([
         {
+          ...sharedSkill,
           name: " padded-name",
-          displayName: "Shared Title",
-          description: "Padded metadata.",
-          contentHash: expect.any(String),
-          filePath,
-          baseDir: skillDir,
           source,
           sourceInfo: {
             path: filePath,
@@ -100,7 +99,6 @@ describe("loadSkills", () => {
             origin: "top-level",
             baseDir: skillDir,
           },
-          disableModelInvocation: true,
         },
       ]);
       expect(session.diagnostics).toEqual([
@@ -119,12 +117,9 @@ describe("loadSkills", () => {
         onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
       });
       expect(local?.skill).toEqual({
+        ...sharedSkill,
         name: "padded-name",
-        displayName: "Shared Title",
-        description: "Padded metadata.",
         contentHash: session.skills[0]!.contentHash,
-        filePath,
-        baseDir: skillDir,
         source: "workspace",
         sourceInfo: {
           path: filePath,
@@ -133,7 +128,6 @@ describe("loadSkills", () => {
           origin: "top-level",
           baseDir: skillDir,
         },
-        disableModelInvocation: true,
       });
       expect(diagnostics).toEqual([]);
     },
@@ -155,12 +149,9 @@ describe("loadSkills", () => {
   it("does not load dash-prefixed Markdown as frontmatter", async () => {
     const tempDir = tempDirs.make("openclaw-skill-scan-");
     const skillDir = path.join(tempDir, "dash-prefix");
-    await fs.mkdir(skillDir);
-    const skillFile = path.join(skillDir, "SKILL.md");
-    await fs.writeFile(
-      skillFile,
+    const skillFile = await writeRawSkill(
+      skillDir,
       "----\nname: bogus\ndescription: must remain Markdown\n---\n# Body\n",
-      "utf-8",
     );
 
     const result = loadSkillsFromPath(tempDir);
@@ -176,27 +167,13 @@ describe("loadSkills", () => {
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
     const tempDir = tempDirs.make("openclaw-skill-scan-");
     const brokenDir = path.join(tempDir, "broken");
-    const validDir = path.join(tempDir, "valid");
-    await fs.mkdir(brokenDir);
-    await fs.mkdir(validDir);
-    const brokenFile = path.join(brokenDir, "SKILL.md");
-    await fs.writeFile(
-      brokenFile,
-      `---
-name: [broken
-description: Broken skill
----
-`,
-      "utf-8",
+    const brokenFile = await writeRawSkill(
+      brokenDir,
+      "---\nname: [broken\ndescription: Broken skill\n---\n",
     );
-    await fs.writeFile(
-      path.join(validDir, "SKILL.md"),
-      `---
-name: valid
-description: Valid sibling
----
-`,
-      "utf-8",
+    await writeRawSkill(
+      path.join(tempDir, "valid"),
+      "---\nname: valid\ndescription: Valid sibling\n---\n",
     );
 
     const result = loadSkillsFromPath(tempDir);

@@ -18,6 +18,9 @@ vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
 }));
 
+const skill = (dir: string, name: string, description = name) =>
+  writeSkill({ dir, name, description });
+
 let fakeHome = "";
 let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
@@ -75,11 +78,7 @@ async function createEscapedBundledSkillFixture(params?: {
   const outsideDir = params?.outsideDir ?? (await createTempWorkspaceDir());
   const bundledDir = path.join(workspaceDir, ".bundled");
   const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
-  await writeSkill({
-    dir: escapedSkillDir,
-    name: "outside-bundled-skill",
-    description: "Outside bundled",
-  });
+  await skill(escapedSkillDir, "outside-bundled-skill", "Outside bundled");
   await fs.mkdir(bundledDir, { recursive: true });
   const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
   await fs.symlink(escapedSkillDir, requestedPath, "dir");
@@ -118,11 +117,11 @@ describe("skill path containment", () => {
         name: rejectedSkillName,
         description: `Untrusted ${source} hardlink`,
       });
-      await writeSkill({
-        dir: path.join(skillRoot, acceptedSkillName),
-        name: acceptedSkillName,
-        description: `Ordinary ${source} skill`,
-      });
+      await skill(
+        path.join(skillRoot, acceptedSkillName),
+        acceptedSkillName,
+        `Ordinary ${source} skill`,
+      );
       const warn = captureWarningLogger();
 
       const entries = loadTestWorkspaceSkills(workspaceDir);
@@ -145,11 +144,7 @@ describe("skill path containment", () => {
       const workspaceDir = await createTempWorkspaceDir();
       const outsideDir = await createTempWorkspaceDir();
       const escapedSkillDir = path.join(outsideDir, "outside-skill");
-      await writeSkill({
-        dir: escapedSkillDir,
-        name: "outside-skill",
-        description: "Outside",
-      });
+      await skill(escapedSkillDir, "outside-skill", "Outside");
       await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
       const requestedPath = path.join(workspaceDir, "skills", "escaped-skill");
       await fs.symlink(escapedSkillDir, requestedPath, "dir");
@@ -157,11 +152,7 @@ describe("skill path containment", () => {
       await fs.mkdir(fileLinkSkillDir, { recursive: true });
       await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(fileLinkSkillDir, "SKILL.md"));
       const targetDir = path.join(workspaceDir, "safe-target");
-      await writeSkill({
-        dir: targetDir,
-        name: "symlink-target",
-        description: "Target skill",
-      });
+      await skill(targetDir, "symlink-target", "Target skill");
       const symlinkedSkillDir = path.join(workspaceDir, "skills", "symlinked");
       await fs.mkdir(symlinkedSkillDir, { recursive: true });
       await fs.symlink(path.join(targetDir, "SKILL.md"), path.join(symlinkedSkillDir, "SKILL.md"));
@@ -192,11 +183,7 @@ describe("skill path containment", () => {
       const workshopSkillsDir = resolveWorkshopSkillsDir(config, "main");
       const outsideDir = await createTempWorkspaceDir();
       const outsideSkillDir = path.join(outsideDir, "outside-workshop-skill");
-      await writeSkill({
-        dir: outsideSkillDir,
-        name: "outside-workshop-skill",
-        description: "Outside Workshop",
-      });
+      await skill(outsideSkillDir, "outside-workshop-skill", "Outside Workshop");
       await fs.mkdir(workshopSkillsDir, { recursive: true });
       await fs.symlink(
         outsideSkillDir,
@@ -220,11 +207,7 @@ describe("skill path containment", () => {
       const skillName = `manager-${++workspaceCaseIndex}`;
       const targetRoot = path.join(tempRoot, `${skillName}-skills`);
       const targetSkillDir = path.join(targetRoot, skillName);
-      await writeSkill({
-        dir: targetSkillDir,
-        name: skillName,
-        description: "Manager skill",
-      });
+      await skill(targetSkillDir, skillName, "Manager skill");
       const workspaceSkillsDir = path.join(workspaceDir, "skills");
       await fs.mkdir(workspaceSkillsDir, { recursive: true });
       const symlinkPath = path.join(workspaceSkillsDir, skillName);
@@ -260,11 +243,7 @@ describe("skill path containment", () => {
       const outsideDir = path.join(tempRoot, `${skillName}-outside`);
       await fs.mkdir(targetSkillDir, { recursive: true });
       await fs.mkdir(outsideDir, { recursive: true });
-      await writeSkill({
-        dir: outsideDir,
-        name: skillName,
-        description: "Escaped metadata",
-      });
+      await skill(outsideDir, skillName, "Escaped metadata");
       await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(targetSkillDir, "SKILL.md"));
       await fs.mkdir(managedDir, { recursive: true });
       const symlinkPath = path.join(managedDir, skillName);
@@ -315,18 +294,10 @@ describe("skill path containment", () => {
       const workspaceDir = await createTempWorkspaceDir();
       const repoDir = await createTempWorkspaceDir();
       const outsideDir = await createTempWorkspaceDir();
-      await writeSkill({
-        dir: path.join(outsideDir, "linked"),
-        name: "outside-linked-skill",
-        description: "Outside linked skill",
-      });
+      await skill(path.join(outsideDir, "linked"), "outside-linked-skill", "Outside linked skill");
       await fs.mkdir(path.join(repoDir, "examples"), { recursive: true });
       await fs.symlink(outsideDir, path.join(repoDir, "examples", "linked"), "dir");
-      await writeSkill({
-        dir: path.join(repoDir, "skills", "group", "valid"),
-        name: "repo-nested-skill",
-        description: "Valid nested repo skill",
-      });
+      await skill(path.join(repoDir, "skills", "group", "valid"), "repo-nested-skill");
 
       const names = loadTestWorkspaceSkills(workspaceDir, {
         config: {
@@ -348,18 +319,10 @@ describe("skill path containment", () => {
       const repoDir = await createTempWorkspaceDir();
       const targetRoot = path.join(tempRoot, `linked-root-${workspaceCaseIndex++}`);
       const targetSkillDir = path.join(targetRoot, "linked-skill");
-      await writeSkill({
-        dir: targetSkillDir,
-        name: "linked-skill",
-        description: "Allowed linked skill",
-      });
+      await skill(targetSkillDir, "linked-skill", "Allowed linked skill");
       await fs.mkdir(path.join(repoDir, "group"), { recursive: true });
       await fs.symlink(targetSkillDir, path.join(repoDir, "group", "linked-skill"), "dir");
-      await writeSkill({
-        dir: path.join(repoDir, "skills", "group", "valid"),
-        name: "repo-nested-skill",
-        description: "Valid nested repo skill",
-      });
+      await skill(path.join(repoDir, "skills", "group", "valid"), "repo-nested-skill");
 
       const names = loadTestWorkspaceSkills(workspaceDir, {
         config: {
