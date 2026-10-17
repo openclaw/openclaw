@@ -260,6 +260,9 @@ const ERROR_PATTERNS = {
     /\bdoes not have a valid coding\s*plan subscription\b/i,
     // Z.ai: error 1311 = model not included in current subscription plan (#48988)
     ZAI_BILLING_CODE_1311_RE,
+    // Bailian/DashScope documented billing errors vs 429 TPS/TPM throttles
+    // (PrepaidBillOverdue / PostpaidBillOverdue, #148236/#148275).
+    /prepaidbilloverdue|postpaidbilloverdue|bill\s*overdue/i,
     /\bcurrent\s+subscription\s+plan\b.*\b(?:does\s+not|doesn't|not)\b.*\binclude\s+access\b/i,
     /\bmodel\b.*\bnot\s+available\b.*\bcurrent\s+plan\b/i,
   ],

@@ -427,7 +427,9 @@ describe("Qwen DashScope 429 profile classification", () => {
       "billing",
     ],
     ["qwen", "insufficient_quota", "Free allocated quota exceeded.", "billing"],
-    ["qwen", "insufficient_quota", "Unknown quota condition", "billing"],
+    // Bailian 429/insufficient_quota without a billing marker is a TPS/TPM
+    // throttle, not billing (#148236): the vendor hook owns this verdict.
+    ["qwen", "insufficient_quota", "Unknown quota condition", "rate_limit"],
   ])("classifies %s %s (%s) as %s", async (provider, code, message, reason, metadata) => {
     const result = await runThroughFailureRecovery({
       provider,
