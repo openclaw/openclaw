@@ -72,7 +72,7 @@ function mountTranscript(
 async function searchTranscript(pane: RecoveryTranscriptElement, query: string) {
   if (!pane.querySelector(".agent-chat__search-bar input")) {
     toggleTranscriptSearch(pane.props.paneId);
-    await pane.updateComplete;
+    await pane.settleUpdates();
   }
   const input = expectDefined(
     pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
@@ -80,7 +80,7 @@ async function searchTranscript(pane: RecoveryTranscriptElement, query: string) 
   );
   input.value = query;
   input.dispatchEvent(new Event("input", { bubbles: true }));
-  await pane.updateComplete;
+  await pane.settleUpdates();
 }
 
 describe("chat transcript full-message recovery", () => {
