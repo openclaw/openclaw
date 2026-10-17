@@ -25,7 +25,10 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
 
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import { resolveBundledChannelMessageToolDiscoveryAdapter } from "../../channels/plugins/message-tool-api.js";
-import type { ChannelMessageActionDiscoveryContext } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionDiscoveryContext,
+  ChannelMessageToolDiscovery,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { settlePreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -49,6 +52,17 @@ const options = {
   agentSessionKey: `agent:main:googlechat:group:${foldedSpace}`,
 };
 const request = { config: {}, action: "send" as const, params: {} };
+
+function makeCatalog(channels: PreparedMessageToolCatalog["channels"]): PreparedMessageToolCatalog {
+  return { version: 1, channels, getChannel: (id) => channels.find((entry) => entry.id === id) };
+}
+
+function discoveryChannel(
+  id: string,
+  describeMessageTool: () => ChannelMessageToolDiscovery,
+): PreparedMessageToolCatalog["channels"][number] {
+  return { id, reconcilesUnknownSend: false, actions: { describeMessageTool } };
+}
 
 describe("session-derived message destinations", () => {
   beforeEach(() => {
@@ -143,11 +157,7 @@ describe("session-derived message destinations", () => {
             },
           ]
         : [];
-      const catalog = {
-        version: 1,
-        channels,
-        getChannel: (id: string) => channels.find((entry) => entry.id === id),
-      };
+      const catalog = makeCatalog(channels);
       expect(
         (
           await resolveEffectiveCurrentChannelContextForRequest(options, {
@@ -200,57 +210,35 @@ describe("session-derived message destinations", () => {
 describe("message tool discovery cache stability", () => {
   it("limits actions and fields to the session's channel bindings with stable bytes", async () => {
     const channels: PreparedMessageToolCatalog["channels"] = [
-      {
-        id: "qa-primary",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: ["send", "react"],
-            schema: {
-              visibility: "all-configured",
-              properties: { primaryLabel: Type.Optional(Type.String()) },
-            },
-          }),
+      discoveryChannel("qa-primary", () => ({
+        actions: ["send", "react"],
+        schema: {
+          visibility: "all-configured",
+          properties: { primaryLabel: Type.Optional(Type.String()) },
         },
-      },
-      {
-        id: "qa-secondary",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: ["send", "poll"],
-            capabilities: ["presentation"],
-            schema: {
-              visibility: "all-configured",
-              properties: { ballotLabel: Type.Optional(Type.String()) },
-            },
-          }),
+      })),
+      discoveryChannel("qa-secondary", () => ({
+        actions: ["send", "poll"],
+        capabilities: ["presentation"],
+        schema: {
+          visibility: "all-configured",
+          properties: { ballotLabel: Type.Optional(Type.String()) },
         },
-      },
-      {
-        id: "qa-unrelated",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: ["event-create"],
-            schema: {
-              visibility: "all-configured",
-              properties: { unrelatedLabel: Type.Optional(Type.String()) },
-            },
-          }),
+      })),
+      discoveryChannel("qa-unrelated", () => ({
+        actions: ["event-create"],
+        schema: {
+          visibility: "all-configured",
+          properties: { unrelatedLabel: Type.Optional(Type.String()) },
         },
-      },
+      })),
     ];
     const discover = (bindings: OpenClawConfig["bindings"], orderedChannels = channels) =>
       resolveMessageToolDiscoveryAsync({
         cfg: { bindings },
         agentId: "main",
         currentChannelProvider: "qa-primary",
-        preparedMessageToolCatalog: {
-          version: 1,
-          channels: orderedChannels,
-          getChannel: (id) => orderedChannels.find((channel) => channel.id === id),
-        },
+        preparedMessageToolCatalog: makeCatalog(orderedChannels),
       });
     const single = await discover([]);
     expect(single.actions).toEqual(["react", "send"]);
@@ -286,16 +274,8 @@ describe("message tool discovery cache stability", () => {
     { allow: ["read", "edit", "read"], expected: ["edit", "read"] },
   ])("keeps schema bytes stable across channel discovery order ($allow)", ({ allow, expected }) => {
     const channels: PreparedMessageToolCatalog["channels"] = [
-      {
-        id: "telegram",
-        reconcilesUnknownSend: false,
-        actions: { describeMessageTool: () => ({ actions: ["send", "react", "poll"] }) },
-      },
-      {
-        id: "discord",
-        reconcilesUnknownSend: false,
-        actions: { describeMessageTool: () => ({ actions: ["send", "poll", "poll-vote"] }) },
-      },
+      discoveryChannel("telegram", () => ({ actions: ["send", "react", "poll"] })),
+      discoveryChannel("discord", () => ({ actions: ["send", "poll", "poll-vote"] })),
     ];
     const createTool = (
       orderedChannels: PreparedMessageToolCatalog["channels"],
@@ -311,11 +291,7 @@ describe("message tool discovery cache stability", () => {
         },
         agentId: "main",
         currentChannelProvider,
-        preparedMessageToolCatalog: {
-          version: 1,
-          channels: orderedChannels,
-          getChannel: (id: string) => orderedChannels.find((channel) => channel.id === id),
-        },
+        preparedMessageToolCatalog: makeCatalog(orderedChannels),
       };
       const actions = resolveMessageToolActionSchemaActions(params);
       return {
@@ -347,25 +323,15 @@ describe("message tool discovery without a current channel", () => {
   ])("keeps the fields needed by $actions", ({ allow, actions, compact }) => {
     const deliveryTag = Type.Optional(Type.String());
     const channels: PreparedMessageToolCatalog["channels"] = [
-      {
-        id: "telegram",
-        reconcilesUnknownSend: false,
-        actions: {
-          describeMessageTool: () => ({
-            actions: compact ? ["send"] : ["send", "react"],
-            capabilities: ["presentation", "delivery-pin"],
-            schema: { visibility: "all-configured", properties: { deliveryTag } },
-          }),
-        },
-      },
+      discoveryChannel("telegram", () => ({
+        actions: compact ? ["send"] : ["send", "react"],
+        capabilities: ["presentation", "delivery-pin"],
+        schema: { visibility: "all-configured", properties: { deliveryTag } },
+      })),
     ];
     const params: MessageToolDiscoveryParams = {
       cfg: { tools: { message: { actions: { allow } } } },
-      preparedMessageToolCatalog: {
-        version: 1,
-        channels,
-        getChannel: (id) => channels.find((channel) => channel.id === id),
-      },
+      preparedMessageToolCatalog: makeCatalog(channels),
     };
     const discovered = resolveMessageToolActionSchemaActions(params);
     const schema = buildMessageToolSchema(params, discovered);

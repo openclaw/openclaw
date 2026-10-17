@@ -95,6 +95,18 @@ function invokeBodies(command: string) {
     .filter((body) => body.command === command);
 }
 
+async function observedTool() {
+  const tool = createMobileUiTool();
+  await tool.execute("observe-1", { action: "observe" });
+  return tool;
+}
+
+const activation = {
+  action: "act",
+  snapshotId: "snapshot-1",
+  mobileAction: { type: "activate", ref: "n1" },
+};
+
 describe("createMobileUiTool", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
@@ -169,8 +181,7 @@ describe("createMobileUiTool", () => {
 
   it("rejects swipes longer than Android's gesture-duration limit", async () => {
     installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
     await expect(
       tool.execute("act-1", {
@@ -191,8 +202,7 @@ describe("createMobileUiTool", () => {
 
   it("gives long actions headroom in both gateway and node timeouts", async () => {
     installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
     await tool.execute("act-1", {
       action: "act",
@@ -211,15 +221,9 @@ describe("createMobileUiTool", () => {
   it("surfaces target_stale and requires use of the fresh snapshot", async () => {
     const code = "target_stale";
     installGatewayBehavior({ outcome: { code, message: "Observe again" } });
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
-    const result = await tool.execute("act-1", {
-      action: "act",
-      snapshotId: "snapshot-1",
-      mobileAction: { type: "activate", ref: "n1" },
-      confirmed: true,
-    });
+    const result = await tool.execute("act-1", { ...activation, confirmed: true });
 
     expect(result.details).toMatchObject({
       outcome: { code, message: "Observe again" },
@@ -242,15 +246,9 @@ describe("createMobileUiTool", () => {
       }
       throw new Error("accessibility service disconnected");
     });
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
-    const result = await tool.execute("act-1", {
-      action: "act",
-      snapshotId: "snapshot-1",
-      mobileAction: { type: "activate", ref: "n1" },
-      confirmed: true,
-    });
+    const result = await tool.execute("act-1", { ...activation, confirmed: true });
 
     expect(result.details).toEqual({
       outcome: { code: "completed", message: null },
@@ -260,14 +258,9 @@ describe("createMobileUiTool", () => {
         message: "accessibility service disconnected",
       },
     });
-    await expect(
-      tool.execute("act-2", {
-        action: "act",
-        snapshotId: "snapshot-1",
-        mobileAction: { type: "activate", ref: "n1" },
-        confirmed: true,
-      }),
-    ).rejects.toThrow(/observe again before acting/);
+    await expect(tool.execute("act-2", { ...activation, confirmed: true })).rejects.toThrow(
+      /observe again before acting/,
+    );
     expect(invokeBodies(ACT)).toHaveLength(1);
   });
 
@@ -341,14 +334,9 @@ describe("createMobileUiTool", () => {
         text: "Send message",
       }),
     });
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
-    const result = await tool.execute("act-1", {
-      action: "act",
-      snapshotId: "snapshot-1",
-      mobileAction: { type: "activate", ref: "n1" },
-    });
+    const result = await tool.execute("act-1", activation);
 
     expect(result.details).toEqual({
       code: "confirmation_required",
@@ -361,14 +349,9 @@ describe("createMobileUiTool", () => {
 
   it("fails closed for a non-matching activate, then dispatches it when confirmed", async () => {
     installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
-    const confirmation = await tool.execute("act-unconfirmed", {
-      action: "act",
-      snapshotId: "snapshot-1",
-      mobileAction: { type: "activate", ref: "n1" },
-    });
+    const confirmation = await tool.execute("act-unconfirmed", activation);
     expect(confirmation.details).toEqual({
       code: "confirmation_required",
       package: "example.app",
@@ -378,20 +361,14 @@ describe("createMobileUiTool", () => {
     expect(invokeBodies(ACT)).toHaveLength(0);
 
     await expect(
-      tool.execute("act-confirmed", {
-        action: "act",
-        snapshotId: "snapshot-1",
-        mobileAction: { type: "activate", ref: "n1" },
-        confirmed: true,
-      }),
+      tool.execute("act-confirmed", { ...activation, confirmed: true }),
     ).resolves.toMatchObject({ details: { outcome: { code: "completed" } } });
     expect(invokeBodies(ACT)).toHaveLength(1);
   });
 
   it("requires confirmation for set_text and dispatches only when confirmed", async () => {
     installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
     const args = {
       action: "act",
       snapshotId: "snapshot-1",
@@ -408,8 +385,7 @@ describe("createMobileUiTool", () => {
 
   it("requires confirmation for blind taps and dispatches only when confirmed", async () => {
     installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
     const args = {
       action: "act",
       snapshotId: "snapshot-1",
@@ -431,8 +407,7 @@ describe("createMobileUiTool", () => {
 
   it("fails closed for blind swipes", async () => {
     installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
     await expect(
       tool.execute("swipe-unconfirmed", {
@@ -455,8 +430,7 @@ describe("createMobileUiTool", () => {
     ["global navigation", { type: "global_action", name: "home" }],
   ])("does not require confirmation for %s", async (_label, mobileAction) => {
     installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
+    const tool = await observedTool();
 
     await expect(
       tool.execute("act-1", { action: "act", snapshotId: "snapshot-1", mobileAction }),

@@ -57,6 +57,24 @@ function configWithDefaults(
   return { agents: { defaults } };
 }
 
+function musicTool(
+  primary = "minimax/music-2.6",
+  options: NonNullable<Parameters<typeof createMusicGenerateTool>[0]> = {},
+) {
+  return expectMusicGenerateTool(
+    createMusicGenerateTool({
+      config: configWithDefaults({ mediaModels: { music: { primary } } }),
+      ...options,
+    }),
+  );
+}
+
+function registerMusicProvider(overrides: Partial<MusicGenerationProvider> = {}) {
+  musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([
+    { id: "minimax", defaultModel: "music-2.6", models: ["music-2.6"], ...overrides },
+  ]);
+}
+
 const mediaActivityMocks = vi.hoisted(() => ({
   listOperations: vi.fn(),
 }));
@@ -192,29 +210,13 @@ function generateMusicOptions(
   return options as Record<string, unknown>;
 }
 
-function taskProgressCall(callIndex = 0): Record<string, unknown> {
-  const call = taskExecutorMocks.recordProgress.mock.calls[callIndex]?.[0];
+function callArgument(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex = 0,
+): Record<string, unknown> {
+  const call = mock.mock.calls[callIndex]?.[0];
   if (!call || typeof call !== "object") {
-    throw new Error(`expected task progress call ${callIndex}`);
-  }
-  return call as Record<string, unknown>;
-}
-
-function taskCompleteCall(callIndex = 0): Record<string, unknown> {
-  const call = taskExecutorMocks.completeOperation.mock.calls[callIndex]?.[0];
-  if (!call || typeof call !== "object") {
-    throw new Error(`expected task complete call ${callIndex}`);
-  }
-  return call as Record<string, unknown>;
-}
-
-function wakeCompletionCall(callIndex = 0): Record<string, unknown> {
-  const call =
-    musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mock.calls[
-      callIndex
-    ]?.[0];
-  if (!call || typeof call !== "object") {
-    throw new Error(`expected wake completion call ${callIndex}`);
+    throw new Error(`expected call argument ${callIndex}`);
   }
   return call as Record<string, unknown>;
 }
@@ -242,11 +244,9 @@ describe("createMusicGenerateTool", () => {
       })),
     };
     musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([provider]);
-    musicGenerationRuntimeMocks.generateMusic.mockResolvedValue({
+    mockGeneratedMusic({
       provider: "music-plugin",
       model: "deployment",
-      attempts: [],
-      ignoredOverrides: [],
       tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
     });
     mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("deployment.mp3", 5));
@@ -307,25 +307,16 @@ describe("createMusicGenerateTool", () => {
           listProviders: () => providers,
         }),
     );
-    mediaStoreMocks.saveMediaBuffer.mockResolvedValue({
-      path: "/tmp/reference-score.wav",
-      id: "reference-score.wav",
-      size: generatedWav.byteLength,
-      contentType: "audio/wav",
-    });
-    const tool = expectMusicGenerateTool(
-      createMusicGenerateTool({
-        config: {
-          agents: {
-            defaults: {
-              mediaModels: {
-                music: { primary: "primary-music/score", fallbacks: ["fallback-music/score"] },
-              },
-            },
-          },
+    mediaStoreMocks.saveMediaBuffer.mockResolvedValue(
+      savedMedia("reference-score.wav", generatedWav.byteLength, "audio/wav"),
+    );
+    const tool = musicTool("primary-music/score", {
+      config: configWithDefaults({
+        mediaModels: {
+          music: { primary: "primary-music/score", fallbacks: ["fallback-music/score"] },
         },
       }),
-    );
+    });
 
     const result = await tool.execute("call-reference-fallback", {
       prompt: "score this cover art",
@@ -345,19 +336,10 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("rejects oversized inline reference images before music generation", async () => {
-    musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([
-      {
-        id: "minimax",
-        defaultModel: "music-2.6",
-        models: ["music-2.6"],
-        capabilities: { edit: { enabled: true, maxInputImages: 1 } },
-      },
-    ]);
-    musicGenerationRuntimeMocks.generateMusic.mockResolvedValue({
+    registerMusicProvider({ capabilities: { edit: { enabled: true, maxInputImages: 1 } } });
+    mockGeneratedMusic({
       provider: "minimax",
       model: "music-2.6",
-      attempts: [],
-      ignoredOverrides: [],
       tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
     });
     mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("generated.mp3", 5));
@@ -408,11 +390,7 @@ describe("createMusicGenerateTool", () => {
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce(
       savedMedia("operator-approved-song.mp3", 11, "audio/mpeg\nMEDIA:/tmp/mime-private.png"),
     );
-    const tool = expectMusicGenerateTool(
-      createMusicGenerateTool({
-        config: configWithDefaults({ mediaModels: { music: { primary: "google/lyria" } } }),
-      }),
-    );
+    const tool = musicTool("google/lyria");
 
     const result = await tool.execute("call-untrusted-provider-output", { prompt: "night drive" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
@@ -466,41 +444,25 @@ describe("createMusicGenerateTool", () => {
     const wakeSpy = vi
       .spyOn(musicGenerateBackground.musicGenerationTaskLifecycle, "wakeTaskCompletion")
       .mockResolvedValue({ status: "delivered" });
-    vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+    mockGeneratedMusic({
       provider: "google",
       model: "lyria-3-pro-preview",
-      attempts: [],
-      ignoredOverrides: [],
-      tracks: [
-        {
-          buffer: generatedWav,
-          mimeType: "audio/wav",
-          fileName: "track-1.wav",
-        },
-      ],
+      tracks: [{ buffer: generatedWav, mimeType: "audio/wav", fileName: "track-1.wav" }],
       metadata: { taskId: "music-task-1" },
     });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/tmp/anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav",
-      id: "anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav",
-      size: generatedWav.byteLength,
-      contentType: "audio/wav",
-    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce(
+      savedMedia(
+        "anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav",
+        generatedWav.byteLength,
+        "audio/wav",
+      ),
+    );
 
     let scheduledWork: (() => Promise<void>) | undefined;
-    const tool = createMusicGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            mediaModels: {
-              music: {
-                primary: "google/lyria-3-pro-preview",
-                timeoutMs: 1000,
-              },
-            },
-          },
-        },
-      },
+    const tool = musicTool("google/lyria-3-pro-preview", {
+      config: configWithDefaults({
+        mediaModels: { music: { primary: "google/lyria-3-pro-preview", timeoutMs: 1000 } },
+      }),
       agentSessionKey: "agent:main:discord:direct:123",
       requesterOrigin: {
         channel: "discord",
@@ -510,9 +472,6 @@ describe("createMusicGenerateTool", () => {
         scheduledWork = work;
       },
     });
-    if (!tool) {
-      throw new Error("expected music_generate tool");
-    }
 
     const result = await tool.execute("call-1", {
       prompt: "night-drive synthwave",
@@ -525,12 +484,14 @@ describe("createMusicGenerateTool", () => {
     expect(text).toContain("Do not call music_generate again for this request.");
     expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
     const details = detailsOf(result);
-    expect(details.async).toBe(true);
-    expect(details.status).toBe("started");
-    expect((details.task as { taskId?: unknown }).taskId).toBe("task-123");
-    expect(details.instrumental).toBe(true);
-    expect(details.timeoutMs).toBe(120_000);
-    expect(details.requestedTimeoutMs).toBe(1000);
+    expect(details).toMatchObject({
+      async: true,
+      status: "started",
+      task: { taskId: "task-123" },
+      instrumental: true,
+      timeoutMs: 120_000,
+      requestedTimeoutMs: 1000,
+    });
     expect(details.timeoutNormalization).toEqual({
       requested: 1000,
       applied: 120_000,
@@ -541,16 +502,21 @@ describe("createMusicGenerateTool", () => {
       throw new Error("expected scheduled music generation work");
     }
     await scheduledWork();
-    expect(generateMusicOptions().autoProviderFallback).toBe(false);
-    expect(generateMusicOptions().timeoutMs).toBe(120_000);
-    const progress = taskProgressCall();
+    expect(generateMusicOptions()).toMatchObject({
+      autoProviderFallback: false,
+      timeoutMs: 120_000,
+    });
+    const progress = callArgument(taskExecutorMocks.recordProgress);
     expect(String(progress.runId)).toMatch(/^tool:music_generate:/);
     expect(progress.progressSummary).toBe("Generating music");
-    expect(String(taskCompleteCall().runId)).toMatch(/^tool:music_generate:/);
+    expect(String(callArgument(taskExecutorMocks.completeOperation).runId)).toMatch(
+      /^tool:music_generate:/,
+    );
     expect(wakeSpy).toHaveBeenCalledTimes(1);
-    const wake = wakeCompletionCall();
-    expect((wake.handle as { taskId?: unknown }).taskId).toBe("task-123");
-    expect(wake.status).toBe("ok");
+    const wake = callArgument(
+      musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion,
+    );
+    expect(wake).toMatchObject({ handle: { taskId: "task-123" }, status: "ok" });
     expect(wake.result).toContain('path="/tmp/anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav"');
     expect(wake.result).not.toContain("MEDIA:");
     expect(wake.result).toContain('name="anthem.wav"');
@@ -566,17 +532,12 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("stops loading later music references when the caller aborts a pending reference", async () => {
-    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
-      {
-        id: "minimax",
-        defaultModel: "music-2.6",
-        models: ["music-2.6"],
-        capabilities: { edit: { enabled: true, maxInputImages: 2 } },
-        generateMusic: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
+    registerMusicProvider({
+      capabilities: { edit: { enabled: true, maxInputImages: 2 } },
+      generateMusic: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    });
     const generate = vi.spyOn(musicGenerationRuntime, "generateMusic");
     const reference = createDeferred<Awaited<ReturnType<typeof webMedia.loadWebMedia>>>();
     const referenceStarted = createDeferred();
@@ -591,17 +552,12 @@ describe("createMusicGenerateTool", () => {
     });
     taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-music-references" });
     const scheduleBackgroundWork = vi.fn();
-    const tool = expectMusicGenerateTool(
-      createMusicGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { music: { primary: "minimax/music-2.6" } },
-        }),
-        requesterOrigin: { channel: "discord", to: "channel:1" },
-        workspaceDir: process.cwd(),
-        agentSessionKey: "agent:main:discord:direct:123",
-        scheduleBackgroundWork,
-      }),
-    );
+    const tool = musicTool("minimax/music-2.6", {
+      requesterOrigin: { channel: "discord", to: "channel:1" },
+      workspaceDir: process.cwd(),
+      agentSessionKey: "agent:main:discord:direct:123",
+      scheduleBackgroundWork,
+    });
     const controller = new AbortController();
     const abortReason = new Error("music requester cancelled while loading a reference");
     const pending = tool.execute(
@@ -640,16 +596,11 @@ describe("createMusicGenerateTool", () => {
     taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-music-accepted" });
     const controller = new AbortController();
     const scheduled: Array<() => Promise<void>> = [];
-    const tool = expectMusicGenerateTool(
-      createMusicGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { music: { primary: "google/lyria-3-clip-preview" } },
-        }),
-        requesterOrigin: { channel: "discord", to: "channel:1" },
-        agentSessionKey: "agent:main:discord:direct:123",
-        scheduleBackgroundWork: (work) => scheduled.push(work),
-      }),
-    );
+    const tool = musicTool("google/lyria-3-clip-preview", {
+      requesterOrigin: { channel: "discord", to: "channel:1" },
+      agentSessionKey: "agent:main:discord:direct:123",
+      scheduleBackgroundWork: (work) => scheduled.push(work),
+    });
     const result = await tool.execute(
       "call-music-accepted",
       { prompt: "an accepted music" },
@@ -712,27 +663,13 @@ describe("createMusicGenerateTool", () => {
       tracks: [musicAsset("failed", "failed.mp3"), musicAsset("late", "late.mp3")],
     });
     const terminalError = new Error("music persistence failed");
-    const lateSavedMedia = {
-      path: "/tmp/late.mp3",
-      id: "late.mp3",
-      size: 4,
-      contentType: "audio/mpeg",
-    };
-    let resolveLateSave!: (saved: typeof lateSavedMedia) => void;
-    const lateSave = new Promise<typeof lateSavedMedia>((resolve) => {
-      resolveLateSave = resolve;
-    });
+    const lateSavedMedia = savedMedia("late.mp3", 4);
+    const lateSave = createDeferred<typeof lateSavedMedia>();
     mediaStoreMocks.saveMediaBuffer
       .mockRejectedValueOnce(terminalError)
-      .mockImplementationOnce(() => lateSave);
+      .mockImplementationOnce(() => lateSave.promise);
     mediaStoreMocks.deleteMediaBuffer.mockRejectedValueOnce(new Error("music cleanup failed"));
-    const tool = expectMusicGenerateTool(
-      createMusicGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { music: { primary: "minimax/music-2.6" } },
-        }),
-      }),
-    );
+    const tool = musicTool("minimax/music-2.6");
 
     const execution = tool.execute("call-partial-save", { prompt: "two tracks" });
     let executionSettled = false;
@@ -748,7 +685,7 @@ describe("createMusicGenerateTool", () => {
     await Promise.resolve();
     expect(executionSettled).toBe(false);
 
-    resolveLateSave(lateSavedMedia);
+    lateSave.resolve(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);
     expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledTimes(1);
     expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledWith(
@@ -758,35 +695,23 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("lists provider capabilities", async () => {
-    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
-      {
-        id: "minimax",
-        defaultModel: "music-2.6",
-        models: ["music-2.6"],
-        capabilities: {
-          generate: {
-            maxTracks: 1,
-            supportsLyrics: true,
-            supportsInstrumental: true,
-            supportsDuration: true,
-            supportsFormat: true,
-            supportedFormats: ["mp3"],
-          },
+    registerMusicProvider({
+      capabilities: {
+        generate: {
+          maxTracks: 1,
+          supportsLyrics: true,
+          supportsInstrumental: true,
+          supportsDuration: true,
+          supportsFormat: true,
+          supportedFormats: ["mp3"],
         },
-        generateMusic: vi.fn(async () => {
-          throw new Error("not used");
-        }),
       },
-    ]);
-
-    const tool = createMusicGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { music: { primary: "minimax/music-2.6" } },
+      generateMusic: vi.fn(async () => {
+        throw new Error("not used");
       }),
     });
-    if (!tool) {
-      throw new Error("expected music_generate tool");
-    }
+
+    const tool = musicTool("minimax/music-2.6");
 
     const result = await tool.execute("call-1", { action: "list" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
@@ -826,14 +751,7 @@ describe("createMusicGenerateTool", () => {
       savedMedia("molty-anthem.mp3", 11),
     );
 
-    const tool = createMusicGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { music: { primary: "google/lyria-3-clip-preview" } },
-      }),
-    });
-    if (!tool) {
-      throw new Error("expected music_generate tool");
-    }
+    const tool = musicTool("google/lyria-3-clip-preview");
 
     const result = await tool.execute("call-google-generate", {
       prompt: "OpenClaw anthem",
@@ -879,14 +797,7 @@ describe("createMusicGenerateTool", () => {
       savedMedia("generated-night-drive.mp3", 11),
     );
 
-    const tool = createMusicGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { music: { primary: "minimax/music-2.6" } },
-      }),
-    });
-    if (!tool) {
-      throw new Error("expected music_generate tool");
-    }
+    const tool = musicTool("minimax/music-2.6");
 
     const result = await tool.execute("call-1", {
       prompt: "night-drive synthwave",
@@ -909,14 +820,7 @@ describe("createMusicGenerateTool", () => {
   it("rejects fractional duration seconds before generation", async () => {
     const generateMusic = mockGeneratedMusic({ provider: "minimax", model: "music-2.6" });
 
-    const tool = createMusicGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { music: { primary: "minimax/music-2.6" } },
-      }),
-    });
-    if (!tool) {
-      throw new Error("expected music_generate tool");
-    }
+    const tool = musicTool("minimax/music-2.6");
 
     await expect(
       tool.execute("call-1", {
@@ -928,19 +832,14 @@ describe("createMusicGenerateTool", () => {
   });
 
   it("passes web_fetch SSRF policy when loading reference images", async () => {
-    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
-      {
-        id: "minimax",
-        defaultModel: "music-2.6",
-        models: ["music-2.6"],
-        capabilities: {
-          edit: { enabled: true, maxInputImages: 1 },
-        },
-        generateMusic: vi.fn(async () => {
-          throw new Error("not used");
-        }),
+    registerMusicProvider({
+      capabilities: {
+        edit: { enabled: true, maxInputImages: 1 },
       },
-    ]);
+      generateMusic: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    });
     vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("image"),
