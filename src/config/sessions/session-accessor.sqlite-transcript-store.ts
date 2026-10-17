@@ -295,12 +295,9 @@ export function appendTranscriptEventInTransaction(
           });
         });
       }
-      advanceCliHistoryBoundaryInTransaction(database, scope, seq);
-      if (
-        isRecord(persistedEvent) &&
-        persistedEvent.type === "compaction" &&
-        parseCompactionDetails(persistedEvent.details)?.qualityDegraded
-      ) {
+      const isCompaction = isRecord(persistedEvent) && persistedEvent.type === "compaction";
+      advanceCliHistoryBoundaryInTransaction(database, scope, seq, isCompaction);
+      if (isCompaction && parseCompactionDetails(persistedEvent.details)?.qualityDegraded) {
         const entry = readSessionEntryRow(database, scope.sessionKey)?.entry;
         if (entry?.sessionId === scope.sessionId && !entry.compactionQualityDegraded) {
           // A later successful summary cannot recover facts already lost from this history.

@@ -2,13 +2,11 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
-import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
-import { withSessionCompactionPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { persistCliRunBlock } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
@@ -125,19 +123,7 @@ it("prepares private CLI history and refuses an unattributed append at execution
       const manager = await SessionManager.openAsync(target);
       const retained = manager.getLeafId();
       assert(retained);
-      await withSessionCompactionPersistenceAsync(
-        manager,
-        (prepared) =>
-          persistCompactionBoundaryWithSessionEntryAsync(target, {
-            prepared,
-            transcriptByteCompactionLatch: {
-              sessionId: target.sessionId,
-              activeBytes: 2048,
-              maxBytes: 1024,
-            },
-          }),
-        () => manager.appendCompactionAsync("Private CLI summary", retained, 1000),
-      );
+      await manager.appendCompactionAsync("Private CLI summary", retained, 1000);
       await writer.assertReadable();
       const compacted = JSON.stringify(
         (await loadCliSessionPromptContext({ sessionTarget: target })).reseedMessages,

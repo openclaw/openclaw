@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
 export type CliHistoryWriter = {
@@ -105,18 +104,18 @@ export function advanceCliHistoryBoundary(
 export function reanchorCliHistoryBoundaryAfterCompaction(
   entry: InternalSessionEntry,
   sessionId: string,
-  before: SessionTranscriptContextVersion,
-  after: SessionTranscriptContextVersion,
+  generation: string | null,
+  seq: number,
 ): CliHistoryBoundary | undefined {
   const boundary = entry.cliHistoryBoundary;
   if (
     !isKnownCliHistoryBoundary(boundary) ||
     entry.sessionId !== sessionId ||
     boundary.sessionId !== sessionId ||
-    boundary.generation !== before.generation ||
-    boundary.maxSeq !== before.rawSeq
+    boundary.generation !== generation ||
+    boundary.maxSeq !== seq - 1
   ) {
     return boundary;
   }
-  return { ...boundary, generation: after.generation, maxSeq: after.rawSeq };
+  return { ...boundary, maxSeq: seq };
 }

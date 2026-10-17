@@ -29,7 +29,6 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
-import { withSessionCompactionPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
@@ -317,19 +316,7 @@ describe("CLI transcript account boundary", () => {
       if (!retained) {
         throw new Error("Missing retained turn");
       }
-      await withSessionCompactionPersistenceAsync(
-        manager,
-        (prepared) =>
-          sessionAccessor.persistCompactionBoundaryWithSessionEntryAsync(f.target, {
-            prepared,
-            transcriptByteCompactionLatch: {
-              sessionId: f.target.sessionId,
-              activeBytes: 2048,
-              maxBytes: 1024,
-            },
-          }),
-        () => manager.appendCompactionAsync("Compacted account summary", retained, 1000),
-      );
+      await manager.appendCompactionAsync("Compacted account summary", retained, 1000);
       await f.run("epoch-a", async (allowed, params) => {
         const prompt = await history(allowed, params);
         if (foreignTail) {
