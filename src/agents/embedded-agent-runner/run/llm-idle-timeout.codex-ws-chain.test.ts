@@ -542,9 +542,15 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     );
   });
 
-  it.each(["bookkeeping", "hidden reasoning"] as const)(
-    "F: parked consumers distinguish provider activity from model progress: %s",
-    async (activity) => {
+  it.each([
+    { activity: "bookkeeping", parked: true },
+    { activity: "hidden reasoning", parked: true },
+    { activity: "empty reasoning", parked: false },
+    { activity: "repeated snapshot", parked: false },
+    { activity: "hidden reasoning", parked: false },
+  ] as const)(
+    "F: distinguishes activity from progress ($activity, parked=$parked)",
+    async ({ activity, parked }) => {
       vi.useFakeTimers();
       vi.stubGlobal("WebSocket", ControlledWebSocket);
       vi.stubGlobal(
@@ -554,7 +560,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       ControlledWebSocket.onSend = (socket) => {
         queueMicrotask(() => {
           socket.deliver({ type: "response.created", response: { id: "resp_f" } });
-          if (activity === "hidden reasoning") {
+          if (activity !== "bookkeeping") {
             socket.deliver({
               type: "response.output_item.added",
               output_index: 0,
@@ -576,7 +582,9 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
         if (type === "start") {
           emitEntered.resolve();
-          await releaseEmit.promise;
+          if (parked) {
+            await releaseEmit.promise;
+          }
         }
       });
       await vi.advanceTimersByTimeAsync(10);
@@ -588,17 +596,23 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
         socket?.deliver(
           activity === "bookkeeping"
             ? { type: "response.in_progress", response: { id: "resp_f" } }
-            : {
-                type: "response.reasoning_text.delta",
-                item_id: "reasoning_f",
-                output_index: 0,
-                delta: "Synthetic hidden progress",
-              },
+            : activity === "repeated snapshot"
+              ? {
+                  type: "response.output_item.done",
+                  output_index: 0,
+                  item: { id: "reasoning_f", type: "reasoning", summary: [] },
+                }
+              : {
+                  type: "response.reasoning_text.delta",
+                  item_id: "reasoning_f",
+                  output_index: 0,
+                  delta: activity === "empty reasoning" ? "" : "Synthetic hidden progress",
+                },
         );
       }, 60_000);
       await vi.advanceTimersByTimeAsync(300_000);
       clearInterval(progress);
-      if (activity === "bookkeeping") {
+      if (activity !== "hidden reasoning") {
         expect(onIdleTimeout).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ message: "LLM idle timeout (240s): no model progress" }),
         );
@@ -609,7 +623,7 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
       releaseEmit.resolve();
       await vi.advanceTimersByTimeAsync(10);
       const { result, thrown } = await consumed;
-      if (activity === "bookkeeping") {
+      if (activity !== "hidden reasoning") {
         expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
           /no model progress|aborted/,
         );

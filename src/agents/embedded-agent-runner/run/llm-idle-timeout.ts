@@ -306,10 +306,11 @@ export function streamWithIdleTimeout(
         clearRequestDeadline();
       }
     };
-    const unsubscribeCreationActivity = onLlmRequestActivity(
-      streamAbortController.signal,
-      finishCreation,
-    );
+    let producerReportsActivity = false;
+    const unsubscribeCreationActivity = onLlmRequestActivity(streamAbortController.signal, () => {
+      producerReportsActivity = true;
+      finishCreation();
+    });
     const sourceSignal = options?.signal;
     const abortFromSourceSignal = () => {
       clearRequestDeadline();
@@ -414,6 +415,7 @@ export function streamWithIdleTimeout(
         const unsubscribeLlmActivity = onLlmRequestActivity(
           streamAbortController.signal,
           (progress) => {
+            producerReportsActivity = true;
             armTimer(progress);
             if (progress && runId && areDiagnosticsEnabledForProcess()) {
               markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
@@ -463,7 +465,9 @@ export function streamWithIdleTimeout(
               rejectIdleTimeout = undefined;
               // Native producer completion lets us safely police parked consumers.
               // Structural streams retain their pending-next-only guard.
-              armTimer();
+              // A notifying producer owns progress, including content-free events.
+              // Structural streams without notifications retain the yield fallback.
+              armTimer(!producerReportsActivity);
               return result;
             } catch (error) {
               settle();
