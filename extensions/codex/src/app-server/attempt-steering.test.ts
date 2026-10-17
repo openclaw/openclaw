@@ -439,25 +439,115 @@ describe("Codex app-server steering queue", () => {
     harness.client.close();
   });
 
-  it("aborts the in-flight steer request and removes its client pending entry", async () => {
-    const harness = createClientHarness();
-    const controller = new AbortController();
-    const queue = createQueue(harness.client, { signal: controller.signal });
-    const pendingRequests = (
-      harness.client as unknown as { pending: Map<number | string, unknown> }
-    ).pending;
+  it("bounds consumption confirmation after a successful steering acknowledgement", async () => {
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line);
+        send({ id: request.id, result: { turnId: "turn-1" } });
+      },
+    });
+    const queue = createQueue(harness.client, { requestTimeoutMs: 1_000 });
+    const accepted = vi.fn();
+    const settled = vi.fn();
+    const outcomes: unknown[] = [];
+    const delivery = queue
+      .queue("synthetic follow-up", {
+        debounceMs: 0,
+        onQueueAccepted: accepted,
+        onQueueSettled: settled,
+      })
+      .then(
+        () => outcomes.push("resolved"),
+        (error: unknown) => outcomes.push(error),
+      );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(accepted).toHaveBeenCalledWith(true);
+      expect(outcomes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(outcomes[0]).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+      expect((outcomes[0] as Error).cause).toMatchObject({
+        message: "Codex steering transcript consumption confirmation timed out",
+      });
+      expect(settled).toHaveBeenCalledOnce();
+      // Ambiguous delivery remains accepted, never eligible for automatic replay.
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(queue.getAcceptedMessages()).toHaveLength(1);
+      expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
 
-    const queued = queue.queue("steer me", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pendingRequests.size).toBe(1);
-
-    controller.abort();
-
-    await rejected;
-    expect(pendingRequests.size).toBe(0);
-    harness.client.close();
+      const next = queue.queue("synthetic later follow-up", { debounceMs: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.writes).toHaveLength(2);
+      expect(queue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
+      await next;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      queue.cancel();
+      harness.client.close();
+      await delivery;
+    }
   });
+
+  it("returns queue-only delivery on acknowledgement while retaining consumption custody", async () => {
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line);
+        send({ id: request.id, result: { turnId: "turn-1" } });
+      },
+    });
+    const queue = createQueue(harness.client, { requestTimeoutMs: 1_000 });
+    const accepted = vi.fn();
+    const settled = vi.fn();
+    const delivered = vi.fn();
+    const delivery = queue
+      .queue("synthetic queue-only message", {
+        debounceMs: 0,
+        waitForTranscriptCommit: false,
+        onQueueAccepted: accepted,
+        onQueueSettled: settled,
+      })
+      .then(delivered);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(delivered).toHaveBeenCalledOnce();
+      expect(settled).not.toHaveBeenCalled();
+      expect(queue.getAcceptedMessages()).toHaveLength(1);
+      expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
+      expect(settled).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(harness.writes).toHaveLength(1);
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      queue.cancel();
+      harness.client.close();
+      await delivery.catch(() => {});
+    }
+  });
+
+  it.each([undefined, false])(
+    "aborts unacknowledged steering with transcript wait=%s",
+    async (waitForTranscriptCommit) => {
+      const harness = createClientHarness();
+      const controller = new AbortController();
+      const queue = createQueue(harness.client, { signal: controller.signal });
+      const pendingRequests = (
+        harness.client as unknown as { pending: Map<number | string, unknown> }
+      ).pending;
+
+      const queued = queue.queue("steer me", { debounceMs: 0, waitForTranscriptCommit });
+      const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pendingRequests.size).toBe(1);
+
+      controller.abort();
+
+      await rejected;
+      expect(pendingRequests.size).toBe(0);
+      harness.client.close();
+    },
+  );
 
   it("batches ordered text and images under one correlated user-message id", async () => {
     const request = vi.fn(async () => ({ turnId: "turn-1" }));

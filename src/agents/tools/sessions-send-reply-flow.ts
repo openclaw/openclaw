@@ -350,7 +350,9 @@ export async function finishSessionsSendReply(params: {
       notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
     });
   const result =
-    timeoutSeconds === 0
+    // An active turn has no response identity correlated to this accepted input.
+    // Never await its old final or the send's synthetic receipt runId.
+    timeoutSeconds === 0 || start.targetDisposition === "steered"
       ? undefined
       : completion
         ? await completion.take(timeoutMs)

@@ -4,7 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
+  readChannelSourceTurnId,
+  readChannelSourceTurnSameThreadRequired,
+} from "../../../auto-reply/reply/source-turn-id.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { resolveRestartRecoverySteeringBlockReason } from "../../../config/sessions/restart-recovery-receipt.js";
 import {
   replaceSessionEntry,
   upsertSessionEntryCore,
@@ -34,11 +41,13 @@ import {
   installSessionPlacementAdmissionProvider,
   prepareSessionPlacementSandbox,
 } from "../../session-placement-admission.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import * as workspaceSandbox from "../../workspace-sandbox.js";
 import { requireGit } from "../../worktrees/git.js";
 import { insertRegistryWorktree } from "../../worktrees/registry.js";
 import { initializeManagedWorktreeTestRepository } from "../../worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../../worktrees/types.js";
+import { createEmbeddedRunHandle } from "../runs.test-support.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 
@@ -410,7 +419,46 @@ it.each(dispatchCases)(
             AgentHarnessAttemptParamsV2["hostCapabilities"]
           >["prepareContinuationRetryCount"]
         | undefined;
+      const originalSourceTurnId = "synthetic-original-source";
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
+        const handle = createEmbeddedRunHandle({
+          runId: params.runId,
+          toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+          queueMessage: async () => {},
+        });
+        const authority = getGatewayToolCallerIdentity()?.embeddedRunToolAuthorityBinding?.({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey!,
+          sessionFile: params.sessionFile,
+          agentId: params.agentId,
+          handle,
+        });
+        expect(authority?.sourceTurnId).toBe(originalSourceTurnId);
+        expect(authority?.sourceTurnId).not.toBe(params.runId);
+        const recoveredEntry = {
+          sessionId: params.sessionId,
+          updatedAt: 1,
+          restartRecoveryDeliveryRunId: params.runId,
+          restartRecoveryDeliverySourceRunId: originalSourceTurnId,
+        };
+        expect(
+          resolveRestartRecoverySteeringBlockReason(
+            recoveredEntry,
+            params.sessionId,
+            authority!.sourceTurnId!,
+          ),
+        ).toBeUndefined();
+        expect(
+          resolveRestartRecoverySteeringBlockReason(recoveredEntry, params.sessionId, params.runId),
+        ).toBe("stale-claim");
+        expect(
+          resolveRestartRecoverySteeringBlockReason(
+            recoveredEntry,
+            "replaced-session",
+            authority!.sourceTurnId!,
+          ),
+        ).toBe("stale-claim");
+
         retainedRetryPreparer = params.hostCapabilities?.prepareContinuationRetryCount;
         expect(params).not.toHaveProperty("prepareContinuationRetryCount");
         if (!remoteSkills && retryPreparation !== "omit") {
@@ -530,6 +578,8 @@ it.each(dispatchCases)(
         oneShotCliRun,
         runtimePluginToolGrant,
       };
+      setChannelSourceTurnId(params, originalSourceTurnId);
+      setChannelSourceTurnSameThreadRequired(params, true);
       let lifecycleGeneration = getAgentEventLifecycleGeneration();
       const laneController = createEmbeddedRunLaneController({
         getLifecycleGeneration: () => lifecycleGeneration,
@@ -853,6 +903,8 @@ it.each(dispatchCases)(
         }
         const { dispatchedAttempt: result } = await pending;
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
+        expect(readChannelSourceTurnId(result.preparedAttempt)).toBe(originalSourceTurnId);
+        expect(readChannelSourceTurnSameThreadRequired(result.preparedAttempt)).toBe(true);
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
         expect(result.rawAttempt.providerRetryMaxRetries).toBe(
           retryPreparation === "omit" ? legacyRetryCount : (retryCount ?? legacyRetryCount),

@@ -80,13 +80,15 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("on this Gateway");
     expect(describeSessionsSendTool()).toContain("not an external address");
     expect(describeSessionsSendTool()).not.toContain("conversations_");
-    expect(describeSessionsSendTool()).toContain("A peer reply reaches you once");
+    expect(describeSessionsSendTool()).toContain(
+      "When a new turn starts, its reply reaches you once",
+    );
     expect(describeSessionsSendTool()).toContain("Continue with another sessions_send");
     expect(describeSessionsSendTool()).toContain("post to channels with message");
     expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
     expect(describeSessionsSendTool()).toContain("neither proves target completion");
     expect(describeSessionsSendTool()).toContain(
-      "With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery.",
+      "Messages to another running session enter its active input queue and return admission only, regardless of timeoutSeconds. An idle recipient or a default self-send starts a new turn; timeoutSeconds only bounds waiting for that new turn’s reply.",
     );
   });
 });
