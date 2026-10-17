@@ -48,6 +48,7 @@ const {
 } = setupGatewaySessionsHandlerTestHarness();
 
 type ArchiveCleanup = {
+  signal: AbortSignal;
   track: <T>(promise: Promise<T>) => Promise<T>;
   releaseOnAbort: (release: () => void) => void;
   dispose: (dispose: () => void) => void;
@@ -68,7 +69,21 @@ async function createArchiveSession(
   const sessionId = `session-${name}`;
   const runId = `run-${name}`;
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, entry) } });
-  return { storePath, sessionKey, sessionId, runId };
+  return {
+    storePath,
+    sessionKey,
+    sessionId,
+    runId,
+    read: () => loadSessionEntry({ storePath, sessionKey }),
+    admit: (signal: AbortSignal, onInterrupt?: () => void) =>
+      beginSessionWorkAdmission({
+        signal,
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        assertAllowed: () => {},
+        onInterrupt,
+      }),
+  };
 }
 
 async function activeArchive(
@@ -84,7 +99,32 @@ async function activeArchive(
   const persistence = createDeferredCore();
   const active = activeRunContext({ ...session, persistence, ...options });
   cleanup.dispose(active.unsubscribe);
+  cleanup.releaseOnAbort(() => persistence.resolve());
   return { ...session, persistence, active };
+}
+
+function placementFixture(
+  session: Pick<WorkerSessionPlacementRecord, "sessionId" | "sessionKey">,
+  beforeReclaim?: () => Promise<void>,
+) {
+  let placement = workerPlacement({ ...session, state: "active" });
+  const dispatch = vi.fn();
+  const reclaim = vi.fn(async () => {
+    if (beforeReclaim) {
+      await beforeReclaim();
+    }
+    placement = workerPlacement({ ...session, state: "reclaimed" });
+    return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+  });
+  return {
+    current: () => placement,
+    reclaim,
+    dispatch,
+    context: {
+      workerSessionPlacementService: placementReader(() => placement),
+      workerPlacementDispatchService: { dispatch, reclaim },
+    },
+  };
 }
 
 async function captureArchiveAuthority(
@@ -147,10 +187,7 @@ async function createArchiveBatch() {
         }>;
       }>(
         "sessions.patchMany",
-        {
-          targets: keys.map((key, i) => archiveTarget(key, ids[i]!)),
-          patch: { archived: true },
-        },
+        { targets: keys.map((key, i) => archiveTarget(key, ids[i]!)), patch: { archived: true } },
         { context },
       ),
     expectArchived: () => keys.forEach((key) => expectArchived(storePath, key)),
@@ -189,6 +226,7 @@ function withArchiveCleanup(signal: AbortSignal, run: (fixture: ArchiveCleanup) 
     signal.addEventListener("abort", release, { once: true });
     try {
       await run({
+        signal,
         track: (promise) => {
           pending.push(promise);
           return promise;
@@ -210,6 +248,10 @@ function withArchiveCleanup(signal: AbortSignal, run: (fixture: ArchiveCleanup) 
   });
 }
 
+function archiveTest(name: string, run: (fixture: ArchiveCleanup) => Promise<void>) {
+  test(name, ({ signal }) => withArchiveCleanup(signal, run));
+}
+
 afterEach(async () => {
   // Vitest cancellation rejects its wrapper before the retained handler body finishes.
   await archiveFixture.cleanup();
@@ -217,28 +259,18 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test("sessions.patch cancels active work and commits only after admission and terminal persistence drain", ({
-  signal,
-}) =>
-  withArchiveCleanup(signal, async (cleanup) => {
-    const { track, releaseOnAbort } = cleanup;
-    const { storePath, sessionKey, sessionId, active, persistence } = await activeArchive(
+archiveTest(
+  "sessions.patch cancels active work and commits only after admission and terminal persistence drain",
+  async (cleanup) => {
+    const { signal, track, releaseOnAbort } = cleanup;
+    const { storePath, sessionKey, sessionId, active, persistence, admit } = await activeArchive(
       "archive-active",
       cleanup,
       { ownerConnId: "different-connection" },
     );
     const interrupted = createDeferredCore();
-    const admission = await beginSessionWorkAdmission({
-      signal,
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      assertAllowed: () => {},
-      onInterrupt: () => interrupted.resolve(),
-    });
-    releaseOnAbort(() => {
-      admission.release();
-      persistence.resolve();
-    });
+    const admission = await admit(signal, () => interrupted.resolve());
+    releaseOnAbort(() => admission.release());
 
     const archive = track(
       archiveSession(sessionKey, sessionId, {
@@ -283,31 +315,24 @@ test("sessions.patch cancels active work and commits only after admission and te
     expect(archived.ok).toBe(true);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
     expect(await replacement).toBeInstanceOf(Error);
-  }));
+  },
+);
 
-test("identity changes fence archive before cancellation and force fresh authorization", ({
-  signal,
-}) =>
-  withArchiveCleanup(signal, async (cleanup) => {
-    const { track, releaseOnAbort } = cleanup;
+archiveTest(
+  "identity changes fence archive before cancellation and force fresh authorization",
+  async (cleanup) => {
+    const { signal, track, releaseOnAbort } = cleanup;
     const session = await activeArchive("archive-sharing-revocation", cleanup, {}, sharedEntry);
-    const { storePath, sessionKey, sessionId, active, persistence } = session;
+    const { storePath, sessionKey, sessionId, active } = session;
     let interrupted = false;
-    const admission = await beginSessionWorkAdmission({
-      signal,
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      assertAllowed: () => {},
-      onInterrupt: () => {
-        interrupted = true;
-      },
+    const admission = await session.admit(signal, () => {
+      interrupted = true;
     });
     const sharingCommitted = createDeferredCore();
     const releaseSharingMutation = createDeferredCore();
     releaseOnAbort(() => {
       releaseSharingMutation.resolve();
       admission.release();
-      persistence.resolve();
     });
     const placement = workerPlacement({ sessionId, sessionKey, state: "active" });
     const reclaim = vi.fn();
@@ -367,16 +392,14 @@ test("identity changes fence archive before cancellation and force fresh authori
     expect(await sharing).toMatchObject({ ok: true });
     expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
 
-    expect(await archive).toMatchObject({
-      ok: false,
-      error: { code: "FORBIDDEN" },
-    });
+    expect(await archive).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
     expect(interrupted).toBe(false);
     expect(active.controller.signal.aborted).toBe(false);
     expectNoSessionQueueCleanup();
     expect(reclaim).not.toHaveBeenCalled();
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-  }));
+  },
+);
 
 test.for(["creator", "changed identity"] as const)(
   "archive permits sharing during drain and revalidates the %s before commit",
@@ -384,28 +407,19 @@ test.for(["creator", "changed identity"] as const)(
     withArchiveCleanup(signal, async (cleanup) => {
       const { track, releaseOnAbort } = cleanup;
       const session = await activeArchive("archive-before-sharing", cleanup, {}, sharedEntry);
-      const { storePath, sessionKey, sessionId, active, persistence } = session;
-      const admission = await beginSessionWorkAdmission({
-        signal,
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed: () => {},
-      });
+      const { storePath, sessionKey, active, persistence } = session;
+      const admission = await session.admit(signal);
       const reclaimGate = createDeferredCore();
       const reclaimEntered = createDeferredCore();
       releaseOnAbort(() => {
         admission.release();
-        persistence.resolve();
         reclaimGate.resolve();
       });
-      let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-      const reclaim = vi.fn(async () => {
+      const { current, reclaim } = placementFixture(session, async () => {
         reclaimEntered.resolve();
         await reclaimGate.promise;
-        placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
-        return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
       });
-      const authority = await captureArchiveAuthority(session, active, () => placement, reclaim);
+      const authority = await captureArchiveAuthority(session, active, current, reclaim);
       const { archiver } = authority;
 
       const archive = track(authority.archive());
@@ -423,10 +437,7 @@ test.for(["creator", "changed identity"] as const)(
       admission.release();
       persistence.resolve();
       if (archiveRole === "changed identity") {
-        expect(await archive).toMatchObject({
-          ok: false,
-          error: { code: "FORBIDDEN" },
-        });
+        expect(await archive).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
         expect(reclaim).not.toHaveBeenCalled();
         expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
         return;
@@ -436,26 +447,21 @@ test.for(["creator", "changed identity"] as const)(
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
       reclaimGate.resolve();
       expect(await archive).toMatchObject({ ok: true });
-      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-        archivedAt: expect.any(Number),
-        visibility: "draft",
-      });
+      expect(session.read()).toMatchObject({ archivedAt: expect.any(Number), visibility: "draft" });
     }),
 );
 
-test("alias archive lets an earlier alias mutation finish before canonical reclaim", ({ signal }) =>
-  withArchiveCleanup(signal, async ({ track, releaseOnAbort }) => {
-    const { storePath } = await createSessionStoreDir();
+archiveTest(
+  "alias archive lets an earlier alias mutation finish before canonical reclaim",
+  async ({ signal, track, releaseOnAbort }) => {
     const aliasKey = "aaa-archive-cloud-alias";
-    const sessionKey = `agent:main:${aliasKey}`;
-    const sessionId = "session-archive-cloud-alias";
-    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-    let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
+    const session = await createArchiveSession(aliasKey);
+    const { storePath, sessionKey, sessionId } = session;
     const reclaimEntered = createDeferredCore();
     const allowNestedReclaim = createDeferredCore();
     const contenderRelease = createDeferredCore();
     const contenderStarted = createDeferredCore();
-    const reclaim = vi.fn(async () => {
+    const { current, reclaim, context } = placementFixture(session, async () => {
       reclaimEntered.resolve();
       await allowNestedReclaim.promise;
       await runExclusiveSessionLifecycleMutation("archive", {
@@ -463,25 +469,12 @@ test("alias archive lets an earlier alias mutation finish before canonical recla
         identities: [aliasKey, sessionKey, sessionId],
         run: async () => {},
       });
-      placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
-      return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
     });
     releaseOnAbort(() => {
       contenderRelease.resolve();
       allowNestedReclaim.resolve();
     });
-    const archive = track(
-      directSessionReq(
-        "sessions.patch",
-        { key: aliasKey, archived: true, expectedSessionId: sessionId },
-        {
-          context: {
-            workerSessionPlacementService: placementReader(() => placement),
-            workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-          },
-        },
-      ),
-    );
+    const archive = track(archiveSession(aliasKey, sessionId, { context }));
     await racePromiseWithAbortSignal(reclaimEntered.promise, signal);
     const contender = track(
       runExclusiveSessionLifecycleMutation("archive", {
@@ -501,9 +494,10 @@ test("alias archive lets an earlier alias mutation finish before canonical recla
     const [result] = await Promise.all([archive, contender]);
     expect(result.ok).toBe(true);
     expect(reclaim).toHaveBeenCalledOnce();
-    expect(placement.state).toBe("reclaimed");
+    expect(current().state).toBe("reclaimed");
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
-  }));
+  },
+);
 
 test.each(["active work", "unavailable drain"] as const)(
   "sessions.patch fails closed on %s",
@@ -543,21 +537,22 @@ test.each(["active work", "unavailable drain"] as const)(
   },
 );
 
-test("sessions.patch returns UNAVAILABLE when terminal persistence fails", ({ signal }) =>
-  withArchiveCleanup(signal, async (cleanup) => {
-    const { track, releaseOnAbort } = cleanup;
-    const { storePath, sessionKey, sessionId, active, persistence } = await activeArchive(
+archiveTest(
+  "sessions.patch returns UNAVAILABLE when terminal persistence fails",
+  async (cleanup) => {
+    const { signal, track } = cleanup;
+    const { storePath, sessionKey, sessionId, active } = await activeArchive(
       "archive-persistence-failure",
       cleanup,
       { terminalPersistenceError: new Error("disk full") },
     );
-    releaseOnAbort(() => persistence.resolve());
 
     const archive = track(archiveSession(sessionKey, sessionId, { context: active.context }));
     const archived = await racePromiseWithAbortSignal(archive, signal);
     expect(active.controller.signal.aborted).toBe(true);
     expectArchiveUnavailable(archived, storePath, sessionKey);
-  }));
+  },
+);
 
 test.each(["main", "global", "unknown"] as const)(
   "sessions.patch rejects %s before cancellation or entry creation",
@@ -597,9 +592,10 @@ test.each(["main", "global", "unknown"] as const)(
   },
 );
 
-test("sessions.patchMany prepares independent archive drains concurrently and releases in target order", ({
-  signal,
-}) =>
+test.for([
+  ["prepares independent archive drains concurrently and releases in target order", false],
+  ["attempts every archive drain release without masking success", true],
+] as const)("sessions.patchMany %s", ([, releaseFails], { signal }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort }) => {
     const batch = await createArchiveBatch();
     const {
@@ -608,7 +604,11 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
     const firstDrained = createDeferredCore();
     const firstStarted = createDeferredCore();
     const secondStarted = createDeferredCore();
-    const firstRelease = vi.fn();
+    const firstRelease = vi.fn(() => {
+      if (releaseFails) {
+        throw new Error("release failed");
+      }
+    });
     const secondRelease = vi.fn();
     const beginInferenceSessionDrain = vi.fn((sessionId: string) => {
       (sessionId === firstSessionId ? firstStarted : secondStarted).resolve();
@@ -640,6 +640,7 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
     firstDrained.resolve();
 
     const result = await archive;
+    expect(result.ok).toBe(true);
     expect(result.payload?.outcomes).toEqual(batch.success);
     expect(firstRelease).toHaveBeenCalledOnce();
     expect(secondRelease).toHaveBeenCalledOnce();
@@ -647,34 +648,8 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
       secondRelease.mock.invocationCallOrder[0]!,
     );
     batch.expectArchived();
-  }));
-
-test("sessions.patchMany attempts every archive drain release without masking success", async () => {
-  const batch = await createArchiveBatch();
-  const {
-    ids: [firstSessionId],
-  } = batch;
-  const firstRelease = vi.fn(() => {
-    throw new Error("release failed");
-  });
-  const secondRelease = vi.fn();
-
-  const result = await batch.archive({
-    workerEnvironmentService: createWorkerInferenceDrainService(
-      vi.fn((sessionId: string) => ({
-        drained: Promise.resolve(),
-        hasWork: () => false,
-        release: sessionId === firstSessionId ? firstRelease : secondRelease,
-      })),
-    ),
-  });
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.outcomes).toEqual(batch.success);
-  expect(firstRelease).toHaveBeenCalledOnce();
-  expect(secondRelease).toHaveBeenCalledOnce();
-  batch.expectArchived();
-});
+  }),
+);
 
 test("sessions.patchMany isolates a failed archive drain and continues later targets", async () => {
   const batch = await createArchiveBatch();
@@ -701,30 +676,15 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
   expectArchived(storePath, idleKey);
 });
 
-test("sessions.patch rejects a generation replaced after the exact preparation read", ({
-  signal,
-}) =>
-  withArchiveCleanup(signal, async (cleanup) => {
-    const { track, releaseOnAbort } = cleanup;
-    const { storePath, sessionKey, sessionId, active, persistence } = await activeArchive(
-      "archive-generation-race",
-      cleanup,
-    );
-    let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-    const dispatch = vi.fn();
-    const reclaim = vi.fn(async () => {
-      placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
-      return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
-    });
-    releaseOnAbort(() => persistence.resolve());
+archiveTest(
+  "sessions.patch rejects a generation replaced after the exact preparation read",
+  async (cleanup) => {
+    const { signal, track } = cleanup;
+    const session = await activeArchive("archive-generation-race", cleanup);
+    const { storePath, sessionKey, sessionId, active, persistence } = session;
+    const { current, dispatch, reclaim, context } = placementFixture(session);
     const archive = track(
-      archiveSession(sessionKey, sessionId, {
-        context: {
-          ...active.context,
-          workerSessionPlacementService: placementReader(() => placement),
-          workerPlacementDispatchService: { dispatch, reclaim },
-        },
-      }),
+      archiveSession(sessionKey, sessionId, { context: { ...active.context, ...context } }),
     );
     await waitForArchivePhase(active.terminalStarted, archive, signal);
     expect(active.controller.signal.aborted).toBe(true);
@@ -740,11 +700,10 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
       code: "INVALID_REQUEST",
       details: { reason: "session-changed" },
     });
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      sessionId: "session-archive-generation-replacement",
-    });
+    expect(session.read()).toMatchObject({ sessionId: "session-archive-generation-replacement" });
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
     expect(reclaim).not.toHaveBeenCalled();
-    expect(placement.state).toBe("active");
+    expect(current().state).toBe("active");
     expect(dispatch).not.toHaveBeenCalled();
-  }));
+  },
+);

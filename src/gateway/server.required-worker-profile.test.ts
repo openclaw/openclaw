@@ -105,9 +105,14 @@ const skipPlacement: NonNullable<SessionPlacementAdmissionProvider["withRequired
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const ownedWorktrees = new Set<string>();
 
-async function configureRequiredWorker(device = "test-node", inference?: "worker") {
+async function configureRequiredWorker(
+  device = "test-node",
+  inference?: "worker",
+  configOverrides: OpenClawConfig = {},
+) {
   const config = await getGatewayConfigModule();
   await config.writeConfigFile({
+    ...configOverrides,
     cloudWorkers: {
       requiredProfile: "dedicated-native",
       profiles: {
@@ -119,6 +124,29 @@ async function configureRequiredWorker(device = "test-node", inference?: "worker
     },
   });
   return config;
+}
+
+async function ordinarySession(name: string, required = true, mockPlacement = true) {
+  const { storePath } = await createSessionStoreDir();
+  const config = await getGatewayConfigModule();
+  await config.writeConfigFile(
+    required ? { cloudWorkers: { requiredProfile: "dedicated-native" } } : {},
+  );
+  const key = `agent:main:dashboard:${name}`;
+  const withRequiredSession = vi.fn<ReturnType<typeof createPreparation>>();
+  const options = mockPlacement
+    ? { ...controlUiClient, context: { workerPlacementDispatchService: { withRequiredSession } } }
+    : controlUiClient;
+  return {
+    key,
+    withRequiredSession,
+    read: () => loadSessionEntry({ agentId: "main", sessionKey: key, storePath }),
+    worktree: () => managedWorktrees.findLiveByOwner("session", key),
+    request: <T = unknown>(
+      method: Parameters<typeof directSessionReq>[0],
+      params: Record<string, unknown> = {},
+    ) => directSessionReq<T>(method, { key, ...params }, options),
+  };
 }
 
 function sessionIdentity(name: string) {
@@ -167,44 +195,37 @@ afterEach(async () => {
 // Real handler, config/session persistence and managed worktree lifecycle. Physical
 // worker preparation is the boundary fixture; this is not provider execution proof.
 test("a write-only ordinary create retains its owned workspace and unsent message when required preparation fails", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const config = await getGatewayConfigModule();
-  await config.writeConfigFile({ cloudWorkers: { requiredProfile: "dedicated-native" } });
-  const key = "agent:main:dashboard:required-worker";
+  const session = await ordinarySession("required-worker");
+  const { key, withRequiredSession } = session;
   let preparationAttempt = 0;
-  const withRequiredSession = vi.fn<ReturnType<typeof createPreparation>>(
-    async (identity, task, assertCurrent) => {
-      assertCurrent?.();
-      const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-      expect(identity).toEqual({ agentId: "main", sessionKey: key, sessionId: entry?.sessionId });
-      const workspace = await managedWorktrees.findLiveByOwner("session", key);
-      expect(workspace).toBeDefined();
-      ownedWorktrees.add(workspace!.id);
-      expect(entry).toMatchObject({
-        worktree: { id: workspace!.id },
-        sessionRoot: workspace!.path,
-      });
-      expect(await fs.readdir(workspace!.path)).toEqual([".git"]);
-      preparationAttempt += 1;
-      if (preparationAttempt === 1) {
-        throw new Error("Required worker is offline; reconnect it and retry.");
-      }
-      return await task(() => assertCurrent?.());
-    },
-  );
+  withRequiredSession.mockImplementation(async (identity, task, assertCurrent) => {
+    assertCurrent?.();
+    const entry = session.read();
+    expect(identity).toEqual({ agentId: "main", sessionKey: key, sessionId: entry?.sessionId });
+    const workspace = await session.worktree();
+    expect(workspace).toBeDefined();
+    ownedWorktrees.add(workspace!.id);
+    expect(entry).toMatchObject({
+      worktree: { id: workspace!.id },
+      sessionRoot: workspace!.path,
+    });
+    expect(await fs.readdir(workspace!.path)).toEqual([".git"]);
+    preparationAttempt += 1;
+    if (preparationAttempt === 1) {
+      throw new Error("Required worker is offline; reconnect it and retry.");
+    }
+    return await task(() => assertCurrent?.());
+  });
   const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
   chatSend.mockImplementation(async ({ params, respond }) => {
     expect(params.message).toBe("Keep this message for the required worker.");
     respond(true, { runId: "required-worker-retry", status: "started" });
   });
-  const context = { workerPlacementDispatchService: { withRequiredSession } };
-  const params = { key, agentId: "main", message: "Keep this message for the required worker." };
-  const created = await directSessionReq<{
-    key: string;
-    sessionId: string;
-    runStarted: boolean;
-    runError?: { message: string };
-  }>("sessions.create", params, { ...controlUiClient, context });
+  const message = "Keep this message for the required worker.";
+  const created = await session.request<{ sessionId: string }>("sessions.create", {
+    agentId: "main",
+    message,
+  });
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(withRequiredSession).toHaveBeenCalledOnce();
   expect(created.payload).toMatchObject({
@@ -213,35 +234,25 @@ test("a write-only ordinary create retains its owned workspace and unsent messag
     runError: { message: expect.stringContaining("Required worker is offline") },
   });
   expect(chatSend).not.toHaveBeenCalled();
-  const workspace = (await managedWorktrees.findLiveByOwner("session", key))!;
+  const workspace = (await session.worktree())!;
   await fs.writeFile(workspace.path + "/retained.txt", "Keep accepted work.");
-  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.sessionId).toBe(
-    created.payload?.sessionId,
-  );
-  const retry = await directSessionReq(
-    "sessions.send",
-    { key, message: params.message, idempotencyKey: "required-worker-retry" },
-    { ...controlUiClient, context },
-  );
+  expect(session.read()?.sessionId).toBe(created.payload?.sessionId);
+  const retry = await session.request("sessions.send", {
+    message,
+    idempotencyKey: "required-worker-retry",
+  });
   expect(retry.ok, JSON.stringify(retry.error)).toBe(true);
   expect(retry.payload).toMatchObject({ runId: "required-worker-retry", status: "started" });
   expect(chatSend).toHaveBeenCalledOnce();
-  expect((await managedWorktrees.findLiveByOwner("session", key))?.id).toBe(workspace.id);
+  expect((await session.worktree())?.id).toBe(workspace.id);
   expect(await fs.readFile(workspace.path + "/retained.txt", "utf8")).toBe("Keep accepted work.");
 });
 
 test.each([{ execNode: "other-device" }, { agentRuntime: "codex" }])(
   "required placement rejects an execution override before creating state: %j",
   async (override) => {
-    const { storePath } = await createSessionStoreDir();
-    const config = await getGatewayConfigModule();
-    await config.writeConfigFile({ cloudWorkers: { requiredProfile: "dedicated-native" } });
-    const key = "agent:main:dashboard:required-worker-override";
-    const created = await directSessionReq(
-      "sessions.create",
-      { key, ...override },
-      controlUiClient,
-    );
+    const session = await ordinarySession("required-worker-override", true, false);
+    const created = await session.request("sessions.create", override);
     expect(created).toMatchObject({
       ok: false,
       error: {
@@ -249,28 +260,17 @@ test.each([{ execNode: "other-device" }, { agentRuntime: "codex" }])(
         message: expect.stringContaining("requires worker profile"),
       },
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
-    expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+    expect(session.read()).toBeUndefined();
+    expect(await session.worktree()).toBeUndefined();
   },
 );
 
 test("unconfigured ordinary create does not prepare a worker or create a managed worktree", async () => {
-  await createSessionStoreDir();
-  const config = await getGatewayConfigModule();
-  await config.writeConfigFile({});
-  const key = "agent:main:dashboard:optional-worker";
-  const withRequiredSession = vi.fn();
-  const created = await directSessionReq(
-    "sessions.create",
-    { key, message: "" },
-    {
-      ...controlUiClient,
-      context: { workerPlacementDispatchService: { withRequiredSession } },
-    },
-  );
+  const session = await ordinarySession("optional-worker", false);
+  const created = await session.request("sessions.create", { message: "" });
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(withRequiredSession).not.toHaveBeenCalled();
-  expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+  expect(session.withRequiredSession).not.toHaveBeenCalled();
+  expect(await session.worktree()).toBeUndefined();
 });
 
 test.each(["channel", "incognito", "shared"] as const)(
@@ -280,24 +280,16 @@ test.each(["channel", "incognito", "shared"] as const)(
     const storePath =
       kind === "shared" ? path.join(createdStore.dir, "shared.sqlite") : createdStore.storePath;
     testState.sessionStorePath = storePath;
-    const config = await getGatewayConfigModule();
+    const config = await configureRequiredWorker(
+      "test-node",
+      "worker",
+      kind === "shared" ? { agents: { entries: { main: {}, ops: {} } } } : {},
+    );
     const agentId = kind === "shared" ? "ops" : "main";
     const key =
       kind === "incognito"
         ? "agent:main:dashboard:incognito-required-worker"
         : `agent:${agentId}:telegram:direct:required-worker`;
-    await config.writeConfigFile({
-      ...(kind === "shared" ? { agents: { entries: { main: {}, ops: {} } } } : {}),
-      cloudWorkers: {
-        requiredProfile: "dedicated-native",
-        profiles: {
-          "dedicated-native": {
-            provider: "device",
-            settings: { device: "test-node", inference: "worker" },
-          },
-        },
-      },
-    });
     if (kind === "shared") {
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:shared-owner", storePath },
