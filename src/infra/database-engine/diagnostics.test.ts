@@ -3,9 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
 import type { PortDescriptor } from "./port-types.js";
+import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -78,6 +80,46 @@ describe("physical store diagnostics", () => {
     expect(result.nextSteps.join(" ")).toContain("doctor --fix");
     expect(fs.readFileSync(input.path!)).toEqual(before);
   });
+
+  it.each([
+    { version: 25, pending: 1, issue: "Schema migrations pending" },
+    { version: 27, pending: 0, issue: "newer than supported" },
+  ])(
+    "preserves readable state schema $version when port admission refuses it",
+    async ({ version, pending, issue }) => {
+      const input = fixture();
+      input.family = "state";
+      input.descriptor = await loadStatePortDescriptor();
+      {
+        using db = openNodeSqliteDatabase(input.path!);
+        const schemas = [input.descriptor, ...(input.descriptor.fragments ?? [])];
+        for (const schema of schemas) {
+          db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
+        }
+        db.exec(`PRAGMA user_version = ${version}`);
+        db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
+          version,
+        );
+        db.prepare(
+          "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
+        ).run(String(version));
+      }
+      const before = fs.readFileSync(input.path!);
+      const result = await inspectDatabaseStore(input);
+      expect(result.schema).toEqual({
+        versioning: "versioned",
+        version,
+        expectedVersion: 26,
+        pending,
+      });
+      expect(result.issues.join(" ")).toContain(issue);
+      expect(result.issues).toContain(
+        "The SQLite schema could not be admitted by its store owner.",
+      );
+      expect(result.nextSteps.join(" ")).toContain("doctor --fix");
+      expect(fs.readFileSync(input.path!)).toEqual(before);
+    },
+  );
 
   it("distinguishes a configured PostgreSQL engine from a physical SQLite store", async () => {
     const input = fixture();

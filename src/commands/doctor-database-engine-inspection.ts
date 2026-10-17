@@ -103,6 +103,7 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
                 : [];
         }
         const files = new Set<string>();
+        const unreadableRoots = new Set<string>();
         for (const root of roots) {
           try {
             const stat = fs.statSync(root, { throwIfNoEntry: false });
@@ -117,13 +118,25 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
               });
               if (walked.failedDirs.length) {
                 result.discoveryFailed = true;
+                for (const failure of walked.failedDirs) {
+                  files.add(failure.path);
+                  unreadableRoots.add(failure.path);
+                }
               }
               for (const entry of walked.entries) {
-                files.add(fs.realpathSync(entry.path));
+                try {
+                  files.add(fs.realpathSync(entry.path));
+                } catch {
+                  result.discoveryFailed = true;
+                  files.add(entry.path);
+                  unreadableRoots.add(entry.path);
+                }
               }
             }
           } catch {
             result.discoveryFailed = true;
+            files.add(root);
+            unreadableRoots.add(root);
           }
         }
         let descriptor;
@@ -152,6 +165,7 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
             },
             descriptor,
             postgres: selection?.postgres,
+            inspectionError: file && unreadableRoots.has(file) ? "unreadable-root" : undefined,
           });
           diagnostic.legacyMigrations = legacy[family.id] ?? { state: "unknown", pending: [] };
           if (diagnostic.legacyMigrations.state !== "none") {

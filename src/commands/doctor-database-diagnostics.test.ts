@@ -104,4 +104,41 @@ describe("Doctor per-store output", () => {
       ),
     ).toMatchSnapshot();
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "retains unreadable store paths and directories as unknown rather than absent",
+    async () => {
+      const root = tempDirs.make("doctor-store-permissions-");
+      await createDiagnosticStores(root);
+      const stateFile = path.join(root, diagnosticPaths.state);
+      const matrixDirectory = path.join(root, "matrix/accounts/retained");
+      const deniedDirectories = [path.dirname(stateFile), matrixDirectory];
+      try {
+        for (const directory of deniedDirectories) {
+          fs.chmodSync(directory, 0);
+        }
+        const inspection = await inspectDoctorDatabaseEngines({
+          config: diagnosticConfig(),
+          stateDir: root,
+          env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
+        });
+        for (const deniedPath of [stateFile, matrixDirectory]) {
+          const store = inspection.stores!.find((entry) => entry.path === deniedPath);
+          expect(store).toMatchObject({
+            family: "state",
+            observed: "unknown",
+            connectivity: "unknown",
+            schema: { version: null, pending: null },
+            issues: ["The physical store root could not be read; its contents are unknown."],
+          });
+          expect(store!.nextSteps.join(" ")).toContain("permissions");
+          expect(store!.nextSteps.join(" ")).not.toContain("Store is not present");
+        }
+      } finally {
+        for (const directory of deniedDirectories) {
+          fs.chmodSync(directory, 0o700);
+        }
+      }
+    },
+  );
 });

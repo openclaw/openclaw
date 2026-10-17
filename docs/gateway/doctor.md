@@ -23,6 +23,9 @@ stay unknown with an actionable next step. Read the
 for field definitions, output examples, and recovery instructions. For example,
 `observed=sqlite (mismatch); schema=26, expected=26, pending=0` means the schema
 is current but the configured PostgreSQL engine has not been applied by a port.
+An older readable state or agent schema still reports its version and pending
+migrations when port validation refuses it. An inaccessible store remains in the
+report as unknown and names the permission repair; it is not reported as absent.
 JSON includes every inspected store in `databaseStores`, independent of the finding severity filter. Store findings also carry the same observations in `details`; inspecting them
 does not migrate data.
 

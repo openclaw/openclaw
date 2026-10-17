@@ -58,6 +58,7 @@ export type DatabaseStoreInspection = Pick<
   descriptor?: PortDescriptor;
   schemaVersion?: number | null;
   postgres?: DatabaseEngineInput;
+  inspectionError?: "unreadable-root";
 };
 
 function observeLease(
@@ -110,6 +111,10 @@ function inspectSqlite(
         result.nextSteps.push("Run openclaw doctor --fix before porting this store.");
       }
     } catch {
+      // Core state and agent stores keep their authoritative version in user_version.
+      if (result.family === "state" || result.family === "agent") {
+        observeVersion(result, facts.userVersion);
+      }
       result.issues.push("The SQLite schema could not be admitted by its store owner.");
       result.nextSteps.push("Run openclaw doctor --fix with the matching OpenClaw version.");
     }
@@ -303,6 +308,11 @@ export async function inspectDatabaseStore(
     issues: [],
     nextSteps: [],
   };
+  if (input.inspectionError === "unreadable-root") {
+    result.issues.push("The physical store root could not be read; its contents are unknown.");
+    result.nextSteps.push("Check store path permissions, then rerun openclaw doctor.");
+    return result;
+  }
   let absent = !input.path;
   if (input.path) {
     try {

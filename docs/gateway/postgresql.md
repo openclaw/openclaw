@@ -502,7 +502,10 @@ configuration. Never delete an anchor to clear a mismatch.
 
 `schema`, `expected`, and `pending` compare observed metadata with the installed
 store owner's descriptor. A version match alone does not prove complete schema
-integrity. Unversioned local journals are identified separately. Installed server
+integrity. Readable state and agent schema versions remain visible when port
+validation refuses an older or newer schema. Unreadable files and directories
+remain in the inventory with unknown contents and a permission-repair step;
+they are not reported as absent. Unversioned local journals are identified separately. Installed server
 extensions and recorded admitted search extensions are separate facts;
 `degraded` identifies recorded keyword-only operation and missing vector support.
 Install a named missing extension as a database administrator, grant `USAGE` on
