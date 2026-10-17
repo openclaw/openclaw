@@ -5,6 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import {
   bindAuthProfileFileObservationReaders,
   readAuthProfileDatabaseIdentity,
@@ -246,9 +247,6 @@ it("observes agent initialization after a cold auth read in the same worker", as
     using database = openNodeSqliteDatabase(source);
     ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path: source, env });
     database
-      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-      .run("plugin-model-catalog-v1", "fixture", "synthetic catalog", 1);
-    database
       .prepare(
         "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
       )
@@ -256,10 +254,17 @@ it("observes agent initialization after a cold auth read in the same worker", as
     await expect(
       runSqliteReadOnlyOperation(
         source,
-        { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: ["fixture"] } },
+        {
+          type: "agentRetirement.sessionStoreBlocker",
+          input: prepareAgentSessionStoreDeletionSafety(
+            { agents: { entries: { survivor: {} } }, session: { store: source } },
+            "main",
+            env,
+          ),
+        },
         { source: "canonical", expectedIdentity, env },
       ),
-    ).resolves.toEqual([{ pluginId: "fixture", contents: "synthetic catalog" }]);
+    ).resolves.toEqual({ blocker: "survivor" });
     expect((await read(source, "canonical", undefined, env)).store).toEqual({
       status: "readable",
       raw: store,
