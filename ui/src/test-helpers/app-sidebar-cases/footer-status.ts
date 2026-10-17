@@ -135,6 +135,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.connected = true;
+    sidebar.gatewayStatus = { kind: "connected" };
+    await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: git@e8cbc62 · 4h ago",
@@ -207,8 +210,14 @@ describe("AppSidebar gateway footer subtitle", () => {
 
     sidebar.connectionStatus = null;
     sidebar.connected = true;
+    sidebar.gatewayStatus = { kind: "connected" };
+    sidebar.connectionRecovery = true;
     await sidebar.updateComplete;
     expect(card()?.getAttribute("data-connection-status")).toBe("connected");
+    expect(card()?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Connected");
+
+    sidebar.connectionRecovery = false;
+    await sidebar.updateComplete;
     expect(card()?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: Local Gateway, primary",
     );

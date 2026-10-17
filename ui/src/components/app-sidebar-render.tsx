@@ -265,7 +265,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
   const gatewayPrimaryTag = () => (gateway()?.isPrimary ? t("nav.gateway.primaryTag") : null);
   const identityMenuLabel = () => t("profilePage.identity.menuButtonLabel", { name: selfLabel() });
   const statusLabel = () =>
-    host.gatewayStatus?.kind
+    host.gatewayStatus?.kind && (host.gatewayStatus.kind !== "connected" || host.connectionRecovery)
       ? gatewayStatusLabel(host.gatewayStatus.kind, host.gatewayStatus.queuedCount)
       : connectionStatus()
         ? t(`connection.${connectionStatus()}`)

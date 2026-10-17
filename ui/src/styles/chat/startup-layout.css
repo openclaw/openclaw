@@ -557,16 +557,6 @@
 
 .chat-pane__header--mobile .chat-pane__crumbs {
   flex: 1 1 auto;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0;
-}
-
-.chat-pane__header--mobile .chat-pane__project-row {
-  display: flex;
-  min-width: 0;
-  max-width: 100%;
-  height: 18px;
 }
 
 .chat-pane__header--mobile
