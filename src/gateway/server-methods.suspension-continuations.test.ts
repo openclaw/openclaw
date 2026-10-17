@@ -36,6 +36,10 @@ afterEach(async () => {
   }
 });
 
+function expectRejected(respond: unknown, code = "UNAVAILABLE") {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
+}
+
 function closeAdmission(mode: "suspension" | "restart signal" | "restart drain" | "direct close") {
   if (mode === "direct close") {
     return undefined;
@@ -141,6 +145,15 @@ async function dispatch(params: {
   return respond;
 }
 
+function bindDispatch(
+  context: GatewayRequestContext,
+  client: GatewayWsClient,
+  admission?: "continuation",
+) {
+  return (method: string, requestParams: Record<string, unknown>, handler: GatewayRequestHandler) =>
+    dispatch({ context, client, admission, method, requestParams, handler });
+}
+
 async function createLifecycleInvoke() {
   const client = createClient("node");
   const send = vi.spyOn(client.socket, "send");
@@ -234,6 +247,7 @@ describe("draining Gateway completion ownership", () => {
       managerCleanups.push(() => manager.drain());
       const client = createClient("operator");
       const context = createContext({ execApprovalManager: manager });
+      const call = bindDispatch(context, client);
       const ownerReady = deferred();
       const root = tryBeginGatewayRootWorkAdmission();
       if (!root) {
@@ -256,27 +270,11 @@ describe("draining Gateway completion ownership", () => {
       });
       const shape = method === "approval.resolve" ? { kind: "exec", decision: "allow-once" } : {};
 
-      const wrong = await dispatch({
-        method,
-        requestParams: { id: "approval-unrelated", ...shape },
-        context,
-        client,
-        handler,
-      });
-      expect(wrong).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
+      const wrong = await call(method, { id: "approval-unrelated", ...shape }, handler);
+      expectRejected(wrong);
       expect(handler).not.toHaveBeenCalled();
 
-      const accepted = await dispatch({
-        method,
-        requestParams: { id: "approval-owned", ...shape },
-        context,
-        client,
-        handler,
-      });
+      const accepted = await call(method, { id: "approval-owned", ...shape }, handler);
       expect(accepted).toHaveBeenCalledWith(true, { applied: true });
       await expect(owner).resolves.toBe("allow-once");
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -291,6 +289,7 @@ describe("draining Gateway completion ownership", () => {
     managerCleanups.push(() => manager.close());
     const client = createClient("operator");
     const context = createContext({ questionManager: manager });
+    const call = bindDispatch(context, client);
     const root = tryBeginGatewayRootWorkAdmission();
     if (!root) {
       throw new Error("expected admitted question owner");
@@ -318,54 +317,28 @@ describe("draining Gateway completion ownership", () => {
     closeAdmission("restart drain");
 
     const newWork = vi.fn();
-    const refused = await dispatch({
-      method: "question.request",
-      requestParams: { id: "question-new" },
-      context,
-      client,
-      handler: newWork,
-    });
-    expect(refused).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    const refused = await call("question.request", { id: "question-new" }, newWork);
+    expectRejected(refused);
     expect(newWork).not.toHaveBeenCalled();
 
-    const inspected = await dispatch({
-      method: "question.get",
-      requestParams: { id: "question-owned" },
-      context,
-      client,
-      handler: ({ respond }) => respond(true, { question: manager.get("question-owned") }),
-    });
+    const inspected = await call("question.get", { id: "question-owned" }, ({ respond }) =>
+      respond(true, { question: manager.get("question-owned") }),
+    );
     expect(inspected).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ question: expect.any(Object) }),
     );
     expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-    const unrelated = await dispatch({
-      method: "question.resolve",
-      requestParams: { id: "question-unrelated" },
-      context,
-      client,
-      handler: vi.fn<GatewayRequestHandler>(),
-    });
-    expect(unrelated).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
+    const unrelated = await call(
+      "question.resolve",
+      { id: "question-unrelated" },
+      vi.fn<GatewayRequestHandler>(),
     );
+    expectRejected(unrelated);
 
-    const answered = await dispatch({
-      method: "question.resolve",
-      requestParams: { id: "question-owned" },
-      context,
-      client,
-      handler: ({ respond }) => {
-        respond(true, manager.resolve("question-owned", { answers: { choice: ["yes"] } }));
-      },
+    const answered = await call("question.resolve", { id: "question-owned" }, ({ respond }) => {
+      respond(true, manager.resolve("question-owned", { answers: { choice: ["yes"] } }));
     });
     expect(answered).toHaveBeenCalledWith(true, {
       status: "answered",
@@ -377,18 +350,8 @@ describe("draining Gateway completion ownership", () => {
       answers: { answers: { choice: ["yes"] } },
     });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-    const replay = await dispatch({
-      method: "question.resolve",
-      requestParams: { id: "question-owned" },
-      context,
-      client,
-      handler: newWork,
-    });
-    expect(replay).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    const replay = await call("question.resolve", { id: "question-owned" }, newWork);
+    expectRejected(replay);
     expect(newWork).not.toHaveBeenCalled();
   });
 
@@ -440,11 +403,7 @@ describe("draining Gateway completion ownership", () => {
         client: createClient("operator"),
         handler,
       });
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
+      expectRejected(response);
       expect(handler).not.toHaveBeenCalled();
       await replacement;
       expect(manager.get(request.id)).toMatchObject({
@@ -477,6 +436,7 @@ describe("draining Gateway completion ownership", () => {
       pairingGeneration: "generation-live",
     });
     const context = createContext({ nodeRegistry: registry });
+    const call = bindDispatch(context, node);
     const invokeReady = deferred<string>();
     const finishDelivery = deferred();
     const chunks: string[] = [];
@@ -507,57 +467,41 @@ describe("draining Gateway completion ownership", () => {
     const suspension = closeAdmission("suspension");
 
     try {
-      const ignored = await dispatch({
-        method: "node.invoke.result",
-        requestParams: { id: "unrelated-invoke", nodeId: "node-1", ok: true },
-        context,
-        client: node,
-        handler: vi.fn<GatewayRequestHandler>(),
-      });
-      expect(ignored).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
+      const ignored = await call(
+        "node.invoke.result",
+        { id: "unrelated-invoke", nodeId: "node-1", ok: true },
+        vi.fn<GatewayRequestHandler>(),
       );
+      expectRejected(ignored);
 
-      const malformed = await dispatch({
-        method: "node.invoke.progress",
-        requestParams: { invokeId, nodeId: "node-1", seq: -1, chunk: "invalid" },
-        context,
-        client: node,
-        handler: handleNodeInvokeProgress,
-      });
-      expect(malformed).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      const malformed = await call(
+        "node.invoke.progress",
+        { invokeId, nodeId: "node-1", seq: -1, chunk: "invalid" },
+        handleNodeInvokeProgress,
       );
+      expectRejected(malformed, "INVALID_REQUEST");
       expect(chunks).toEqual([]);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-      const progressed = await dispatch({
-        method: "node.invoke.progress",
-        requestParams: { invokeId, nodeId: "node-1", seq: 0, chunk: "working" },
-        context,
-        client: node,
-        handler: handleNodeInvokeProgress,
-      });
+      const progressed = await call(
+        "node.invoke.progress",
+        { invokeId, nodeId: "node-1", seq: 0, chunk: "working" },
+        handleNodeInvokeProgress,
+      );
       expect(progressed).toHaveBeenCalledWith(true, { ok: true, ignored: false }, undefined);
       expect(chunks).toEqual(["working"]);
 
-      const completed = await dispatch({
-        method: "node.invoke.result",
-        requestParams: {
+      const completed = await call(
+        "node.invoke.result",
+        {
           id: invokeId,
           nodeId: "node-1",
           ok: true,
           payloadJSON: null,
           error: null,
         },
-        context,
-        client: node,
-        handler: handleNodeInvokeResult,
-      });
+        handleNodeInvokeResult,
+      );
       expect(completed).toHaveBeenCalledWith(true, { ok: true }, undefined);
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       finishDelivery.resolve();
@@ -581,34 +525,21 @@ describe("restart lifecycle completion ownership", () => {
       closeAdmission(mode);
       const admission = mode === "direct close" ? "continuation" : undefined;
       const invoke = await createLifecycleInvoke();
+      const call = bindDispatch(invoke.context, invoke.client, admission);
       try {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         const newWork = vi.fn();
-        const refused = await dispatch({
-          method: "node.runnerInventory.update",
-          requestParams: {},
-          context: invoke.context,
-          client: invoke.client,
-          admission,
-          handler: newWork,
-        });
-        expect(refused).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "UNAVAILABLE" }),
-        );
+        const refused = await call("node.runnerInventory.update", {}, newWork);
+        expectRejected(refused);
         expect(newWork).not.toHaveBeenCalled();
-        const progressed = await dispatch({
-          method: "node.invoke.progress",
-          requestParams: { invokeId: invoke.invokeId, nodeId: "node-1", seq: 0, chunk: "stopped" },
-          context: invoke.context,
-          client: invoke.client,
-          admission,
-          handler: (options) => {
+        const progressed = await call(
+          "node.invoke.progress",
+          { invokeId: invoke.invokeId, nodeId: "node-1", seq: 0, chunk: "stopped" },
+          (options) => {
             expect(getActiveGatewayRootWorkCount()).toBe(0);
             return handleNodeInvokeProgress(options);
           },
-        });
+        );
         // Lifecycle invokes have no stream consumer, but authenticated progress
         // still records execution and prevents a contradictory not-ready replay.
         expect(progressed).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);
@@ -616,18 +547,15 @@ describe("restart lifecycle completion ownership", () => {
         if (mode !== "direct close") {
           expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
         }
-        const completed = await dispatch({
-          method: "node.invoke.result",
-          requestParams: {
+        const completed = await call(
+          "node.invoke.result",
+          {
             ...resultRequest(invoke.invokeId),
             ok: false,
             error: { code: "NODE_NOT_READY", message: "not ready" },
           },
-          context: invoke.context,
-          client: invoke.client,
-          admission,
-          handler: handleNodeInvokeResult,
-        });
+          handleNodeInvokeResult,
+        );
         expect(completed).toHaveBeenCalledWith(true, { ok: true }, undefined);
         await expect(invoke.result).resolves.toMatchObject({
           ok: false,
@@ -636,19 +564,12 @@ describe("restart lifecycle completion ownership", () => {
             message: "node reported not-ready after invocation progress",
           },
         });
-        const replayed = await dispatch({
-          method: "node.invoke.result",
-          requestParams: resultRequest(invoke.invokeId),
-          context: invoke.context,
-          client: invoke.client,
-          admission,
-          handler: handleNodeInvokeResult,
-        });
-        expect(replayed).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "UNAVAILABLE" }),
+        const replayed = await call(
+          "node.invoke.result",
+          resultRequest(invoke.invokeId),
+          handleNodeInvokeResult,
         );
+        expectRejected(replayed);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         if (mode !== "direct close") {
           expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
@@ -683,11 +604,7 @@ describe("restart lifecycle completion ownership", () => {
           client,
           handler: handleNodeInvokeResult,
         });
-        expect(rejected).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "UNAVAILABLE" }),
-        );
+        expectRejected(rejected);
         if (changed === "owner" || changed === "pairing") {
           expect(invoke.send.mock.calls.map(([frame]) => frame.toString())).toContainEqual(
             expect.stringContaining('"event":"node.invoke.cancel"'),
@@ -711,22 +628,21 @@ describe("restart lifecycle completion ownership", () => {
     async (changed) => {
       closeAdmission("restart drain");
       const invoke = await createLifecycleInvoke();
+      const call = bindDispatch(invoke.context, invoke.client);
       const enteredHandler = deferred();
       const resumeHandler = deferred();
       try {
-        const response = dispatch({
-          method: "node.invoke.result",
-          requestParams: resultRequest(invoke.invokeId),
-          context: invoke.context,
-          client: invoke.client,
-          handler: async (options) => {
+        const response = call(
+          "node.invoke.result",
+          resultRequest(invoke.invokeId),
+          async (options) => {
             expect(getActiveGatewayRootWorkCount()).toBe(0);
             enteredHandler.resolve();
             await resumeHandler.promise;
             expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
             await handleNodeInvokeResult(options);
           },
-        });
+        );
         await Promise.race([
           enteredHandler.promise,
           response.then(() => {

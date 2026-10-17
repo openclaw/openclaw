@@ -68,15 +68,6 @@ function expectStaleRunBuffersPresent(deps: MaintenanceTimerDeps, runId: string)
   });
 }
 
-function expectStaleRunBuffersSwept(deps: MaintenanceTimerDeps, runId: string): void {
-  const run = deps.chatRunState.runs.get(runId);
-  expect(run?.buffer).toBeUndefined();
-  expect(run?.rawBuffer).toBeUndefined();
-  expect(run?.deltaSentAt).toBeUndefined();
-  expect(run?.assistantScope).toBeUndefined();
-  expect(run?.display).toBeUndefined();
-}
-
 function seedBufferedAgentEvent(deps: MaintenanceTimerDeps, runId: string): void {
   deps.chatRunState.getOrCreate(runId).agentText = {
     assistant: {
@@ -140,11 +131,6 @@ describe("gateway chat-state maintenance", () => {
           expect(deps.chatRunState.resolveBuffer(runId).text).toBe("Fresh output");
         } else {
           expect(deps.chatRunState.runs.has(runId)).toBe(false);
-          if (kind === "aborted") {
-            expectStaleRunBuffersSwept(deps, runId);
-            expect(deps.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
-            expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
-          }
         }
       } finally {
         await stopMaintenanceTimers(timers);
@@ -164,11 +150,7 @@ describe("gateway chat-state maintenance", () => {
           ? claimAgentRunContext(
               runId,
               { sessionKey: "main" },
-              {
-                trackOwner: true,
-                ownsContext: true,
-                protectFromSweep: true,
-              },
+              { trackOwner: true, ownsContext: true, protectFromSweep: true },
             )
           : undefined;
       if (kind === "embedded") {
@@ -215,22 +197,13 @@ describe("gateway chat-state maintenance", () => {
     },
   );
   it("prunes idle tool-event recipients while preserving grace and registered run state", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-    const deps = {
-      ...createGatewayMaintenanceStateForTest(),
-      logHealth: { info: vi.fn(), error: vi.fn() },
-      runWorktreeGc: async () => undefined,
-      runDeliveryQueueMediaGc: async () => undefined,
-      runManagedOutgoingMediaGc: async () => undefined,
-    };
+    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const { toolEventRecipients, registry, runs } = deps.chatRunState;
     toolEventRecipients.add("active-expired", "conn-active");
     toolEventRecipients.add("registered-expired", "conn-registered");
     registry.add("registered-expired", { sessionKey: "session-1", clientRunId: "client-1" });
 
     await vi.advanceTimersByTimeAsync(9 * 60_000 + 2_000);
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(deps);
     try {
       await vi.advanceTimersByTimeAsync(27_000);

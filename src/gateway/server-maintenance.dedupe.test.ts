@@ -6,48 +6,16 @@ import {
 import { createArtifactDownload } from "./artifact-download-grants.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
-// Dedupe-record maintenance: TTL retention for active runs/queued sends and
-// overflow eviction ordering. Split from server-maintenance.test.ts, which
-// sits at the max-lines cap; mocks are hoisted per file, so the module-mock
-// preamble is repeated while pure fixtures stay local to each block.
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
-const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
-  deletedRecordCount: 0,
-  deletedFileCount: 0,
-  retainedCount: 0,
-}));
 const startDevicePairSetupMaintenanceMock = vi.hoisted(() => vi.fn(async () => 0));
 
 // mock-isolation: Dedupe timers must not start the unrelated device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
   startDevicePairSetupMaintenance: startDevicePairSetupMaintenanceMock,
 }));
-
-vi.mock("../infra/delivery-queue-sqlite.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/delivery-queue-sqlite.js")>(
-    "../infra/delivery-queue-sqlite.js",
-  );
-  return { ...actual, pruneExpiredDeliveryQueueTombstones: vi.fn() };
-});
-
-vi.mock("../infra/outbound/delivery-queue-media-spool.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../infra/outbound/delivery-queue-media-spool.js")
-  >("../infra/outbound/delivery-queue-media-spool.js");
-  return { ...actual, pruneOrphanedDeliveryQueueMedia: vi.fn(async () => undefined) };
-});
-
-vi.mock("../media/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../media/store.js")>("../media/store.js");
-  return {
-    ...actual,
-    cleanOldMedia: vi.fn(async () => {}),
-    prunePlaybackTranscodeCache: vi.fn(async () => {}),
-  };
-});
 
 const ABORTED_RUN_TTL_MS = 60 * 60_000;
 
@@ -69,14 +37,16 @@ function createActiveRun(
 function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
-    logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
-    runDeliveryQueueMediaGc: vi.fn(async () => undefined),
-    runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
+    runManagedOutgoingMediaGc: async () => undefined,
   };
 }
 
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
+
+function expiredDedupe(runId: string, status = "accepted") {
+  return { ts: Date.now() - DEDUPE_TTL_MS - 1, ok: true, payload: { runId, status } };
+}
 
 function seedStableDedupeEntries(deps: MaintenanceTimerDeps, now: number): void {
   for (let index = 0; index < DEDUPE_MAX; index += 1) {
@@ -84,7 +54,7 @@ function seedStableDedupeEntries(deps: MaintenanceTimerDeps, now: number): void 
   }
 }
 
-async function createTimedMaintenanceScenario() {
+function createTimedMaintenanceScenario() {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
   const deps = createMaintenanceTimerDeps();
@@ -160,19 +130,14 @@ describe("gateway dedupe maintenance", () => {
   });
 
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
-    const { deps, now } = await createTimedMaintenanceScenario();
+    const { deps } = createTimedMaintenanceScenario();
     const runId = "exec-approval-followup:req-active:nonce:retry-1";
     deps.chatAbortControllers.set(runId, createActiveRun("agent:main:main", "agent"));
-    deps.dedupe.set("agent:exec-approval-followup:req-active", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId, status: "accepted" },
-    });
-    deps.dedupe.set("agent:exec-approval-followup:req-stale", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId: "exec-approval-followup:req-stale:nonce:retry-1", status: "accepted" },
-    });
+    deps.dedupe.set("agent:exec-approval-followup:req-active", expiredDedupe(runId));
+    deps.dedupe.set(
+      "agent:exec-approval-followup:req-stale",
+      expiredDedupe("exec-approval-followup:req-stale:nonce:retry-1"),
+    );
 
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -184,33 +149,37 @@ describe("gateway dedupe maintenance", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("keeps queued chat dedupe entries through ttl and overflow", async () => {
-    const { deps, now } = await createTimedMaintenanceScenario();
-    const runId = "queued-oldest";
-    seedStableDedupeEntries(deps, now);
-    deps.chatQueuedTurns.set(runId, {
-      controller: new AbortController(),
-      sessionId: "session-main",
-      sessionKey: "agent:main:main",
-    });
-    deps.dedupe.set(`chat:${runId}`, {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId, status: "ok" },
-    });
-    deps.dedupe.set("overflow-newest", { ts: now, ok: true });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
-    expect(deps.dedupe.has(`chat:${runId}`)).toBe(true);
-    expect(deps.dedupe.has("stable-0")).toBe(false);
-    await stopMaintenanceTimers(timers);
-  });
+  it.each(["chat", "agent"] as const)(
+    "keeps live %s dedupe through ttl and overflow",
+    async (kind) => {
+      const { deps, now } = createTimedMaintenanceScenario();
+      const runId = "active-oldest";
+      seedStableDedupeEntries(deps, now);
+      if (kind === "chat") {
+        deps.chatQueuedTurns.set(runId, {
+          controller: new AbortController(),
+          sessionId: "session-main",
+          sessionKey: "agent:main:main",
+        });
+      } else {
+        deps.chatAbortControllers.set(runId, createActiveRun("agent:main:main", "agent"));
+      }
+      const key = `${kind}:${runId}`;
+      deps.dedupe.set(key, expiredDedupe(runId, kind === "chat" ? "ok" : "accepted"));
+      deps.dedupe.set("overflow-newest", { ts: now, ok: true });
+      const timers = startGatewayMaintenanceTimers(deps);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.dedupe.size).toBe(DEDUPE_MAX);
+      expect(deps.dedupe.has(key)).toBe(true);
+      expect(deps.dedupe.has("stable-0")).toBe(false);
+      expect(deps.dedupe.has("stable-1")).toBe(false);
+      expect(deps.dedupe.has("overflow-newest")).toBe(true);
+      await stopMaintenanceTimers(timers);
+    },
+  );
 
   it("evicts multiple dedupe overflows by oldest timestamp with interleaved reinsertions", async () => {
-    const { deps, now } = await createTimedMaintenanceScenario();
+    const { deps, now } = createTimedMaintenanceScenario();
 
     for (let index = 0; index < DEDUPE_MAX; index += 1) {
       deps.dedupe.set(`item-${index}`, { ts: now - 10_000 + index, ok: true });
@@ -240,31 +209,6 @@ describe("gateway dedupe maintenance", () => {
     expect(deps.dedupe.has("overflow-1")).toBe(true);
 
     expect(deps.dedupe.has("item-1")).toBe(true);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("does not evict active agent dedupe entries while trimming overflow", async () => {
-    const { deps, now } = await createTimedMaintenanceScenario();
-
-    seedStableDedupeEntries(deps, now);
-    deps.chatAbortControllers.set("active-oldest", createActiveRun("agent:main:main", "agent"));
-    deps.dedupe.set("agent:active-oldest", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId: "active-oldest", status: "accepted" },
-    });
-    deps.dedupe.set("overflow-newest", { ts: now, ok: true });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
-    expect(deps.dedupe.has("agent:active-oldest")).toBe(true);
-    expect(deps.dedupe.has("stable-0")).toBe(false);
-    expect(deps.dedupe.has("stable-1")).toBe(false);
-    expect(deps.dedupe.has("overflow-newest")).toBe(true);
 
     await stopMaintenanceTimers(timers);
   });

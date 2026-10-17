@@ -18,6 +18,19 @@ import type { GatewayRequestHandler } from "./server-methods/types.js";
 import * as sessionGroupCatalog from "./session-group-catalog.js";
 import { talkModeHandlers } from "./talk/handlers/mode.js";
 
+function expectRejected(respond: unknown, code = "UNAVAILABLE") {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
+}
+
+function profileIdentity(profile: { id: string; updatedAt: number }) {
+  return {
+    profileId: profile.id,
+    displayName: null,
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  };
+}
+
 function createPendingProfileClient() {
   return {
     connId: "conn-pending-profile",
@@ -39,8 +52,11 @@ async function dispatchPendingProfileMethod(params: {
   requestParams?: unknown;
   methodRegistry?: ReturnType<typeof createGatewayMethodRegistry>;
   expectedProfileId?: string;
+  context?: Parameters<typeof handleGatewayRequest>[0]["context"];
+  respond?: ReturnType<typeof vi.fn>;
+  webchat?: boolean;
 }) {
-  const respond = vi.fn();
+  const respond = params.respond ?? vi.fn();
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -53,11 +69,13 @@ async function dispatchPendingProfileMethod(params: {
     },
     respond,
     client: params.client,
-    isWebchatConnect: () => false,
-    context: {
-      logGateway: { warn: vi.fn() },
-      getRuntimeConfig: () => ({}),
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+    isWebchatConnect: () => params.webchat ?? false,
+    context:
+      params.context ??
+      ({
+        logGateway: { warn: vi.fn() },
+        getRuntimeConfig: () => ({}),
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"]),
     ...(params.methodRegistry
       ? { methodRegistry: params.methodRegistry }
       : params.handler
@@ -91,12 +109,7 @@ describe("Gateway pending-profile authorization", () => {
           admittedScopes.push(readGatewayRequestMutationAuthority(options).sessionScope);
           options.respond(true, { ok: true });
         });
-        const identity = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        const identity = profileIdentity(profile);
         const groupRead = method === "sessions.groups.list";
         const ensureCatalog = sessionGroupCatalog.ensureSessionGroupCatalog;
         using catalogPreparation = groupRead
@@ -155,11 +168,7 @@ describe("Gateway pending-profile authorization", () => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
     client.connect.scopes = ["operator.sessions.read"];
     const denied = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
-    expect(denied).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
+    expectRejected(denied, "FORBIDDEN");
     expect(handler).not.toHaveBeenCalled();
 
     client.connect.scopes = ["operator.read"];
@@ -183,12 +192,7 @@ describe("Gateway pending-profile authorization", () => {
           platform: "web",
           mode: "webchat",
         };
-        client.authenticatedUserProfile = {
-          profileId: source.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        };
+        client.authenticatedUserProfile = profileIdentity(source);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const broadcast = vi.fn();
@@ -199,19 +203,15 @@ describe("Gateway pending-profile authorization", () => {
         });
         const context = createDirectChatContext({ broadcast, hasConnectedTalkNode });
         const respond = vi.fn();
-        const request = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "bound-talk-mode",
-            method: "talk.mode",
-            expectedProfileId: source.id,
-            params: { enabled: true, phase: "listening" },
-          },
+        const request = dispatchPendingProfileMethod({
+          method: "talk.mode",
+          expectedProfileId: source.id,
+          requestParams: { enabled: true, phase: "listening" },
           client,
           context,
           respond,
-          isWebchatConnect: () => true,
-          extraHandlers: talkModeHandlers,
+          webchat: true,
+          handler: talkModeHandlers["talk.mode"],
         });
         try {
           await Promise.race([entered.promise, request]);
@@ -259,34 +259,22 @@ describe("Gateway pending-profile authorization", () => {
       });
       const before = loadSessionEntry(scope);
       const client = createPendingProfileClient();
-      client.authenticatedUserProfile = {
-        profileId: source.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: source.updatedAt,
-      };
+      client.authenticatedUserProfile = profileIdentity(source);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const respond = vi.fn();
       const context = createDirectChatContext();
-      const request = handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "bound-patch",
-          method: "sessions.patch",
-          expectedProfileId: source.id,
-          params: { key: scope.sessionKey, agentId: "main", label: "must not commit" },
-        },
+      const request = dispatchPendingProfileMethod({
+        method: "sessions.patch",
+        expectedProfileId: source.id,
+        requestParams: { key: scope.sessionKey, agentId: "main", label: "must not commit" },
         client,
-        respond,
-        isWebchatConnect: () => false,
         context,
-        extraHandlers: {
-          "sessions.patch": async (options) => {
-            entered.resolve();
-            await release.promise;
-            await sessionMutationHandlers["sessions.patch"]!(options);
-          },
+        respond,
+        handler: async (options) => {
+          entered.resolve();
+          await release.promise;
+          await sessionMutationHandlers["sessions.patch"]!(options);
         },
       });
       try {
@@ -306,19 +294,14 @@ describe("Gateway pending-profile authorization", () => {
         }),
       );
       const accepted = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "current-patch",
-          method: "sessions.patch",
-          expectedProfileId: target.id,
-          params: { key: scope.sessionKey, agentId: "main", label: "current account" },
-        },
+      await dispatchPendingProfileMethod({
+        method: "sessions.patch",
+        expectedProfileId: target.id,
+        requestParams: { key: scope.sessionKey, agentId: "main", label: "current account" },
         client,
         context,
         respond: accepted,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionMutationHandlers,
+        handler: sessionMutationHandlers["sessions.patch"],
       });
       expect(accepted.mock.calls[0]?.[0]).toBe(true);
       expect(loadSessionEntry(scope)?.label).toBe("current account");
@@ -334,12 +317,7 @@ describe("Gateway pending-profile authorization", () => {
       client.authenticatedGitHubIdentitySync = vi.fn(async () => {
         entered.resolve();
         await release.promise;
-        client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        client.authenticatedUserProfile = profileIdentity(profile);
         return { profileId: profile.id, updatedAt: profile.updatedAt };
       });
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
@@ -369,12 +347,7 @@ describe("Gateway pending-profile authorization", () => {
         const source = ensureProfileForEmail(email);
         const target = ensureProfileForEmail("merged-profile@example.test");
         const client = createPendingProfileClient();
-        client.authenticatedUserProfile = {
-          profileId: source.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        };
+        client.authenticatedUserProfile = profileIdentity(source);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const handler = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
@@ -666,11 +639,7 @@ describe("Gateway self-profile scope", () => {
         requestParams: { profileId: profile.id, displayName: "Not permitted" },
       });
 
-      expect(deniedRead).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
+      expectRejected(deniedRead, "FORBIDDEN");
       expect(deniedWrite).toHaveBeenCalledWith(
         false,
         undefined,
