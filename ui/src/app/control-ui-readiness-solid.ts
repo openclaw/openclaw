@@ -71,7 +71,10 @@ export function createSolidControlUiReadiness(
         : { kind: "loading", navigationVisible: false };
     }
     await terminal?.updateComplete;
-    return { ...presentation, terminalActivationReady: terminal?.available === true };
+    return {
+      ...presentation,
+      terminalActivationReady: terminal?.isConnected === true && terminal.available === true,
+    };
   });
   // Publish committed DOM readiness to the external automation hook.
   createEffect(
