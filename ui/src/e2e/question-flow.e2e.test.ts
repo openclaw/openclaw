@@ -1,18 +1,12 @@
 // Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
-import path from "node:path";
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
-import { beforeEach, afterEach, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  type MockGatewayControls,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
@@ -24,13 +18,8 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("question-flow");
-  }
-});
+const composerSelector = ".agent-chat__composer-combobox textarea";
+const tooltipSelector = "openclaw-tooltip .tooltip-surface[popover]:popover-open";
 const mainSessionKey = "agent:main:main";
 const questionSessionKey = "agent:main:question-proof";
 
@@ -74,17 +63,6 @@ function storedSecretAnswer(): QuestionResolveResult {
   return { status: "answered", answers: { answers: { api_key: ["stored"] } } };
 }
 
-async function screenshot(page: Page, name: string) {
-  if (!captureUiProof) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
-}
-
 function historyMessages() {
   return Array.from({ length: 12 }, (_, index) => ({
     role: index % 2 === 0 ? "user" : "assistant",
@@ -107,7 +85,6 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
-    ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
@@ -131,20 +108,17 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
         path: "",
         count: 2,
         defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: null },
-        sessions: [
-          {
-            key: mainSessionKey,
-            kind: "direct",
-            label: "Home",
-            updatedAt: Date.now() - 1_000,
-          },
-          {
-            key: questionSessionKey,
-            kind: "direct",
-            label: "Question proof",
-            updatedAt: Date.now(),
-          },
-        ],
+        sessions: (
+          [
+            [mainSessionKey, "Home", -1_000],
+            [questionSessionKey, "Question proof", 0],
+          ] as const
+        ).map(([key, label, offset]) => ({
+          key,
+          label,
+          kind: "direct" as const,
+          updatedAt: Date.now() + offset,
+        })),
       } satisfies SessionsListResult,
     },
     // The handshake must advertise the genuine canonical main; the question
@@ -191,7 +165,7 @@ async function expectQuestionAttention(page: Page, preview: string | null): Prom
   const session = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
   const questionAttention = session.locator('[data-session-attention="question"]');
   const expectedCount = present ? 1 : 0;
-  await expect.poll(() => questionAttention.count()).toBe(expectedCount);
+  await expectCount(questionAttention, expectedCount);
   if (present) {
     await expect
       .poll(() =>
@@ -203,15 +177,8 @@ async function expectQuestionAttention(page: Page, preview: string | null): Prom
         ),
       )
       .toBe(preview);
-    await expect.poll(() => session.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+    await expectCount(session.locator(".sidebar-recent-session__subtitle"), 0);
   }
-}
-
-async function emitRequested(
-  gateway: MockGatewayControls,
-  record: ReturnType<typeof questionRecord>,
-) {
-  await gateway.emitGatewayEvent("question.requested", record);
 }
 
 function scrollRegressionQuestion(id: string, prompt: string) {
@@ -247,7 +214,7 @@ suite.define(() => {
       },
     ]);
 
-    await emitRequested(gateway, request);
+    await gateway.emitGatewayEvent("question.requested", request);
     await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
     await expectQuestionAttention(page, request.questions[0]!.question);
     // The drawer's initial focus move must finish before opening the tooltip.
@@ -255,15 +222,11 @@ suite.define(() => {
     const row = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
     const shell = page.locator(".shell");
     const attention = row.locator('[data-session-attention="question"]');
-    const tooltip = row.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open");
+    const tooltip = row.locator(tooltipSelector);
     const route = page.url();
 
     await attention.tap();
-    try {
-      await expectCount(tooltip, 1);
-    } finally {
-      await screenshot(page, "01-sidebar-attention-tapped.png");
-    }
+    await expectCount(tooltip, 1);
     expect(await shell.getAttribute("class")).toContain("shell--nav-drawer-open");
     expect(page.url()).toBe(route);
     expect(await row.getByText(request.questions[0]!.question, { exact: true }).isVisible()).toBe(
@@ -305,13 +268,12 @@ suite.define(() => {
       },
     ]);
 
-    await emitRequested(gateway, request);
+    await gateway.emitGatewayEvent("question.requested", request);
     const panel = panelFor(page, prompt);
     await panel.waitFor();
     const link = panel.getByRole("link", { name: "Open link", exact: true });
-    await expect.poll(() => link.count()).toBe(1);
+    await expectCount(link, 1);
     expect(await link.getAttribute("href")).toBe(url);
-    await screenshot(page, "01-external-step-pending.png");
 
     const popupPromise = page.waitForEvent("popup");
     await link.click();
@@ -319,7 +281,6 @@ suite.define(() => {
     await popup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
     expect(popup.url()).toBe(url);
     expect(await popup.evaluate(() => window.opener)).toBeNull();
-    await screenshot(popup, "02-external-step-opened.png");
     await popup.close();
     await panel.waitFor();
     await expectQuestionAttention(page, request.questions[0]!.question);
@@ -335,7 +296,6 @@ suite.define(() => {
     await keyboardPopup.close();
     await panel.waitFor();
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
-    await screenshot(page, "03-external-step-ready-to-confirm.png");
 
     const answers = { answers: { continue: ["I've completed this step"] } };
     await gateway.setMethodResponse("question.resolve", {
@@ -348,7 +308,6 @@ suite.define(() => {
     expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
     await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
-    await screenshot(page, "04-external-step-completed.png");
   });
 
   it("settles a live-edge transcript after a question enters footer flow", async () => {
@@ -359,7 +318,10 @@ suite.define(() => {
       .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
 
     const prompt = "Which detailed release strategy should I use?";
-    await emitRequested(gateway, scrollRegressionQuestion("question-live-edge-scroll", prompt));
+    await gateway.emitGatewayEvent(
+      "question.requested",
+      scrollRegressionQuestion("question-live-edge-scroll", prompt),
+    );
     const panel = panelFor(page, prompt);
     await panel.waitFor();
     await waitForChatScrollIdle(page);
@@ -379,8 +341,7 @@ suite.define(() => {
         );
       })
       .toBe(true);
-    await expect.poll(() => page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
-    await screenshot(page, "05-question-live-edge-scroll.png");
+    await expectCount(page.getByRole("button", { name: "Scroll to latest" }), 0);
   });
 
   it("preserves explicit backscroll and keeps the latest arrow above the question", async () => {
@@ -398,7 +359,10 @@ suite.define(() => {
     const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
 
     const prompt = "Which detailed release strategy should stay below my reading position?";
-    await emitRequested(gateway, scrollRegressionQuestion("question-backscroll-position", prompt));
+    await gateway.emitGatewayEvent(
+      "question.requested",
+      scrollRegressionQuestion("question-backscroll-position", prompt),
+    );
     const panel = panelFor(page, prompt);
     await panel.waitFor();
     await waitForChatScrollIdle(page);
@@ -418,19 +382,17 @@ suite.define(() => {
         return Boolean(arrowBox && panelBox && arrowBox.y + arrowBox.height <= panelBox.y);
       })
       .toBe(true);
-    await screenshot(page, "06-question-backscroll-arrow.png");
   });
 
   defineQuestionFooterTests({
     openQuestionPage,
     questionRecord,
     questionSessionKey,
-    screenshot,
   });
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
     const { gateway, page } = await openQuestionPage();
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
     const request = questionRecord("question-deploy-target", [
       {
@@ -451,14 +413,12 @@ suite.define(() => {
       },
     ]);
 
-    await emitRequested(gateway, request);
+    await gateway.emitGatewayEvent("question.requested", request);
     const panel = panelFor(page, "Where should I deploy?");
     await panel.waitFor();
     await expectQuestionAttention(page, request.questions[0]!.question);
-    await expect
-      .poll(() => page.locator(".chat-thread openclaw-chat-question-panel").count())
-      .toBe(0);
-    await expect.poll(() => panel.getByText("1/1", { exact: true }).count()).toBe(1);
+    await expectCount(page.locator(".chat-thread openclaw-chat-question-panel"), 0);
+    await expectCount(panel.getByText("1/1", { exact: true }), 1);
     await expectCount(panel.getByPlaceholder("Type your own answer here"), 1);
     await expectCount(page.locator(".agent-chat__input"), 0);
     await expectCount(page.locator(".agent-chat__composer-footer"), 0);
@@ -477,25 +437,23 @@ suite.define(() => {
         };
       })
       .toEqual({ left: 0, width: 0 });
-    await page
-      .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
-      .hover();
-    await expectCount(page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open"), 1);
+    const attention = page.locator(
+      `[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`,
+    );
+    await attention.hover();
+    await expectCount(page.locator(tooltipSelector), 1);
     await page.mouse.move(400, 50);
-    await expectCount(page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open"), 0);
-    await page
-      .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
-      .focus();
-    await expectCount(page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open"), 1);
+    await expectCount(page.locator(tooltipSelector), 0);
+    await attention.focus();
+    await expectCount(page.locator(tooltipSelector), 1);
     await expectCount(page.locator('.session-progress-hovercard[data-open="true"]'), 0);
-    await screenshot(page, "01-question-pending.png");
 
     await panel.locator(".chat-question-panel__collapse").click();
     await composer.waitFor();
     await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
     await expectFocused(composer);
     await page.locator(".chat-question-panel__collapsed-button").click();
-    await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+    await expectCount(page.locator(".agent-chat__input"), 0);
     await expectFocused(panel.locator(".chat-question-panel"));
 
     const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
@@ -512,14 +470,11 @@ suite.define(() => {
     await expectQuestionAttention(page, null);
     const summary = page.locator(".chat-question-summary").filter({ hasText: "Deploy:" });
     await summary.waitFor();
-    await expect
-      .poll(() => summary.getByText("Staging (Recommended)", { exact: true }).count())
-      .toBe(1);
+    await expectCount(summary.getByText("Staging (Recommended)", { exact: true }), 1);
     await composer.waitFor();
     await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
     await expectFocused(composer);
     await summary.scrollIntoViewIfNeeded();
-    await screenshot(page, "02-question-answered.png");
     expect(
       await summary.getByText(request.questions[0]!.question, { exact: true }).isVisible(),
     ).toBe(true);
@@ -530,15 +485,13 @@ suite.define(() => {
     const request = secretStoreQuestion("question-store-secret-success");
     const fakeSecret = "fake-secret-never-use-browser-proof-123";
     await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
-    await emitRequested(gateway, request);
+    await gateway.emitGatewayEvent("question.requested", request);
 
     const panel = panelFor(page, "Provide the deployment API key");
     await panel.waitFor();
-    await expect.poll(() => panel.getByText("Requested by main", { exact: false }).count()).toBe(1);
+    await expectCount(panel.getByText("Requested by main", { exact: false }), 1);
     await expectCount(panel.getByText("Publish the release artifacts."), 1);
-    await expect
-      .poll(() => panel.getByText("Replaces DEPLOY_API_KEY", { exact: false }).count())
-      .toBe(1);
+    await expectCount(panel.getByText("Replaces DEPLOY_API_KEY", { exact: false }), 1);
     const secretInput = panel.getByLabel("API key", { exact: true });
     await expectCount(secretInput, 1);
     expect(await secretInput.getAttribute("type")).toBe("password");
@@ -547,12 +500,10 @@ suite.define(() => {
     await expectCount(panel.locator('[role="radiogroup"]'), 0);
     const hostsInput = panel.locator(".chat-question-panel__hosts");
     expect(await hostsInput.inputValue()).toBe("api.example.test");
-    await screenshot(page, "07-secret-store-pending.png");
 
     await secretInput.fill(fakeSecret);
     await hostsInput.fill("api.example.test, uploads.example.test extra.example.test");
     await expectSecretNotEchoed(page, fakeSecret, true);
-    await screenshot(page, "08-secret-store-masked-input.png");
 
     await secretInput.focus();
     await page.keyboard.press("Tab");
@@ -564,7 +515,6 @@ suite.define(() => {
     const hide = button(panel, "Hide secret");
     expect(await hide.getAttribute("aria-pressed")).toBe("true");
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
-    await screenshot(page, "08-secret-store-visible-input.png");
     await page.keyboard.press("Space");
     expect(await secretInput.getAttribute("type")).toBe("password");
     expect(await secretInput.inputValue()).toBe(fakeSecret);
@@ -580,10 +530,9 @@ suite.define(() => {
     await expectCount(panel, 0);
     const summary = page.locator(".chat-question-summary").filter({ hasText: "API key:" });
     await summary.waitFor();
-    await expect.poll(() => summary.getByText("Answered", { exact: true }).count()).toBe(1);
+    await expectCount(summary.getByText("Answered", { exact: true }), 1);
     expect(await summary.textContent()).not.toContain("stored");
     await expectSecretNotEchoed(page, fakeSecret);
-    await screenshot(page, "09-secret-store-answered.png");
   });
 
   it("keeps a store-bound question interactive after Gateway validation rejects its hosts", async () => {
@@ -594,7 +543,7 @@ suite.define(() => {
     await gateway.setMethodResponse("question.resolve", {
       __mockError: { code: "INVALID_REQUEST", message: validationMessage },
     });
-    await emitRequested(gateway, request);
+    await gateway.emitGatewayEvent("question.requested", request);
 
     const panel = panelFor(page, "Provide the deployment API key");
     const secretInput = panel.locator('input[type="password"]');
@@ -607,7 +556,6 @@ suite.define(() => {
     await expect.poll(() => secretInput.isEnabled()).toBe(true);
     expect(await secretInput.inputValue()).toBe(fakeSecret);
     await expectSecretNotEchoed(page, fakeSecret);
-    await screenshot(page, "10-secret-store-validation-error.png");
 
     await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
     await hostsInput.fill("corrected.example.test");
@@ -621,7 +569,7 @@ suite.define(() => {
       answers: { answers: { api_key: [fakeSecret] } },
       secretStoreAllowedHosts: ["corrected.example.test"],
     });
-    await expect.poll(() => panel.count()).toBe(0);
+    await expectCount(panel, 0);
     await expectSecretNotEchoed(page, fakeSecret);
   });
 
@@ -659,16 +607,13 @@ suite.define(() => {
       "Waiting for your answer",
     );
     expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
-    await screenshot(page, "11-secret-store-ask-pending.png");
     const secretInput = panel.getByLabel("API key", { exact: true });
     expect(await secretInput.getAttribute("type")).toBe("password");
     await secretInput.fill(fakeSecret);
     await expectSecretNotEchoed(page, fakeSecret, true);
-    await screenshot(page, "12-secret-store-ask-masked-input.png");
     await button(panel, "Show secret").click();
     expect(await secretInput.getAttribute("type")).toBe("text");
     expect(await secretInput.inputValue()).toBe(fakeSecret);
-    await screenshot(page, "12-secret-store-ask-visible-input.png");
     await button(panel, "Submit").click();
 
     const resolveRequest = await gateway.waitForRequest("question.resolve");
@@ -686,7 +631,6 @@ suite.define(() => {
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
-    await screenshot(page, "13-secret-store-ask-answered.png");
   });
 
   it("retains a typed answer when navigating between pending questions", async () => {
@@ -711,47 +655,35 @@ suite.define(() => {
       },
     ]);
 
-    await emitRequested(gateway, first);
-    await emitRequested(gateway, second);
+    await gateway.emitGatewayEvent("question.requested", first);
+    await gateway.emitGatewayEvent("question.requested", second);
     const panel = page.locator("openclaw-chat-question-panel");
     await panel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
     await button(panel, "Next").click();
     await panel.getByText("Who should read it?", { exact: true }).waitFor();
     await button(panel, "Previous").click();
     await panel.getByText("Which format should I use?", { exact: true }).waitFor();
-    try {
-      expect(
-        await panel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
-      ).toBe("Compact");
-      expect(await panel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked")).toBe(
-        "false",
-      );
-    } finally {
-      await screenshot(page, "14-retained-custom-answer.png");
-    }
+    expect(
+      await panel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
+    ).toBe("Compact");
+    expect(await panel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
   it.each([
-    { action: "answer", status: "answered" as const, closeSubmittingPane: false },
-    { action: "cancellation", status: "cancelled" as const, closeSubmittingPane: false },
-    {
-      action: "answer after its submitting pane closes",
-      status: "answered" as const,
-      closeSubmittingPane: true,
-    },
-    {
-      action: "cancellation after its submitting pane closes",
-      status: "cancelled" as const,
-      closeSubmittingPane: true,
-    },
-  ])(
-    "updates current panes and sidebar from an authoritative $action without a resolution event",
-    async ({ status, closeSubmittingPane }) => {
+    ["answered", false],
+    ["cancelled", false],
+    ["answered", true],
+    ["cancelled", true],
+  ] as const)(
+    "reconciles %s across panes (submitting pane closed: %s) without a resolution event",
+    async (status, closeSubmittingPane) => {
       const { gateway, page } = await openQuestionPage();
       await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expectCount(panes, 2);
-      await expectCount(panes.locator(".agent-chat__composer-combobox textarea"), 2);
+      await expectCount(panes.locator(composerSelector), 2);
       expect(await gateway.getRequests("question.list")).toHaveLength(1);
 
       const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`, [
@@ -763,7 +695,7 @@ suite.define(() => {
         },
       ]);
 
-      await emitRequested(gateway, request);
+      await gateway.emitGatewayEvent("question.requested", request);
       const panels = panelFor(page, "Where should both panes deploy?");
       await expectCount(panels, 2);
       await expectQuestionAttention(page, request.questions[0]!.question);
@@ -800,9 +732,7 @@ suite.define(() => {
       const remainingCount = closeSubmittingPane ? 1 : 2;
 
       await expectCount(panels, 0);
-      await expect
-        .poll(() => remainingPanes.locator(".agent-chat__composer-combobox textarea").count())
-        .toBe(remainingCount);
+      await expectCount(remainingPanes.locator(composerSelector), remainingCount);
       await expect
         .poll(() =>
           page
@@ -830,7 +760,7 @@ suite.define(() => {
     ]);
 
     await gateway.setMethodResponse("question.list", { questions: [request] });
-    await emitRequested(gateway, request);
+    await gateway.emitGatewayEvent("question.requested", request);
     const panel = panelFor(page, "Where should I deploy after reconnecting?");
     await panel.waitFor();
     await expectQuestionAttention(page, request.questions[0]!.question);
@@ -848,9 +778,9 @@ suite.define(() => {
     const recovery = await gateway.waitForRequest("question.get");
     expect(recovery.params).toEqual({ id: request.id });
 
-    await expect.poll(() => panel.count()).toBe(0);
+    await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await page.locator(composerSelector).waitFor();
     await expect.poll(() => favicon.getAttribute("href")).toBe(originalFavicon);
   });
 });

@@ -78,7 +78,6 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
   const unregister = registerAgentRunDelegatedAuthorityClosedHandler((authority) =>
     manager.cancelClosedAuthorities(authority.operationalRunInstance),
   );
-  const frames: unknown[] = [];
   let delivery = Promise.resolve();
   let deliveryError: Error | undefined;
   const socket = Object.assign(new EventEmitter(), {
@@ -93,7 +92,6 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     ) {
       const callback = typeof options === "function" ? options : onSent;
       const frame: unknown = JSON.parse(wire.toString());
-      frames.push(frame);
       delivery = delivery
         .then(() => deliver(frame))
         .then(
@@ -254,7 +252,6 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     profileId: profile.id,
     registration: registration.promise,
     requests,
-    frames,
     flushEvents,
     request: (method: string, params: unknown) => request(browser, method, params),
     ask: (toolCallId: string, signal?: AbortSignal) =>

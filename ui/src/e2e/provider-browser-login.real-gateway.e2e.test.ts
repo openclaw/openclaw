@@ -53,8 +53,6 @@ async function connectReadbackClient() {
   return { client, nextPublication: () => publication.promise };
 }
 const browserArgs: string[] = [];
-const writeArtifact = (name: string, value: unknown) =>
-  fs.writeFile(path.join(suite.artifactDir, name), JSON.stringify(value, null, 2));
 const suite = createControlUiE2eSuite({
   name: "Provider browser login through real HTTPS Gateway",
   startServerBeforeBrowser: true,
@@ -95,16 +93,14 @@ suite.define(() => {
   it("rejects cancelled and stale callbacks, then saves a fresh sign-in and serves an existing session", async () => {
     const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
       readback.client.request<T>(method, params);
+    const authStatus = () => call<ModelAuthStatusResult>("models.authStatus", { agentId: "main" });
     const profile = async () => {
-      const status: ModelAuthStatusResult = await call("models.authStatus", { agentId: "main" });
+      const status = await authStatus();
       return status.providers
         .flatMap((provider) => provider.profiles)
         .find((entry) => entry.profileId === `${loginProvider}:default`);
     };
-    const initialAuthStatus: ModelAuthStatusResult = await call("models.authStatus", {
-      agentId: "main",
-    });
-    await writeArtifact("initial-auth-status.json", initialAuthStatus);
+    const initialAuthStatus = await authStatus();
     expect(
       initialAuthStatus.providerCapabilities?.flatMap((provider) => provider.loginOptions ?? []),
     ).toEqual([
@@ -114,24 +110,19 @@ suite.define(() => {
         kind: "oauth",
       }),
     ]);
-    const callbacks: Array<{ url: string; status: number }> = [];
-    const recordCallback = (response: Response) => {
-      callbacks.push({ url: response.url(), status: response.status() });
-      return response;
-    };
+    const savedProfile = { type: "api_key", profileId: `${loginProvider}:default` };
     const approve = async (page: Page) => {
       const callback = page.waitForResponse(
         (response) => new URL(response.url()).pathname === "/oauth/provider/callback",
       );
       await page.getByRole("button", { name: "Approve sign-in" }).click();
-      return recordCallback(await callback);
+      return await callback;
     };
     const expectRejected = async (response: Response) => {
       expect(response.status()).toBe(410);
       expect(await profile()).toBeUndefined();
       expect(fixture.requests).not.toContain("/token");
     };
-    let finalHistory: unknown;
     const sessionKey = loginSessionKey;
     expect(JSON.stringify(await call("chat.history", { sessionKey }))).toContain(
       loginHistoryMarker,
@@ -170,13 +161,11 @@ suite.define(() => {
         const approved = await fixture.instance.cli(["devices", "approve", pending[0].requestId]);
         expect(approved.code, approved.stderr).toBe(0);
         await waitForControlUiGatewayReady(page);
+        const modal = page.locator("openclaw-modal-dialog");
         const begin = async () => {
           await page.locator("[data-models-connect]").click();
           await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
-          await page
-            .locator("openclaw-modal-dialog")
-            .getByRole("button", { name: "Fixture browser sign-in", exact: true })
-            .click();
+          await modal.getByRole("button", { name: "Fixture browser sign-in", exact: true }).click();
           const link = page.locator(".wizard-step__external-link");
           await link.waitFor();
           const popup = context.waitForEvent("page");
@@ -186,51 +175,38 @@ suite.define(() => {
           return providerPage;
         };
         const cancelledPage = await begin();
-        await page.screenshot({ path: path.join(suite.artifactDir, "login-started.png") });
         expect(pagePreviewRequests).toBe(0);
         expect(await page.locator(".link-hovercard").count()).toBe(0);
-        await page
-          .locator("openclaw-modal-dialog")
-          .getByRole("button", { name: "Cancel", exact: true })
-          .click();
-        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+        await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+        await expect.poll(() => modal.count()).toBe(0);
         const cancelledResponse = await approve(cancelledPage);
         await expectRejected(cancelledResponse);
         await cancelledPage.waitForURL(cancelledResponse.url());
         const staleUrl = cancelledResponse.url();
         expect(new URL(staleUrl).origin).toBe(loginOrigin);
         const freshPage = await begin();
-        const replay = recordCallback(
-          expectDefined(await cancelledPage.goto(staleUrl), "callback response"),
-        );
+        const replay = expectDefined(await cancelledPage.goto(staleUrl), "callback response");
         await expectRejected(replay);
         const freshResponse = await approve(freshPage);
         expect(freshResponse.status()).toBe(200);
         await freshPage.waitForURL(freshResponse.url());
         expect(new URL(freshResponse.url()).origin).toBe(loginOrigin);
-        await expect
-          .poll(profile)
-          .toMatchObject({ type: "api_key", profileId: `${loginProvider}:default` });
-        const completedLogin = page.locator("openclaw-modal-dialog");
-        await completedLogin
+        await expect.poll(profile).toMatchObject(savedProfile);
+        await modal
           .getByRole("heading", { name: "Fixture browser sign-in is connected", exact: true })
           .waitFor();
         await page
           .getByText("Fixture browser sign-in: Provider credentials saved.", { exact: true })
           .waitFor();
-        await completedLogin.getByRole("button", { name: "Close", exact: true }).click();
-        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "login-completed.png") });
+        await modal.getByRole("button", { name: "Close", exact: true }).click();
+        await expect.poll(() => modal.count()).toBe(0);
         await readback.client.stopAndWait();
         await fixture.instance.stopGateway();
         await fixture.instance.startGateway();
         readback = await connectReadbackClient();
         // The browser may still be in its 15-second reconnect backoff.
         await waitForControlUiGatewayReady(page, 30_000);
-        expect(await profile()).toMatchObject({
-          type: "api_key",
-          profileId: `${loginProvider}:default`,
-        });
+        expect(await profile()).toMatchObject(savedProfile);
         expect(JSON.stringify(await call("chat.history", { sessionKey }))).toContain(
           loginHistoryMarker,
         );
@@ -265,25 +241,11 @@ suite.define(() => {
           idempotencyKey: "browser-login-existing-session",
         });
         await expect
-          .poll(async () => {
-            finalHistory = await call("chat.history", { sessionKey });
-            return JSON.stringify(finalHistory);
-          })
+          .poll(async () => JSON.stringify(await call("chat.history", { sessionKey })))
           .toContain("Signed-in fixture reply");
         expect(fixture.requests).toContain("/models");
         expect(fixture.requests).toContain("/chat/completions");
         expect(pagePreviewRequests).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "after-restart.png") });
-        await fs.copyFile(fixture.edgeReceipt, path.join(suite.artifactDir, "edge-receipt.json"));
-      },
-      async () => {
-        await writeArtifact("flow.json", {
-          callbacks,
-          finalHistory,
-          authorizations: fixture.authorizations,
-          requests: fixture.requests,
-          sessionKey,
-        });
       },
     );
   }, 120_000);

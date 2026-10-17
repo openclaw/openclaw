@@ -1,4 +1,5 @@
 // Control UI tests prove route-scoped CSS on fresh direct navigation.
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -11,6 +12,33 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
+
+async function probeStyles(
+  page: Page,
+  markup: string,
+  fields: [string, string][],
+  cssClass = "",
+  tagName: "div" | "article" = "div",
+) {
+  return page.evaluate(
+    ({ html, properties, className, tag }) => {
+      const probe = document.createElement(tag);
+      probe.className = className;
+      probe.innerHTML = html;
+      document.body.append(probe);
+      const styles = properties.map(([selector, property]) => {
+        const element = probe.querySelector(selector);
+        if (!element) {
+          throw new Error(`Style probe missing ${selector}`);
+        }
+        return getComputedStyle(element).getPropertyValue(property);
+      });
+      probe.remove();
+      return styles;
+    },
+    { html: markup, properties: fields, className: cssClass, tag: tagName },
+  );
+}
 
 suite.define(() => {
   it("loads shared Markdown and session-link styles on direct Cron, Skills, and Chat routes", async () => {
@@ -33,78 +61,49 @@ suite.define(() => {
       expect(cronResponse?.status()).toBe(200);
       await page.locator(".cron-page").waitFor();
 
-      const cronStyles = await page.evaluate(() => {
-        const probe = document.createElement("div");
-        probe.innerHTML = `
+      const [padding, listGap, listFontSize, ...cronStyles] = await probeStyles(
+        page,
+        `
           <div class="chat-text"><ul><li>First</li><li>Second</li></ul><pre><code>code</code></pre></div>
           <a class="session-link">session</a>
-        `;
-        document.body.append(probe);
-        const style = (selector: string) => {
-          const element = probe.querySelector(selector);
-          if (!element) {
-            throw new Error(`Cron style probe missing ${selector}`);
-          }
-          return getComputedStyle(element);
-        };
-        const listItemStyle = style("li + li");
-        const result = {
-          listPadding: Number.parseFloat(style("ul").paddingLeft),
-          listItemGap: Number.parseFloat(listItemStyle.marginTop),
-          listItemFontSize: Number.parseFloat(listItemStyle.fontSize),
-          preBorderStyle: style("pre").borderTopStyle,
-          preOverflow: style("pre").overflowX,
-          sessionFontWeight: style(".session-link").fontWeight,
-          sessionTextDecoration: style(".session-link").textDecorationLine,
-        };
-        probe.remove();
-        return result;
-      });
-      expect(cronStyles.listPadding).toBeGreaterThan(0);
-      expect(cronStyles.listItemGap / cronStyles.listItemFontSize).toBeCloseTo(0.4, 2);
-      expect(cronStyles).toMatchObject({
-        preBorderStyle: "solid",
-        preOverflow: "auto",
-        sessionFontWeight: "500",
-        sessionTextDecoration: "none",
-      });
+        `,
+        [
+          ["ul", "padding-left"],
+          ["li + li", "margin-top"],
+          ["li + li", "font-size"],
+          ["pre", "border-top-style"],
+          ["pre", "overflow-x"],
+          [".session-link", "font-weight"],
+          [".session-link", "text-decoration-line"],
+        ],
+      );
+      expect(Number.parseFloat(padding!)).toBeGreaterThan(0);
+      expect(Number.parseFloat(listGap!) / Number.parseFloat(listFontSize!)).toBeCloseTo(0.4, 2);
+      expect(cronStyles).toEqual(["solid", "auto", "500", "none"]);
 
       const skillsResponse = await page.goto(`${suite.server.baseUrl}skills`);
       expect(skillsResponse?.status()).toBe(200);
       await page.getByRole("searchbox", { name: "Search skills", exact: true }).waitFor();
 
-      const skillsStyles = await page.evaluate(() => {
-        const probe = document.createElement("article");
-        probe.className = "sidebar-markdown";
-        probe.innerHTML = `
+      expect(
+        await probeStyles(
+          page,
+          `
           <h2>Heading</h2>
           <ul><li class="task-list-item">Task</li></ul>
           <pre><code>code</code></pre>
           <table><tbody><tr><td>Cell</td></tr></tbody></table>
-        `;
-        document.body.append(probe);
-        const style = (selector: string) => {
-          const element = probe.querySelector(selector);
-          if (!element) {
-            throw new Error(`Skills style probe missing ${selector}`);
-          }
-          return getComputedStyle(element);
-        };
-        const result = {
-          headingBorderStyle: style("h2").borderBottomStyle,
-          preOverflow: style("pre").overflowX,
-          tableDisplay: style("table").display,
-          taskListStyle: style(".task-list-item").listStyleType,
-        };
-        probe.remove();
-        return result;
-      });
-      expect(skillsStyles).toEqual({
-        headingBorderStyle: "solid",
-        preOverflow: "auto",
-        tableDisplay: "block",
-        taskListStyle: "none",
-      });
+        `,
+          [
+            ["h2", "border-bottom-style"],
+            ["pre", "overflow-x"],
+            ["table", "display"],
+            [".task-list-item", "list-style-type"],
+          ],
+          "sidebar-markdown",
+          "article",
+        ),
+      ).toEqual(["solid", "auto", "block", "none"]);
 
       const chatResponse = await page.goto(`${suite.server.baseUrl}chat?session=main`);
       expect(chatResponse?.status()).toBe(200);
@@ -146,37 +145,31 @@ suite.define(() => {
           range.selectNodeContents(target);
           return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top))).size;
         };
+        const fontSize = Number.parseFloat(getComputedStyle(element(".probe-table-copy")).fontSize);
         const result = {
-          demographicsLineCount: lineCount(element("td:first-child")),
-          dimensionLineCount: lineCount(dimension),
+          lines: [lineCount(dimension), lineCount(element("td:first-child"))],
           firstColumnWidth: dimension.getBoundingClientRect().width,
-          listToQuoteGap: gap(".probe-list", ".probe-quote"),
-          quoteMargin: margin(".probe-quote"),
-          tableToCopyGap: gap("table", ".probe-table-copy"),
-          tableCopyMargin: margin(".probe-table-copy"),
-          taskListToDetailsGap: gap(".probe-task-list", ".probe-details"),
-          detailsMargin: margin(".probe-details"),
-          unorderedToOrderedGap: gap(".probe-unordered", ".probe-ordered"),
-          orderedMargin: margin(".probe-ordered"),
-          blockFontSize: Number.parseFloat(getComputedStyle(element(".probe-table-copy")).fontSize),
+          gaps: [
+            gap(".probe-list", ".probe-quote"),
+            gap("table", ".probe-table-copy"),
+            gap(".probe-task-list", ".probe-details"),
+            gap(".probe-unordered", ".probe-ordered"),
+          ],
+          margins: [".probe-quote", ".probe-table-copy", ".probe-details", ".probe-ordered"].map(
+            (selector) => margin(selector) / fontSize,
+          ),
         };
         probe.remove();
         return result;
       });
-      expect(chatMarkdownStyles.dimensionLineCount).toBe(1);
-      expect(chatMarkdownStyles.demographicsLineCount).toBe(1);
+      expect(chatMarkdownStyles.lines).toEqual([1, 1]);
       expect(chatMarkdownStyles.firstColumnWidth).toBeGreaterThanOrEqual(128);
-      expect(chatMarkdownStyles.listToQuoteGap).toBeGreaterThan(0);
-      expect(chatMarkdownStyles.tableToCopyGap).toBeGreaterThan(0);
-      expect(chatMarkdownStyles.taskListToDetailsGap).toBeGreaterThan(0);
-      expect(chatMarkdownStyles.unorderedToOrderedGap).toBeGreaterThan(0);
-      expect(chatMarkdownStyles.quoteMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(1, 2);
-      expect(chatMarkdownStyles.tableCopyMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(
-        1,
-        2,
-      );
-      expect(chatMarkdownStyles.detailsMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(1, 2);
-      expect(chatMarkdownStyles.orderedMargin / chatMarkdownStyles.blockFontSize).toBeCloseTo(1, 2);
+      for (const gap of chatMarkdownStyles.gaps) {
+        expect(gap).toBeGreaterThan(0);
+      }
+      for (const margin of chatMarkdownStyles.margins) {
+        expect(margin).toBeCloseTo(1, 2);
+      }
     });
   });
 });

@@ -67,8 +67,8 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
   let edgeReservation: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
   const provider = createServer(
     { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
-    (request, response) => {
-      void (async () => {
+    async (request, response) => {
+      try {
         const url = new URL(request.url ?? "/", "https://provider.fixture");
         requests.push(url.pathname);
         if (url.pathname === "/authorize") {
@@ -139,39 +139,33 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
           response.end(
             [
               {
-                id: "fixture-reply",
-                object: "chat.completion.chunk",
-                created: 1,
-                model: "ready",
-                choices: [
-                  {
-                    index: 0,
-                    delta: { role: "assistant", content: "Signed-in fixture reply" },
-                    finish_reason: null,
-                  },
-                ],
+                delta: { role: "assistant", content: "Signed-in fixture reply" },
+                finish_reason: null,
               },
-              {
-                id: "fixture-reply",
-                object: "chat.completion.chunk",
-                created: 1,
-                model: "ready",
-                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              },
+              { delta: {}, finish_reason: "stop" },
             ]
-              .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+              .map(
+                (choice) =>
+                  `data: ${JSON.stringify({
+                    id: "fixture-reply",
+                    object: "chat.completion.chunk",
+                    created: 1,
+                    model: "ready",
+                    choices: [{ index: 0, ...choice }],
+                  })}\n\n`,
+              )
               .join("") + "data: [DONE]\n\n",
           );
         } else {
           response.writeHead(404).end();
         }
-      })().catch((error: unknown) => {
+      } catch (error) {
         console.error("Provider browser login fixture failed", error);
         if (!response.headersSent) {
           response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
         }
         response.end("Provider browser login fixture failed");
-      });
+      }
     },
   );
   const close = async () => {
@@ -296,9 +290,7 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
       instance,
       baseUrl: `${loginOrigin}/`,
       edgePort,
-      authorizations,
       requests,
-      edgeReceipt,
       close,
     };
   } catch (error) {
