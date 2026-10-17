@@ -20,10 +20,6 @@ import {
 
 const NOW = 1_000_000;
 const EXPIRE_TIME = new Date(NOW + 3_600_000).toISOString();
-const validCache = {
-  name: "cachedContents/cache-id",
-  expireTime: new Date(NOW + 60_000).toISOString(),
-};
 const TOOLS = [
   {
     name: "lookup",
