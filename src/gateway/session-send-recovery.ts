@@ -226,11 +226,7 @@ export async function recoverSessionSendDeliveries(
               if (source.entry?.archivedAt || destination.entry?.archivedAt) {
                 // Archive stops work without replacing the transcript. Retain the
                 // cancelled receipt, but do not create a misleading failure notice.
-                if (await discardSessionPendingInput(scope, input.runId, assertCurrent)) {
-                  context.logGateway.debug(
-                    `Session delivery recovery cancelled: ${JSON.stringify({ reason: "endpoint-archived", endpoint: source.entry?.archivedAt ? "source" : "target", sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id })}`,
-                  );
-                }
+                await discardSessionPendingInput(scope, input.runId, assertCurrent);
                 return;
               }
               const callGateway: AgentToolGatewayRequestCaller = async () => {

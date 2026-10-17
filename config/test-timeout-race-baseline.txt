@@ -78,7 +78,6 @@ src/gateway/test/server-sessions-resources.test-helpers.ts	1
 src/gateway/worker-environments/node-worker-workspace-publication.test.ts	2
 src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts	3
 src/infra/approval-handler-runtime.test.ts	1
-src/infra/env.test.ts	2
 src/infra/http-body.response.test.ts	2
 src/infra/kysely-sync.test.ts	1
 src/infra/net/fetch-guard.ssrf.test.ts	2

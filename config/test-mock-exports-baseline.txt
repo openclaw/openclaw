@@ -7492,7 +7492,6 @@
 ["src/infra/diagnostic-process-siblings.env.test.ts","./ports-probe.js","cf75f667f7577856a6044cf51b369351f90b91a0a70761969ad52d28ade5c0b4",1]
 ["src/infra/dotenv-global.test.ts","../logging/subsystem.js","6b154f74290d6c84838b4a5b1e90ccd0fb1ccc3f52262c70817046790e4337ab",1]
 ["src/infra/dotenv.test.ts","../logging/subsystem.js","cc3ed5309b0613f4a930554189c634533af26a9d51f667934a48e8a4ba9cac0d",1]
-["src/infra/env.test.ts","../logging/subsystem.js","3e31890d82d777a5528946638e4bcee4a1668ac33bf9a96b403cadf8aeabf75c",1]
 ["src/infra/exec-approval-channel-runtime.test.ts","../../packages/gateway-client/src/readiness.js","0973e1cf3487fc9abc2c883ce2ab2c57c59e5705f5357b20b392a34e3f3e9828",1]
 ["src/infra/exec-approval-channel-runtime.test.ts","../gateway/operator-approvals-client.js","b81ca77fcb368061390b05d6489c64d4db9720d991c511bcd6bce1d2ab7b5c12",1]
 ["src/infra/exec-approval-channel-runtime.test.ts","../logging/subsystem.js","fc4434c1911dc1d112b82ef46c4a3919466eccead33d01159189ea8383c21407",1]
