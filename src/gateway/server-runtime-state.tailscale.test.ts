@@ -1,7 +1,7 @@
 import { request as httpRequest, type RequestOptions } from "node:http";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
@@ -20,6 +20,12 @@ async function createRuntime(...args: Parameters<typeof createGatewayRuntimeStat
   onTestFinished(() => {
     runtime.wss.close();
   });
+  return runtime;
+}
+
+async function createReadyRuntime(tailscaleMode: "serve" | "funnel", registry?: PluginRegistry) {
+  const runtime = await createRuntime(registry, { tailscaleMode, getReadiness });
+  await runtime.startListening();
   return runtime;
 }
 
@@ -97,11 +103,7 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
-    const runtime = await createRuntime(undefined, {
-      tailscaleMode: "serve",
-      getReadiness,
-    });
-    await runtime.startListening();
+    const runtime = await createReadyRuntime("serve");
     const ordinaryAddress = ordinaryEndpoint(runtime);
     const tailscaleAddress = managedEndpoint(runtime);
     expect(tailscaleAddress.host).toBe("127.0.0.1");
@@ -127,11 +129,7 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
-    const runtime = await createRuntime(undefined, {
-      tailscaleMode: "funnel",
-      getReadiness,
-    });
-    await runtime.startListening();
+    const runtime = await createReadyRuntime("funnel");
     const endpoint = managedEndpoint(runtime);
 
     const missingMarker = await requestStatus(endpoint, "/ready", forwardedHeaders);
@@ -228,11 +226,7 @@ describe("managed Tailscale gateway ingress", () => {
       pluginId: "plugin-ws",
       source: "test",
     });
-    const runtime = await createRuntime(registry, {
-      tailscaleMode: "serve",
-      getReadiness,
-    });
-    await runtime.startListening();
+    const runtime = await createReadyRuntime("serve", registry);
     const ordinaryAddress = ordinaryEndpoint(runtime);
     const proxyHeaders = { ...forwardedHeaders, "x-forwarded-for": "198.51.100.20" };
 

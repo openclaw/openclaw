@@ -125,6 +125,11 @@ describe("registered correlated completion recovery custody", () => {
         return database;
       };
       const database = persist(state.stateDir);
+      const expectPendingReceipt = async (settlementOutcome: typeof outcome) => {
+        expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
+          settlementOutcome,
+        });
+      };
       if (change === "hydration pending") {
         const store = await import("../state/openclaw-state-db-readonly.js");
         const unavailable = vi
@@ -262,6 +267,18 @@ describe("registered correlated completion recovery custody", () => {
           log: { ...log, child: () => log },
         });
       let services = startServices();
+      const replaySettlement = async () => {
+        services.heartbeatRunner.stop();
+        services = startServices();
+        await clock.advanceBy(1_250);
+        await services.stopDeliveryRecovery();
+        expect(settled).toHaveBeenCalledTimes(2);
+        expect(
+          getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
+        ).toBe("completed");
+        expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
+        expect(deliver).not.toHaveBeenCalled();
+      };
       try {
         await clock.advanceBy(1_250);
         await services.stopDeliveryRecovery();
@@ -271,31 +288,18 @@ describe("registered correlated completion recovery custody", () => {
         if (change === "hydration pending") {
           expect(subagentRuns.has(child.runId)).toBe(false);
           expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("in_progress");
-          expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
-            settlementOutcome: "recovered",
-          });
+          await expectPendingReceipt("recovered");
           expect(resume).not.toHaveBeenCalled();
           expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true })).toBe(
             1,
           );
-          services.heartbeatRunner.stop();
-          services = startServices();
-          await clock.advanceBy(1_250);
-          await services.stopDeliveryRecovery();
-          expect(settled).toHaveBeenCalledTimes(2);
+          await replaySettlement();
           expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("delivered");
-          expect(
-            getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-          ).toBe("completed");
-          expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
-          expect(deliver).not.toHaveBeenCalled();
         } else if (change === "default after commit") {
           const committed = readSubagentRun(database, child.runId);
           expect(committed?.delivery?.status).toBe("delivered");
           expect(resume).not.toHaveBeenCalled();
-          expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
-            settlementOutcome: "recovered",
-          });
+          await expectPendingReceipt("recovered");
           if (replacement) {
             expect(readSubagentRun(replacement, child.runId)).toEqual(replacementBefore);
           }
@@ -305,17 +309,8 @@ describe("registered correlated completion recovery custody", () => {
           vi.unstubAllEnvs();
           // Reconstitute the live owner through canonical restoration, without a receipt closure.
           expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
-          services.heartbeatRunner.stop();
-          services = startServices();
-          await clock.advanceBy(1_250);
-          await services.stopDeliveryRecovery();
-          expect(settled).toHaveBeenCalledTimes(2);
+          await replaySettlement();
           expect(readSubagentRun(database, child.runId)).toEqual(committed);
-          expect(
-            getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-          ).toBe("completed");
-          expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
-          expect(deliver).not.toHaveBeenCalled();
         } else if (replacingSource) {
           const target =
             change === "file" ? openOpenClawStateDatabase({ path: database.path }) : replacement!;
@@ -327,9 +322,7 @@ describe("registered correlated completion recovery custody", () => {
             expect.stringContaining("settled callback failed"),
           );
           if (change === "default") {
-            expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
-              settlementOutcome: outcome,
-            });
+            await expectPendingReceipt(outcome);
             expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("in_progress");
           }
         } else {

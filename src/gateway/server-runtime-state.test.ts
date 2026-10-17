@@ -100,14 +100,7 @@ async function requestPluginUpgrade(port: number, path: string): Promise<string>
   return await new Promise<string>((resolve, reject) => {
     const socket = connect({ host: "127.0.0.1", port });
     let response = "";
-    let settled = false;
-    const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(response);
-    };
+    const finish = () => resolve(response);
     socket.setEncoding("utf8");
     socket.on("connect", () => {
       socket.write(
