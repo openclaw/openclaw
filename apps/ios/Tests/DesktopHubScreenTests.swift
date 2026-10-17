@@ -99,13 +99,15 @@ struct DesktopHubScreenTests {
         let url = page.url(config: config)
         let script = page.authUserScript(
             config: config,
-            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
+            legacyCredentials: ["password": "accepted-password"])
 
         #expect(url?.absoluteString == "https://gateway.example.com/focus/desktop/source/gateway")
         #expect(url?.absoluteString.contains("secret-token") == false)
         #expect(url?.absoluteString.contains("secret-password") == false)
         #expect(script?.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") == true)
-        #expect(script?.contains("\"token\":\"secret-token\"") == true)
-        #expect(script?.contains("\"password\":\"secret-password\"") == true)
+        #expect(script?.contains("\"password\":\"accepted-password\"") == true)
+        #expect(script?.contains("secret-token") == false)
+        #expect(script?.contains("secret-password") == false)
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
     }
 }

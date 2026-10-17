@@ -2644,6 +2644,8 @@ describe("ci workflow guards", () => {
       mkdirSync(helpers, { recursive: true });
       installCollectChecks(root);
       copyFileSync("scripts/lib/swift-toolchain.sh", path.join(helpers, "swift-toolchain.sh"));
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      writeFileSync(path.join(root, "scripts/ios-access-restart-proof.py"), "");
       writeExecutable(path.join(bin, "xcodebuild"), [
         `#!${testNodeExecPath}`,
         'require("node:fs").appendFileSync(process.env.COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',

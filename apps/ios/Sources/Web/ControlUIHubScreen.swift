@@ -38,17 +38,19 @@ enum ControlUIHubPage {
         return AuthenticatedControlUI.pageURL(config: config, path: path, queryItems: [])
     }
 
-    func authUserScript(config: GatewayConnectConfig?, storedOperatorToken: String?) -> String? {
+    @MainActor
+    func authUserScript(config: GatewayConnectConfig?, legacyCredentials: [String: String]? = nil) -> String? {
         AuthenticatedControlUI.authUserScript(
             config: config,
             pageURL: self.url(config: config),
-            storedOperatorToken: storedOperatorToken)
+            legacyCredentials: legacyCredentials)
     }
 
     func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
         let identity = AuthenticatedControlUI.webContentIdentity(
             config: config,
-            storedOperatorToken: storedOperatorToken)
+            storedOperatorToken: storedOperatorToken,
+            authorizationRevision: config?.ingressAuthorization?.revision)
         guard case .desktop = self else { return identity }
         var hasher = Hasher()
         hasher.combine(identity)
@@ -76,6 +78,7 @@ enum ControlUIHubPage {
 /// and the offline fallback; the page owns its route and reload identity.
 struct ControlUIHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
+    @State private var failedAccessBoundaryIdentity: Int?
     let page: ControlUIHubPage
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var usesNativeNavigationChrome = false
@@ -84,15 +87,33 @@ struct ControlUIHubScreen: View {
     var body: some View {
         let config = self.appModel.activeGatewayConnectConfig
         let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: config)
+        let nativeAuthProvider = IOSDashboardNativeGatewayAuthProvider(appModel: self.appModel, config: config)
+        let authorization = config?.ingressAuthorization
+        let webContentIdentity = self.page.webContentIdentity(
+            config: config, storedOperatorToken: storedOperatorToken)
         ZStack {
             OpenClawProBackground()
-            if let url = self.page.url(config: config) {
+            if let url = self.page.url(config: config),
+               authorization == nil || authorization?.dashboardCookie(url) != nil,
+               self.failedAccessBoundaryIdentity != webContentIdentity
+            {
                 AuthenticatedControlUIWebView(
                     url: url,
-                    authScript: self.page.authUserScript(config: config, storedOperatorToken: storedOperatorToken),
-                    tls: config?.tls)
+                    authScript: self.page.authUserScript(config: config),
+                    tls: config?.tls,
+                    authScriptProvider: {
+                        let credentials = await nativeAuthProvider?.legacyCredentials()
+                        return self.page.authUserScript(config: config, legacyCredentials: credentials)
+                    },
+                    nativeGatewayAuthProvider: nativeAuthProvider,
+                    accessCookie: authorization?.dashboardCookie(url),
+                    accessAdmissionIsCurrent: authorization.map { authorization in
+                        { authorization.isCurrent() }
+                    },
+                    accessResponseCheck: authorization?.checkResponse,
+                    onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
-                        .id(self.page.webContentIdentity(config: config, storedOperatorToken: storedOperatorToken))
+                        .id(webContentIdentity)
                         .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard

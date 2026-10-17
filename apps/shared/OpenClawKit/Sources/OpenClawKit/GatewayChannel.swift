@@ -182,6 +182,21 @@ public actor GatewayChannelActor {
         return self.acceptedHTTPBearer?.token
     }
 
+    func dashboardAuthContext(
+        ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayChannelDashboardAuthContext?
+    {
+        guard let binding = self.authBinding(ifCurrentConnectionGeneration: expectedGeneration),
+              let options = self.connectOptions
+        else { return nil }
+        return GatewayChannelDashboardAuthContext(
+            binding: binding,
+            options: options,
+            encoder: self.encoder,
+            token: self.token,
+            password: self.password,
+            httpResourceBearer: self.httpResourceBearer(ifCurrentConnectionGeneration: expectedGeneration))
+    }
+
     nonisolated func retireSocketAdmission() {
         self.socketAdmission.withLock { $0 = false }
     }
@@ -1519,6 +1534,7 @@ extension GatewayChannelActor {
         if error is CancellationError ||
             error is OpenClawNativeStateError ||
             error is GatewayConnectAuthError ||
+            error is GatewayExternalAuthorizationError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
             error is GatewayTLSValidationError
