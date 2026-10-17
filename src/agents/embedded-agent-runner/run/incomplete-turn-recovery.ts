@@ -2,7 +2,10 @@ import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
-import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import {
+  hasAcceptedSessionSpawn,
+  hasUncollectedSessionSpawn,
+} from "../../accepted-session-spawn.js";
 import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
 import {
   resolveReplyCompletion,
@@ -134,7 +137,9 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     (params.attempt.lastToolError && !params.consumedToolFailure) ||
-    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    (params.tolerateSideEffects === true
+      ? hasUncollectedSessionSpawn(params.attempt.acceptedSessionSpawns)
+      : hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) ||
     params.attempt.itemLifecycle.activeCount > 0 ||
     params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount ||
     hasAsyncActivity(params.attempt.toolMetas) ||
