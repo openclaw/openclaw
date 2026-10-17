@@ -323,6 +323,7 @@ export async function runBridgeRequest(params: {
                 name: entry.mcp?.toolName ?? entry.name,
                 source: "mcp",
                 description: truncateUtf16Safe(entry.description, 512),
+                instructions: entry.mcp?.instructions,
               };
             });
         break;

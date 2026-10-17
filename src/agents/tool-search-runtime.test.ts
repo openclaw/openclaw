@@ -642,7 +642,7 @@ describe("Tool Search catalog indexing", () => {
     const { catalogRef, runtime } = createRuntime([shadowed, visible]);
     addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const projection = createCodeModeCatalogProjection(
-      catalogRef.current!.entries.map(compactToolSearchCatalogEntry),
+      catalogRef.current!.entries.map((entry) => compactToolSearchCatalogEntry(entry)),
     );
     const effectiveOptions = { limit: 1, allowedIds: projection.byId };
 

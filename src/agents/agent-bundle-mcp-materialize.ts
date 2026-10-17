@@ -95,6 +95,7 @@ function buildAppToolPolicyProjections(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(server?.instructions ? { instructions: server.instructions } : {}),
         codexApproval: {
           mode: server?.codexApprovalMode,
           ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
@@ -250,6 +251,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(server?.instructions ? { instructions: server.instructions } : {}),
         ...(tool.oauthConnectBootstrap ? { oauthConnectBootstrap: true } : {}),
         ...(tool.excludedFromOpenClawCatalog || appOnly
           ? { excludedFromOpenClawCatalog: true }
@@ -323,6 +325,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
           safeServerName,
           toolName: operation,
           operation,
+          ...(server.instructions ? { instructions: server.instructions } : {}),
           ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
         },
       });

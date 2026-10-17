@@ -1,6 +1,7 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
@@ -37,6 +38,14 @@ const catalogMetadata = new WeakMap<
 >();
 const untrustedSchemaIdentities = new WeakMap<object, number>();
 let nextUntrustedSchemaIdentity = 1;
+const MAX_SEARCH_MCP_INSTRUCTIONS_CHARS = 512;
+
+function compactMcpInstructions(instructions: string | undefined): string | undefined {
+  if (!instructions || instructions.length <= MAX_SEARCH_MCP_INSTRUCTIONS_CHARS) {
+    return instructions;
+  }
+  return `${truncateUtf16Safe(instructions, MAX_SEARCH_MCP_INSTRUCTIONS_CHARS - 3)}...`;
+}
 
 function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
   return entries
@@ -410,9 +419,15 @@ export function visibleCatalogEntries(
   );
 }
 
-export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+export function compactToolSearchCatalogEntry(
+  entry: ToolSearchCatalogEntry,
+  options: { fullInstructions?: boolean } = {},
+) {
   const output =
     entry.source === "openclaw" ? compactToolOutputHint(entry.outputSchema) : undefined;
+  const instructions = options.fullInstructions
+    ? entry.mcp?.instructions
+    : compactMcpInstructions(entry.mcp?.instructions);
   // Node provenance is namespace-only metadata; generic Tool Search keeps its
   // existing MCP result shape outside Code Mode.
   const mcp = entry.mcp
@@ -421,6 +436,7 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
         safeServerName: entry.mcp.safeServerName,
         toolName: entry.mcp.toolName,
         operation: entry.mcp.operation,
+        ...(instructions ? { instructions } : {}),
       }
     : undefined;
   return {

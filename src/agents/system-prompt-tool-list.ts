@@ -10,6 +10,12 @@ type SystemPromptToolListParams = {
   acpSpawnRuntimeEnabled: boolean;
 };
 
+/** Server-level guidance an MCP server published in its initialize result. */
+export type McpServerInstruction = {
+  server: string;
+  instructions: string;
+};
+
 /** Render the visible tool list with stable core ordering and caller-provided names. */
 export function buildSystemPromptToolLines(params: SystemPromptToolListParams): string[] {
   const { visibleTools, availableTools, promptSurface, acpSpawnRuntimeEnabled } = params;
@@ -92,6 +98,7 @@ export function buildSystemPromptToolingSection(params: {
   promptSurface: AgentPromptSurfaceKind;
   availableTools: ReadonlySet<string>;
   webSearchUnconfigured?: boolean;
+  mcpServerInstructions?: readonly McpServerInstruction[];
 }): string[] {
   const {
     includeToolGuidance,
@@ -114,6 +121,7 @@ export function buildSystemPromptToolingSection(params: {
             ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
             : []),
           "The AGENTS.md Tools section guides usage; it never grants availability.",
+          ...buildMcpServerInstructionsSection(params.mcpServerInstructions),
         ]
       : []),
     ...(params.webSearchUnconfigured && !availableTools.has("web_search")
@@ -121,5 +129,27 @@ export function buildSystemPromptToolingSection(params: {
           "Web search is supported but not configured. Set it up with `openclaw configure --section web` or Settings → Ask OpenClaw; `web_search` is unavailable until configured.",
         ]
       : []),
+  ];
+}
+
+/**
+ * Renders the server-level guidance of the MCP servers that still expose an admitted
+ * tool. Callers derive the list from the effective tool set, so a server whose tools
+ * were all filtered out never reaches this section.
+ */
+export function buildMcpServerInstructionsSection(
+  instructions: readonly McpServerInstruction[] | undefined,
+): string[] {
+  const entries = (instructions ?? [])
+    .map((entry) => ({ server: entry.server.trim(), text: entry.instructions.trim() }))
+    .filter((entry) => entry.server.length > 0 && entry.text.length > 0);
+  if (entries.length === 0) {
+    return [];
+  }
+  return [
+    "",
+    "## MCP Server Instructions",
+    "Server-wide guidance published by the MCP servers behind the tools above; it applies to that server's tools.",
+    ...entries.flatMap((entry) => [`### ${entry.server}`, entry.text]),
   ];
 }

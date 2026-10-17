@@ -42,6 +42,8 @@ export type McpServerCatalog = {
   title?: string;
   icons?: McpAppIcon[];
   settings?: McpAppSettingsCapability;
+  /** Server-level usage guidance from the initialize result, when the server publishes it. */
+  instructions?: string;
   toolCount: number;
   resources?: {
     listChanged?: boolean;

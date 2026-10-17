@@ -8,9 +8,9 @@ export function codeModeWaitRunUnavailableMessage(ctx: ToolSearchToolContext): s
   // Resolve the effective binding before selecting the core tool so client shadows win.
   const processTool =
     !ctx.toolExecutionAllow || isToolExecutionAllowed(ctx.toolExecutionAllow, "process")
-      ? createCodeModeCatalogBindings(entries.map(compactToolSearchCatalogEntry)).find(
-          (entry) => entry.id === "openclaw:core:process",
-        )
+      ? createCodeModeCatalogBindings(
+          entries.map((entry) => compactToolSearchCatalogEntry(entry)),
+        ).find((entry) => entry.id === "openclaw:core:process")
       : undefined;
   return (
     'code mode run is unavailable or expired. Only the top-level runId from a Code Mode result with status: "waiting" can be resumed. This ID is unknown or no longer resumable; review earlier exec/wait results before continuing. This error does not mean earlier actions had no effect.' +
