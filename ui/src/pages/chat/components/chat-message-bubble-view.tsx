@@ -91,7 +91,6 @@ export function GroupedMessage(props: GroupedMessageProps) {
       props.messageKey,
       props.options,
       props.onOpenSidebar,
-      refreshMedia,
     );
   });
   let element: Element | undefined;

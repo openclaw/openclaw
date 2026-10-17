@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import type { AssistantAttachmentItem, ImageBlock } from "./chat-message-media.ts";
@@ -36,6 +37,28 @@ it("keeps the focused native image control and decoded node when gallery metadat
   expect(view.container.querySelector("img")).toBe(image);
   expect(image.alt).toBe("After");
   expect(image.width).toBe(1600);
+});
+
+it("retries a standalone native image after a failed preview", async () => {
+  const source = `/tmp/standalone-preview-${crypto.randomUUID()}.png`;
+  const retry = createDeferred<Response>();
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ available: true }))
+    .mockImplementationOnce(() => retry.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  await loadAssistantAttachmentAvailability(source);
+  const view = mountSolid(() => <MessageImages images={[{ url: source }]} />);
+  const image = view.container.querySelector("img")!;
+  expect(image).not.toBeNull();
+  image.dispatchEvent(new Event("error"));
+  flush();
+  view.getByRole("button", { name: "Retry", exact: true }).click();
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  expect(view.container.querySelector("img")).toBeNull();
+  retry.resolve(Response.json({ available: true }));
+  await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
 it("cancels an offscreen poster request and releases the visible poster on unmount", async () => {

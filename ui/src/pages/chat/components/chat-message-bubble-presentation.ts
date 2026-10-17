@@ -62,7 +62,6 @@ export function prepareGroupedMessage(
   messageKey: string,
   opts: GroupedMessageOptions,
   onOpenSidebar?: (content: SidebarContent) => void,
-  onMediaChange?: () => void,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
   const { message, normalizedMessage, displayMarkdown, humanMentions } =
@@ -148,7 +147,6 @@ export function prepareGroupedMessage(
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     mediaOwner: opts.mediaOwner,
-    onMediaChange,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,

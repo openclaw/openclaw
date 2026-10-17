@@ -11,6 +11,7 @@ import {
 import { chatImageRenditionWidth } from "./chat-image-rendition.ts";
 import {
   isManagedOutgoingMediaSource,
+  loadAssistantAttachmentAvailability,
   reportAssistantImageFailure,
   resolveAssistantAttachmentAvailability,
   retryAssistantAttachmentAvailability,
@@ -70,7 +71,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
   let previewElement: HTMLImageElement | undefined;
   let managed = false;
   const previewWidth = chatImageRenditionWidth("inline");
-  let pendingPreview: Promise<string | null> | undefined;
+  let pendingPreview: Promise<unknown> | undefined;
   let imageKey = Symbol("image-presentation");
   let retainedImage: RetainedInlineImage | { status: "unavailable" } | undefined;
   let admitted = false;
@@ -246,12 +247,21 @@ function createMessageImagePresentation(props: MessageImageProps) {
           : decodeFailed
             ? t("chat.imageLightbox.loadFailed")
             : undefined;
+      const retryAvailability = (allowImage = false) => {
+        retryAssistantAttachmentAvailability(source, subscriptionOptions, allowImage);
+        if (!subscriptionOptions?.onMediaChange) {
+          observeStandalonePreview(
+            loadAssistantAttachmentAvailability(source, subscriptionOptions),
+          );
+          refreshImage();
+        }
+      };
       return present(
         renderImagePlaceholder(image, reason, {
           path: isLocalAssistantAttachmentSource(source) ? source : undefined,
           onAllow:
             !decodeFailed && availability.status === "unavailable" && availability.canAllow
-              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions, true)
+              ? () => retryAvailability(true)
               : undefined,
           onRetry: decodeFailed
             ? () => {
@@ -259,7 +269,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
                 refreshImage();
               }
             : availability.status === "unavailable" && availability.recoverable
-              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions)
+              ? () => retryAvailability()
               : undefined,
         }),
       );
@@ -310,14 +320,8 @@ function createMessageImagePresentation(props: MessageImageProps) {
     );
     const pending = resource.pending;
     // Standalone previews settle once without opting into a pane's automatic retries.
-    if (!subscriptionOptions?.onMediaChange && pending && pendingPreview !== pending) {
-      pendingPreview = pending;
-      void pending.then(() => {
-        if (pendingPreview === pending && active && currentImage) {
-          pendingPreview = undefined;
-          refreshImage();
-        }
-      });
+    if (!subscriptionOptions?.onMediaChange && pending) {
+      observeStandalonePreview(pending);
     }
     return present(
       resource.value
@@ -327,6 +331,19 @@ function createMessageImagePresentation(props: MessageImageProps) {
             resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
           ),
     );
+  }
+
+  function observeStandalonePreview(pending: Promise<unknown>) {
+    if (pendingPreview === pending) {
+      return;
+    }
+    pendingPreview = pending;
+    void pending.then(() => {
+      if (pendingPreview === pending && active && currentImage) {
+        pendingPreview = undefined;
+        refreshImage();
+      }
+    });
   }
 
   function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
@@ -397,7 +414,10 @@ function createMessageImagePresentation(props: MessageImageProps) {
           ? () => {
               resolveManagedImageResource(
                 image.url,
-                { ...currentOptions, onMediaChange: refreshImage },
+                currentOptions?.mediaOwner !== undefined ||
+                  currentOptions?.onMediaChange !== undefined
+                  ? { ...currentOptions, onMediaChange: refreshImage }
+                  : currentOptions,
                 image.artifactId,
                 managedImageInlineVariant(image),
                 true,
@@ -423,10 +443,12 @@ function createMessageImagePresentation(props: MessageImageProps) {
     releaseRetainedImage();
     loadedElement = undefined;
     if (currentImage?.url && isLocalAssistantAttachmentSource(currentImage.url)) {
-      reportAssistantImageFailure(currentImage.url, {
-        ...currentOptions,
-        onMediaChange: refreshImage,
-      });
+      reportAssistantImageFailure(
+        currentImage.url,
+        currentOptions?.mediaOwner !== undefined || currentOptions?.onMediaChange !== undefined
+          ? { ...currentOptions, onMediaChange: refreshImage }
+          : currentOptions,
+      );
     } else {
       retainedImage = { status: "unavailable" };
     }
