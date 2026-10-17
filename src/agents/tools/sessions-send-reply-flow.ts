@@ -213,6 +213,7 @@ export function prepareSessionsSendReplyContext(params: {
   callerOwnsCompletion: boolean;
   requesterIsSubagent: boolean;
   ownedTask: boolean;
+  acpFollowup?: boolean;
   isIsolatedCronRequester: boolean;
   targetIsSubagent: boolean;
   requesterSessionKey: string;
@@ -252,7 +253,15 @@ export function prepareSessionsSendReplyContext(params: {
     ...params.context,
     requesterSession,
     requesterDeliveryGeneration,
-    replyMode: taskOwned ? undefined : params.targetIsSubagent ? "one-way" : "peer",
+    replyMode: params.callerOwnsCompletion
+      ? undefined
+      : params.acpFollowup
+        ? "one-way"
+        : taskOwned
+          ? undefined
+          : params.targetIsSubagent
+            ? "one-way"
+            : "peer",
   };
 }
 
@@ -271,6 +280,7 @@ export async function finishSessionsSendReply(params: {
   timeoutMs: number;
   targetIsSubagent: boolean;
   isIsolatedCronRequester: boolean;
+  acpFollowup?: boolean;
 }) {
   const {
     start,
@@ -345,10 +355,11 @@ export async function finishSessionsSendReply(params: {
       skip: registryCompletion || delayedDelivery.status === "skipped",
       targetSessionKey: acceptedTargetSessionKey,
       displayKey: start.a2aSessionKey ?? replyContext.displayKey,
-      notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
+      notifyRequesterOnWaitFailure:
+        notifyRequesterOnWaitFailure && (!isIsolatedCronRequester || params.acpFollowup === true),
     });
   const result =
-    timeoutSeconds === 0
+    timeoutSeconds === 0 || (params.acpFollowup && replyContext.replyMode === "one-way")
       ? undefined
       : completion
         ? await completion.take(timeoutMs)

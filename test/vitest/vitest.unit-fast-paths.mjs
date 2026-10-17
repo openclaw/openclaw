@@ -77,6 +77,7 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/post-json.test.ts",
   "src/acp/client.test.ts",
   "src/acp/control-plane/manager.runtime-config.test.ts",
+  "src/acp/control-plane/manager.identity-reconcile.test.ts",
   "src/acp/control-plane/manager.runtime-handles.test.ts",
   "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",

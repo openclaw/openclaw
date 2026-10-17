@@ -53,8 +53,10 @@ work. The delivery path depends on that shape.
     - The parent asks for work with `sessions_spawn({ runtime: "acp", mode: "run" })`.
     - The child runs in its own ACP harness session.
     - Child turns run on the same background lane used by native sub-agent spawns, so a slow ACP harness does not block unrelated main-session work.
-    - Completion reports back through the task-completion announce path. OpenClaw converts internal completion metadata into a plain ACP prompt before sending it to an external harness, so harnesses do not see OpenClaw-only runtime context markers.
+    - Initial completion reports back through the native subagent completion path. OpenClaw converts internal completion metadata into a plain ACP prompt before sending it to an external harness, so harnesses do not see OpenClaw-only runtime context markers.
     - The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
+    - After a completed turn, the parent can use `sessions_send` with the same child session key to answer a question or continue the work. This requires a stable harness session identity and confirmed session resume support. Runtime cleanup releases the worker while retaining that identity and the original working directory.
+    - Follow-ups to running one-shots or sessions without confirmed resume state are rejected. Use `session_status` or the completion result for progress; a status-check prompt is another turn, not a read-only status query.
 
     Do **not** treat this path as a peer-to-peer chat between parent and
     child. The child already has a completion channel back to the parent.
@@ -75,15 +77,19 @@ work. The delivery path depends on that shape.
     message an ACP target, for example under broad `tools.sessions.visibility`
     settings.
 
-    OpenClaw skips the A2A follow-up only when the requester is the parent of
-    its own parent-owned one-shot ACP child. In that case, running A2A on top
-    of task completion can wake the parent with the child's result, forward
-    the parent's reply back into the child, and create a parent/child echo
-    loop. Accepted `sessions_send` results report target admission separately
+    Parent-owned ACP follow-ups use one-way result delivery, never a
+    parent/child conversation loop. Initial spawns retain their native
+    completion owner; a resumed turn uses the session follow-up completion
+    owner. Accepted `sessions_send` results report target admission separately
     from announcement delivery: `targetDisposition` is `queued` or `steered`,
-    while `delivery.status` is `pending` or `skipped`. For this owned-child case,
-    `delivery.status="skipped"` because the completion path is already responsible
-    for the result.
+    while `delivery.status` is `pending` or `skipped`. A resumed one-shot reports
+    `delivery.status="pending"` until its asynchronous result is delivered.
+
+    For a completed resumable one-shot using parent completion, `sessions_send` returns `accepted`
+    without waiting for an inline reply, even with a positive `timeoutSeconds`.
+    The follow-up result arrives through one-way session completion. Use the default send
+    mode or `mode="followup"`; `mode="resume"` is reserved for paused native
+    sub-agent tasks and does not resume ACP sessions.
 
   </Accordion>
   <Accordion title="Resume an existing session">

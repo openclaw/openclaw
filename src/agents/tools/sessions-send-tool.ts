@@ -3,6 +3,7 @@ import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isAcpTurnActive } from "../../acp/control-plane/active-turns.js";
 import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -61,13 +62,10 @@ import {
   PLACED_SESSIONS_SEND_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
-import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
+import { runSessionsSendFollowup } from "./sessions-send-followup.js";
 import { sendFailure } from "./sessions-send-helpers.js";
-import {
-  finishSessionsSendReply,
-  prepareSessionsSendReplyContext,
-} from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
+import { resolveAcpSessionsSendRoute } from "./sessions-send-route.js";
 import {
   createSessionsSendSessionReaders,
   withSessionsSendRequesterSource,
@@ -562,11 +560,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             return sendFailure("forbidden", formatErrorMessage(error), displayKey, runId);
           }
           try {
-            const targetIsSubagent = isSubagentSessionFromEntry(
-              targetSession.canonicalKey,
-              targetSessionEntry,
-              targetAcpMeta,
-            );
             if (mode === "notify") {
               return await notifySessionsSendSession({
                 message,
@@ -617,8 +610,21 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 callGateway: communication.callGateway,
               });
             }
+            const acpRoute = resolveAcpSessionsSendRoute({
+              entry: targetSessionEntry,
+              acpMeta: targetAcpMeta,
+              requesterSessionKey: requesterSession.canonicalKey,
+              targetSessionKey: targetSession.canonicalKey,
+              activeAcpTurn: isAcpTurnActive({
+                agentId: targetSession.agentId,
+                sessionKey: targetSession.canonicalKey,
+              }),
+            });
+            if (acpRoute.rejection) {
+              return sendFailure("error", acpRoute.rejection, displayKey, runId);
+            }
             const ownChild = targetSessionEntry?.spawnedBy === requesterSession.canonicalKey;
-            const startParams: Parameters<typeof dispatchSessionsSendFollowup>[0] = {
+            const startParams: Parameters<typeof runSessionsSendFollowup>[0] = {
               cfg,
               callGateway: communication.callGateway,
               runId,
@@ -653,19 +659,25 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 });
               },
             };
-            const replyContext = prepareSessionsSendReplyContext({
+            return await runSessionsSendFollowup(startParams, {
               requesterTarget: requesterSession,
               requesterSessionId: opts?.agentSessionId,
               callerOwnsCompletion:
                 opts?.completionOwner === "caller" || access.basis === "scoped-grant",
               requesterIsSubagent,
               ownedTask: communication.ownedTask,
+              acpFollowup: acpRoute.deferToSessionCompletion,
               isIsolatedCronRequester,
-              targetIsSubagent,
-              requesterSessionKey: requesterSession.canonicalKey,
-              targetSession: targetSessionEntry
-                ? { ...targetSessionEntry, acp: targetAcpMeta }
-                : undefined,
+              targetSession: targetSessionEntry,
+              targetAcpMeta,
+              message,
+              ownChild,
+              requesterTurnRunId: opts?.requesterTurnRunId,
+              withRequesterAuthority,
+              watch: params.watch === true,
+              promptedAt,
+              timeoutSeconds,
+              timeoutMs,
               context: {
                 callGateway: gatewayCall,
                 targetSessionKey: resolvedKey,
@@ -677,33 +689,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 requesterOrigin,
                 requesterChannel,
               },
-            });
-            const { start, completion, registryCompletion, watchField } =
-              await dispatchSessionsSendFollowup(startParams, replyContext, {
-                message,
-                ownChild,
-                nativeChild: !targetAcpMeta,
-                requesterSessionKey: requesterSession.canonicalKey,
-                requesterAgentId,
-                requesterTurnRunId: opts?.requesterTurnRunId,
-                targetSession: targetSessionEntry,
-                withRequesterAuthority,
-                watch: params.watch === true,
-              });
-            return await finishSessionsSendReply({
-              start,
-              completion,
-              registryCompletion,
-              watchField,
-              replyContext,
-              targetSession,
-              cfg,
-              requesterAgentId,
-              promptedAt,
-              timeoutSeconds,
-              timeoutMs,
-              targetIsSubagent,
-              isIsolatedCronRequester,
             });
           } finally {
             communication.close();

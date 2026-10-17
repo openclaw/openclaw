@@ -45,6 +45,7 @@ Quick `/acp` flow from chat:
     - A failed spawn waits for any already-started provisional session deletion to finish before returning, including when the cleanup request deadline expires.
     - Parent-owned ACP sessions are treated as background work even when the runtime session is persistent; completion and cross-surface delivery follow their accepted native completion path rather than acting like a normal user-facing chat session.
     - The ACP control plane closes one-shot runtime handles after the turn settles. Persistent sessions keep their ACP session and binding lifecycle; use `/acp close` to end one explicitly. Cleanup does not depend on a Tasks record.
+    - Completed one-shots with a stable session identity and advertised resume/load support retain confirmed resume metadata after runtime cleanup. Their parent can continue them with `sessions_send`; follow-up results use the session follow-up completion owner.
     - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, reset, or expired.
     - Gateway commands stay local. `/acp ...`, `/status`, and `/session` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.

@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -9,6 +10,7 @@ import {
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
+import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -17,7 +19,11 @@ import {
 } from "./gateway-caller-context.js";
 import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
-import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
+import {
+  finishSessionsSendReply,
+  prepareSessionsSendReplyContext,
+  startSessionsSendReplyFlow,
+} from "./sessions-send-reply-flow.js";
 import {
   startSessionsSendAgentRun,
   trySessionsSendActiveRunDelivery,
@@ -74,14 +80,75 @@ export async function startSessionsSendFollowup(
   return { start, completion };
 }
 
+/** Keep dispatch and completion on the same prepared requester and target facts. */
+export async function runSessionsSendFollowup(
+  params: Parameters<typeof startSessionsSendAgentRun>[0] & {
+    sessionStoreTarget: Parameters<typeof finishSessionsSendReply>[0]["targetSession"];
+  },
+  options: Omit<
+    Parameters<typeof prepareSessionsSendReplyContext>[0],
+    "requesterSessionKey" | "targetSession" | "targetIsSubagent" | "context"
+  > &
+    Pick<
+      Parameters<typeof finishSessionsSendReply>[0],
+      "promptedAt" | "timeoutSeconds" | "timeoutMs"
+    > &
+    Pick<
+      Parameters<typeof dispatchSessionsSendFollowup>[2],
+      "message" | "ownChild" | "watch" | "requesterTurnRunId" | "withRequesterAuthority"
+    > & {
+      targetSession?: SessionEntry;
+      targetAcpMeta?: SessionAcpMeta;
+      context: Parameters<typeof prepareSessionsSendReplyContext>[0]["context"] & {
+        requesterAgentId: string;
+      };
+    },
+) {
+  const requesterSessionKey = options.requesterTarget.canonicalKey;
+  const requesterAgentId = options.context.requesterAgentId;
+  const targetIsSubagent = isSubagentSessionFromEntry(
+    params.sessionStoreTarget.canonicalKey,
+    options.targetSession,
+    options.targetAcpMeta,
+  );
+  const replyContext = prepareSessionsSendReplyContext({
+    ...options,
+    requesterSessionKey,
+    targetIsSubagent,
+    targetSession: options.targetSession
+      ? { ...options.targetSession, acp: options.targetAcpMeta }
+      : undefined,
+  });
+  const dispatched = await dispatchSessionsSendFollowup(params, replyContext, {
+    ...options,
+    nativeChild: !options.targetAcpMeta,
+    requesterSessionKey,
+    requesterAgentId,
+  });
+  return await finishSessionsSendReply({
+    ...dispatched,
+    replyContext,
+    targetSession: params.sessionStoreTarget,
+    cfg: params.cfg,
+    requesterAgentId,
+    promptedAt: options.promptedAt,
+    timeoutSeconds: options.timeoutSeconds,
+    timeoutMs: options.timeoutMs,
+    targetIsSubagent,
+    isIsolatedCronRequester: options.isIsolatedCronRequester,
+    acpFollowup: options.acpFollowup,
+  });
+}
+
 /** Accepted child followups belong to the same completion owner as spawned work. */
-export async function dispatchSessionsSendFollowup(
+async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
   replyContext: Parameters<typeof startSessionsSendFollowup>[2],
   options: {
     message: string;
     ownChild: boolean;
     nativeChild: boolean;
+    acpFollowup?: boolean;
     watch: boolean;
     requesterSessionKey: string;
     requesterAgentId: string;
@@ -120,7 +187,8 @@ export async function dispatchSessionsSendFollowup(
     options.watch || (options.ownChild && !("ok" in active)) ? requesterTurn : undefined;
   const request =
     !("ok" in active) &&
-    (completionTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
+    (completionTurn ||
+      (replyContext.replyMode === "one-way" && (options.ownChild || options.acpFollowup))) &&
     sameRequester
       ? await prepareSessionsSendFollowup({
           runId: params.runId,

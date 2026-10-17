@@ -90,12 +90,13 @@ const connection = new AgentSideConnection(
         authMethods: [],
       };
     },
-    async newSession({ mcpServers }) {
+    async newSession({ cwd, mcpServers }) {
       const sessionId = randomUUID();
       const state = {
         history: [],
         tone: "plain",
         mode: "normal",
+        cwd,
         mcpServers,
         argv: process.argv.slice(3),
         ...(captureWorkerEnv ? { workerThreads: process.env.TOKIO_WORKER_THREADS ?? null } : {}),
@@ -108,9 +109,10 @@ const connection = new AgentSideConnection(
       }
       return { sessionId, ...describe(state) };
     },
-    async loadSession({ sessionId, mcpServers }) {
+    async loadSession({ sessionId, cwd, mcpServers }) {
       const state = JSON.parse(await fs.readFile(file(sessionId), "utf8"));
       state.loadedMcpServers = mcpServers;
+      state.loadedCwd = cwd;
       sessions.set(sessionId, state);
       return describe(state);
     },

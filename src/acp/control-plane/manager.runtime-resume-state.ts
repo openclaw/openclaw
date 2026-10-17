@@ -25,11 +25,23 @@ const SESSION_RESUME_REQUIRED_DETAIL_CODE = "SESSION_RESUME_REQUIRED";
 
 // Backends wrap missing-session errors differently; the structured cause code
 // preserves recovery across their wording (#87830).
-function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeError): boolean {
+function isMissingManagerResumeTargetError(error: AcpRuntimeError): boolean {
+  return (
+    hasResumeDetailCode(error, SESSION_RESUME_REQUIRED_DETAIL_CODE) ||
+    isConfirmedMissingManagerResumeTargetError(error)
+  );
+}
+
+/** Only adapter-correlated missing-target evidence invalidates a one-shot identity. */
+export function isConfirmedMissingManagerResumeTargetError(error: AcpRuntimeError): boolean {
+  return hasResumeDetailCode(error, "SESSION_RESUME_TARGET_NOT_FOUND");
+}
+
+function hasResumeDetailCode(error: AcpRuntimeError, detailCode: string): boolean {
   let current: unknown = error;
   // Depth-capped to defend against self-referential cause cycles.
   for (let depth = 0; current && depth < 8; depth += 1) {
-    if ((current as { detailCode?: unknown }).detailCode === SESSION_RESUME_REQUIRED_DETAIL_CODE) {
+    if ((current as { detailCode?: unknown }).detailCode === detailCode) {
       return true;
     }
     current = (current as { cause?: unknown }).cause;
@@ -72,7 +84,7 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     !params.runtime ||
     !params.meta ||
     params.meta.mode !== "persistent" ||
-    !isRecoverableMissingManagerPersistentSessionError(params.error)
+    !isMissingManagerResumeTargetError(params.error)
   ) {
     return false;
   }
@@ -114,6 +126,7 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
 }
 
 async function clearPersistedRuntimeResumeState(params: {
+  acpControl?: Parameters<WriteManagerSessionMeta>[0]["acpControl"];
   assertCommitAllowed?: () => void;
   expectedControlBinding?: AcpSessionControlBinding;
   cfg: OpenClawConfig;
@@ -125,6 +138,7 @@ async function clearPersistedRuntimeResumeState(params: {
 }): Promise<boolean> {
   const now = Date.now();
   const updated = await params.writeSessionMeta({
+    acpControl: params.acpControl,
     assertCommitAllowed: params.assertCommitAllowed,
     expectedControlBinding: params.expectedControlBinding,
     cfg: params.cfg,
@@ -184,6 +198,7 @@ async function clearPersistedRuntimeResumeState(params: {
 
 /** Clears persisted runtime resume identifiers while preserving the manager session shell. */
 export async function discardPersistedManagerRuntimeState(params: {
+  acpControl?: Parameters<WriteManagerSessionMeta>[0]["acpControl"];
   assertCommitAllowed?: () => void;
   expectedControlBinding?: AcpSessionControlBinding;
   cfg: OpenClawConfig;
