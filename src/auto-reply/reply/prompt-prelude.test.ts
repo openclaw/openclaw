@@ -231,7 +231,6 @@ it("keeps completed audio transcripts in room-event bodies", async () => {
   const agentText = `[Audio]\nTranscript:\n${transcript}`;
   const transportEnvelope = "[Discord channel #ambient]\n[media attached: voice-message.ogg]";
   const ctx = context(transportEnvelope, {
-    BodyStripped: agentText,
     BodyForAgent: agentText,
     RawBody: transportEnvelope,
     CommandBody: transportEnvelope,
@@ -250,7 +249,7 @@ it("keeps completed audio transcripts in room-event bodies", async () => {
     MessageSid: "2003",
     SenderName: "Alice",
   });
-  const sessionCtx = finalizeInboundContext({ ...ctx });
+  const sessionCtx = finalizeInboundContext({ ...ctx, BodyStripped: agentText });
 
   const envelope = await envelopeFor(sessionCtx, { ctx });
 

@@ -1837,7 +1837,6 @@ src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
 src/gateway/desktop/node-source-context.ts	1
-src/gateway/exec-approval-registration.ts	3
 src/gateway/gateway-cli-backend.live-helpers.ts	2
 src/gateway/gateway-cli-backend.live-probe-helpers.ts	4
 src/gateway/health/collector.ts	1
@@ -1977,6 +1976,7 @@ src/infra/agent-events.ts	2
 src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-runtime.ts	9
+src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	5
 src/infra/backup-create-stream.ts	3
 src/infra/backup-create.ts	1
