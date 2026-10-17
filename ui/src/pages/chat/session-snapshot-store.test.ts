@@ -247,6 +247,15 @@ describe("persistent chat session snapshots", () => {
     { snapshot: { ...snapshot("message"), unexpected: true } },
     { snapshot: { ...snapshot("message"), pagination: { hasMore: false, nextOffset: 1 } } },
     { snapshot: { ...snapshot("message"), pagination: { hasMore: true, nextOffset: -1 } } },
+    {
+      snapshot: {
+        ...snapshot("message"),
+        historyState: {
+          stateRevision: { sessionInfo: "info-1" },
+          sessionInfo: { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } },
+        },
+      },
+    },
     { sessionId: "different-session" },
   ])(
     "rejects malformed durable snapshot envelopes without exposing cached history ($snapshot)",

@@ -34,10 +34,17 @@ import { readTranscriptDisplayPosition } from "../../../src/chat/transcript-disp
 import { CHAT_TRANSCRIPT_METADATA_KEYS } from "../pages/chat/chat-transcript-metadata.ts";
 import * as activityChecks from "./protocol-validators.generated/activity.js";
 import * as approvalChecks from "./protocol-validators.generated/approvals.js";
+import * as historyStateChecks from "./protocol-validators.generated/history-state.js";
 import * as sessionInputChecks from "./protocol-validators.generated/session-input.js";
 import * as transcriptChecks from "./protocol-validators.generated/transcript.js";
 
-const checks = { ...activityChecks, ...approvalChecks, ...sessionInputChecks, ...transcriptChecks };
+const checks = {
+  ...activityChecks,
+  ...approvalChecks,
+  ...sessionInputChecks,
+  ...transcriptChecks,
+  ...historyStateChecks,
+};
 
 const activity = { itemId: "tool-1", phase: "start", kind: "tool", title: "Read file" };
 const approval = {
