@@ -50,6 +50,11 @@ function capture(profileId: string, assertCurrent = () => {}) {
   return capturePersonalAuthProfileAuthorization({ profileId, assertCurrent });
 }
 
+const retired = { code: "MCP_AUTHORIZATION_RETIRED" };
+function expectRetired(grant: Awaited<ReturnType<typeof capture>>) {
+  expect(grant.assertCurrent).toThrow(expect.objectContaining(retired));
+}
+
 function mutateRecord(profileId: string, transform: (value: string) => string | undefined) {
   const ownerProfileId = profileId.split(":")[1]!;
   runOpenClawStateWriteTransaction(({ db }) => {
@@ -85,8 +90,8 @@ function mutateRecord(profileId: string, transform: (value: string) => string | 
   });
 }
 
-it("keeps its private lifetime through OAuth/usage updates and unlink, with cheap effect assertions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("keeps its private lifetime through OAuth/usage updates and unlink, with cheap effect assertions", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { owner, profileId } = fixture();
     const sql = observeMainThreadSql();
     const grant = await capture(profileId);
@@ -151,11 +156,8 @@ it("keeps its private lifetime through OAuth/usage updates and unlink, with chea
     );
     grant.dispose();
     next.dispose();
-    expect(grant.assertCurrent).toThrow(
-      expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-    );
-  });
-});
+    expectRetired(grant);
+  }));
 
 it.each(["same bytes", "refreshed bytes"])(
   "survives owner restart but rotates on same-ID reconnect (%s)",
@@ -175,9 +177,7 @@ it.each(["same bytes", "refreshed bytes"])(
         assertCurrent() {},
       });
       expect(connected.authProfileId).toBe(profileId);
-      expect(restarted.assertCurrent).toThrow(
-        expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-      );
+      expectRetired(restarted);
       await expect(restarted.revalidate()).rejects.toMatchObject({
         code: "MCP_AUTHORIZATION_RETIRED",
       });
@@ -192,8 +192,8 @@ it.each(["same bytes", "refreshed bytes"])(
   },
 );
 
-it("allows concurrent adoption after an out-of-process reconnect without reviving old grants", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+it("allows concurrent adoption after an out-of-process reconnect without reviving old grants", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const { owner, profileId, credential } = fixture();
     const original = await capture(profileId);
     try {
@@ -233,9 +233,7 @@ it("allows concurrent adoption after an out-of-process reconnect without revivin
           adopted.assertCurrent();
           await adopted.revalidate();
         }
-        expect(original.assertCurrent).toThrow(
-          expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-        );
+        expectRetired(original);
         await expect(original.revalidate()).rejects.toMatchObject({
           code: "MCP_AUTHORIZATION_RETIRED",
         });
@@ -247,11 +245,10 @@ it("allows concurrent adoption after an out-of-process reconnect without revivin
     } finally {
       original.dispose();
     }
-  });
-});
+  }));
 
-it("separates a different account while preserving the original explicit pin", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("separates a different account while preserving the original explicit pin", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { owner, profileId, credential } = fixture();
     const original = await capture(profileId);
     const connected = await connectUserModelAccountAsync({
@@ -267,11 +264,10 @@ it("separates a different account while preserving the original explicit pin", a
     original.assertCurrent();
     original.dispose();
     other.dispose();
-  });
-});
+  }));
 
-it("explicitly enrolls a legacy record once through the native writer without exporting its lifetime", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("explicitly enrolls a legacy record once through the native writer without exporting its lifetime", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { profileId } = fixture();
     mutateRecord(profileId, (raw) => {
       const record = JSON.parse(raw);
@@ -300,44 +296,37 @@ it("explicitly enrolls a legacy record once through the native writer without ex
     expect(readUserModelAuthProfile(profileId)).not.toHaveProperty("authorizationId");
     grant.dispose();
     restarted.dispose();
-  });
-});
+  }));
 
-it("does not enroll missing/deleted accounts or recreate their credentials", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("does not enroll missing/deleted accounts or recreate their credentials", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { profileId } = fixture();
     const grant = await capture(profileId);
     mutateRecord(profileId, () => undefined);
     await expect(grant.revalidate()).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
-    expect(grant.assertCurrent).toThrow(
-      expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-    );
+    expectRetired(grant);
     await expect(capture(profileId)).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
     expect(readUserModelAuthProfile(profileId)).toBeUndefined();
     grant.dispose();
-  });
-});
+  }));
 
-it("retires transferred ownership and preserves a distinct lifetime after restart", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("retires transferred ownership and preserves a distinct lifetime after restart", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { owner, profileId } = fixture();
     const target = ensureProfileForEmail("personal-authorization-target@example.test");
     const grant = await capture(profileId);
     await mergeCanonicalUserProfiles(owner.id, target.id);
-    expect(grant.assertCurrent).toThrow(
-      expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-    );
+    expectRetired(grant);
     await closeOpenClawStateDatabaseAsync();
     const transferred = await capture(profileId);
     expect(transferred.authorizationId).not.toBe(grant.authorizationId);
     transferred.assertCurrent();
     grant.dispose();
     transferred.dispose();
-  });
-});
+  }));
 
-it("retains caller revocation and refuses isolated auth scopes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("retains caller revocation and refuses isolated auth scopes", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { profileId } = fixture();
     let current = true;
     const grant = await capture(profileId, () => {
@@ -346,14 +335,11 @@ it("retains caller revocation and refuses isolated auth scopes", async () => {
       }
     });
     current = false;
-    expect(grant.assertCurrent).toThrow(
-      expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-    );
+    expectRetired(grant);
     current = true;
     await expect(grant.revalidate()).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
     await expect(
       authProfileRuntimeMode.run({ kind: "env-only" }, () => capture(profileId)),
     ).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_UNAVAILABLE" });
     grant.dispose();
-  });
-});
+  }));

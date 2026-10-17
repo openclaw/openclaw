@@ -27,7 +27,20 @@ import {
 } from "./store-runtime.js";
 import * as storeUpdate from "./store-update.js";
 
-afterEach(() => clearRuntimeAuthProfileStoreSnapshots());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeAuthProfileStoreSnapshots();
+});
+
+function resolveCliProfile(agentDir: string, profileId: string) {
+  return resolveCliExecutionAuthProfileId({
+    cliExecutionProvider: "claude-cli",
+    authProfileProvider: "claude-cli",
+    config: {},
+    agentDir,
+    selected: { authProfileId: profileId, authProfileIdSource: "user" },
+  });
+}
 
 describe("auth profile catalog credential removal", () => {
   it.each([
@@ -200,36 +213,30 @@ describe("auth profile catalog credential removal", () => {
           },
         });
         const update = storeUpdate.runAuthProfileStoreUpdate;
-        const saving = vi
-          .spyOn(storeUpdate, "runAuthProfileStoreUpdate")
-          .mockImplementation(async (params) => {
-            if (params.agentDir !== child) {
-              expect(loadPersistedAuthProfileStore(child)?.profiles[profileId]).toBeUndefined();
-              if (exit === "failure") {
-                throw new Error("synthetic second-owner failure");
-              }
-              throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+        vi.spyOn(storeUpdate, "runAuthProfileStoreUpdate").mockImplementation(async (params) => {
+          if (params.agentDir !== child) {
+            expect(loadPersistedAuthProfileStore(child)?.profiles[profileId]).toBeUndefined();
+            if (exit === "failure") {
+              throw new Error("synthetic second-owner failure");
             }
-            return update(params);
-          });
-        try {
-          const removing = removeAuthProfilesAcrossOwnerStores({
-            agentDir: child,
-            profileIds: [profileId],
-          });
-          if (exit === "failure") {
-            await expect(removing).rejects.toThrow("synthetic second-owner failure");
-          } else {
-            await expect(removing).resolves.toBe(false);
+            throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
           }
-          expect(loadPersistedAuthProfileStore(main)?.profiles[profileId]).toEqual(credential);
-          expect(loadPersistedAuthProfileStore(child)?.profiles[profileId]).toBeUndefined();
-          const persisted = catalogs.loadPersistedPluginModelCatalogsReadOnly(child)[0]?.contents;
-          expect(persisted).toContain("retained");
-          expect(persisted).not.toContain(credential.access);
-        } finally {
-          saving.mockRestore();
+          return update(params);
+        });
+        const removing = removeAuthProfilesAcrossOwnerStores({
+          agentDir: child,
+          profileIds: [profileId],
+        });
+        if (exit === "failure") {
+          await expect(removing).rejects.toThrow("synthetic second-owner failure");
+        } else {
+          await expect(removing).resolves.toBe(false);
         }
+        expect(loadPersistedAuthProfileStore(main)?.profiles[profileId]).toEqual(credential);
+        expect(loadPersistedAuthProfileStore(child)?.profiles[profileId]).toBeUndefined();
+        const persisted = catalogs.loadPersistedPluginModelCatalogsReadOnly(child)[0]?.contents;
+        expect(persisted).toContain("retained");
+        expect(persisted).not.toContain(credential.access);
       });
     },
   );
@@ -290,14 +297,7 @@ describe("auth profile catalog credential removal", () => {
         { version: AUTH_STORE_VERSION, profiles: { [profileId]: credential } },
         agentDir,
       );
-      const resolveProfile = () =>
-        resolveCliExecutionAuthProfileId({
-          cliExecutionProvider: "claude-cli",
-          authProfileProvider: "claude-cli",
-          config: {},
-          agentDir,
-          selected: { authProfileId: profileId, authProfileIdSource: "user" },
-        });
+      const resolveProfile = () => resolveCliProfile(agentDir, profileId);
       await expect(resolveProfile()).resolves.toBe(profileId);
       const databasePath = resolveAuthProfileDatabasePath(agentDir);
       const identity = inspectDatabasePathIdentitySync(databasePath);
@@ -335,14 +335,7 @@ describe("auth profile catalog credential removal", () => {
         },
         agentDir,
       );
-      const resolveProfile = () =>
-        resolveCliExecutionAuthProfileId({
-          cliExecutionProvider: "claude-cli",
-          authProfileProvider: "claude-cli",
-          config: {},
-          agentDir,
-          selected: { authProfileId: profileId, authProfileIdSource: "user" },
-        });
+      const resolveProfile = () => resolveCliProfile(agentDir, profileId);
       await expect(resolveProfile()).resolves.toBe(profileId);
       const newerStore = {
         version: AUTH_STORE_VERSION,
