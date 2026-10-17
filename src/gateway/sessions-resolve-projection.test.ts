@@ -9,6 +9,7 @@ import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { seedCanonicalSessionValidation } from "../config/sessions/session-canonical-validation.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -23,8 +24,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { withOpenClawTestState as withRawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
@@ -48,9 +47,7 @@ import {
 
 const scope = { agentId: "main", sessionKey: "agent:main:target" };
 const entry = { sessionId: "target-id", updatedAt: 1, label: "original" };
-const cfg: OpenClawConfig = {
-  agents: { ownership: "explicit", entries: { main: {} } },
-};
+const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
 const selectors: SessionsResolveParams[] = [
   { key: scope.sessionKey, agentId: "main" },
   { sessionId: entry.sessionId, agentId: "main" },
@@ -83,11 +80,7 @@ async function withOpenClawTestState(
   });
 }
 async function resolve(p: SessionsResolveParams) {
-  return resolveSessionKeyFromResolveParams({
-    client: null,
-    p,
-    projection: await projectionFor(),
-  });
+  return resolveSessionKeyFromResolveParams({ client: null, p, projection: await projectionFor() });
 }
 
 function requestResolve(
@@ -115,7 +108,23 @@ function requestResolve(
   });
 }
 
+function seed(values: SessionEntry = entry, sessionKey = scope.sessionKey) {
+  replaceSessionEntrySync({ ...scope, sessionKey }, values);
+}
+
+function observePromptReads(marker = SIBLING_MARKER) {
+  const parse = vi.spyOn(JSON, "parse");
+  return {
+    [Symbol.dispose]: () => parse.mockRestore(),
+    expectIdle: () =>
+      expect(
+        parse.mock.calls.filter(([json]) => typeof json === "string" && json.includes(marker)),
+      ).toHaveLength(0),
+  };
+}
+
 const resolved = { ok: true, key: scope.sessionKey, agentId: "main" };
+const missing = { ok: true, missing: true };
 
 describe("session resolution metadata", () => {
   it.for(["shortId", "reference"] as const)(
@@ -125,10 +134,7 @@ describe("session resolution metadata", () => {
         setRuntimeConfigSnapshot(cfg);
         const sessionId = "4d2e08ab-1111-4000-8000-000000000001";
         const key = `agent:main:chat:${sessionId}`;
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          { sessionId, updatedAt: 2, label: "Resolved target", visibility: "shared" },
-        );
+        seed({ sessionId, updatedAt: 2, label: "Resolved target", visibility: "shared" }, key);
         const sibling = { agentId: "main", sessionKey: "agent:main:resolve-unrelated" };
         const siblingEntry = {
           sessionId: "resolve-unrelated",
@@ -181,7 +187,6 @@ describe("session resolution metadata", () => {
               label: "Renamed sibling",
               updatedAt: 3,
             });
-            const started = performance.now();
             pending = Promise.resolve(
               requestResolve(
                 currentProjection,
@@ -193,11 +198,6 @@ describe("session resolution metadata", () => {
               pending.then(() => "response" as const),
               entered.promise.then(() => "native ownership" as const),
             ]);
-            console.info("sessions-resolve-readiness", {
-              selector,
-              first: winner,
-              elapsedMs: performance.now() - started,
-            });
             release.resolve();
             await pending;
             expect(respond).toHaveBeenCalledWith(
@@ -221,7 +221,7 @@ describe("session resolution metadata", () => {
 
   it("reselects indexed candidates when the configured store changes during lookup", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      replaceSessionEntrySync(scope, entry);
+      seed();
       const storePath = state.statePath("replacement.sqlite");
       const replacementKey = "agent:main:replacement";
       replaceSessionEntrySync({ agentId: "main", storePath, sessionKey: replacementKey }, entry);
@@ -250,74 +250,56 @@ describe("session resolution metadata", () => {
     });
   });
 
-  it("resolves indexed targets while unrelated metadata is unavailable", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      replaceSessionEntrySync(scope, entry);
-      const sibling = "agent:main:unavailable-metadata";
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: sibling },
-        { sessionId: "unavailable-metadata", updatedAt: 2 },
-      );
-      const projection = await projectionFor();
-      await projection.ensureMaterialized();
-      const readOwnership = runtimeOwnership.readSessionRuntimeOwnershipAsync;
-      const ownership = vi
-        .spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync")
-        .mockImplementation((params) => {
-          if (params.sessionKey === sibling) {
-            throw new Error("Unrelated metadata unavailable");
-          }
-          return readOwnership(params);
-        });
-      try {
-        for (const params of selectors) {
+  it.each(["ownership", "display"] as const)(
+    "resolves indexed targets when unrelated %s metadata is unavailable",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        seed();
+        const sibling = "agent:main:unavailable-metadata";
+        seed({ sessionId: "unavailable-metadata", updatedAt: 2 }, sibling);
+        const projection = await projectionFor();
+        await projection.ensureMaterialized();
+        const readOwnership = runtimeOwnership.readSessionRuntimeOwnershipAsync;
+        const readInputs = rowInputs.readSessionRowInputs;
+        using _ =
+          kind === "ownership"
+            ? vi
+                .spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync")
+                .mockImplementation((params) => {
+                  if (params.sessionKey === sibling) {
+                    throw new Error("Unrelated metadata unavailable");
+                  }
+                  return readOwnership(params);
+                })
+            : vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+                if (params.key === sibling) {
+                  throw new Error("Unrelated display unavailable");
+                }
+                return readInputs(params);
+              });
+        const requests =
+          kind === "ownership"
+            ? selectors
+            : [
+                { sessionId: entry.sessionId },
+                { label: entry.label },
+                { reference: { key: scope.sessionKey } },
+              ];
+        for (const params of requests) {
           sessionChanges.emit({
             all: true,
-            scope: { storePath: openOpenClawAgentDatabase(scope).path },
+            scope:
+              kind === "ownership"
+                ? { storePath: openOpenClawAgentDatabase(scope).path }
+                : "catalog",
           });
           const respond = vi.fn();
           await requestResolve(projection, params, respond);
           expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
         }
-      } finally {
-        ownership.mockRestore();
-      }
-    });
-  });
-
-  it("resolves discovery from current metadata when an unrelated display row cannot rebuild", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      replaceSessionEntrySync(scope, entry);
-      const sibling = "agent:main:unrelated-display";
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: sibling },
-        { sessionId: "unrelated-display", updatedAt: 2 },
-      );
-      const projection = await projectionFor();
-      await projection.ensureMaterialized();
-      const readInputs = rowInputs.readSessionRowInputs;
-      const display = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
-        if (params.key === sibling) {
-          throw new Error("Unrelated display unavailable");
-        }
-        return readInputs(params);
       });
-      try {
-        sessionChanges.emit({ all: true, scope: "catalog" });
-        for (const params of [
-          { sessionId: entry.sessionId },
-          { label: entry.label },
-          { reference: { key: scope.sessionKey } },
-        ]) {
-          const respond = vi.fn();
-          await requestResolve(projection, params, respond);
-          expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
-        }
-      } finally {
-        display.mockRestore();
-      }
-    });
-  });
+    },
+  );
 
   it("resolves parent-scoped key requests without hydrating retained subagent tasks", async () => {
     await withOpenClawTestState(
@@ -327,7 +309,7 @@ describe("session resolution metadata", () => {
         const parent = "agent:main:main";
         const key = "agent:main:subagent:12345678-0aaa-4000-8000-000000000001";
         const selected = { ...entry, updatedAt: now, spawnedBy: parent };
-        replaceSessionEntrySync({ ...scope, sessionKey: key }, selected);
+        seed(selected, key);
         const rows = [key, "agent:main:subagent:retained"].map((childSessionKey, index) => ({
           runId: `resolve-run-${index}`,
           childSessionKey,
@@ -344,7 +326,7 @@ describe("session resolution metadata", () => {
         clearSubagentRunsReadCacheForTest();
         const projection = await projectionFor();
         const respond = vi.fn();
-        const parse = vi.spyOn(JSON, "parse");
+        using reads = observePromptReads("retained-resolve-task:");
         try {
           await requestResolve(projection, { key, spawnedBy: parent, agentId: "main" }, respond);
           expect(respond).toHaveBeenCalledWith(
@@ -352,11 +334,8 @@ describe("session resolution metadata", () => {
             expect.objectContaining({ ok: true, key, agentId: "main" }),
             undefined,
           );
-          expect(parse.mock.calls.some(([json]) => json.includes("retained-resolve-task:"))).toBe(
-            false,
-          );
+          reads.expectIdle();
         } finally {
-          parse.mockRestore();
           clearSubagentRunsReadCacheForTest();
         }
       },
@@ -365,27 +344,22 @@ describe("session resolution metadata", () => {
 
   it.each(selectors)("resolves %j without decoding unrelated saved prompts", async (p) => {
     await withOpenClawTestState({ label: "resolve-prompts" }, async () => {
-      replaceSessionEntrySync(scope, entry);
+      seed();
       for (let index = 0; index < 3; index++) {
-        replaceSessionEntrySync(
-          { ...scope, sessionKey: `agent:main:sibling-${index}` },
+        seed(
           {
             sessionId: `sibling-${index}`,
             updatedAt: 1,
             skillsSnapshot: { prompt: "unrelated-resolve-prompt".repeat(1024), skills: [] },
           },
+          `agent:main:sibling-${index}`,
         );
       }
       await projectionFor();
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        expect(await resolve(p)).toEqual(resolved);
-        expect(
-          parse.mock.calls.filter(([json]) => json.includes("unrelated-resolve-prompt")),
-        ).toHaveLength(0);
-      } finally {
-        parse.mockRestore();
-      }
+      using reads = observePromptReads("unrelated-resolve-prompt");
+
+      expect(await resolve(p)).toEqual(resolved);
+      reads.expectIdle();
     });
   });
 
@@ -396,7 +370,7 @@ describe("session resolution metadata", () => {
       );
       const roleCfg = { ...cfg, ...rolePolicyConfig() };
       const visible = { ...entry, visibility: "shared" as const };
-      replaceSessionEntrySync(scope, visible);
+      seed(visible);
       const lookup = async (p: SessionsResolveParams) =>
         withPreparedSessionResolve(
           { client, p, projection: await projectionFor(roleCfg) },
@@ -414,26 +388,14 @@ describe("session resolution metadata", () => {
           .run(JSON.stringify(hidden), hidden.label, scope.sessionKey);
         (await projectionFor(roleCfg)).dispose();
         projections.delete(roleCfg);
-        expect(await lookup({ key: scope.sessionKey, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
-        expect(await lookup({ label: hidden.label, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
-        expect(await lookup({ label: entry.label, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
+        expect(await lookup({ key: scope.sessionKey, allowMissing: true })).toEqual(missing);
+        expect(await lookup({ label: hidden.label, allowMissing: true })).toEqual(missing);
+        expect(await lookup({ label: entry.label, allowMissing: true })).toEqual(missing);
         const tracked = { ...visible, label: "tracked" };
-        replaceSessionEntrySync(scope, tracked);
+        seed(tracked);
         expect(await lookup({ key: scope.sessionKey })).toEqual(resolved);
         expect(await lookup({ label: tracked.label })).toEqual(resolved);
-        expect(await lookup({ label: hidden.label, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
+        expect(await lookup({ label: hidden.label, allowMissing: true })).toEqual(missing);
       } finally {
         external.close();
       }
@@ -442,8 +404,6 @@ describe("session resolution metadata", () => {
 
   it("does not publish a discovery result after its session becomes a foreign draft", async () => {
     await withOpenClawTestState({ label: "resolve-publication-visibility" }, async () => {
-      ensureUserProfilesSchema({});
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = roleClient("view", "resolve-publication-viewer");
       const owner = roleClient("write", "resolve-publication-owner");
       const roleCfg = { ...cfg, ...rolePolicyConfig() };
@@ -456,7 +416,7 @@ describe("session resolution metadata", () => {
           id: owner.authenticatedUserProfile!.profileId,
         },
       };
-      replaceSessionEntrySync(scope, visible);
+      seed(visible);
       const projection = await projectionFor(roleCfg);
       await projection.ensureMaterialized();
       const publications: Array<{
@@ -476,17 +436,17 @@ describe("session resolution metadata", () => {
       await request();
       const pending = request();
       queueMicrotask(() => {
-        replaceSessionEntrySync(scope, { ...visible, visibility: "draft" });
+        seed({ ...visible, visibility: "draft" });
       });
       await pending;
       await request();
 
       const found = [true, { ...resolved, displayName: entry.label }, undefined];
-      const missing = [true, { ok: false }, undefined];
+      const missingResponse = [true, { ok: false }, undefined];
       expect(publications).toEqual([
         { visibility: "shared", response: found },
         { visibility: "shared", response: found },
-        { visibility: "draft", response: missing },
+        { visibility: "draft", response: missingResponse },
       ]);
     });
   });
@@ -496,11 +456,8 @@ describe("session resolution metadata", () => {
     async (kind) => {
       await withOpenClawTestState({ label: "resolve-corruption" }, async () => {
         const siblingKey = "agent:main:sibling";
-        replaceSessionEntrySync(scope, entry);
-        replaceSessionEntrySync(
-          { ...scope, sessionKey: siblingKey },
-          { sessionId: "sibling", updatedAt: 1 },
-        );
+        seed();
+        seed({ sessionId: "sibling", updatedAt: 1 }, siblingKey);
         const read = async (key: string) => {
           const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
             cfg,
@@ -550,51 +507,25 @@ const SIBLING_PROMPT = SIBLING_MARKER.repeat(1600);
 const TARGET_PROMPT = "target-lookup-prompt".repeat(1600);
 const SIBLING_ROWS = 24;
 
-function systemPromptReport(chars: number) {
-  return {
-    source: "run" as const,
-    generatedAt: 1,
-    systemPrompt: { chars, projectContextChars: 0, nonProjectContextChars: chars },
-    injectedWorkspaceFiles: [],
-    skills: { promptChars: chars, entries: [{ name: "seeded-skill", blockChars: chars }] },
-    tools: { listChars: 0, schemaChars: 0, entries: [] },
-  };
+function mainRun(sessionKey: string) {
+  return { sessionKey, agentId: "main" };
 }
 
 function seedStore() {
-  replaceSessionEntrySync(scope, {
+  seed({
     sessionId: "target-id",
     updatedAt: 2,
-    skillsSnapshot: { prompt: TARGET_PROMPT, skills: [{ name: "target-skill" }] },
-    systemPromptReport: systemPromptReport(TARGET_PROMPT.length),
+    skillsSnapshot: { prompt: TARGET_PROMPT, skills: [] },
   });
   for (let index = 0; index < SIBLING_ROWS; index++) {
-    replaceSessionEntrySync(
-      { ...scope, sessionKey: `agent:main:sibling-${index}` },
+    seed(
       {
         sessionId: `sibling-${index}`,
         updatedAt: 1,
-        skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [{ name: "sibling-skill" }] },
-        systemPromptReport: systemPromptReport(SIBLING_PROMPT.length),
+        skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
       },
+      `agent:main:sibling-${index}`,
     );
-  }
-}
-
-/** Counts JSON.parse calls that decoded the sibling marker. */
-function measureSiblingDecodes<T>(run: () => T): { result: T; decodes: number } {
-  const parse = vi.spyOn(JSON, "parse");
-  try {
-    const result = run();
-    const matched = parse.mock.calls.flatMap(([json]) =>
-      typeof json === "string" && json.includes(SIBLING_MARKER) ? [json] : [],
-    );
-    return {
-      result,
-      decodes: matched.length,
-    };
-  } finally {
-    parse.mockRestore();
   }
 }
 
@@ -609,37 +540,32 @@ describe("gateway session lookups", () => {
         createDirectChatContext({ getRuntimeConfig: () => cfg }),
         () => projection,
       );
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        for (const runId of ["target-id", "absent-run-id"]) {
-          const respond = vi.fn();
-          await expectDefined(
-            artifactsHandlers["artifacts.list"],
-            "artifact list handler",
-          )({
-            params: { runId, agentId: "main" },
-            context,
-            req: { type: "req", id: runId, method: "artifacts.list" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-          });
-          if (runId === "target-id") {
-            expect(respond).toHaveBeenCalledWith(true, { artifacts: [] });
-          } else {
-            expect(respond).toHaveBeenCalledWith(
-              false,
-              undefined,
-              expect.objectContaining({
-                details: { type: "artifact_scope_not_found" },
-              }),
-            );
-          }
+      using reads = observePromptReads();
+
+      for (const runId of ["target-id", "absent-run-id"]) {
+        const respond = vi.fn();
+        await expectDefined(
+          artifactsHandlers["artifacts.list"],
+          "artifact list handler",
+        )({
+          params: { runId, agentId: "main" },
+          context,
+          req: { type: "req", id: runId, method: "artifacts.list" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        if (runId === "target-id") {
+          expect(respond).toHaveBeenCalledWith(true, { artifacts: [] });
+        } else {
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ details: { type: "artifact_scope_not_found" } }),
+          );
         }
-        expect(parse.mock.calls.some(([json]) => json.includes(SIBLING_MARKER))).toBe(false);
-      } finally {
-        parse.mockRestore();
       }
+      reads.expectIdle();
     });
   });
 
@@ -647,10 +573,7 @@ describe("gateway session lookups", () => {
     await withOpenClawTestState({ label: "lookup-shared-owner" }, async (state) => {
       const storePath = state.statePath("shared.sqlite");
       const sharedConfig: OpenClawConfig = {
-        agents: {
-          entries: { main: {}, ops: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
+        agents: { entries: { main: {}, ops: {} }, defaults: { sessionStore: { agentId: "ops" } } },
         session: { scope: "global", store: storePath },
       };
       setRuntimeConfigSnapshot(sharedConfig);
@@ -670,10 +593,9 @@ describe("gateway session lookups", () => {
       expect
         .soft(resolveSessionForRun("shared-run", { agentId: "main", projection }))
         .toBeUndefined();
-      expect.soft(resolveSessionForRun("shared-run", { projection })).toEqual({
-        sessionKey: "global",
-        agentId: "ops",
-      });
+      expect
+        .soft(resolveSessionForRun("shared-run", { projection }))
+        .toEqual({ sessionKey: "global", agentId: "ops" });
       const resolveArtifacts = await prepareArtifactSessionResolution(
         { runId: "shared-run" },
         projection,
@@ -694,61 +616,35 @@ describe("gateway session lookups", () => {
       setRuntimeConfigSnapshot(cfg);
       // Same sessionId on two keys: selection depends on updatedAt surviving the
       // metadata projection, which is the field a bad projection would drop.
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:stale" },
-        {
-          sessionId: "shared-id",
-          updatedAt: 1,
-          skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
-        },
-      );
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:fresh" },
-        {
-          sessionId: "shared-id",
-          updatedAt: 99,
-          skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
-        },
-      );
+      const shared = {
+        sessionId: "shared-id",
+        skillsSnapshot: { prompt: SIBLING_PROMPT, skills: [] },
+      };
+      seed({ ...shared, updatedAt: 1 }, "agent:main:stale");
+      seed({ ...shared, updatedAt: 99 }, "agent:main:fresh");
 
       const projection = await projectionFor();
-      const statements = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const observed = measureSiblingDecodes(() => {
+      {
+        using statements = vi.spyOn(DatabaseSync.prototype, "prepare");
+        using reads = observePromptReads();
         for (let run = 0; run < 20; run++) {
           expect(resolveSessionForRun(`orphan-${run}`, { projection })).toBeUndefined();
         }
-        return resolveSessionForRun("shared-id", { agentId: "main", projection });
-      });
-      expect(statements).not.toHaveBeenCalled();
-      statements.mockRestore();
-      expect(observed.result).toEqual({ sessionKey: "agent:main:fresh", agentId: "main" });
-      expect(observed.decodes).toBe(0);
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:stale" },
-        { sessionId: "shared-id", updatedAt: 100 },
-      );
-      expect(resolveSessionForRun("shared-id", { projection })).toEqual({
-        sessionKey: "agent:main:stale",
-        agentId: "main",
-      });
-      expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:late" },
-        { sessionId: "late-id", updatedAt: 1 },
-      );
-      expect(resolveSessionForRun("late-id", { projection })).toEqual({
-        sessionKey: "agent:main:late",
-        agentId: "main",
-      });
-      replaceSessionEntrySync(
-        { ...scope, sessionKey: "agent:main:late" },
-        { sessionId: "rolled-id", updatedAt: 2 },
+        const result = resolveSessionForRun("shared-id", { agentId: "main", projection });
+        expect(statements).not.toHaveBeenCalled();
+        expect(result).toEqual(mainRun("agent:main:fresh"));
+        reads.expectIdle();
+      }
+      seed({ sessionId: "shared-id", updatedAt: 100 }, "agent:main:stale");
+      expect(resolveSessionForRun("shared-id", { projection })).toEqual(
+        mainRun("agent:main:stale"),
       );
       expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
-      expect(resolveSessionForRun("rolled-id", { projection })).toEqual({
-        sessionKey: "agent:main:late",
-        agentId: "main",
-      });
+      seed({ sessionId: "late-id", updatedAt: 1 }, "agent:main:late");
+      expect(resolveSessionForRun("late-id", { projection })).toEqual(mainRun("agent:main:late"));
+      seed({ sessionId: "rolled-id", updatedAt: 2 }, "agent:main:late");
+      expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
+      expect(resolveSessionForRun("rolled-id", { projection })).toEqual(mainRun("agent:main:late"));
       projection.dispose();
       expect(resolveSessionForRun("rolled-id", { projection })).toBeUndefined();
     });

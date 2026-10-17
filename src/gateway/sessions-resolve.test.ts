@@ -13,83 +13,71 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
-const hoisted = vi.hoisted(() => ({
-  listAgentIdsMock: vi.fn(),
-}));
+const hoisted = vi.hoisted(() => ({ listAgentIdsMock: vi.fn() }));
 
 vi.mock("../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
     "../agents/agent-scope.js",
   );
-  return {
-    ...actual,
-    listAgentIds: hoisted.listAgentIdsMock,
-  };
+  return { ...actual, listAgentIds: hoisted.listAgentIdsMock };
 });
 
-const { resolveSessionKeyFromResolveParams: resolveSessionKeyFromResolveParamsWithClient } =
+const { resolveSessionKeyFromResolveParams: resolveWithClient } =
   await import("./sessions-resolve.js");
 
-type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
-
-let selectedStore:
-  | {
-      store: Record<string, SessionEntry>;
-      storePath?: string;
-      targetsBySessionKey?: Map<
-        string,
-        { agentId: string; storeTarget: { agentId: string; storePath: string } }
-      >;
-    }
-  | undefined;
+type ResolveParams = Parameters<typeof resolveWithClient>[0];
+type Fixture = Parameters<typeof createSessionRowProjectionFixture>[0];
+let selectedStore: Omit<Fixture, "cfg">;
 let projections: ReturnType<typeof createSessionRowProjectionFixture>[];
 const resolve = (p: ResolveParams["p"], cfg: OpenClawConfig = {}) => {
   setRuntimeConfigSnapshot(cfg);
-  const store = selectedStore?.store ?? {};
   const projection = createSessionRowProjectionFixture({
+    ...selectedStore,
     cfg,
-    store,
-    storePath: selectedStore?.storePath,
     agentId: p.agentId ?? "main",
-    targetsBySessionKey:
-      selectedStore?.targetsBySessionKey &&
-      new Map(
-        [...selectedStore.targetsBySessionKey].map(([key, target]) => [
-          key,
-          {
-            ...target,
-            entry: store[key],
-            readSourceEntry: (parentKey: string) => store[parentKey],
-            resolveSourceKey: (parentKey: string) => parentKey,
-          },
-        ]),
-      ),
   });
   projections.push(projection);
-  return resolveSessionKeyFromResolveParamsWithClient({
-    client: null,
-    p,
-    projection,
-  });
+  return resolveWithClient({ client: null, p, projection });
 };
 
 describe("resolveSessionKeyFromResolveParams", () => {
-  const target = (key: string) =>
-    [key, { agentId: "main", storeTarget: { agentId: "main", storePath } }] as const;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let storePath: string;
 
-  function setStore(
-    store: Record<string, SessionEntry>,
-    targetsBySessionKey?: NonNullable<typeof selectedStore>["targetsBySessionKey"],
-  ) {
-    selectedStore = { store, storePath, targetsBySessionKey };
+  function setStore(store: Record<string, SessionEntry>, owners?: Record<string, string>) {
+    selectedStore = {
+      store,
+      storePath,
+      targetsBySessionKey:
+        owners &&
+        new Map(
+          Object.entries(owners).map(([key, agentId]) => [
+            key,
+            {
+              agentId,
+              storeTarget: { agentId, storePath },
+              entry: store[key],
+              readSourceEntry: (parentKey: string) => store[parentKey],
+              resolveSourceKey: (parentKey: string) => parentKey,
+            },
+          ]),
+        ),
+    };
+  }
+
+  function candidates(display: (index: number) => Partial<SessionEntry>) {
+    return Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [
+        `agent:main:thread:12345678-${index.toString(16).padStart(4, "0")}-4000-8000-000000000000`,
+        { sessionId: `candidate-${index}`, updatedAt: 100 - index, ...display(index) },
+      ]),
+    );
   }
 
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
     storePath = path.join(tempDirs.make("sessions-resolve-"), "sessions.json");
-    selectedStore = undefined;
+    setStore({});
     projections = [];
     onTestFinished(() => {
       for (const projection of projections) {
@@ -98,7 +86,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
       clearRuntimeConfigSnapshot();
     });
     hoisted.listAgentIdsMock.mockReset();
-    // Default: all agents are known (main is always present).
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
   });
 
@@ -151,38 +138,22 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it("returns at most ten recent candidates and ignores a stale slug hint", () => {
-    const store = Object.fromEntries(
-      Array.from({ length: 12 }, (_, index) => {
-        const suffix = index.toString(16).padStart(4, "0");
-        return [
-          `agent:main:thread:12345678-${suffix}-4000-8000-000000000000`,
-          {
-            sessionId: `candidate-${index}`,
-            updatedAt: 100 - index,
-            displayName: `Candidate ${index}`,
-            ...(index % 2 === 0 ? { boardFace: "dashboard" as const } : {}),
-          },
-        ];
-      }),
-    );
+    const store = candidates((index) => ({
+      displayName: `Candidate ${index}`,
+      ...(index % 2 === 0 ? { boardFace: "dashboard" as const } : {}),
+    }));
     setStore(store);
 
     const expectedKeys = Object.keys(store).slice(0, 10);
     expect(resolve({ shortId: "12345678", slugHint: "renamed-session" })).toEqual({
       ok: true,
       ambiguous: true,
-      candidates: expectedKeys.map((key, index) => {
-        const candidate: {
-          key: string;
-          agentId: string;
-          displayName: string;
-          boardFace?: "dashboard";
-        } = { key, agentId: "main", displayName: `Candidate ${index}` };
-        if (index % 2 === 0) {
-          candidate.boardFace = "dashboard";
-        }
-        return candidate;
-      }),
+      candidates: expectedKeys.map((key, index) =>
+        Object.assign(
+          { key, agentId: "main", displayName: `Candidate ${index}` },
+          index % 2 === 0 ? { boardFace: "dashboard" } : {},
+        ),
+      ),
     });
   });
 
@@ -222,7 +193,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
           boardFace: "dashboard",
         },
       },
-      new Map([["global", { agentId: "work", storeTarget: { agentId: "work", storePath } }]]),
+      { global: "work" },
     );
     expect(
       resolve(
@@ -246,10 +217,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
         .mockReturnValue(null);
       onTestFinished(() => bundledFallback.mockRestore());
       const key = "agent:main:matrix:channel:!Room:example.org";
-      setStore(
-        { [key]: { sessionId: key, updatedAt: 1, displayName: "Room" } },
-        new Map([target(key)]),
-      );
+      setStore({ [key]: { sessionId: key, updatedAt: 1, displayName: "Room" } }, { [key]: "main" });
       const result = resolve({
         reference: { key: `agent:main:matrix:channel:${room}` },
         agentId: "main",
@@ -265,17 +233,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
   );
 
   it("bounds named-reference ambiguity after excluding deleted agents and non-UUID titles", () => {
-    const store = Object.fromEntries(
-      Array.from({ length: 12 }, (_, index) => [
-        `agent:main:thread:12345678-${index.toString(16).padStart(4, "0")}-4000-8000-000000000000`,
-        {
-          sessionId: `candidate-${index}`,
-          updatedAt: 100 - index,
-          displayName: "Shared dashboard",
-          boardFace: "dashboard" as const,
-        },
-      ]),
-    );
+    const store = candidates(() => ({ displayName: "Shared dashboard", boardFace: "dashboard" }));
     const keys = Object.keys(store);
     store["agent:deleted:thread:12345678-ffff-4000-8000-000000000000"] = {
       sessionId: "deleted-dashboard",
@@ -289,7 +247,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       displayName: "Shared dashboard",
       boardFace: "dashboard",
     };
-    setStore(store, new Map(Object.keys(store).map(target)));
+    setStore(store, Object.fromEntries(Object.keys(store).map((key) => [key, "main"])));
     expect(resolve({ reference: { key: "agent:main:missing", slug: "shared-dashboard" } })).toEqual(
       {
         ok: true,
@@ -305,10 +263,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it.each([
-    {
-      p: { shortId: "too-short" },
-      message: "shortId must be 8-32 hexadecimal characters",
-    },
+    { p: { shortId: "too-short" }, message: "shortId must be 8-32 hexadecimal characters" },
     { p: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
     {
       p: { key: "agent:main:literal", reference: { key: "agent:main:literal" } },

@@ -65,6 +65,32 @@ function selectedCount(selections: MockInstance<SessionRowProjection["selectEntr
   );
 }
 
+function seed(values: Parameters<typeof replaceSessionEntrySync>[1] = entry, sessionKey = key) {
+  replaceSessionEntrySync({ agentId: "main", sessionKey }, values);
+}
+
+function acpMeta(
+  sessionKey: string,
+  runtimeSessionName: string,
+  identity: Pick<
+    Parameters<typeof seedCanonicalAcpSessionMeta>[0],
+    "sessionId" | "lifecycleRevision"
+  >,
+) {
+  seedCanonicalAcpSessionMeta({
+    sessionKey,
+    ...identity,
+    meta: {
+      backend: "fixture",
+      agent: "harness",
+      runtimeSessionName,
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 1,
+    },
+  });
+}
+
 function addUnrelatedSessions() {
   for (let index = 0; index < 96; index++) {
     replaceSessionEntrySync(
@@ -84,59 +110,36 @@ it("resolves free ACP aliases from current resident facts without SQLite or disc
       label: "Free ACP",
     };
     replaceSessionEntrySync({ agentId: "harness", sessionKey: acpKey }, acpEntry);
-    seedCanonicalAcpSessionMeta({
-      sessionKey: acpKey.replace("agent:harness:", "agent:HARNESS:"),
+    acpMeta(acpKey.replace("agent:harness:", "agent:HARNESS:"), "free-resident", {
       lifecycleRevision: acpEntry.lifecycleRevision,
-      meta: {
-        backend: "fixture",
-        agent: "harness",
-        runtimeSessionName: "free-resident",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 1,
-      },
     });
     addUnrelatedSessions();
-    const projection = await createSessionRowProjection({ cfg });
-    // Match the Gateway request lifetime so idle preview reads stay outside this proof.
-    const releaseForegroundWork = retainSessionListForegroundWork();
-    try {
-      await projection.ensureMaterialized();
-      const reads = observeMainThreadReads();
-      const describe = vi.spyOn(projection, "describe");
-      const selections = vi.spyOn(projection, "selectEntries");
-      try {
-        for (const p of [
-          { sessionId: acpEntry.sessionId },
-          { label: acpEntry.label },
-          { shortId: "12345678" },
-        ]) {
-          selections.mockClear();
-          expect(resolveSessionKeyFromResolveParams({ client: null, projection, p })).toMatchObject(
-            resolved(acpKey, "harness"),
-          );
-          if ("sessionId" in p) {
-            expect(selectedCount(selections)).toBeLessThanOrEqual(2);
-          }
-        }
-        expect(describe).not.toHaveBeenCalled();
-        expect(
-          resolveSessionKeyFromResolveParams({
-            client: null,
-            projection,
-            p: { key: acpKey },
-          }),
-        ).toMatchObject(resolved(acpKey, "harness"));
-        reads.expectIdle();
-      } finally {
-        describe.mockRestore();
-        selections.mockRestore();
-        reads.restore();
+    using lifetime = new DisposableStack();
+    // Keep idle preview reads outside the Gateway request lifetime.
+    lifetime.defer(retainSessionListForegroundWork());
+    const { projection } = lifetime.use(await residentProjection());
+    await projection.ensureMaterialized();
+    using reads = observeReads();
+    using describe = vi.spyOn(projection, "describe");
+    using selections = vi.spyOn(projection, "selectEntries");
+    for (const p of [
+      { sessionId: acpEntry.sessionId },
+      { label: acpEntry.label },
+      { shortId: "12345678" },
+    ]) {
+      selections.mockClear();
+      expect(resolveSessionKeyFromResolveParams({ client: null, projection, p })).toMatchObject(
+        resolved(acpKey, "harness"),
+      );
+      if ("sessionId" in p) {
+        expect(selectedCount(selections)).toBeLessThanOrEqual(2);
       }
-    } finally {
-      projection.dispose();
-      releaseForegroundWork();
     }
+    expect(describe).not.toHaveBeenCalled();
+    expect(
+      resolveSessionKeyFromResolveParams({ client: null, projection, p: { key: acpKey } }),
+    ).toMatchObject(resolved(acpKey, "harness"));
+    reads.expectIdle();
   });
 });
 
@@ -147,7 +150,6 @@ const cfg = {
   },
 };
 const key = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
-const scope = { agentId: "main", sessionKey: key };
 const entry = {
   sessionId: "resident-resolve",
   updatedAt: 1,
@@ -160,7 +162,7 @@ it.each(["exact", "broad"] as const)(
   "resolves replaced IDs immediately after a %s committed publication",
   async (publication) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      replaceSessionEntrySync(scope, entry);
+      seed();
       using owner = await residentProjection();
       const { projection } = owner;
       const resolve = (sessionId: string) =>
@@ -168,31 +170,21 @@ it.each(["exact", "broad"] as const)(
 
       await projection.ensureMaterialized();
       const emit = sessionChanges.emit.bind(sessionChanges);
-      const publicationSpy =
+      using publicationSpy =
         publication === "broad"
-          ? vi.spyOn(sessionChanges, "emit").mockImplementation((change, database) =>
-              emit(
-                "all" in change
-                  ? change
-                  : {
-                      all: true,
-                      scope: {
-                        agentId: change.agentId,
-                        storePath: change.storePath,
-                      },
-                    },
-                database,
-              ),
-            )
+          ? vi.spyOn(sessionChanges, "emit").mockImplementation((change, database) => {
+              if ("all" in change) {
+                return emit(change, database);
+              }
+              const { agentId, storePath } = change;
+              return emit({ all: true, scope: { agentId, storePath } }, database);
+            })
           : undefined;
-      try {
-        runOpenClawAgentWriteTransaction(
-          (database) => writeSessionEntry(database, key, { ...entry, sessionId: "replacement-id" }),
-          { agentId: "main" },
-        );
-      } finally {
-        publicationSpy?.mockRestore();
-      }
+      runOpenClawAgentWriteTransaction(
+        (database) => writeSessionEntry(database, key, { ...entry, sessionId: "replacement-id" }),
+        { agentId: "main" },
+      );
+      publicationSpy?.mockRestore();
       expect(await resolve("replacement-id")).toEqual(resolved(key));
       expect(await resolve(entry.sessionId)).toEqual(missing);
       expect(await resolve(key)).toEqual(resolved(key));
@@ -204,10 +196,7 @@ it.each(["global", "unknown"] as const)(
   "keeps the advertised %s store winner when resolving IDs and filtering discovery",
   async (sentinel) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const config = {
-        ...cfg,
-        session: { store: state.statePath("stores", "{agentId}.sqlite") },
-      };
+      const config = { ...cfg, session: { store: state.statePath("stores", "{agentId}.sqlite") } };
       const configuredPath = state.statePath("stores", "main.sqlite");
       const defaultPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const winner = { sessionId: `configured-${sentinel}`, updatedAt: 1 };
@@ -250,11 +239,7 @@ it.each(["global", "unknown"] as const)(
         expect((await listProjectedSessions({ projection, client, opts })).sessions).toEqual([]);
         await expect(
           withPreparedSessionResolve(
-            {
-              client: null,
-              projection,
-              p: { key: sentinel, allowMissing: true },
-            },
+            { client: null, projection, p: { key: sentinel, allowMissing: true } },
             () => projection.describe({ agentId: "main", key: sentinel })?.entry.sessionId,
           ),
         ).resolves.toBe(winner.sessionId);
@@ -265,7 +250,7 @@ it.each(["global", "unknown"] as const)(
 
 it("bounds exact resident selection without SQLite and sees committed label changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    replaceSessionEntrySync(scope, entry);
+    seed();
     addUnrelatedSessions();
     using owner = await residentProjection();
     const { projection } = owner;
@@ -297,7 +282,7 @@ it("bounds exact resident selection without SQLite and sees committed label chan
       reads.expectIdle();
     }
 
-    replaceSessionEntrySync(scope, { ...entry, label: "Updated label" });
+    seed({ ...entry, label: "Updated label" });
     expect(await resolve({ label: "Updated label" })).toEqual(resolved(key));
     expect(await resolve({ label: entry.label, allowMissing: true })).toEqual(missing);
   });
@@ -305,7 +290,7 @@ it("bounds exact resident selection without SQLite and sees committed label chan
 
 it("searches stored and selected model identities from retained row facts without SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    replaceSessionEntrySync(scope, entry);
+    seed();
     using owner = await residentProjection();
     const { projection } = owner;
 
@@ -364,50 +349,30 @@ it("prepares a cold exact resolution and refuses consumption after its projectio
       { agentId: "harness", sessionKey: archivedKey },
       { sessionId: "archived-resolve", updatedAt: 1, archivedAt: 1 },
     );
-    seedCanonicalAcpSessionMeta({
-      sessionKey: archivedKey,
-      sessionId: "archived-resolve",
-      meta: {
-        backend: "fixture",
-        agent: "harness",
-        runtimeSessionName: "archived-runtime",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 1,
-      },
-    });
+    acpMeta(archivedKey, "archived-runtime", { sessionId: "archived-resolve" });
     using owner = await residentProjection({});
     const { projection } = owner;
     const consume = vi.fn((result) => result);
+    const read = (p: SessionsResolveParams, isCurrent?: () => boolean) =>
+      withPreparedSessionResolve({ projection, client: null, p, isCurrent }, consume);
 
     expect(projection.describe({ agentId: "harness", key: archivedKey })).toBeUndefined();
     {
       using reads = observeReads();
 
-      await expect(
-        withPreparedSessionResolve(
-          { projection, client: null, p: { shortId: "44444444" } },
-          consume,
-        ),
-      ).resolves.toMatchObject(resolved(archivedKey, "harness"));
-      await expect(
-        withPreparedSessionResolve({ projection, client: null, p: { key: archivedKey } }, consume),
-      ).resolves.toMatchObject(resolved(archivedKey, "harness"));
+      await expect(read({ shortId: "44444444" })).resolves.toMatchObject(
+        resolved(archivedKey, "harness"),
+      );
+      await expect(read({ key: archivedKey })).resolves.toMatchObject(
+        resolved(archivedKey, "harness"),
+      );
       reads.expectIdle();
     }
 
     consume.mockClear();
-    await expect(
-      withPreparedSessionResolve(
-        {
-          projection,
-          client: null,
-          p: { key: archivedKey },
-          isCurrent: () => false,
-        },
-        consume,
-      ),
-    ).rejects.toThrow("Session projection changed");
+    await expect(read({ key: archivedKey }, () => false)).rejects.toThrow(
+      "Session projection changed",
+    );
     expect(consume).not.toHaveBeenCalled();
   });
 });
