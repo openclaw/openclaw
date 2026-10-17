@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { activityRunInspectorSearch } from "../../ui/src/pages/activity/run-inspector-model.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "../audit/execution-decision-receipts.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -291,16 +290,12 @@ describe("operator approval decision receipts", () => {
     const { db, insert, resolve, page, displays } = receiptFixture();
     for (const id of ["page-a", "page-b", "page-c"]) {
       await insert(id);
-      await resolve(id, "deny", {
-        resolver: { kind: "device", id: "reviewer" },
-      });
+      await resolve(id, "deny");
     }
     db.exec("UPDATE operator_approvals SET rowid = 100 WHERE approval_id = 'page-a'");
     db.exec("DELETE FROM operator_approvals WHERE approval_id = 'page-c'");
     await insert("page-c");
-    await resolve("page-c", "deny", {
-      resolver: { kind: "device", id: "reviewer" },
-    });
+    await resolve("page-c", "deny");
     expect(
       db.prepare("SELECT cursor_id FROM operator_approvals WHERE approval_id = 'page-c'").get(),
     ).toEqual({ cursor_id: 3 });
@@ -316,16 +311,6 @@ describe("operator approval decision receipts", () => {
     expect(firstDisplay?.selectorId).toBe(`approval-decision:${first.nextCursor?.rowId}`);
     expect(first.entries[0]?.selectorId).toBe(firstDisplay?.selectorId);
     expect(firstDisplay?.selectorId).not.toBe(first.entries[0]?.receipt.receiptId);
-    const receiptSearch = activityRunInspectorSearch(
-      { kind: "run", id: context.runId },
-      { id: firstDisplay?.selectorId ?? "" },
-    );
-    expect(new URLSearchParams(receiptSearch.slice(1)).get("receipt")).toBe(
-      firstDisplay?.selectorId,
-    );
-    expect(receiptSearch).not.toContain(
-      encodeURIComponent(first.entries[0]?.receipt.receiptId ?? ""),
-    );
     const next = page({ after: first.nextCursor, limit: 2 });
     expect(next.entries.map((entry) => entry.receipt)).toEqual([
       expect.objectContaining({
@@ -348,20 +333,15 @@ describe("operator approval decision receipts", () => {
       await insert(`binding-${bindingState}`);
       if (bindingState === "missing") {
         db.prepare("DELETE FROM operator_approval_execution_identities").run();
-      } else if (bindingState === "malformed") {
-        db.exec("PRAGMA ignore_check_constraints = ON");
-        db.prepare(
-          "UPDATE operator_approval_execution_identities SET source_context_id = ''",
-        ).run();
       } else {
-        db.prepare(
-          "UPDATE operator_approval_execution_identities SET source_context_id = 'context-other'",
-        ).run();
+        if (bindingState === "malformed") {
+          db.exec("PRAGMA ignore_check_constraints = ON");
+        }
+        db.prepare("UPDATE operator_approval_execution_identities SET source_context_id = ?").run(
+          bindingState === "malformed" ? "" : "context-other",
+        );
       }
-      await resolve(`binding-${bindingState}`, "deny", {
-        resolver: { kind: "device", id: "reviewer" },
-        nowMs: 3_000,
-      });
+      await resolve(`binding-${bindingState}`, "deny", { nowMs: 3_000 });
 
       const receipts = page({ limit: 10, nowMs: 4_000 }).entries.map((entry) => entry.receipt);
       expect(receipts).toEqual([

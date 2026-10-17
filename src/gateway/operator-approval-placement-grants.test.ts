@@ -1,4 +1,3 @@
-// Process-local placement-grant retention and final-boundary revalidation.
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import type { Compilable, Updateable } from "kysely";
@@ -79,16 +78,23 @@ function createDatabaseOptions(): OpenClawStateDatabaseOptions {
 function placementDatabase(databaseOptions: OpenClawStateDatabaseOptions) {
   const database = openOpenClawStateDatabase(databaseOptions);
   const stateDb = getNodeSqliteKysely<PlacementTestDatabase>(database.db);
+  const execute = <Row>(query: Compilable<Row>) => executeSqliteQuerySync(database.db, query);
   return {
     database,
     stateDb,
-    execute: <Row>(query: Compilable<Row>) => executeSqliteQuerySync(database.db, query),
+    execute,
+    revokeApproval: () =>
+      execute(
+        stateDb
+          .updateTable("operator_approvals")
+          .set({ status: "denied", decision: "deny" })
+          .where("approval_id", "=", "approval-1"),
+      ),
     updatePlacement: (
       update: Updateable<PlacementTestDatabase["worker_session_placements"]>,
       sessionId = SESSION_ID,
     ) =>
-      executeSqliteQuerySync(
-        database.db,
+      execute(
         stateDb
           .updateTable("worker_session_placements")
           .set(update)
@@ -165,23 +171,21 @@ function approval(id: string, sessionId = SESSION_ID): NewOperatorApproval {
   };
 }
 
-async function resolveBinding(
-  runtime: ReturnType<typeof createPlacementStandingGrantRuntime>,
-): Promise<PlacementStandingGrantMintSpec> {
+async function resolveBinding(runtime: ReturnType<typeof createRuntime>) {
   const binding = await runtime.resolveBindingAsync(RESOLUTION_INPUT);
   expect(binding).not.toBeNull();
   return binding!;
 }
 
-async function mintGrant(
-  databaseOptions = createDatabaseOptions(),
-  now: () => number = () => NOW_MS + 2_000,
-) {
+async function createPlacementFixture(retain = true, now: () => number = () => NOW_MS + 2_000) {
+  const databaseOptions = createDatabaseOptions();
   seedActivePlacement(databaseOptions);
   const runtime = createRuntime(databaseOptions, now);
   const binding = await resolveBinding(runtime);
-  await retainAllowedGrant(databaseOptions, runtime, binding);
-  return { binding, runtime, ...placementDatabase(databaseOptions) };
+  if (retain) {
+    await retainAllowedGrant(databaseOptions, runtime, binding);
+  }
+  return { binding, runtime, databaseOptions, ...placementDatabase(databaseOptions) };
 }
 
 async function retainAllowedGrant(
@@ -207,7 +211,7 @@ async function retainAllowedGrant(
 
 describe("placement standing grants", () => {
   it("accepts the released synchronous SDK runtime at the node approval boundary", async () => {
-    const { binding } = await mintGrant();
+    const { binding } = await createPlacementFixture();
     const consumed = () => ({
       outcome: "consumed" as const,
       grant: { ...binding, mintedByApprovalId: "approval-1", expiresAtMs: NOW_MS + 60_000 },
@@ -245,9 +249,8 @@ describe("placement standing grants", () => {
   });
 
   it("retains each session's parent while selecting the current placement", async () => {
-    const databaseOptions = createDatabaseOptions();
-    const { binding, runtime, stateDb, execute, updatePlacement } =
-      await mintGrant(databaseOptions);
+    const { binding, runtime, databaseOptions, stateDb, execute, updatePlacement } =
+      await createPlacementFixture();
     execute(stateDb.updateTable("worker_session_placements").set({ state: "draining" }));
     seedActivePlacement(databaseOptions, "session-placement-2", "environment-2");
     const successor = await resolveBinding(runtime);
@@ -266,15 +269,11 @@ describe("placement standing grants", () => {
   });
 
   it("prepares without host SQL and rejects a parent revoked before transport handoff", async () => {
-    const databaseOptions = createDatabaseOptions();
-    const { binding, runtime, stateDb, execute } = await mintGrant(databaseOptions);
+    const { binding, runtime, revokeApproval } = await createPlacementFixture();
     await runtime.resolveAsync(binding);
     const hostSql = observeHostDataSql();
     try {
-      const expired = {
-        ...grantInput(binding),
-        expiresAtMs: NOW_MS,
-      };
+      const expired = { ...grantInput(binding), expiresAtMs: NOW_MS };
       const posted = vi.spyOn(Worker.prototype, "postMessage");
       try {
         expect(() => runtime.retain(expired)).toThrow("use retainAsync");
@@ -296,12 +295,7 @@ describe("placement standing grants", () => {
     }
     expect(await runtime.consumeAsync(binding)).toMatchObject({ outcome: "consumed" });
     expect(runtime.consume(binding).outcome).toBe("consumed");
-    execute(
-      stateDb
-        .updateTable("operator_approvals")
-        .set({ status: "denied", decision: "deny" })
-        .where("approval_id", "=", "approval-1"),
-    );
+    revokeApproval();
     const dispatchSql = observeHostDataSql();
     try {
       expect(runtime.consume(binding).outcome).toBe("no-grant");
@@ -315,7 +309,7 @@ describe("placement standing grants", () => {
   });
 
   it("rejects terminal metadata on an active placement before authorizing its grant", async () => {
-    const { binding, runtime, updatePlacement } = await mintGrant();
+    const { binding, runtime, updatePlacement } = await createPlacementFixture();
     updatePlacement({ terminal_reason: "retired", terminal_at_ms: NOW_MS });
     await expect(runtime.resolveAsync(binding)).rejects.toThrow(
       "Worker session placement active cannot retain terminal facts",
@@ -360,17 +354,14 @@ describe("placement standing grants", () => {
   });
 
   it("does not retain a grant before the parent allow-always decision", async () => {
-    const databaseOptions = createDatabaseOptions();
-    seedActivePlacement(databaseOptions);
-    const runtime = createRuntime(databaseOptions);
-    const binding = await resolveBinding(runtime);
+    const { databaseOptions, runtime, binding } = await createPlacementFixture(false);
     await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
     expect(await runtime.retainAsync(grantInput(binding))).toBe(false);
     expect((await runtime.validateAsync(binding)).outcome).toBe("no-grant");
   });
 
   it("keeps operation families isolated", async () => {
-    const { binding, runtime } = await mintGrant();
+    const { binding, runtime } = await createPlacementFixture();
     expect(
       await runtime.validateAsync({ ...binding, command: "another.dangerous.command" }),
     ).toMatchObject({ outcome: "no-grant" });
@@ -380,7 +371,7 @@ describe("placement standing grants", () => {
     ["node substitution", { nodeId: "node-2" }, "node-changed"],
     ["device re-pair", { pairingGeneration: "pairing-2" }, "pairing-changed"],
   ] as const)("fails closed after %s", async (_name, change, expected) => {
-    const { binding, runtime } = await mintGrant();
+    const { binding, runtime } = await createPlacementFixture();
     expect((await runtime.consumeAsync({ ...binding, ...change })).outcome).toBe(expected);
   });
 
@@ -389,7 +380,7 @@ describe("placement standing grants", () => {
     ["gateway owner-epoch rotation", { active_owner_epoch: 8 }],
     ["placement drain", { state: "draining" }],
   ] as const)("fails closed after %s", async (_name, update) => {
-    const { binding, runtime, updatePlacement } = await mintGrant();
+    const { binding, runtime, updatePlacement } = await createPlacementFixture();
     updatePlacement(update);
     expect((await runtime.consumeAsync(binding)).outcome).toBe("placement-changed");
   });
@@ -403,20 +394,12 @@ describe("placement standing grants", () => {
     };
     for (const [scenario, outcome] of Object.entries(scenarios)) {
       let nowMs = NOW_MS + 2_000;
-      const databaseOptions = createDatabaseOptions();
-      const { binding, runtime, database, stateDb, execute } = await mintGrant(
-        databaseOptions,
-        () => nowMs,
-      );
+      const { binding, runtime, database, stateDb, execute, revokeApproval } =
+        await createPlacementFixture(true, () => nowMs);
       if (scenario === "parent-missing") {
         execute(stateDb.deleteFrom("operator_approvals").where("approval_id", "=", "approval-1"));
       } else if (scenario === "parent") {
-        execute(
-          stateDb
-            .updateTable("operator_approvals")
-            .set({ status: "denied", decision: "deny" })
-            .where("approval_id", "=", "approval-1"),
-        );
+        revokeApproval();
       } else if (scenario === "placement") {
         execute(stateDb.deleteFrom("worker_session_placements"));
       }

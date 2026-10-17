@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,21 +21,18 @@ import {
 
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let options: OpenClawStateDatabaseOptions;
 
-function databaseOptions(): OpenClawStateDatabaseOptions {
+beforeEach(() => {
   const stateDir = fs.realpathSync(tempDirs.make("openclaw-approval-id-"));
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
+  options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+});
 
 function approval(id: string): NewOperatorApproval {
   return {
     id,
     kind: "exec",
-    presentation: {
-      kind: "exec",
-      commandText: `echo ${id}`,
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    },
+    presentation: { kind: "exec", commandText: id, allowedDecisions: ["allow-once"] },
     source: { runId: "run-1" },
     runtimeEpoch: "runtime-a",
     createdAtMs: 1_000,
@@ -60,42 +57,31 @@ function expectFound(result: unknown, record: object) {
   expect(result).toMatchObject({ outcome: "found", record });
 }
 
-function identityFixture() {
-  const options = databaseOptions();
-  const owner = {
-    expectedKind: "exec",
-    runtimeEpoch: "runtime-a",
-    databaseOptions: options,
-  } as const;
-  return {
-    options,
-    insert: (id: string) =>
-      insertOperatorApproval({ approval: approval(id), databaseOptions: options }),
-    resolve: (id: string) =>
-      resolveOperatorApproval({
-        id,
-        decision: "allow-once",
-        resolver: { kind: "device", id: "reviewer" },
-        nowMs: 2_000,
-        ...owner,
-      }),
-    consume: (id: string, consumerId = "consumer") =>
-      consumeOperatorApprovalAllowOnce({
-        id,
-        consumerId,
-        nowMs: 3_000,
-        ...owner,
-      }),
-    get: (id: string) =>
-      getOperatorApprovalDetailed({ id, nowMs: 3_000, databaseOptions: options }),
-  };
-}
+const input = (id: string) => ({ id, databaseOptions: options });
+const owner = { expectedKind: "exec", runtimeEpoch: "runtime-a" } as const;
+const insert = (id: string) =>
+  insertOperatorApproval({ approval: approval(id), databaseOptions: options });
+const resolve = (id: string) =>
+  resolveOperatorApproval({
+    ...input(id),
+    ...owner,
+    decision: "allow-once",
+    resolver: { kind: "device", id: "reviewer" },
+    nowMs: 2_000,
+  });
+const consume = (id: string, consumerId = "consumer") =>
+  consumeOperatorApprovalAllowOnce({
+    ...input(id),
+    ...owner,
+    consumerId,
+    nowMs: 3_000,
+  });
+const get = (id: string) => getOperatorApprovalDetailed({ ...input(id), nowMs: 3_000 });
+const sql = (query: string) => openOpenClawStateDatabase(options).db.prepare(query);
 
 describe("operator approval execution identity", () => {
   it("rolls back the parent when the child insert is forced to fail", () => {
-    const options = databaseOptions();
-    const db = openOpenClawStateDatabase(options).db;
-    db.exec(`
+    openOpenClawStateDatabase(options).db.exec(`
       CREATE TABLE operator_approval_execution_identities (
         approval_id TEXT PRIMARY KEY REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
         source_context_id TEXT NOT NULL,
@@ -108,8 +94,7 @@ describe("operator approval execution identity", () => {
       END;
     `);
 
-    // The injected trigger is deliberately noncanonical; worker admission rejects it.
-    // Exercise the same native transaction directly to prove parent/child atomicity.
+    // Use the native transaction: worker admission rejects this noncanonical trigger.
     expect(() =>
       insertOperatorApprovalNative({
         approval: approval("atomic"),
@@ -117,15 +102,14 @@ describe("operator approval execution identity", () => {
       }),
     ).toThrow("forced child failure");
     expect(
-      db.prepare("SELECT approval_id FROM operator_approvals WHERE approval_id = ?").get("atomic"),
+      sql("SELECT approval_id FROM operator_approvals WHERE approval_id = ?").get("atomic"),
     ).toBeUndefined();
     expect(
-      db.prepare("SELECT approval_id FROM operator_approval_execution_identities").get(),
+      sql("SELECT approval_id FROM operator_approval_execution_identities").get(),
     ).toBeUndefined();
   });
 
   it("keeps parent decision and consume semantics independent of child/audit rows", async () => {
-    const { options, insert, resolve, consume, get } = identityFixture();
     for (const id of ["missing-child", "corrupt-child", "deleted-audit"]) {
       expect(await insert(id)).toMatchObject({ outcome: "inserted" });
     }
@@ -152,13 +136,9 @@ describe("operator approval execution identity", () => {
     }
   });
   it("preserves companion identity through an older approval reader write and candidate reopen", async () => {
-    const { options, insert, consume, get } = identityFixture();
     await insert("older-reader");
-    const candidate = openOpenClawStateDatabase(options);
-    const version = candidate.db.prepare("PRAGMA user_version").get();
-    const binding = candidate.db
-      .prepare("SELECT * FROM operator_approval_execution_identities")
-      .all();
+    const version = sql("PRAGMA user_version").get();
+    const binding = sql("SELECT * FROM operator_approval_execution_identities").all();
     expect(binding).toEqual([
       {
         approval_id: "older-reader",
@@ -168,11 +148,9 @@ describe("operator approval execution identity", () => {
     ]);
     await closeDatabase();
 
-    // The pinned reader predates companion identities. Its original decoder and
-    // decision transition reopen through the current shared database owner.
+    // Reopen through the pinned pre-companion reader, then the current owner.
     const olderInput = { id: "older-reader", nowMs: 2_000, databaseOptions: options };
     expectFound(getOlderOperatorApproval(olderInput), { status: "pending", decision: null });
-    const older = openOpenClawStateDatabase(options);
     expect(
       resolveOlderOperatorApproval({
         ...olderInput,
@@ -186,7 +164,7 @@ describe("operator approval execution identity", () => {
       status: "allowed",
       decision: "allow-once",
     });
-    expect(older.db.prepare("PRAGMA user_version").get()).toEqual(version);
+    expect(sql("PRAGMA user_version").get()).toEqual(version);
     await closeDatabase();
 
     expectFound(await get("older-reader"), {
@@ -197,12 +175,9 @@ describe("operator approval execution identity", () => {
       outcome: "consumed",
     });
     expectFound(await get("older-reader"), { consumedBy: "candidate-consumer" });
-    const reopened = openOpenClawStateDatabase(options).db;
-    expect(reopened.prepare("SELECT * FROM operator_approval_execution_identities").all()).toEqual(
-      binding,
-    );
-    expect(reopened.prepare("PRAGMA user_version").get()).toEqual(version);
-    expect(reopened.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
-    expect(reopened.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(sql("SELECT * FROM operator_approval_execution_identities").all()).toEqual(binding);
+    expect(sql("PRAGMA user_version").get()).toEqual(version);
+    expect(sql("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+    expect(sql("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
