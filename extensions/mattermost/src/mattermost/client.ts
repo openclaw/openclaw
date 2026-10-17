@@ -466,18 +466,12 @@ export async function createMattermostDirectChannelWithRetry(
   const timeoutMs = resolveTimerTimeoutMs(rawTimeoutMs, 30000);
 
   return await retryAsync(
-    async () => {
-      try {
-        return await client.request<MattermostChannel>("/channels/direct", {
-          method: "POST",
-          body: JSON.stringify(userIds),
-          timeoutMs,
-        });
-      } catch (err) {
-        // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
-        throw err instanceof Error ? err : new Error(String(err));
-      }
-    },
+    () =>
+      client.request<MattermostChannel>("/channels/direct", {
+        method: "POST",
+        body: JSON.stringify(userIds),
+        timeoutMs,
+      }),
     {
       attempts: maxRetries + 1,
       // Core retry raises maxDelayMs to the minDelayMs floor, but the schema
