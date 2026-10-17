@@ -31,6 +31,10 @@ function fixture() {
   return { database, rows, write, transaction };
 }
 
+function fail(message: string): never {
+  throw new Error(message);
+}
+
 it.each(["waiting", "active"] as const)(
   "installs a received commit independently of a %s native transaction's rollback",
   (phase) => {
@@ -68,9 +72,7 @@ it("retains committed success and delivers later observers when a notification t
   const seen: unknown[] = [];
   const result = transaction(() => {
     write("committed");
-    deferSqlitePostCommitPublication(database, () => {
-      throw new Error("notification unavailable");
-    });
+    deferSqlitePostCommitPublication(database, () => fail("notification unavailable"));
     deferSqlitePostCommitPublication(database, () => seen.push(rows()));
     return "saved";
   });
@@ -125,18 +127,12 @@ it("installs every commit receipt even if a prior owner cannot fence its failed 
   transaction(() => {
     write("committed");
     stageSqliteTransactionState(database, {
-      commit() {
-        throw new Error("legacy installer failed");
-      },
+      commit: () => fail("legacy installer failed"),
     });
     stageSqliteTransactionState(database, {
-      commit() {
-        receipt = rows();
-      },
+      commit: () => (receipt = rows()),
     });
-    deferSqlitePostCommitPublication(database, () => {
-      notified = true;
-    });
+    deferSqlitePostCommitPublication(database, () => (notified = true));
   });
   expect(receipt).toEqual([{ id: "committed" }]);
   expect(notified).toBe(false);

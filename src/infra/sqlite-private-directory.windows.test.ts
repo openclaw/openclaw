@@ -106,25 +106,25 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     }
   });
 
-  it("publishes a short private file that can be reopened normally", () => {
-    const root = tempDirs.make("openclaw-private-short-");
-    const filename = path.join(root, "private.sqlite");
-    writePrivateFile(filename, "short");
-    expect(fsSync.statSync(filename).nlink).toBe(1);
-    expect(fsSync.readdirSync(root)).toEqual(["private.sqlite"]);
-  });
-
-  it.each([201, 202, 220, 280])(
-    "creates private paths with a %i-character parent",
+  it.each([null, 201, 202, 220, 280])(
+    "creates reopenable private files with parent length %s",
     (parentLength) => {
       const root = tempDirs.make("openclaw-sqlite-private-long-");
-      const parent = path.join(root, "p".repeat(parentLength - root.length - 1));
-      fsSync.mkdirSync(parent, { recursive: true });
-      const directory = createPrivateSqliteTempDirectorySync(parent, "long-");
-      expect(fsSync.statSync(directory).isDirectory()).toBe(true);
+      const parent =
+        parentLength === null ? root : path.join(root, "p".repeat(parentLength - root.length - 1));
+      if (parentLength !== null) {
+        fsSync.mkdirSync(parent, { recursive: true });
+        const directory = createPrivateSqliteTempDirectorySync(parent, "long-");
+        expect(fsSync.statSync(directory).isDirectory()).toBe(true);
+      }
       const filename = path.join(parent, "private.sqlite");
-      expect(filename.length).toBe(parentLength + 15);
-      writePrivateFile(filename, "long");
+      writePrivateFile(filename, "private");
+      if (parentLength === null) {
+        expect(fsSync.statSync(filename).nlink).toBe(1);
+        expect(fsSync.readdirSync(root)).toEqual(["private.sqlite"]);
+      } else {
+        expect(filename.length).toBe(parentLength + 15);
+      }
     },
   );
 
