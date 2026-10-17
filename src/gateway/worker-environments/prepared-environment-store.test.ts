@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import type {
-  PreparedEnvironmentSelection,
-  WorkerEnvironmentIntentInput,
-} from "./environment-record.js";
+import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 
@@ -17,12 +14,14 @@ describe("prepared environment ownership", () => {
   const fixture = usePreparedPoolFixture();
   let environments: typeof fixture.store;
   let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
-  const openStores = () => {
-    environments = fixture.store;
-    placements = createWorkerSessionPlacementStore({
+  const createPlacements = () =>
+    createWorkerSessionPlacementStore({
       database: fixture.database,
       now: () => fixture.nowMs,
     });
+  const openStores = () => {
+    environments = fixture.store;
+    placements = createPlacements();
   };
   const reopenStores = async () => {
     await fixture.reopenStore();
@@ -38,20 +37,15 @@ describe("prepared environment ownership", () => {
     assertCurrent,
   };
   function reserve(environmentId = "prepared-1", purpose: "reserve" | "build" = "reserve") {
-    const input = {
-      environmentId,
-      providerId: "test-provider",
-      profileId: "test-profile",
-      provisionOperationId: `provision:${environmentId}`,
-      profileSnapshot: {
-        settings: {},
-        executionMode: "worker-turn",
-        project: { key: PROJECT_KEY, root: "/project", baseCommit: "d".repeat(40) },
-      },
-      preparation: { purpose, key: PREPARATION_KEY, demandAtMs: 900, expiresAtMs: 2_000 },
-    } satisfies WorkerEnvironmentIntentInput;
     return environments.ensurePreparedIntent({
-      intent: input,
+      intent: {
+        environmentId,
+        providerId: "test-provider",
+        profileId: "test-profile",
+        provisionOperationId: `provision:${environmentId}`,
+        profileSnapshot: fixture.profile(PROJECT_KEY),
+        preparation: { purpose, key: PREPARATION_KEY, demandAtMs: 900, expiresAtMs: 2_000 },
+      },
       projectKey: PROJECT_KEY,
       target: purpose === "build" ? 0 : 1,
       maxTotal: purpose === "build" ? 1 : 4,
@@ -91,13 +85,8 @@ describe("prepared environment ownership", () => {
 
   it("admits a build at zero ready target and preserves its purpose on reopen", async () => {
     expect((await reserve("build-1", "build"))?.preparation?.purpose).toBe("build");
-    expect(
-      environments.isPreparedIntentWithinCapacity({
-        environmentId: "build-1",
-        target: 0,
-        maxTotal: 1,
-      }),
-    ).toBe(true);
+    const capacity = { environmentId: "build-1", target: 0, maxTotal: 1 };
+    expect(environments.isPreparedIntentWithinCapacity(capacity)).toBe(true);
     await reopenStores();
     expect(environments.get("build-1")?.preparation?.purpose).toBe("build");
     expect(await reserve("build-2", "build")).toEqual(environments.get("build-1"));
@@ -117,10 +106,7 @@ describe("prepared environment ownership", () => {
       sql.restore();
     }
     expect(assigned).toMatchObject({ state: "provisioning", environmentId: "prepared-1" });
-    const anotherStore = createWorkerSessionPlacementStore({
-      database: fixture.database,
-      now: () => fixture.nowMs,
-    });
+    const anotherStore = createPlacements();
     expect(await anotherStore.bindPreparedEnvironment(second)).toBeUndefined();
     const failed = await placements.fail({
       sessionId: first.sessionId,

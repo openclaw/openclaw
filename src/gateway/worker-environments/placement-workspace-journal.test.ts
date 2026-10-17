@@ -207,10 +207,10 @@ describe("worker placement workspace journal", () => {
     { operation: "acceptance", outcome: "committed" },
     { operation: "acceptance", outcome: "unknown" },
     { operation: "acceptance", outcome: "rollback" },
-  ] as const)("preserves $operation custody when settlement is $outcome", async (scenario) => {
+  ] as const)("retains $operation custody after $outcome", async ({ operation, outcome }) => {
     const { active, owner, journal } = await seedJournal();
     const appliedJournal = { ...journal, appliedManifestRef: journal.currentManifestRef };
-    const claim = scenario.operation === "acceptance" ? await claimWorker() : undefined;
+    const claim = operation === "acceptance" ? await claimWorker() : undefined;
     if (claim) {
       await store.markWorkspaceResultPending(claim);
       await store.updateWorkspaceBaseManifest({ claim, manifestRef: journal.currentManifestRef });
@@ -219,26 +219,19 @@ describe("worker placement workspace journal", () => {
     } else {
       await store.abortWorkspaceReconciliation(owner);
     }
-    if (scenario.outcome === "unknown") {
+    if (outcome === "unknown") {
       vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
         () => {},
       );
       const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-        (admit, attachment) => {
-          const admission = createAdmission(admit, attachment);
-          return {
-            ...admission,
-            get committed() {
-              return undefined;
-            },
-            get settlement() {
-              return { kind: "unknown" as const };
-            },
-          };
-        },
+        (admit, attachment) => ({
+          ...createAdmission(admit, attachment),
+          committed: undefined,
+          settlement: { kind: "unknown" as const },
+        }),
       );
-    } else if (scenario.outcome === "rollback") {
+    } else if (outcome === "rollback") {
       database.db.exec(`
         CREATE TRIGGER reject_accepted_journal_cleanup
         BEFORE DELETE ON worker_workspace_reconciliations
@@ -270,13 +263,14 @@ describe("worker placement workspace journal", () => {
       expect(await store.loadWorkspaceReconciliation(owner)).toEqual(journal);
       return;
     }
+    const expectedClaim = { claimId: claim.claimId, runId: claim.runId };
     const assertCurrent = () => {
       if (!store.validateWorkspaceResultClaim(claim)) {
         throw new Error("workspace result authority lost");
       }
     };
     const acceptance = store.acceptWorkspaceResult(claim, assertCurrent);
-    if (scenario.outcome === "unknown") {
+    if (outcome === "unknown") {
       await expect(acceptance).rejects.toBeInstanceOf(
         AcceptedWorkspacePublicationIndeterminateError,
       );
@@ -297,7 +291,7 @@ describe("worker placement workspace journal", () => {
           assertCurrent,
         }),
       ).rejects.toThrow("already applied and awaits fence acceptance");
-    } else if (scenario.outcome === "rollback") {
+    } else if (outcome === "rollback") {
       await expect(acceptance).rejects.toThrow("accepted journal cleanup refused");
       expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
       expect(store.preparedWorkspaceResult(claim)?.workspaceAcceptedAtMs).toBeNull();
@@ -305,30 +299,25 @@ describe("worker placement workspace journal", () => {
       await expect(acceptance).resolves.toBeUndefined();
       expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
       expect(store.preparedWorkspaceResult(claim)).toMatchObject({
-        claimId: claim.claimId,
-        runId: claim.runId,
+        ...expectedClaim,
         workspaceAcceptedAtMs: 1_000,
       });
     }
-    expect(corrupted).toBe(scenario.outcome === "rollback" ? 0 : 1);
+    expect(corrupted).toBe(outcome === "rollback" ? 0 : 1);
     expect(await store.loadWorkspaceReconciliation(owner)).toEqual(
-      scenario.outcome === "rollback" ? appliedJournal : undefined,
+      outcome === "rollback" ? appliedJournal : undefined,
     );
     expect(await store.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       {
-        claimId: claim.claimId,
-        runId: claim.runId,
+        ...expectedClaim,
         gatewayInstanceId: store.workspaceResultInstanceId(),
-        workspaceAcceptedAtMs: scenario.outcome === "rollback" ? null : 1_000,
+        workspaceAcceptedAtMs: outcome === "rollback" ? null : 1_000,
       },
     ]);
-    expect(store.validateTurnClaim(claim)).toBe(scenario.outcome !== "unknown");
-    if (scenario.outcome === "unknown") {
+    expect(store.validateTurnClaim(claim)).toBe(outcome !== "unknown");
+    if (outcome === "unknown") {
       // An uncertain receipt must be reloaded before the durable claim can authorize work.
-      expect((await store.getAsync(claim.sessionId))?.turnClaim).toMatchObject({
-        claimId: claim.claimId,
-        runId: claim.runId,
-      });
+      expect((await store.getAsync(claim.sessionId))?.turnClaim).toMatchObject(expectedClaim);
       expect(store.validateTurnClaim(claim)).toBe(true);
     }
   });

@@ -31,9 +31,10 @@ import {
 } from "./placement-store.js";
 import {
   advancePlacementFixtureToActive,
+  createPlacementTurnClaimFixtureOps,
   seedAttachedPlacementEnvironment,
 } from "./placement-test-fixtures.js";
-import { ActiveTurnClaimError, createPlacementTurnClaimOps } from "./placement-turn-claims.js";
+import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { PERSONAL_SCOPE } from "./placement-workspace-reservation.kernel.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -41,7 +42,6 @@ import { executeLocalTurn } from "./worker-turn-admission.js";
 
 let database: OpenClawStateDatabase;
 let placements: WorkerSessionPlacementStore;
-let stateDir: string;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeStateDatabaseForTest();
@@ -61,7 +61,7 @@ function input(name: string) {
 }
 
 beforeAll(async () => {
-  stateDir = tempDirs.make("openclaw-placement-turn-worker-");
+  const stateDir = tempDirs.make("openclaw-placement-turn-worker-");
   database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
   placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   const warm = await placements.claimTurn(input("warm"));
@@ -133,20 +133,15 @@ function revokeAt(stage: "transaction" | "commit", message: string, onRevoke = (
   };
 }
 
-async function withoutHostSql(
-  run: (queries: ReturnType<typeof observeHostDataSql>) => Promise<void>,
-  ...cleanup: Array<() => void>
-) {
+function onExit(...callbacks: Array<() => void>) {
+  return { [Symbol.dispose]: () => callbacks.forEach((callback) => callback()) };
+}
+
+async function withoutHostSql(run: () => Promise<void>) {
   const queries = observeHostDataSql();
-  try {
-    await run(queries);
-    expect(queries.queries).toEqual([]);
-  } finally {
-    for (const release of cleanup) {
-      release();
-    }
-    queries.restore();
-  }
+  using _ = onExit(queries.restore);
+  await run();
+  expect(queries.queries).toEqual([]);
 }
 
 function observeProjection(requested: ReturnType<typeof input>) {
@@ -218,6 +213,7 @@ it("transitions, drains and settles terminal placement failure without caller-th
       observedActivation.push(environments.get(environmentId)?.lastActivatedAtMs);
     }
   });
+  using _ = onExit(stop);
   await withoutHostSql(async () => {
     const active = await advancePlacementFixtureToActive(placements, database, identity, {
       environmentId,
@@ -261,7 +257,7 @@ it("transitions, drains and settles terminal placement failure without caller-th
       recoveryError: "synthetic cleanup failure",
     });
     expect(observedActivation).toEqual([1_000]);
-  }, stop);
+  });
 });
 
 it.each(["delivered", "committed", "unknown"] as const)(
@@ -285,39 +281,35 @@ it.each(["delivered", "committed", "unknown"] as const)(
     });
     const corrupted =
       outcome === "delivered" ? undefined : losePlacementReply(claim.sessionId, outcome);
-    await withoutHostSql(
-      async () => {
-        const failed = placements.failWorkspaceResultAndReleaseTurn(
-          pending!,
-          "synthetic terminal result failure",
-        );
-        if (outcome === "unknown") {
-          await expect(failed).rejects.toThrow();
-          expect(closed).toEqual([]);
-          expect(authority.isCurrent()).toBe(false);
-        } else {
-          await expect(failed).resolves.toMatchObject({
-            state: "failed",
-            generation: claim.placementGeneration + 3,
-            turnClaim: null,
-          });
-          expect(closed).toEqual([{ claimId: claim.claimId, current: false, pending: false }]);
-        }
-        if (corrupted) {
-          expect(corrupted()).toBe(1);
-        }
-        expect(changes).toEqual([
-          {
-            sessionId: requested.sessionId,
-            sessionKey: requested.sessionKey,
-            agentId: requested.agentId,
-          },
-        ]);
-      },
-      stop,
-      stopChanges,
-      authority.release,
-    );
+    using _ = onExit(stop, stopChanges, authority.release);
+    await withoutHostSql(async () => {
+      const failed = placements.failWorkspaceResultAndReleaseTurn(
+        pending!,
+        "synthetic terminal result failure",
+      );
+      if (outcome === "unknown") {
+        await expect(failed).rejects.toThrow();
+        expect(closed).toEqual([]);
+        expect(authority.isCurrent()).toBe(false);
+      } else {
+        await expect(failed).resolves.toMatchObject({
+          state: "failed",
+          generation: claim.placementGeneration + 3,
+          turnClaim: null,
+        });
+        expect(closed).toEqual([{ claimId: claim.claimId, current: false, pending: false }]);
+      }
+      if (corrupted) {
+        expect(corrupted()).toBe(1);
+      }
+      expect(changes).toEqual([
+        {
+          sessionId: requested.sessionId,
+          sessionKey: requested.sessionKey,
+          agentId: requested.agentId,
+        },
+      ]);
+    });
     expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
   },
 );
@@ -406,8 +398,9 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
       return grant();
     });
   });
-  await withoutHostSql(
-    async () => {
+  {
+    using _ = onExit(admission.mockRestore, retained.release);
+    await withoutHostSql(async () => {
       await gate.updateAckCursors({ claim, transcriptSeq: 4 });
       expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
       await gate.updateAckCursors({ claim, liveSeq: 9 });
@@ -417,10 +410,8 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
         lastTranscriptAckCursor: 4,
         lastLiveEventAckCursor: 9,
       });
-    },
-    admission.mockRestore,
-    retained.release,
-  );
+    });
+  }
   expect(observedCommit).toBe(true);
   expect(placements.get(claim.sessionId)).toMatchObject({
     generation: claim.placementGeneration,
@@ -462,26 +453,23 @@ it("keeps the maintenance inventory usable across non-local turn bookkeeping", a
       return grant();
     });
   });
-  await withoutHostSql(
-    async () => {
-      await placements.releaseTurn(await placements.claimTurn(turn));
-      const claim = await placements.claimTurn(turn);
-      await placements.updateAckCursors({ claim, liveEvent: 9 });
-      await placements.acceptWorkspaceResult(claim);
-      await placements.completeWorkspaceResultAndReleaseTurn(claim);
-      inventory.assertCurrent();
-      expect(pendingChecks).toBe(6);
-      expect(inventory.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
-      const current = await placements.prepareMaintenancePlacements();
-      try {
-        expect(current.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
-      } finally {
-        current.release();
-      }
-    },
-    admission.mockRestore,
-    inventory.release,
-  );
+  using _ = onExit(admission.mockRestore, inventory.release);
+  await withoutHostSql(async () => {
+    await placements.releaseTurn(await placements.claimTurn(turn));
+    const claim = await placements.claimTurn(turn);
+    await placements.updateAckCursors({ claim, liveEvent: 9 });
+    await placements.acceptWorkspaceResult(claim);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
+    inventory.assertCurrent();
+    expect(pendingChecks).toBe(6);
+    expect(inventory.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
+    const current = await placements.prepareMaintenancePlacements();
+    try {
+      expect(current.placements).toContainEqual({ ...active, lastLiveEventAckCursor: 9 });
+    } finally {
+      current.release();
+    }
+  });
 });
 
 it.each(["placement", "caller"] as const)(
@@ -536,35 +524,25 @@ it.each(["committed", "unknown"] as const)(
   },
 );
 
-it("claims and strictly releases durable turns without host SQLite", async () => {
-  await withoutHostSql(async (queries) => {
-    const claim = await placements.claimTurn(input("sql-free"));
-    expect(claim).toMatchObject({
-      sessionId: "placement-worker-sql-free",
-      claimId: "claim-sql-free",
-      owner: { kind: "local" },
-      placementGeneration: 0,
-    });
-    const released = await placements.releaseTurn(claim);
-    expect(released).toMatchObject({ sessionId: claim.sessionId, state: "local", turnClaim: null });
-    await expect(placements.releaseTurn(claim)).rejects.toThrow(
-      "turn claim changed before release",
-    );
-    expect(queries.calls[1]).not.toHaveBeenCalled();
-  });
-  expect(placements.get("placement-worker-sql-free")?.turnClaim).toBeNull();
-});
-
-it.each(["committed", "unknown"] as const)(
-  "certifies local projection facts across %s claim settlement",
-  async (outcome) => {
-    const requested = input(`projection-${outcome}`);
+it.each([
+  ["claim", "committed"],
+  ["claim", "unknown"],
+  ["release", "committed"],
+  ["release", "unknown"],
+] as const)(
+  "publishes local %s projection facts before observers across %s settlement",
+  async (operation, outcome) => {
+    const requested = input(`projection-${operation}-${outcome}`);
     // The fault belongs to the claim admission, not the worker's first open admission.
-    await placements.releaseTurn(await placements.claimTurn(requested));
+    const original = await placements.claimTurn(requested);
+    if (operation === "claim") {
+      await placements.releaseTurn(original);
+    }
     await placements.readProjection([requested.sessionId]);
     const { snapshots, changes, stop } = observeProjection(requested);
+    using _ = onExit(stop);
     const corrupted = losePlacementReply(requested.sessionId, outcome);
-    try {
+    if (operation === "claim") {
       const claim = await placements.claimTurn(requested);
       expect(corrupted()).toBe(1);
       expect(snapshots).toHaveLength(1);
@@ -576,52 +554,52 @@ it.each(["committed", "unknown"] as const)(
       ).toBe(true);
       stop();
       await placements.releaseTurn(claim);
-    } finally {
-      stop();
-    }
-  },
-);
-
-it.each(["committed", "unknown"] as const)(
-  "publishes local release facts before observers across %s settlement",
-  async (outcome) => {
-    const requested = input(`release-projection-${outcome}`);
-    const claim = await placements.claimTurn(requested);
-    await placements.readProjection([requested.sessionId]);
-    const { snapshots, stop } = observeProjection(requested);
-    const corrupted = losePlacementReply(requested.sessionId, outcome);
-    try {
-      await expect(placements.releaseTurn(claim)).resolves.toMatchObject({ turnClaim: null });
+    } else {
+      await expect(placements.releaseTurn(original)).resolves.toMatchObject({ turnClaim: null });
       expect(corrupted()).toBe(1);
       expect(snapshots).toHaveLength(1);
       expect(snapshots[0]?.placements.get(requested.sessionId)?.turnClaim).toBeNull();
       expect(placements.get(requested.sessionId)?.turnClaim).toBeNull();
-    } finally {
-      stop();
     }
   },
 );
 
-it("replays the same local claim without replacing its identity or a successor", async () => {
-  const requested = input("idempotent");
-  const claim = await placements.claimTurn(requested);
-  const replay = await placements.claimTurn(requested);
-  expect(replay).toEqual(claim);
-  await expect(placements.claimTurn({ ...requested, agentId: "another-agent" })).rejects.toThrow(
-    "placement identity changed",
-  );
-  await expect(placements.claimTurn({ ...requested, runId: "another-run" })).rejects.toBeInstanceOf(
-    ActiveTurnClaimError,
-  );
-  expect(placements.get(requested.sessionId)?.turnClaim).toMatchObject({
-    claimId: requested.claimId,
-    runId: requested.runId,
+it("claims and strictly releases SQL-free local turns without replacing identity or a successor", async () => {
+  await withoutHostSql(async () => {
+    const requested = input("idempotent");
+    const claim = await placements.claimTurn(requested);
+    expect(claim).toMatchObject({
+      sessionId: requested.sessionId,
+      claimId: requested.claimId,
+      owner: { kind: "local" },
+      placementGeneration: 0,
+    });
+    const replay = await placements.claimTurn(requested);
+    expect(replay).toEqual(claim);
+    await expect(placements.claimTurn({ ...requested, agentId: "another-agent" })).rejects.toThrow(
+      "placement identity changed",
+    );
+    await expect(
+      placements.claimTurn({ ...requested, runId: "another-run" }),
+    ).rejects.toBeInstanceOf(ActiveTurnClaimError);
+    expect(placements.get(requested.sessionId)?.turnClaim).toMatchObject({
+      claimId: requested.claimId,
+      runId: requested.runId,
+    });
+    expect(await placements.releaseTurn(replay)).toMatchObject({
+      sessionId: claim.sessionId,
+      state: "local",
+      turnClaim: null,
+    });
+    await expect(placements.releaseTurn(claim)).rejects.toThrow(
+      "turn claim changed before release",
+    );
+    const successor = await placements.claimTurn({ ...requested, claimId: "successor" });
+    await placements.releaseTurnIfOwned(claim);
+    expect(placements.get(requested.sessionId)?.turnClaim?.claimId).toBe("successor");
+    await placements.releaseTurn(successor);
+    expect(placements.get(requested.sessionId)?.turnClaim).toBeNull();
   });
-  await placements.releaseTurn(replay);
-  const successor = await placements.claimTurn({ ...requested, claimId: "successor" });
-  await placements.releaseTurnIfOwned(claim);
-  expect(placements.get(requested.sessionId)?.turnClaim?.claimId).toBe("successor");
-  await placements.releaseTurn(successor);
 });
 
 it.each(["new local", "existing local", "worker"] as const)(
@@ -784,15 +762,7 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   let next: Awaited<ReturnType<typeof placements.prepareTurnClaimAuthority>> | undefined;
   try {
     expect(previous.isCurrent()).toBe(false);
-    const native = createPlacementTurnClaimOps({
-      path: database.path,
-      instanceId: "native-placement-fixture",
-      now: () => 1_001,
-      read: () => database.db,
-      write: (operation) =>
-        runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
-    });
-    const replacement = native.claimTurn(requested).claim;
+    const replacement = createPlacementTurnClaimFixtureOps(database).claimTurn(requested);
     next = await placements.prepareTurnClaimAuthority(replacement);
     expect(next.isCurrent()).toBe(true);
     pendingDelivery = undefined;
@@ -854,7 +824,6 @@ it.each(["write contention", "authority"] as const)(
     }
     expect(runLocal).toHaveBeenCalledOnce();
     if (retryable) {
-      expect(assertSettlementCurrent).toBeDefined();
       expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
       expect(placements.get(claim.sessionId)?.turnClaim).toBeNull();
       await expect(
@@ -952,21 +921,18 @@ it.each(["prepare", "release"] as const)(
       owner: previous.owner,
     });
     await placements.markWorkspaceResultPending(next);
-    try {
-      expect(placements.validateWorkspaceResultClaim(next)).toBe(true);
-      if (operation === "prepare") {
-        await expect(placements.prepareWorkspaceResultClaim(previous)).rejects.toThrow(
-          "workspace result authority changed",
-        );
-      } else {
-        await placements.releaseTurnIfOwned(previous);
-      }
-      expect(await placements.listPendingWorkspaceResultsAsync(next.sessionId)).toMatchObject([
-        { claimId: next.claimId, runId: next.runId },
-      ]);
-      expect(placements.validateWorkspaceResultClaim(next)).toBe(true);
-    } finally {
-      await settleResult(next);
+    await using _ = { [Symbol.asyncDispose]: () => settleResult(next) };
+    expect(placements.validateWorkspaceResultClaim(next)).toBe(true);
+    if (operation === "prepare") {
+      await expect(placements.prepareWorkspaceResultClaim(previous)).rejects.toThrow(
+        "workspace result authority changed",
+      );
+    } else {
+      await placements.releaseTurnIfOwned(previous);
     }
+    expect(await placements.listPendingWorkspaceResultsAsync(next.sessionId)).toMatchObject([
+      { claimId: next.claimId, runId: next.runId },
+    ]);
+    expect(placements.validateWorkspaceResultClaim(next)).toBe(true);
   },
 );

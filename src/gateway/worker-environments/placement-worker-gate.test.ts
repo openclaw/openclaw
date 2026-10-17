@@ -70,8 +70,13 @@ describe("worker session placement gate", () => {
     store.startDrain({ ...BINDING, expectedGeneration });
   const reconcile = (expectedGeneration: number) =>
     store.startReconcile({ ...BINDING, expectedGeneration });
-  const operation = (claim: WorkerSessionTurnClaim, toolCallId: string, requestDigest: string) =>
-    ({ claim, toolName: "sessions_send", toolCallId, requestDigest }) as const;
+  const operation = (claim: WorkerSessionTurnClaim, id: string) =>
+    ({
+      claim,
+      toolName: "sessions_send",
+      toolCallId: `call-${id}`,
+      requestDigest: `digest-${id}`,
+    }) as const;
   const complete = (claim: WorkerSessionTurnClaim, toolCallId: string, requestDigest: string) =>
     store.completeWorkerSessionToolOperation({
       sourceSessionId: claim.sessionId,
@@ -258,11 +263,7 @@ describe("worker session placement gate", () => {
 
   it("lets the admitted worker finish acknowledgements after draining closes admission", async () => {
     const claim = await preclaim("run-worker-draining-ack");
-    const active = store.get(SESSION.sessionId);
-    if (active?.state !== "active") {
-      throw new Error("expected active placement");
-    }
-    await drain(active.generation);
+    await drain(claim.placementGeneration);
     const gate = createWorkerSessionPlacementGate(store);
     expect(gate.validateWorkerTurn(claim)).toBe(true);
     await gate.updateAckCursors({ claim, transcriptSeq: 5 });
@@ -274,7 +275,7 @@ describe("worker session placement gate", () => {
   it("does not reconcile away a claim while its session operation is running", async () => {
     const claim = await preclaim("run-worker-reconcile-tools");
     await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-    const request = operation(claim, "call-reconcile-send", "digest-reconcile-send");
+    const request = operation(claim, "reconcile-send");
     expect(await store.beginWorkerSessionToolOperation(request)).toMatchObject({ kind: "execute" });
     const draining = await drain(claim.placementGeneration);
 
@@ -291,12 +292,11 @@ describe("worker session placement gate", () => {
       state: "reconciling",
       turnClaim: null,
     });
-    expect(
-      database.db.prepare("SELECT COUNT(*) AS count FROM worker_turn_tool_authorities").get(),
-    ).toEqual({ count: 0 });
-    expect(
-      database.db.prepare("SELECT COUNT(*) AS count FROM worker_session_tool_operations").get(),
-    ).toEqual({ count: 0 });
+    for (const table of ["worker_turn_tool_authorities", "worker_session_tool_operations"]) {
+      expect(database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    }
   });
 
   it("caps running session operations across connection incarnations", async () => {
@@ -304,67 +304,53 @@ describe("worker session placement gate", () => {
     await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     for (let index = 0; index < WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS; index += 1) {
       expect(
-        await store.beginWorkerSessionToolOperation(
-          operation(claim, `capacity-call-${index}`, `capacity-digest-${index}`),
-        ),
+        await store.beginWorkerSessionToolOperation(operation(claim, `capacity-${index}`)),
       ).toMatchObject({ kind: "execute" });
     }
 
     const reconnectedStore = createWorkerSessionPlacementStore({ database });
     expect(
-      await reconnectedStore.beginWorkerSessionToolOperation(
-        operation(claim, "capacity-overflow", "capacity-overflow-digest"),
-      ),
+      await reconnectedStore.beginWorkerSessionToolOperation(operation(claim, "capacity-overflow")),
     ).toEqual({ kind: "capacity" });
     expect(
-      await store.beginWorkerSessionToolOperation(
-        operation(claim, "capacity-call-0", "capacity-digest-0"),
-      ),
+      await store.beginWorkerSessionToolOperation(operation(claim, "capacity-0")),
     ).toMatchObject({ kind: "in-progress" });
   });
 
-  it.each([false, true])(
-    "reserves operation settlement for its owner until restart recovery: %s",
-    async (recover) => {
-      const claim = await preclaim("run-worker-restart");
-      const toolName = recover ? "sessions_send" : "sessions_spawn";
-      await store.authorizeWorkerTurnTools(
-        claim,
-        recover ? ["sessions_send"] : ["sessions_spawn", "sessions_send"],
+  it.each([false, true])("retains settlement owner (recovery: %s)", async (recover) => {
+    const claim = await preclaim("run-worker-restart");
+    const toolName = recover ? "sessions_send" : "sessions_spawn";
+    await store.authorizeWorkerTurnTools(
+      claim,
+      recover ? ["sessions_send"] : ["sessions_spawn", "sessions_send"],
+    );
+    const request = { ...operation(claim, "before-restart"), toolName } as const;
+    expect(await store.beginWorkerSessionToolOperation(request)).toMatchObject({
+      kind: "execute",
+    });
+    const restarted = createWorkerSessionPlacementStore({ database });
+    if (recover) {
+      expect(await restarted.recoverWorkerSessionToolOperationsAfterRestart()).toBe(1);
+    }
+    expect(await restarted.beginWorkerSessionToolOperation(request)).toEqual({ kind: "unknown" });
+    if (recover) {
+      await expect(restarted.releaseTurn(claim)).resolves.toBeDefined();
+    } else {
+      expect(
+        await restarted.beginWorkerSessionToolOperation({
+          ...request,
+          requestDigest: "changed-digest",
+        }),
+      ).toEqual({ kind: "conflict" });
+      await expect(restarted.releaseTurn(claim)).rejects.toThrow(
+        "running worker session operation",
       );
-      const request = {
-        claim,
-        toolName,
-        toolCallId: "call-before-restart",
-        requestDigest: "digest-before-restart",
-      } as const;
-      expect(await store.beginWorkerSessionToolOperation(request)).toMatchObject({
-        kind: "execute",
+      expect(await complete(claim, request.toolCallId, request.requestDigest)).toBe(true);
+      expect(await restarted.beginWorkerSessionToolOperation(request)).toEqual({
+        kind: "completed",
+        resultJson: '{"status":"ok"}',
       });
-      const restarted = createWorkerSessionPlacementStore({ database });
-      if (recover) {
-        expect(await restarted.recoverWorkerSessionToolOperationsAfterRestart()).toBe(1);
-      }
-      expect(await restarted.beginWorkerSessionToolOperation(request)).toEqual({ kind: "unknown" });
-      if (recover) {
-        await expect(restarted.releaseTurn(claim)).resolves.toBeDefined();
-      } else {
-        expect(
-          await restarted.beginWorkerSessionToolOperation({
-            ...request,
-            requestDigest: "changed-digest",
-          }),
-        ).toEqual({ kind: "conflict" });
-        await expect(restarted.releaseTurn(claim)).rejects.toThrow(
-          "running worker session operation",
-        );
-        expect(await complete(claim, request.toolCallId, request.requestDigest)).toBe(true);
-        expect(await restarted.beginWorkerSessionToolOperation(request)).toEqual({
-          kind: "completed",
-          resultJson: '{"status":"ok"}',
-        });
-        await restarted.releaseTurn(claim);
-      }
-    },
-  );
+      await restarted.releaseTurn(claim);
+    }
+  });
 });
