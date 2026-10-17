@@ -23,55 +23,33 @@ const startup = vi.hoisted(() => ({
   schemas: { incompatible: [], indeterminate: [] },
   prepareDoctorDatabasePreflight: vi.fn<typeof prepareDoctorDatabasePreflight>(),
   runDoctorHealthFlow: vi.fn(),
+  hasCliDotEnv: false,
+  profileAtDotenvLoad: undefined as string | undefined,
+  loadDotEnv: vi.fn((): void => {
+    startup.profileAtDotenvLoad = process.env.OPENCLAW_PROFILE;
+  }),
 }));
-
 vi.mock("../commands/doctor-database-preflight.js", () => ({
   prepareDoctorDatabasePreflight: startup.prepareDoctorDatabasePreflight,
 }));
-vi.mock("../flows/doctor-health.js", () => ({
-  runDoctorHealthFlow: startup.runDoctorHealthFlow,
-}));
+vi.mock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: startup.runDoctorHealthFlow }));
 vi.mock("./program/preaction.js", () => ({ registerPreActionHooks() {} }));
-
 // mock-isolation: This suite tests dispatch ordering; engine routing has separate boundary coverage.
 vi.mock("./database-engine-selection.js", () => ({
   prepareCliDatabaseEngine: startup.prepareDatabase,
 }));
-
 vi.mock("../config/io.js", () => ({
   readSourceConfigBestEffort: startup.readConfig,
   readBestEffortConfig: startup.readConfig,
 }));
-
-vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
-  startProxy: startup.startProxy,
-}));
-
+vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({ startProxy: startup.startProxy }));
 vi.mock("../infra/net/proxy-env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/net/proxy-env.js")>()),
   hasEnvHttpProxyAgentConfigured: () => true,
 }));
-
 vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
   ensureGlobalUndiciEnvProxyDispatcher: startup.ensureDispatcher,
 }));
-
-const fileState = vi.hoisted(() => ({
-  hasCliDotEnv: false,
-}));
-
-const dotenvState = vi.hoisted(() => {
-  const state = {
-    profileAtDotenvLoad: undefined as string | undefined,
-  };
-  return {
-    state,
-    loadDotEnv: vi.fn(() => {
-      state.profileAtDotenvLoad = process.env.OPENCLAW_PROFILE;
-    }),
-  };
-});
-
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   type ExistsSyncPath = Parameters<typeof actual.existsSync>[0];
@@ -79,35 +57,23 @@ vi.mock("node:fs", async () => {
     ...actual,
     existsSync: vi.fn((target: ExistsSyncPath) => {
       if (typeof target === "string" && target.endsWith(".env")) {
-        return fileState.hasCliDotEnv;
+        return startup.hasCliDotEnv;
       }
       return actual.existsSync(target);
     }),
   };
 });
-
-vi.mock("./dotenv.js", () => ({
-  loadCliDotEnv: dotenvState.loadDotEnv,
-}));
-
+vi.mock("./dotenv.js", () => ({ loadCliDotEnv: startup.loadDotEnv }));
 vi.mock("../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/env.js")>()),
   normalizeEnv: vi.fn(),
 }));
-
 vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
   assertSupportedRuntime: vi.fn(async () => {}),
 }));
-
-vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: startup.ensurePath,
-}));
-
-vi.mock("./route.js", () => ({
-  tryRouteCli: startup.route,
-}));
-
+vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: startup.ensurePath }));
+vi.mock("./route.js", () => ({ tryRouteCli: startup.route }));
 vi.mock("./windows-argv.js", () => ({
   normalizeWindowsArgv: (argv: string[]) => argv,
 }));
@@ -116,28 +82,36 @@ import { runCli } from "./run-main.js";
 
 describe("runCli environment and passive startup", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const envKeys = [
-    "OPENCLAW_UPDATE_IN_PROGRESS",
-    "OPENCLAW_PROFILE",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_CONTAINER",
-    "OPENCLAW_GATEWAY_PORT",
-    "OPENCLAW_GATEWAY_URL",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
-  ];
+  const envKeys =
+    "UPDATE_IN_PROGRESS PROFILE STATE_DIR CONFIG_PATH CONTAINER GATEWAY_PORT GATEWAY_URL GATEWAY_TOKEN GATEWAY_PASSWORD"
+      .split(" ")
+      .map((key) => `OPENCLAW_${key}`);
   const envSnapshot = captureEnv(envKeys);
+  let originalArgv: string[];
+  let originalExitCode: typeof process.exitCode;
+  let originalListeners: ReturnType<typeof process.listeners>;
 
   beforeEach(() => {
+    originalArgv = process.argv;
+    originalExitCode = process.exitCode;
+    originalListeners = process.listeners("uncaughtException");
     vi.clearAllMocks();
     startup.prepareDoctorDatabasePreflight.mockResolvedValue(startup.schemas);
     envKeys.forEach(deleteTestEnvValue);
-    dotenvState.state.profileAtDotenvLoad = undefined;
-    fileState.hasCliDotEnv = false;
+    startup.profileAtDotenvLoad = undefined;
+    startup.hasCliDotEnv = false;
   });
 
   afterEach(() => {
+    process.argv = originalArgv;
+    process.exitCode = originalExitCode;
+    for (const listener of process.listeners("uncaughtException")) {
+      if (!originalListeners.includes(listener)) {
+        process.off("uncaughtException", listener);
+      }
+    }
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     envSnapshot.restore();
   });
 
@@ -151,9 +125,6 @@ describe("runCli environment and passive startup", () => {
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
     vi.stubGlobal("fetch", globalThis.fetch);
     const database = resolveOpenClawStateSqlitePath();
-    const originalArgv = process.argv;
-    const originalExitCode = process.exitCode;
-    const originalListeners = process.listeners("uncaughtException");
     try {
       for (const args of [
         ["update"],
@@ -172,8 +143,7 @@ describe("runCli environment and passive startup", () => {
             return true;
           });
         }
-        const argv = ["node", "openclaw", ...args];
-        process.argv = argv;
+        const argv = (process.argv = ["node", "openclaw", ...args]);
         await runCliWithExitFinalization({
           run: () => runCli(argv),
           onError: (error) => {
@@ -185,45 +155,15 @@ describe("runCli environment and passive startup", () => {
       await initializeDebugProxyCaptureAsync("cli-enabled-control");
       expect(existsSync(database)).toBe(true);
     } finally {
-      try {
-        await finalizeDebugProxyCaptureAsync();
-      } finally {
-        try {
-          await closeOpenClawStateDatabaseAsync();
-        } finally {
-          process.argv = originalArgv;
-          process.exitCode = originalExitCode;
-          for (const listener of process.listeners("uncaughtException")) {
-            if (!originalListeners.includes(listener)) {
-              process.off("uncaughtException", listener);
-            }
-          }
-          vi.unstubAllGlobals();
-          vi.unstubAllEnvs();
-        }
-      }
+      await finalizeDebugProxyCaptureAsync().finally(closeOpenClawStateDatabaseAsync);
     }
   });
 
   it("carries the single early update preflight through Commander into Doctor", async () => {
     setTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     startup.route.mockResolvedValueOnce(false);
-    const argv = ["node", "openclaw", "doctor", "--fix", "--non-interactive"];
-    const originalArgv = process.argv;
-    const originalListeners = process.listeners("uncaughtException");
-    process.argv = argv;
-    try {
-      await expect(runCli(argv)).rejects.toEqual(new ExitError(0));
-    } finally {
-      process.argv = originalArgv;
-      for (const listener of process.listeners("uncaughtException")) {
-        if (!originalListeners.includes(listener)) {
-          process.off("uncaughtException", listener);
-        }
-      }
-    }
-
-    // Omitted options and explicit undefined both select the full fleet.
+    process.argv = ["node", "openclaw", "doctor", "--fix", "--non-interactive"];
+    await expect(runCli(process.argv)).rejects.toEqual(new ExitError(0));
     expect(
       startup.prepareDoctorDatabasePreflight.mock.calls.map(([options]) => options?.scope),
     ).toEqual([undefined]);
@@ -237,37 +177,34 @@ describe("runCli environment and passive startup", () => {
   });
 
   it.each([
-    ["--channel", "--", "cleanup"],
-    ["cleanup", "--version"],
-  ])("keeps cleanup passive before dispatch: %j", async (...args) => {
+    { args: ["--channel", "--", "cleanup"], starts: 0 },
+    { args: ["cleanup", "--version"], starts: 0 },
+    { args: ["--channel", "cleanup"], starts: 1 },
+  ])("starts update infrastructure only for a channel value: $args", async ({ args, starts }) => {
     const argv = ["node", "openclaw", "update", ...args];
     await runCli(argv);
 
     expect(startup.route).toHaveBeenCalledWith(argv);
-    expect({
-      configReads: startup.readConfig.mock.calls.length,
-      proxyStarts: startup.startProxy.mock.calls.length,
-      pathEnsures: startup.ensurePath.mock.calls.length,
-      dispatcherEnsures: startup.ensureDispatcher.mock.calls.length,
-    }).toEqual({ configReads: 0, proxyStarts: 0, pathEnsures: 0, dispatcherEnsures: 0 });
-  });
-
-  it("retains update startup when cleanup is the value of --channel", async () => {
-    await runCli(["node", "openclaw", "update", "--channel", "cleanup"]);
-    expect(startup.readConfig).toHaveBeenCalledOnce();
-    expect(startup.startProxy).toHaveBeenCalledWith({ selected: "synthetic" });
-    expect(startup.ensurePath).toHaveBeenCalledOnce();
-    expect(startup.ensureDispatcher).toHaveBeenCalledOnce();
+    expect(
+      [startup.readConfig, startup.startProxy, startup.ensurePath, startup.ensureDispatcher].map(
+        (mock) => mock.mock.calls.length,
+      ),
+    ).toEqual([starts, starts, starts, starts]);
+    if (starts) {
+      expect(startup.startProxy).toHaveBeenCalledWith({ selected: "synthetic" });
+    }
   });
 
   it("applies --profile before dotenv loading", async () => {
-    fileState.hasCliDotEnv = true;
+    startup.hasCliDotEnv = true;
     await runCli(["node", "openclaw", "--profile", "rawdog", "status"]);
 
-    expect(dotenvState.loadDotEnv).toHaveBeenCalledOnce();
-    expect(dotenvState.loadDotEnv).toHaveBeenCalledBefore(startup.prepareDatabase);
-    expect(dotenvState.state.profileAtDotenvLoad).toBe("rawdog");
-    expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
+    expect(startup.loadDotEnv).toHaveBeenCalledOnce();
+    expect(startup.loadDotEnv).toHaveBeenCalledBefore(startup.prepareDatabase);
+    expect([startup.profileAtDotenvLoad, process.env.OPENCLAW_PROFILE]).toEqual([
+      "rawdog",
+      "rawdog",
+    ]);
   });
 
   it("rejects --container combined with interleaved --dev", async () => {

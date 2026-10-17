@@ -1,30 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 // Register fixture mocks before modules that consume them.
 // oxfmt-ignore
-import {
-  installRunMainTestHooks,
-  cliArgs,
-  readOnlyCoreOptions,
-  tempDirs,
-  runCli,
-  tryRouteCliMock,
-  loadDotEnvMock,
-  existsSyncOverride,
-  buildProgramMock,
-  parkCurrentLaunchAgentForMaintenanceMock,
-  readConfigFileSnapshotMock,
-  commanderParseAsyncMock,
-  addGatewayRunCommandMock,
-  ensureCliExecutionBootstrapMock,
-  emitCliBannerMock,
-  loadConfigMock,
-  startProxyMock,
-  stopProxyMock,
-  withCliExitSpies,
-  runGatewayBeforeHook,
-  makeProgram,
-  validConfig,
-} from "./run-main.test-support.js";
+import * as f from "./run-main.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -34,11 +11,76 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import { makeProxyHandle } from "./run-main.proxy-exit.test-support.js";
 
+function primeConfig(...args: Parameters<typeof f.validConfig>) {
+  f.readConfigFileSnapshotMock.mockResolvedValue(f.validConfig(...args));
+}
+
+function guardedConfig(source: Parameters<typeof f.validConfig>[0]) {
+  return f.validConfig(source, { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" });
+}
+async function prepareGuarded(source: Parameters<typeof f.validConfig>[0]) {
+  f.readConfigFileSnapshotMock.mockResolvedValue(guardedConfig(source));
+  await f.runCli(f.cliArgs("gateway"));
+  await f.runGatewayBeforeHook();
+  return f.ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
+}
+const futureConfig = { meta: { lastTouchedVersion: "9999.1.1" } };
+const serviceConfig = { ...futureConfig, env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } } };
+const newerSchemaError = () =>
+  createNewerSqliteSchemaVersionError(
+    "OpenClaw state database",
+    "/tmp/openclaw-startup/state/openclaw.sqlite",
+    14,
+    13,
+  );
+const serviceOverride = {
+  OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+  OPENCLAW_SERVICE_MARKER: undefined,
+};
+const openClawEnv = (values: Record<string, string | undefined>) =>
+  Object.fromEntries(Object.entries(values).map(([key, value]) => [`OPENCLAW_${key}`, value]));
+function expectEnv(values: Record<string, string | undefined>) {
+  expect(
+    Object.fromEntries(Object.keys(values).map((key) => [key, process.env[`OPENCLAW_${key}`]])),
+  ).toEqual(values);
+}
+const localConfig = (vars?: Record<string, string>) => ({
+  gateway: { mode: "local" as const },
+  ...(vars ? { env: { vars } } : {}),
+});
+function selectConfig(
+  select: () => boolean,
+  selected: Parameters<typeof f.validConfig>[0],
+  original: Parameters<typeof f.validConfig>[0] = localConfig(),
+) {
+  f.readConfigFileSnapshotMock.mockImplementation(async () =>
+    f.validConfig(select() ? selected : original),
+  );
+}
+function primeProxy(final: ReturnType<typeof makeProxyHandle> | null) {
+  const early = makeProxyHandle();
+  const config = { proxyUrl: "http://127.0.0.1:19876" };
+  f.loadConfigMock.mockReturnValueOnce({ proxy: config });
+  f.startProxyMock.mockResolvedValueOnce(early).mockResolvedValueOnce(final);
+  return { early, config };
+}
+
+async function expectBlocked(message: string, code = 1, flags: string[] = []) {
+  await f.withCliExitSpies(async (errorSpy) => {
+    await expect(f.runCli(f.cliArgs("gateway", ...flags))).rejects.toMatchObject({
+      name: "ExitError",
+      code,
+    });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(f.ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+  });
+}
+
 async function withGatewayHome(
   files: (home: string) => Record<string, string>,
   run: (home: string) => Promise<void>,
 ): Promise<void> {
-  const home = tempDirs.make("openclaw-run-main-env-");
+  const home = f.tempDirs.make("openclaw-run-main-env-");
   for (const [relative, content] of Object.entries(files(home))) {
     const target = path.join(home, relative);
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -61,38 +103,29 @@ async function withGatewayHome(
 }
 
 describe("runCli exit behavior", () => {
-  installRunMainTestHooks();
+  f.installRunMainTestHooks();
 
   it.each(["environment selection", "full Commander preaction"])(
     "parks the managed Gateway when a newer schema blocks %s",
     async (phase) => {
-      const error = createNewerSqliteSchemaVersionError(
-        "OpenClaw state database",
-        "/tmp/openclaw-startup/state/openclaw.sqlite",
-        14,
-        13,
-      );
-      const argv = cliArgs("--log-level", "debug", "gateway", "run");
+      const error = newerSchemaError();
+      const argv = f.cliArgs("--log-level", "debug", "gateway", "run");
       if (phase === "environment selection") {
-        readConfigFileSnapshotMock.mockRejectedValueOnce(error);
+        f.readConfigFileSnapshotMock.mockRejectedValueOnce(error);
       } else {
-        buildProgramMock.mockReturnValueOnce(
-          makeProgram("gateway", vi.fn().mockRejectedValueOnce(error)),
+        f.buildProgramMock.mockReturnValueOnce(
+          f.makeProgram("gateway", vi.fn().mockRejectedValueOnce(error)),
         );
-        tryRouteCliMock.mockResolvedValueOnce(false);
+        f.tryRouteCliMock.mockResolvedValueOnce(false);
       }
-      await withCliExitSpies(async (errorSpy, exitSpy) => {
-        await expect(runCli(argv)).rejects.toMatchObject({ name: "ExitError", code: 78 });
+      await f.withCliExitSpies(async (errorSpy, exitSpy) => {
+        await expect(f.runCli(argv)).rejects.toMatchObject({ name: "ExitError", code: 78 });
 
-        expect(parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
+        expect(f.parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
         expect(exitSpy).toHaveBeenCalledWith(78);
         expect(errorSpy.mock.calls.flat().join("\n")).toContain(error.message);
-        expect(addGatewayRunCommandMock).not.toHaveBeenCalled();
-        if (phase === "environment selection") {
-          expect(buildProgramMock).not.toHaveBeenCalled();
-        } else {
-          expect(buildProgramMock).toHaveBeenCalledOnce();
-        }
+        expect(f.addGatewayRunCommandMock).not.toHaveBeenCalled();
+        expect(f.buildProgramMock).toHaveBeenCalledTimes(phase === "environment selection" ? 0 : 1);
       });
     },
   );
@@ -101,92 +134,52 @@ describe("runCli exit behavior", () => {
     { label: "Gateway help", args: ["gateway", "--help"] },
     { label: "another command", args: ["status"] },
   ])("does not park the Gateway for a newer-schema failure during $label", async ({ args }) => {
-    const error = createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      "/tmp/openclaw-startup/state/openclaw.sqlite",
-      14,
-      13,
-    );
-    buildProgramMock.mockReturnValueOnce(
-      makeProgram(args[0], vi.fn().mockRejectedValueOnce(error)),
+    const error = newerSchemaError();
+    f.buildProgramMock.mockReturnValueOnce(
+      f.makeProgram(args[0], vi.fn().mockRejectedValueOnce(error)),
     );
 
     await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
-      await expect(runCli(cliArgs(...args))).rejects.toBe(error);
+      await expect(f.runCli(f.cliArgs(...args))).rejects.toBe(error);
     });
 
-    expect(parkCurrentLaunchAgentForMaintenanceMock).not.toHaveBeenCalled();
+    expect(f.parkCurrentLaunchAgentForMaintenanceMock).not.toHaveBeenCalled();
   });
 
   it("defers config-drift exit until readiness releases its lease", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        {
-          cron: { store: "/tmp/included-a.json" },
-          gateway: { mode: "local" },
-        },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
+    const before = await prepareGuarded({
+      cron: { store: "/tmp/included-a.json" },
+      gateway: { mode: "local" },
+    });
+    f.readConfigFileSnapshotMock.mockResolvedValue(
+      guardedConfig({
+        cron: { store: "/tmp/included-b.json" },
+        gateway: { mode: "local" },
+      }),
     );
-    await runCli(cliArgs("gateway"));
-    await runGatewayBeforeHook();
-    const beforeStatePreparation =
-      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        {
-          cron: { store: "/tmp/included-b.json" },
-          gateway: { mode: "local" },
-        },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await withCliExitSpies(async (errorSpy, exitSpy) => {
-      await expect(beforeStatePreparation?.()).rejects.toMatchObject({
-        name: "ExitError",
-        code: 1,
-      });
+    await f.withCliExitSpies(async (errorSpy, exitSpy) => {
+      await expect(before?.()).rejects.toMatchObject({ name: "ExitError", code: 1 });
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("changed during startup"));
       expect(exitSpy).not.toHaveBeenCalled();
     });
   });
-
   it("defers a service-mode future-config exit to readiness", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        { gateway: { mode: "local" } },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await runCli(cliArgs("gateway"));
-    await runGatewayBeforeHook();
-    const beforeStatePreparation =
-      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
-    await withCliExitSpies(async (errorSpy, exitSpy) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-          OPENCLAW_SERVICE_MARKER: undefined,
-        },
-        async () => {
-          await expect(
-            beforeStatePreparation?.(
-              validConfig(
-                {
-                  env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-                  meta: { lastTouchedVersion: "9999.1.1" },
-                },
-                { hash: "future", path: "/tmp/openclaw.json", raw: "{}" },
-              ),
-            ),
-          ).rejects.toMatchObject({ name: "ExitError", code: 78 });
-          expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("start the gateway service"),
-          );
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-          expect(exitSpy).not.toHaveBeenCalled();
-        },
-      );
+    const before = await prepareGuarded({ gateway: { mode: "local" } });
+    await f.withCliExitSpies(async (errorSpy, exitSpy) => {
+      await withEnvAsync(serviceOverride, async () => {
+        await expect(
+          before?.(
+            f.validConfig(serviceConfig, {
+              hash: "future",
+              path: "/tmp/openclaw.json",
+              raw: "{}",
+            }),
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 78 });
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("start the gateway service"));
+        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+        expect(exitSpy).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -195,51 +188,26 @@ describe("runCli exit behavior", () => {
     { flags: ["--force"], service: false, action: "force-kill gateway port listeners", code: 1 },
     { flags: ["--dev", "--reset"], service: false, action: "reset the dev gateway state", code: 1 },
   ])("blocks future config before $action", async ({ flags, service, action, code }) => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig({ meta: { lastTouchedVersion: "9999.1.1" } }),
-    );
+    primeConfig(futureConfig);
     await withEnvAsync(
       {
         OPENCLAW_SERVICE_MARKER: service ? "gateway" : undefined,
         OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: service ? "1" : undefined,
       },
-      () =>
-        withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway", ...flags))).rejects.toMatchObject({
-            name: "ExitError",
-            code,
-          });
-          expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(action));
-          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-          expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-        }),
+      async () => {
+        await expectBlocked(action, code, flags);
+        expect(f.readConfigFileSnapshotMock.mock.calls).toEqual([[f.readOnlyCoreOptions]]);
+        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+      },
     );
   });
 
   it("blocks and revokes the destructive override when selected config declares service mode", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig({
-        env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-        meta: { lastTouchedVersion: "9999.1.1" },
-      }),
-    );
-    await withCliExitSpies(async () => {
-      await withEnvAsync(
-        {
-          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-          OPENCLAW_SERVICE_MARKER: undefined,
-        },
-        async () => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
-            name: "ExitError",
-            code: 78,
-          });
-          expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-        },
-      );
+    primeConfig(serviceConfig);
+    await withEnvAsync(serviceOverride, async () => {
+      await expectBlocked("start the gateway service", 78);
+      expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+      expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
     });
   });
 
@@ -252,9 +220,8 @@ describe("runCli exit behavior", () => {
       }),
       async (home) => {
         process.env.OPENCLAW_CONFIG_PATH = path.join(home, "profile", "openclaw.json");
-        await runCli(cliArgs("gateway"));
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("state-token");
-        expect(process.env.OPENCLAW_GATEWAY_PASSWORD).toBe("config-root-password");
+        await f.runCli(f.cliArgs("gateway"));
+        expectEnv({ GATEWAY_TOKEN: "state-token", GATEWAY_PASSWORD: "config-root-password" });
       },
     );
   });
@@ -266,51 +233,37 @@ describe("runCli exit behavior", () => {
       }),
       async (home) => {
         const stateDir = path.join(home, "state");
-        readConfigFileSnapshotMock.mockImplementation(async () =>
-          validConfig(
-            process.env.OPENCLAW_CONFIG_PATH === path.join(stateDir, "future.json")
-              ? { meta: { lastTouchedVersion: "9999.1.1" } }
-              : { env: { vars: { OPENCLAW_STATE_DIR: stateDir } }, gateway: { mode: "local" } },
-          ),
+        selectConfig(
+          () => process.env.OPENCLAW_CONFIG_PATH === path.join(stateDir, "future.json"),
+          futureConfig,
+          localConfig({ OPENCLAW_STATE_DIR: stateDir }),
         );
-        await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
-            name: "ExitError",
-            code: 1,
-          });
-          expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("run gateway state preparation"),
-          );
-          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-          expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-        });
+        await expectBlocked("run gateway state preparation");
+        expect(f.readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
+        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
       },
     );
   });
 
   it("does not apply environment variables from invalid config snapshots", async () => {
     await withEnvAsync({ OPENCLAW_INCLUDE_ROOTS: undefined }, async () => {
-      readConfigFileSnapshotMock.mockResolvedValue({
+      f.readConfigFileSnapshotMock.mockResolvedValue({
         exists: true,
         issues: [{ message: "invalid", path: "gateway" }],
         legacyIssues: [],
         valid: false,
-        sourceConfig: {
-          env: { vars: { OPENCLAW_INCLUDE_ROOTS: "/tmp/openclaw-includes" } },
-          gateway: { mode: "local" },
-        },
+        sourceConfig: localConfig({ OPENCLAW_INCLUDE_ROOTS: "/tmp/openclaw-includes" }),
       });
 
-      await runCli(cliArgs("gateway"));
-      await runGatewayBeforeHook();
+      await f.runCli(f.cliArgs("gateway"));
+      await f.runGatewayBeforeHook();
 
       expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
-      expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [readOnlyCoreOptions],
-        [readOnlyCoreOptions],
+      expect(f.readConfigFileSnapshotMock.mock.calls).toEqual([
+        [f.readOnlyCoreOptions],
+        [f.readOnlyCoreOptions],
       ]);
-      expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith(
+      expect(f.ensureCliExecutionBootstrapMock).toHaveBeenCalledWith(
         expect.objectContaining({
           commandPath: ["gateway"],
           beforeStatePreparation: expect.any(Function),
@@ -329,10 +282,12 @@ describe("runCli exit behavior", () => {
           "OPENCLAW_GATEWAY_TOKEN=selected-token\nOPENCLAW_INCLUDE_ROOTS=/tmp/untrusted-include-root\nNODE_OPTIONS=--require /tmp/untrusted.js\n",
       }),
       async (home) => {
-        await runCli(cliArgs("gateway"));
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(path.join(home, "selected-state"));
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("selected-token");
+        await f.runCli(f.cliArgs("gateway"));
+        expectEnv({
+          STATE_DIR: path.join(home, "selected-state"),
+          CONFIG_PATH: undefined,
+          GATEWAY_TOKEN: "selected-token",
+        });
       },
     );
   });
@@ -344,10 +299,12 @@ describe("runCli exit behavior", () => {
         "selected-state/.env": "OPENCLAW_GATEWAY_TOKEN=selected-token\n",
       }),
       async (home) => {
-        await runCli(cliArgs("gateway"));
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(path.join(home, "selected-state"));
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("selected-token");
-        expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
+        await f.runCli(f.cliArgs("gateway"));
+        expectEnv({
+          STATE_DIR: path.join(home, "selected-state"),
+          GATEWAY_TOKEN: "selected-token",
+          INCLUDE_ROOTS: undefined,
+        });
         expect(process.env.NODE_OPTIONS).toBeUndefined();
       },
     );
@@ -362,23 +319,16 @@ describe("runCli exit behavior", () => {
       async (home) => {
         const selectedStateDir = path.join(home, "selected-state");
         let selectLateState = false;
-        readConfigFileSnapshotMock.mockImplementation(async () =>
-          validConfig(
-            selectLateState && process.env.OPENCLAW_STATE_DIR !== selectedStateDir
-              ? {
-                  env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
-                  gateway: { mode: "local" },
-                }
-              : { gateway: { mode: "local" } },
-          ),
+        selectConfig(
+          () => selectLateState && process.env.OPENCLAW_STATE_DIR !== selectedStateDir,
+          localConfig({ OPENCLAW_STATE_DIR: selectedStateDir }),
         );
-        await runCli(cliArgs("gateway"));
+        await f.runCli(f.cliArgs("gateway"));
         expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("early-token");
         selectLateState = true;
-        await runGatewayBeforeHook();
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("selected-token");
-        expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledOnce();
+        await f.runGatewayBeforeHook();
+        expectEnv({ STATE_DIR: selectedStateDir, GATEWAY_TOKEN: "selected-token" });
+        expect(f.ensureCliExecutionBootstrapMock).toHaveBeenCalledOnce();
       },
     );
   });
@@ -387,8 +337,8 @@ describe("runCli exit behavior", () => {
     const { normalizeEnv, normalizeZaiEnv } = await import("../infra/env.js");
     await withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, async () => {
       let useReplacement = false;
-      readConfigFileSnapshotMock.mockImplementation(async () =>
-        validConfig({
+      f.readConfigFileSnapshotMock.mockImplementation(async () =>
+        f.validConfig({
           env: { vars: { Z_AI_API_KEY: useReplacement ? "replacement-key" : "superseded-key" } },
           gateway: { mode: "local" },
         }),
@@ -396,14 +346,16 @@ describe("runCli exit behavior", () => {
       await vi.mocked(normalizeEnv).withImplementation(
         () => normalizeZaiEnv(),
         async () => {
-          await runCli(cliArgs("gateway"));
+          await f.runCli(f.cliArgs("gateway"));
           expect(process.env.ZAI_API_KEY).toBe("superseded-key");
 
           useReplacement = true;
-          await runGatewayBeforeHook();
+          await f.runGatewayBeforeHook();
 
-          expect(process.env.Z_AI_API_KEY).toBe("replacement-key");
-          expect(process.env.ZAI_API_KEY).toBe("replacement-key");
+          expect([process.env.Z_AI_API_KEY, process.env.ZAI_API_KEY]).toEqual([
+            "replacement-key",
+            "replacement-key",
+          ]);
         },
       );
     });
@@ -416,156 +368,117 @@ describe("runCli exit behavior", () => {
       }),
       async (home) => {
         const futureConfigPath = path.join(home, "future.json");
-        readConfigFileSnapshotMock.mockImplementation(async () =>
-          validConfig(
-            process.env.OPENCLAW_CONFIG_PATH === futureConfigPath
-              ? { meta: { lastTouchedVersion: "9999.1.1" } }
-              : {
-                  env: { vars: { OPENCLAW_CONFIG_PATH: futureConfigPath } },
-                  gateway: { mode: "local" },
-                },
-          ),
+        selectConfig(
+          () => process.env.OPENCLAW_CONFIG_PATH === futureConfigPath,
+          futureConfig,
+          localConfig({ OPENCLAW_CONFIG_PATH: futureConfigPath }),
         );
-        await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
-            name: "ExitError",
-            code: 1,
-          });
-          expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("run gateway state preparation"),
-          );
-          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-        });
+        await expectBlocked("run gateway state preparation");
+        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
       },
     );
   });
 
   it("retains selected config paths and invocation reset targets", async () => {
-    await withEnvAsync(
-      {
-        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-invocation/openclaw.json",
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_HOME: "/tmp/openclaw-invocation-home",
-        OPENCLAW_INCLUDE_ROOTS: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-invocation-state",
-        OPENCLAW_TEST_FAST: "1",
-        OPENCLAW_WORKSPACE_DIR: "/tmp/openclaw-invocation-workspace",
-      },
-      async () => {
-        readConfigFileSnapshotMock.mockResolvedValue(
-          validConfig({
-            env: {
-              vars: {
-                OPENCLAW_CONFIG_PATH: "/tmp/openclaw-reset/openclaw.json",
-                OPENCLAW_GATEWAY_TOKEN: "old-token",
-                OPENCLAW_HOME: "/tmp/openclaw-reset-home",
-                OPENCLAW_INCLUDE_ROOTS: "/tmp/openclaw-reset-includes",
-                OPENCLAW_PROFILE: "config-dev",
-                OPENCLAW_STATE_DIR: "/tmp/openclaw-reset",
-                OPENCLAW_TEST_FAST: "0",
-                OPENCLAW_WORKSPACE_DIR: "/tmp/openclaw-reset-workspace",
-              },
-            },
-            gateway: { mode: "local" },
-          }),
-        );
-        await runCli(cliArgs("gateway", "--dev", "--reset"));
-
-        await runGatewayBeforeHook({ reset: true });
-
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-invocation/openclaw.json");
-        expect(process.env.OPENCLAW_HOME).toBe("/tmp/openclaw-invocation-home");
-        expect(process.env.OPENCLAW_PROFILE).toBeUndefined();
-        expect(process.env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-invocation-state");
-        expect(process.env.OPENCLAW_TEST_FAST).toBe("1");
-        expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe("/tmp/openclaw-invocation-workspace");
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
-        expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-      },
-    );
+    const targets: Array<[string, string | undefined, string]> = [
+      [
+        "CONFIG_PATH",
+        "/tmp/openclaw-invocation/openclaw.json",
+        "/tmp/openclaw-reset/openclaw.json",
+      ],
+      ["GATEWAY_TOKEN", undefined, "old-token"],
+      ["HOME", "/tmp/openclaw-invocation-home", "/tmp/openclaw-reset-home"],
+      ["INCLUDE_ROOTS", undefined, "/tmp/openclaw-reset-includes"],
+      ["PROFILE", undefined, "config-dev"],
+      ["STATE_DIR", "/tmp/openclaw-invocation-state", "/tmp/openclaw-reset"],
+      ["TEST_FAST", "1", "0"],
+      ["WORKSPACE_DIR", "/tmp/openclaw-invocation-workspace", "/tmp/openclaw-reset-workspace"],
+    ];
+    const invocation = Object.fromEntries(targets.map(([key, value]) => [key, value]));
+    await withEnvAsync(openClawEnv(invocation), async () => {
+      primeConfig({
+        env: {
+          vars: Object.fromEntries(targets.map(([key, , value]) => [`OPENCLAW_${key}`, value])),
+        },
+        gateway: { mode: "local" },
+      });
+      await f.runCli(f.cliArgs("gateway", "--dev", "--reset"));
+      await f.runGatewayBeforeHook({ reset: true });
+      expectEnv(invocation);
+      expect(f.ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+    });
   });
 
   it("honors banner suppression on the gateway foreground fast path", async () => {
     process.env.OPENCLAW_HIDE_BANNER = "1";
 
-    await runCli(cliArgs("gateway"));
+    await f.runCli(f.cliArgs("gateway"));
 
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(emitCliBannerMock).not.toHaveBeenCalled();
-    expect(commanderParseAsyncMock).toHaveBeenCalledWith(cliArgs("gateway"));
+    expect(f.tryRouteCliMock).not.toHaveBeenCalled();
+    expect(f.emitCliBannerMock).not.toHaveBeenCalled();
+    expect(f.commanderParseAsyncMock).toHaveBeenCalledWith(f.cliArgs("gateway"));
   });
 
   it("keeps explicit database preflight isolated from default state selection", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(true);
+    f.tryRouteCliMock.mockResolvedValueOnce(true);
 
-    await runCli(cliArgs("database", "preflight", "/tmp/openclaw-candidate.sqlite", "--json"));
+    await f.runCli(f.cliArgs("database", "preflight", "/tmp/openclaw-candidate.sqlite", "--json"));
 
-    expect(loadDotEnvMock).not.toHaveBeenCalled();
-    expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(f.loadDotEnvMock).not.toHaveBeenCalled();
+    expect(f.loadConfigMock).not.toHaveBeenCalled();
+    expect(f.startProxyMock).not.toHaveBeenCalled();
   });
 
   it("replaces the early managed proxy with the final accepted gateway config", async () => {
-    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
-    const earlyHandle = makeProxyHandle();
+    f.existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
     const finalHandle = makeProxyHandle();
-    const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
+    const { early: earlyHandle, config: earlyProxy } = primeProxy(finalHandle);
     const finalProxy = { proxyUrl: "http://127.0.0.1:29876" };
-    loadConfigMock.mockReturnValueOnce({ proxy: earlyProxy });
-    startProxyMock.mockResolvedValueOnce(earlyHandle).mockResolvedValueOnce(finalHandle);
-    commanderParseAsyncMock.mockImplementationOnce(async () => {
-      await runGatewayBeforeHook();
+    f.commanderParseAsyncMock.mockImplementationOnce(async () => {
+      await f.runGatewayBeforeHook();
       await getGatewayRunRuntimeHooks().refreshManagedProxy?.(finalProxy);
     });
 
-    await runCli(cliArgs("gateway", "run"));
+    await f.runCli(f.cliArgs("gateway", "run"));
 
-    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
-    expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
-    expect(startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
-    expect(startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);
-    expect(stopProxyMock).toHaveBeenNthCalledWith(1, earlyHandle);
-    expect(stopProxyMock).toHaveBeenNthCalledWith(2, finalHandle);
-    const earlyStopOrder = stopProxyMock.mock.invocationCallOrder[0] ?? 0;
-    const finalEnvironmentReadOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[1] ?? 0;
-    const finalStartOrder = startProxyMock.mock.invocationCallOrder[1] ?? 0;
+    expect(f.loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    expect(f.loadConfigMock).toHaveBeenCalledWith(f.readOnlyCoreOptions);
+    expect(f.startProxyMock.mock.calls).toEqual([[earlyProxy], [finalProxy]]);
+    expect(f.stopProxyMock.mock.calls).toEqual([[earlyHandle], [finalHandle]]);
+    const earlyStopOrder = f.stopProxyMock.mock.invocationCallOrder[0] ?? 0;
+    const finalEnvironmentReadOrder = f.readConfigFileSnapshotMock.mock.invocationCallOrder[1] ?? 0;
+    const finalStartOrder = f.startProxyMock.mock.invocationCallOrder[1] ?? 0;
     expect(finalEnvironmentReadOrder).toBeGreaterThan(earlyStopOrder);
     expect(finalStartOrder).toBeGreaterThan(earlyStopOrder);
   });
 
   it("removes early proxy signal handlers when the final config disables the proxy", async () => {
-    const earlyHandle = makeProxyHandle();
-    const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
+    const { early: earlyHandle, config: earlyProxy } = primeProxy(null);
     const finalProxy = undefined;
-    loadConfigMock.mockReturnValueOnce({ proxy: earlyProxy });
-    startProxyMock.mockResolvedValueOnce(earlyHandle).mockResolvedValueOnce(null);
     const processOnceSpy = vi.spyOn(process, "once");
     const processOffSpy = vi.spyOn(process, "off");
-    commanderParseAsyncMock.mockImplementationOnce(async () => {
-      const sigtermHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
-      const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
-      const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
+    f.commanderParseAsyncMock.mockImplementationOnce(async () => {
+      const installed = ["SIGTERM", "SIGINT", "exit"].map((signal) => [
+        signal,
+        processOnceSpy.mock.calls.find(([event]) => event === signal)?.[1],
+      ]);
 
       await getGatewayRunRuntimeHooks().refreshManagedProxy?.(finalProxy);
 
-      expect(processOffSpy).toHaveBeenCalledWith("SIGTERM", sigtermHandler);
-      expect(processOffSpy).toHaveBeenCalledWith("SIGINT", sigintHandler);
-      expect(processOffSpy).toHaveBeenCalledWith("exit", exitHandler);
+      for (const [signal, handler] of installed) {
+        expect(processOffSpy).toHaveBeenCalledWith(signal, handler);
+      }
     });
 
     try {
-      await runCli(cliArgs("gateway", "run"));
+      await f.runCli(f.cliArgs("gateway", "run"));
     } finally {
       processOffSpy.mockRestore();
       processOnceSpy.mockRestore();
     }
 
-    expect(startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
-    expect(startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);
-    expect(stopProxyMock).toHaveBeenCalledOnce();
-    expect(stopProxyMock).toHaveBeenCalledWith(earlyHandle);
+    expect(f.startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
+    expect(f.startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);
+    expect(f.stopProxyMock).toHaveBeenCalledExactlyOnceWith(earlyHandle);
   });
 });
