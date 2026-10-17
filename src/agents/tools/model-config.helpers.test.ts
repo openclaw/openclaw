@@ -1,3 +1,5 @@
+// Model config helper tests cover provider auth detection across config and
+// stored agent auth profiles for reusable media tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -16,7 +18,10 @@ vi.mock("../auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
 }));
 
-// A non-bundled provider is visible only when its config reaches env resolution.
+// Env-key candidates for plugin providers are resolved from the metadata
+// snapshot keyed by config/workspace. Stub the env resolver so a provider is
+// only "env-authed" when config/workspaceDir actually reach it, mirroring a
+// config-scoped (non-bundled) provider plugin without loading plugin runtime.
 const authMocks = vi.hoisted(() => ({ resolveEnvApiKey: vi.fn() }));
 
 vi.mock("../model-auth.js", async (importOriginal) => {
@@ -50,32 +55,17 @@ const codexSubstitute = {
 const openAiKeep = { kind: "keep", ref: `openai/${MODEL}` } satisfies Decision;
 const drop = { kind: "drop" } satisfies Decision;
 
-function providerConfig(
-  provider: string,
-  key: string,
-  baseUrl = "https://api.openai.com/v1",
-): OpenClawConfig {
-  return { models: { providers: { [provider]: { baseUrl, apiKey: key, models: [] } } } };
-}
-
-const openAiRefCfg = providerConfig("openai", "openai:default");
-const hatcheryCfg = providerConfig("hatchery", "sk-configured", "https://example.com/v1"); // pragma: allowlist secret
-
-function billingCooldown(
-  provider: string,
-  offset = 60_000,
-  profiles: Profiles = {},
-): AuthProfileStore {
-  return {
-    ...store(profiles),
-    usageStats: {
-      [`inline-api-key:${provider}`]: {
-        disabledUntil: Date.now() + offset,
-        disabledReason: "billing",
+const openAiRefCfg: OpenClawConfig = {
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "openai:default",
+        models: [],
       },
     },
-  };
-}
+  },
+};
 
 const store = (profiles: Profiles): AuthProfileStore => ({ version: 1, profiles });
 
@@ -112,16 +102,18 @@ const resolveMedia = (
 
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "");
-  authMocks.resolveEnvApiKey
-    .mockReset()
-    .mockImplementation((provider: string, _env?: unknown, options?: { config?: unknown }) =>
+  authMocks.resolveEnvApiKey.mockReset();
+  authMocks.resolveEnvApiKey.mockImplementation(
+    (provider: string, _env?: unknown, options?: { config?: unknown }) =>
       provider === "acme" && options?.config
         ? { apiKey: "sk-acme-env", source: "env: ACME_API_KEY" }
         : null,
-    );
+  );
 });
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("hasProviderAuthForTool", () => {
   it("does not select direct or subscription agent credentials for plugin scope", () => {
@@ -148,15 +140,14 @@ describe("hasProviderAuthForTool", () => {
     );
   });
   it("keeps a prepared missing auth source unavailable without probing storage", () => {
-    const noStorage = () => {
-      throw new Error("unexpected caller-thread auth storage access");
-    };
-    const probe = vi
-      .spyOn(authSource, "hasAnyAuthProfileStoreSource")
-      .mockImplementation(noStorage);
+    const probe = vi.spyOn(authSource, "hasAnyAuthProfileStoreSource").mockImplementation(() => {
+      throw new Error("unexpected caller-thread auth source probe");
+    });
     const load = vi
       .spyOn(authStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfiles")
-      .mockImplementation(noStorage);
+      .mockImplementation(() => {
+        throw new Error("unexpected caller-thread credential store load");
+      });
     const params = {
       provider: "unconfigured-provider",
       agentDir: AGENT_DIR,
@@ -173,6 +164,8 @@ describe("hasProviderAuthForTool", () => {
   });
 
   it("accepts env-key plugin provider auth only when config reaches env resolution", () => {
+    // "acme" is not in models.json, so custom-provider auth is false; the only
+    // path to true is the config-aware env lookup.
     const cfg = { models: { providers: {} } } as OpenClawConfig;
     expect(hasProviderAuthForTool({ provider: "acme", cfg, workspaceDir: "/ws" })).toBe(true);
     expect(authMocks.resolveEnvApiKey).toHaveBeenCalledWith("acme", undefined, {
@@ -183,7 +176,36 @@ describe("hasProviderAuthForTool", () => {
   });
 
   it("accepts config-backed custom provider auth", () => {
-    expect(hasProviderAuthForTool({ provider: "hatchery", cfg: hatcheryCfg })).toBe(true);
+    const cfg = {
+      models: {
+        providers: {
+          hatchery: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(hasProviderAuthForTool({ provider: "hatchery", cfg })).toBe(true);
+  });
+
+  it("accepts AWS SDK auth without a static credential", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            auth: "aws-sdk",
+            api: "bedrock-converse-stream",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg })).toBe(true);
   });
 
   it("rejects providers without config, env, or profile auth", () => {
@@ -204,58 +226,124 @@ describe("hasProviderAuthForTool", () => {
   });
 
   it("hides inline provider keys during billing cooldown, keeping profile fallback", () => {
-    // Regression: omitting the store advertised inline keys during billing cooldown.
-    const check = (authStore: AuthProfileStore) =>
-      hasProviderAuthForTool({ provider: "hatchery", cfg: hatcheryCfg, authStore });
+    // Regression: hasProviderAuthForTool used to call the runtime availability
+    // check without the auth store, so inline provider keys in billing cooldown
+    // were still advertised as usable tool auth.
+    const cfg = {
+      models: {
+        providers: {
+          hatchery: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const cooldownStats = (disabledUntil: number) => ({
+      "inline-api-key:hatchery": { disabledUntil, disabledReason: "billing" as const },
+    });
 
-    expect(check(billingCooldown("hatchery"))).toBe(false);
-    expect(check(billingCooldown("hatchery", -60_000))).toBe(true);
     expect(
-      check(
-        billingCooldown("hatchery", 60_000, {
-          "hatchery:default": apiKey("hatchery", "sk-profile"),
-        }),
-      ),
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        cfg,
+        authStore: { version: 1, profiles: {}, usageStats: cooldownStats(Date.now() + 60_000) },
+      }),
+    ).toBe(false);
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        cfg,
+        authStore: { version: 1, profiles: {}, usageStats: cooldownStats(Date.now() - 60_000) },
+      }),
+    ).toBe(true);
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        cfg,
+        authStore: {
+          version: 1,
+          profiles: { "hatchery:default": apiKey("hatchery", "sk-profile") },
+          usageStats: cooldownStats(Date.now() + 60_000),
+        },
+      }),
     ).toBe(true);
   });
 });
 
 describe("resolveOpenAiImageMediaCandidate", () => {
   it("drops an implicit OpenAI image candidate while its inline key is in billing cooldown", () => {
-    const cfg = providerConfig("openai", "sk-configured"); // pragma: allowlist secret
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
 
     expect(resolveMedia({ cfg })).toEqual(openAiKeep);
-    expect(resolveMedia({ cfg, authStore: billingCooldown("openai") })).toEqual(drop);
+    expect(
+      resolveMedia({
+        cfg,
+        authStore: {
+          version: 1,
+          profiles: {},
+          usageStats: {
+            "inline-api-key:openai": {
+              disabledUntil: Date.now() + 60_000,
+              disabledReason: "billing" as const,
+            },
+          },
+        },
+      }),
+    ).toEqual(drop);
   });
 
-  it.each<[string, () => Profiles, OpenClawConfig | undefined, Decision]>([
-    ["token auth", () => ({ "openai:token": token("openai") }), undefined, codexSubstitute],
-    ["API-key auth", () => ({ "openai:api-key": apiKey("openai") }), undefined, openAiKeep],
-    [
-      "excluded subscription auth",
-      () => ({
-        "openai:api-key": { provider: "openai", type: "api_key" },
-        "openai:chatgpt": oauth("openai"),
-      }),
-      { auth: { order: { openai: ["openai:api-key"] } } },
-      drop,
-    ],
-    [
-      "OAuth reference",
-      () => ({ "openai:default": oauth("openai") }),
-      openAiRefCfg,
+  it("resolves canonical OpenAI token-only media auth", () => {
+    expect(resolveMedia({ authStore: store({ "openai:token": token("openai") }) })).toEqual(
       codexSubstitute,
-    ],
-    [
-      "unresolved API-key reference",
-      () => ({
-        "openai:default": { provider: "openai", type: "api_key" },
-        "openai:chatgpt": oauth("openai"),
-      }),
-      openAiRefCfg,
-      codexSubstitute,
-    ],
-  ])("routes %s", (_name, profiles, cfg, expected) => {
-    expect(resolveMedia({ cfg, authStore: store(profiles()) })).toEqual(expected);
+    );
+  });
+
+  it("keeps OpenAI media when a direct API key profile exists", () => {
+    const authStore = store({ "openai:api-key": apiKey("openai") });
+
+    expect(resolveMedia({ authStore })).toEqual(openAiKeep);
+  });
+
+  it("drops Codex media when auth order excludes subscription-style auth", () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        order: {
+          openai: ["openai:api-key"],
+        },
+      },
+    };
+    const authStore = store({
+      "openai:api-key": { provider: "openai", type: "api_key" },
+      "openai:chatgpt": oauth("openai"),
+    });
+
+    expect(resolveMedia({ cfg, authStore })).toEqual(drop);
+  });
+
+  it("does not treat provider apiKey OAuth profile references as direct OpenAI media auth", () => {
+    const authStore = store({ "openai:default": oauth("openai") });
+
+    expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
+  });
+
+  it("does not treat unresolved provider apiKey profile references as direct auth", () => {
+    const authStore = store({
+      "openai:default": { provider: "openai", type: "api_key" },
+      "openai:chatgpt": oauth("openai"),
+    });
+
+    expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
   });
 });

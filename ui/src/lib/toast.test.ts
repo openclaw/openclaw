@@ -5,7 +5,7 @@ import "../components/modal-dialog.ts";
 import { setToastInNavDrawer } from "../app/navigation-surface.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { showToast, type ToastOptions } from "./toast.ts";
+import { showToast } from "./toast.ts";
 import "./toast-host.ts";
 
 async function settleHost(host: HTMLElementTagNameMap["openclaw-toast-host"]) {
@@ -14,64 +14,16 @@ async function settleHost(host: HTMLElementTagNameMap["openclaw-toast-host"]) {
   flush();
 }
 
-async function show(options: ToastOptions) {
-  showToast(options);
+async function mountHost() {
+  const host = document.createElement("openclaw-toast-host");
+  document.body.append(host);
   await settleHost(host);
-}
-
-const timedToast = (options: Partial<ToastOptions> = {}) =>
-  show({ message: "First", durationMs: 100, onDismiss, ...options });
-
-function undoToast(options: Partial<ToastOptions>): ToastOptions {
-  return { message: "Session archived", actionLabel: "Undo", onAction: vi.fn(), ...options };
-}
-
-async function shadowModal() {
-  const owner = document.createElement("div");
-  const root = owner.attachShadow({ mode: "open" });
-  const modal = document.createElement("openclaw-modal-dialog");
-  modal.open = true;
-  root.append(modal);
-  document.body.append(owner);
-  await modal.updateComplete;
-  return { owner, root, modal };
-}
-
-function anchoredToast() {
-  const node = document.createElement("div");
-  document.body.append(node);
-  const spy = vi.spyOn(node, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
-  return { anchor: node, bounds: spy };
-}
-
-function anchoredHost(reducedMotion: boolean) {
-  const media = vi.fn(() => ({ matches: reducedMotion }));
-  vi.stubGlobal("matchMedia", media);
-  return { media, ...anchoredToast() };
-}
-
-async function expectPaused(onDismiss: ReturnType<typeof vi.fn>) {
-  await vi.advanceTimersByTimeAsync(200);
-  expect(onDismiss).not.toHaveBeenCalled();
-}
-
-async function expectTimeout(onDismiss: ReturnType<typeof vi.fn>, remaining: number) {
-  await vi.advanceTimersByTimeAsync(remaining - 1);
-  expect(onDismiss).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
+  return host;
 }
 
 let restoreDialog: () => void;
-let host: HTMLElementTagNameMap["openclaw-toast-host"];
-let onDismiss: ReturnType<typeof vi.fn>;
-beforeEach(async () => {
+beforeEach(() => {
   restoreDialog = installDialogPolyfill();
-  vi.useFakeTimers();
-  onDismiss = vi.fn();
-  host = document.createElement("openclaw-toast-host");
-  document.body.append(host);
-  await settleHost(host);
 });
 afterEach(() => {
   document.body.replaceChildren();
@@ -83,29 +35,45 @@ afterEach(() => {
 
 describe("shared toast", () => {
   it("reports when no host can present the toast", () => {
-    host.remove();
     expect(showToast({ message: "Unavailable" })).toBe(false);
   });
 
   it("shows and replaces the active toast", async () => {
-    await show({ message: "First" });
+    const host = await mountHost();
+
+    showToast({ message: "First" });
+    await settleHost(host);
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("First");
-    await show({ message: "Second" });
+
+    showToast({ message: "Second" });
+    await settleHost(host);
     expect(host.querySelectorAll(".app-toast")).toHaveLength(1);
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second");
   });
 
   it("routes successive notices through an active modal inside a shadow root", async () => {
-    const { modal } = await shadowModal();
-    await show({ message: "Critical session notice" });
-    expect(host.parentElement).toBe(modal.getOverlayContainer());
-    expect(host.textContent).toContain("Critical session notice");
+    const appHost = await mountHost();
+    const shadowOwner = document.createElement("div");
+    const shadowRoot = shadowOwner.attachShadow({ mode: "open" });
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.open = true;
+    shadowRoot.append(modal);
+    document.body.append(shadowOwner);
+    await modal.updateComplete;
+
+    showToast({ message: "Critical session notice" });
+    await settleHost(appHost);
+
+    expect(appHost.parentElement).toBe(modal.getOverlayContainer());
+    expect(appHost.textContent).toContain("Critical session notice");
+
     expect(showToast({ message: "Follow-up session notice" })).toBe(true);
-    await settleHost(host);
-    expect(host.textContent).toContain("Follow-up session notice");
+    await settleHost(appHost);
+    expect(appHost.textContent).toContain("Follow-up session notice");
   });
 
   it("presents toasts in the outer modal after a nested modal closes", async () => {
+    const appHost = await mountHost();
     const outer = document.createElement("openclaw-modal-dialog");
     const inner = document.createElement("openclaw-modal-dialog");
     outer.append(inner);
@@ -114,73 +82,110 @@ describe("shared toast", () => {
     await inner.updateComplete;
     inner.hide();
     await inner.updateComplete;
-    expect([inner.isConnected, inner.open]).toEqual([true, false]);
-    await show({ message: "Outer dialog notice" });
-    expect(host.parentElement).toBe(outer.getOverlayContainer());
-    expect(host.textContent).toContain("Outer dialog notice");
+
+    expect(inner.isConnected).toBe(true);
+    expect(inner.open).toBe(false);
+    showToast({ message: "Outer dialog notice" });
+    await settleHost(appHost);
+
+    expect(appHost.parentElement).toBe(outer.getOverlayContainer());
+    expect(appHost.textContent).toContain("Outer dialog notice");
   });
 
-  it.each(["hover exit", "render update"])("retains shadow focus on %s", async (trigger) => {
-    const { owner, root, modal } = await shadowModal();
-    await show(undoToast({ durationMs: 100, onDismiss }));
-    expect(host.parentElement).toBe(modal.getOverlayContainer());
-    await vi.advanceTimersByTimeAsync(40);
-    const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
-    const toast = host.querySelector<HTMLElement>(".app-toast")!;
-    if (trigger === "hover exit") {
-      toast.dispatchEvent(new Event("pointerenter"));
-    }
-    action.focus();
-    expect(document.activeElement).toBe(owner);
-    expect(root.activeElement).toBe(action);
-    if (trigger === "hover exit") {
-      toast.dispatchEvent(new Event("pointerleave"));
-    } else {
-      host.toast = { ...host.toast! };
+  it.each(["hover exit", "render update"])(
+    "keeps shadow-root Undo focused through %s and resumes only after focus leaves",
+    async (trigger) => {
+      vi.useFakeTimers();
+      const host = await mountHost();
+      const shadowOwner = document.createElement("div");
+      const root = shadowOwner.attachShadow({ mode: "open" });
+      const modal = document.createElement("openclaw-modal-dialog");
+      modal.open = true;
+      root.append(modal);
+      document.body.append(shadowOwner);
+      await modal.updateComplete;
+      const onDismiss = vi.fn();
+      showToast({
+        message: "Session archived",
+        actionLabel: "Undo",
+        onAction: vi.fn(),
+        durationMs: 100,
+        onDismiss,
+      });
       await settleHost(host);
-    }
-    await expectPaused(onDismiss);
-    expect(root.activeElement).toBe(action);
-    const dismiss = host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!;
-    dismiss.focus();
-    await expectPaused(onDismiss);
-    dismiss.blur();
-    await expectTimeout(onDismiss, 60);
-  });
+      expect(host.parentElement).toBe(modal.getOverlayContainer());
+      await vi.advanceTimersByTimeAsync(40);
+      const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+      const toast = host.querySelector<HTMLElement>(".app-toast")!;
+      if (trigger === "hover exit") {
+        toast.dispatchEvent(new Event("pointerenter"));
+      }
+      action.focus();
+      expect(document.activeElement).toBe(shadowOwner);
+      expect(root.activeElement).toBe(action);
+      if (trigger === "hover exit") {
+        toast.dispatchEvent(new Event("pointerleave"));
+      } else {
+        host.toast = { ...host.toast! };
+        await settleHost(host);
+      }
+      await vi.advanceTimersByTimeAsync(200);
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(root.activeElement).toBe(action);
+      const dismiss = host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!;
+      dismiss.focus();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(onDismiss).not.toHaveBeenCalled();
+      dismiss.blur();
+      await vi.advanceTimersByTimeAsync(59);
+      expect(onDismiss).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
+    },
+  );
 
-  it.each(["out of a shadow root", "into a modal"])("%s relocation resumes", async (direction) => {
-    if (direction === "out of a shadow root") {
-      await shadowModal();
-    }
-    await timedToast();
+  it("resumes remaining time when relocation out of a shadow root drops focus", async () => {
+    vi.useFakeTimers();
+    const host = await mountHost();
+    const shadowOwner = document.createElement("div");
+    const root = shadowOwner.attachShadow({ mode: "open" });
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.open = true;
+    root.append(modal);
+    document.body.append(shadowOwner);
+    await modal.updateComplete;
+    const onDismiss = vi.fn();
+    showToast({ message: "Session archived", durationMs: 100, onDismiss });
+    await settleHost(host);
     await vi.advanceTimersByTimeAsync(40);
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!.focus();
-    await expectPaused(onDismiss);
-    let target: HTMLElement = document.body;
-    if (direction === "into a modal") {
-      const modal = document.createElement("openclaw-modal-dialog");
-      document.body.append(modal);
-      await modal.updateComplete;
-      target = modal.getOverlayContainer()!;
-    }
-    target.append(host);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onDismiss).not.toHaveBeenCalled();
+    document.body.append(host);
     await settleHost(host);
     expect(host.contains(document.activeElement)).toBe(false);
-    await expectTimeout(onDismiss, 60);
+    await vi.advanceTimersByTimeAsync(59);
+    expect(onDismiss).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
   });
 
   it("preserves queued outcomes, placement, and the deadline across drawer handoffs", async () => {
+    vi.useFakeTimers();
     const app = document.createElement("div");
     const shell = document.createElement("div");
     shell.className = "shell";
     const drawer = document.createElement("nav");
     drawer.className = "shell-nav";
+    const host = document.createElement("openclaw-toast-host");
     shell.append(drawer, host);
     app.append(shell);
     document.body.append(app);
+    const onDismiss = vi.fn();
     showToast({ message: "First", durationMs: 100, onDismiss });
     showToast({ message: "Queued", fifo: true });
     await vi.advanceTimersByTimeAsync(40);
+
     const elements = { navDrawerElement: drawer, shellElement: shell, toastElement: host };
     setToastInNavDrawer(elements, true);
     await settleHost(host);
@@ -194,50 +199,93 @@ describe("shared toast", () => {
     expect(host.dataset.toastPlacement).toBe("shell");
     expect(host.textContent).toContain("First");
     expect(onDismiss).not.toHaveBeenCalled();
+
     await vi.advanceTimersByTimeAsync(20);
     await settleHost(host);
     expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
     expect(host.textContent).toContain("Queued");
   });
 
-  it.each(["hover", "focus"])("waits for %s and the other interaction", async (first) => {
-    await show(undoToast({ durationMs: 100, onDismiss }));
-    await vi.advanceTimersByTimeAsync(40);
-    const toast = host.querySelector<HTMLElement>(".app-toast")!;
-    const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
-    toast.dispatchEvent(new Event("pointerenter"));
-    action.focus();
-    await vi.advanceTimersByTimeAsync(200);
-    const leaveHover = () => toast.dispatchEvent(new Event("pointerleave"));
-    const leaveFocus = () => action.blur();
-    const [endFirst, endLast] =
-      first === "hover" ? [leaveHover, leaveFocus] : [leaveFocus, leaveHover];
-    endFirst();
-    await expectPaused(onDismiss);
-    endLast();
-    await expectTimeout(onDismiss, 60);
-  });
+  it.each(["hover", "focus"])(
+    "waits for both interactions to end when %s ends first",
+    async (first) => {
+      vi.useFakeTimers();
+      const host = await mountHost();
+      const onDismiss = vi.fn();
+      showToast({
+        message: "Session archived",
+        actionLabel: "Undo",
+        onAction: vi.fn(),
+        durationMs: 100,
+        onDismiss,
+      });
+      await settleHost(host);
+      await vi.advanceTimersByTimeAsync(40);
+      const toast = host.querySelector<HTMLElement>(".app-toast")!;
+      const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+      toast.dispatchEvent(new Event("pointerenter"));
+      action.focus();
+      await vi.advanceTimersByTimeAsync(200);
+      const leaveHover = () => toast.dispatchEvent(new Event("pointerleave"));
+      if (first === "hover") {
+        leaveHover();
+      } else {
+        action.blur();
+      }
+      await vi.advanceTimersByTimeAsync(200);
+      expect(onDismiss).not.toHaveBeenCalled();
+      if (first === "hover") {
+        action.blur();
+      } else {
+        leaveHover();
+      }
+      await vi.advanceTimersByTimeAsync(59);
+      expect(onDismiss).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
+    },
+  );
 
   it("gives replacements and FIFO successors their own duration without losing retained focus", async () => {
-    const [firstDismiss, secondDismiss, queuedDismiss] = [vi.fn(), vi.fn(), vi.fn()];
-    await show({ message: "First", durationMs: 100, onDismiss: firstDismiss });
+    vi.useFakeTimers();
+    const host = await mountHost();
+    const firstDismiss = vi.fn();
+    const secondDismiss = vi.fn();
+    const queuedDismiss = vi.fn();
+    showToast({ message: "First", durationMs: 100, onDismiss: firstDismiss });
+    await settleHost(host);
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!.focus();
     showToast({ message: "Queued", durationMs: 100, fifo: true, onDismiss: queuedDismiss });
-    await expectPaused(firstDismiss);
-    await show({ message: "Replacement", durationMs: 100, onDismiss: secondDismiss });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(firstDismiss).not.toHaveBeenCalled();
+    showToast({ message: "Replacement", durationMs: 100, onDismiss: secondDismiss });
+    await settleHost(host);
     expect(firstDismiss).toHaveBeenCalledExactlyOnceWith("replaced");
-    await expectPaused(secondDismiss);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(secondDismiss).not.toHaveBeenCalled();
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!.click();
     await settleHost(host);
     expect(secondDismiss).toHaveBeenCalledExactlyOnceWith("dismiss");
     expect(host.textContent).toContain("Queued");
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!.blur();
-    await expectTimeout(queuedDismiss, 100);
+    await vi.advanceTimersByTimeAsync(99);
+    expect(queuedDismiss).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(queuedDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
   });
 
   it("cleans up paused toasts and queued outcomes on removal", async () => {
-    const { anchor, bounds, media } = anchoredHost(false);
-    const [firstDismiss, queuedDismiss] = [vi.fn(), vi.fn()];
+    vi.useFakeTimers();
+    const media = vi.fn(() => ({ matches: false }));
+    vi.stubGlobal("matchMedia", media);
+    const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    const bounds = vi
+      .spyOn(anchor, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 100, 100));
+    const firstDismiss = vi.fn();
+    const queuedDismiss = vi.fn();
     showToast({ anchor, message: "First", onDismiss: firstDismiss });
     showToast({ message: "Queued", fifo: true, onDismiss: queuedDismiss });
     await settleHost(host);
@@ -245,7 +293,8 @@ describe("shared toast", () => {
     bounds.mockClear();
     media.mockClear();
     host.remove();
-    expect([bounds.mock.calls, media.mock.calls]).toEqual([[], []]);
+    expect(bounds).not.toHaveBeenCalled();
+    expect(media).not.toHaveBeenCalled();
     expect(firstDismiss).toHaveBeenCalledExactlyOnceWith("disconnected");
     expect(queuedDismiss).toHaveBeenCalledExactlyOnceWith("disconnected");
     await vi.advanceTimersByTimeAsync(0);
@@ -256,9 +305,19 @@ describe("shared toast", () => {
   });
 
   it("still runs a focused action immediately and honors reduced-motion dismissal", async () => {
-    const { anchor, bounds, media } = anchoredHost(true);
+    vi.useFakeTimers();
+    const media = vi.fn(() => ({ matches: true }));
+    vi.stubGlobal("matchMedia", media);
+    const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    const bounds = vi
+      .spyOn(anchor, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 100, 100));
     const onAction = vi.fn();
-    await show(undoToast({ anchor, onAction, onDismiss }));
+    const onDismiss = vi.fn();
+    showToast({ anchor, message: "Session archived", actionLabel: "Undo", onAction, onDismiss });
+    await settleHost(host);
     const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
     action.focus();
     await vi.advanceTimersByTimeAsync(6_100);
@@ -266,10 +325,12 @@ describe("shared toast", () => {
     media.mockClear();
     action.click();
     await settleHost(host);
-    expect([bounds.mock.calls, media.mock.calls]).toEqual([[], []]);
+    expect(bounds).not.toHaveBeenCalled();
+    expect(media).not.toHaveBeenCalled();
     expect(onAction).toHaveBeenCalledOnce();
     expect(onDismiss).toHaveBeenCalledExactlyOnceWith("action");
-    await show({ anchor, message: "Temporary", durationMs: 100 });
+    showToast({ anchor, message: "Temporary", durationMs: 100 });
+    await settleHost(host);
     bounds.mockClear();
     await vi.advanceTimersByTimeAsync(100);
     await settleHost(host);
@@ -280,43 +341,90 @@ describe("shared toast", () => {
   });
 
   it("does not carry hover from a removed toast into later notifications", async () => {
-    await show({ message: "First" });
+    vi.useFakeTimers();
+    const host = await mountHost();
+    showToast({ message: "First" });
+    await settleHost(host);
     host.querySelector(".app-toast")!.dispatchEvent(new Event("pointerenter"));
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!.click();
     await settleHost(host);
     expect(host.querySelector(".app-toast")).toBeNull();
-    await timedToast({ message: "Later" });
+    const onDismiss = vi.fn();
+    showToast({ message: "Later", durationMs: 100, onDismiss });
+    await settleHost(host);
     await vi.advanceTimersByTimeAsync(100);
     expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
   });
 
   it("resumes after a focused action is removed by replacement", async () => {
-    await show({ message: "First", actionLabel: "Undo", onAction: vi.fn() });
+    vi.useFakeTimers();
+    const host = await mountHost();
+    showToast({ message: "First", actionLabel: "Undo", onAction: vi.fn() });
+    await settleHost(host);
     host.querySelector<HTMLButtonElement>(".app-toast__action")!.focus();
-    await timedToast({ message: "Replacement" });
+    const onDismiss = vi.fn();
+    showToast({ message: "Replacement", durationMs: 100, onDismiss });
+    await settleHost(host);
     expect(host.contains(document.activeElement)).toBe(false);
     await vi.advanceTimersByTimeAsync(100);
     expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
   });
 
+  it("resumes the remaining duration when a modal relocation drops focus", async () => {
+    vi.useFakeTimers();
+    const host = await mountHost();
+    const onDismiss = vi.fn();
+    showToast({ message: "First", durationMs: 100, onDismiss });
+    await settleHost(host);
+    await vi.advanceTimersByTimeAsync(40);
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    const modal = document.createElement("openclaw-modal-dialog");
+    document.body.append(modal);
+    await modal.updateComplete;
+    modal.getOverlayContainer()!.append(host);
+    await settleHost(host);
+    expect(host.contains(document.activeElement)).toBe(false);
+    await vi.advanceTimersByTimeAsync(59);
+    expect(onDismiss).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("timeout");
+  });
+
   it("auto-dismisses after the configured duration", async () => {
-    const { anchor } = anchoredToast();
-    await show({ anchor, message: "Temporary", durationMs: 50 });
+    vi.useFakeTimers();
+    const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+
+    showToast({ anchor, message: "Temporary", durationMs: 50 });
+    await settleHost(host);
     await vi.advanceTimersByTimeAsync(50);
     await settleHost(host);
+
     expect(host.querySelector('.app-toast[data-active="false"]')).not.toBeNull();
+
     await vi.runAllTimersAsync();
     await settleHost(host);
+
     expect(host.querySelector(".app-toast")).toBeNull();
   });
 
   it("preserves the dismissal reason when an exiting toast is replaced", async () => {
-    const { anchor } = anchoredToast();
+    vi.useFakeTimers();
+    const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
     const reasons: string[] = [];
-    await show({ anchor, message: "First", onDismiss: (reason) => reasons.push(reason) });
+
+    showToast({ anchor, message: "First", onDismiss: (reason) => reasons.push(reason) });
+    await settleHost(host);
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
     await settleHost(host);
     showToast({ message: "Second" });
+
     expect(reasons).toEqual(["dismiss"]);
   });
 });

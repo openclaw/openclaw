@@ -41,7 +41,7 @@ export function pendingSetRequests(request: Mock<GatewayBrowserClient["request"]
   return {
     pending,
     retired,
-    acknowledge(index: number) {
+    acknowledge: (index: number) => {
       pending.handleResponse({ type: "res", id: ids[index]!, ok: true, payload: {} });
     },
   };

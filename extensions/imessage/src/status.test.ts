@@ -87,6 +87,7 @@ vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => ({
   ...setupToolsMocks,
 }));
 
+// mock-isolation: Status tests control installation outcomes without installing the native CLI.
 vi.mock("./install-imsg.js", () => ({ installIMessageCli: installIMessageCliMock }));
 
 async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {

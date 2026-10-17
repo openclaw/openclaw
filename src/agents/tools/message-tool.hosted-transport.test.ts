@@ -189,6 +189,7 @@ it("dispatches a hosted message action without connecting to either Gateway endp
       );
     for (const [index, tool] of tools.entries()) {
       const result = await execute(tool, index === 0 ? undefined : "default");
+      expect(dispatched).toHaveBeenCalledTimes(index + 1);
       expect(result.details).toMatchObject({
         ok: true,
         listener: "hosted-local",

@@ -250,9 +250,9 @@ it.each(["native", "acp", "missing requester", "visible"] as const)(
         requesterSessionKey: requesterKey,
         controllerSessionKey: controllerKey,
         expectsCompletionMessage: true,
-        completionRequesterSessionId: originalSessionId,
-        completionRequesterLifecycleRevision: originalRevision,
       });
+      expect(restored?.completionRequesterSessionId).toBe(originalSessionId);
+      expect(restored?.completionRequesterLifecycleRevision).toBe(originalRevision);
       expect(loadSessionEntryReadOnly({ sessionKey: requesterKey, agentId: "main" })).toMatchObject(
         replacement,
       );

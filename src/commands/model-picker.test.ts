@@ -32,6 +32,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 const loadStaticManifestCatalogRowsForList = vi.hoisted(() =>
   vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
 );
+// mock-isolation: Each picker case supplies its own static provider catalog.
 vi.mock("./models/list.manifest-catalog.js", () => ({ loadStaticManifestCatalogRowsForList }));
 
 const loadScopedModelCatalog = vi.hoisted(() =>
@@ -73,6 +74,7 @@ const modelAuth = vi.hoisted(() => ({
     return provider !== "amazon-bedrock" || auth === undefined || auth === "aws-sdk";
   },
 }));
+// mock-isolation: Model selection uses synthetic auth evidence, never host credentials.
 vi.mock("../agents/model-auth.js", () => modelAuth);
 
 const providerAuthRoute = vi.hoisted(() => ({ value: undefined as AuthRoute | undefined }));
@@ -107,7 +109,9 @@ const createProviderAuthChecker = vi.hoisted(() =>
     });
   }),
 );
+// mock-isolation: The fixture owns provider auth evaluation and selected-route evidence.
 vi.mock("../agents/model-provider-auth.js", () => ({ createProviderAuthChecker }));
+// mock-isolation: Resolve fixture provider owners without loading installed provider plugins.
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) => {
     const id = provider.replace(/-plan$/, "");
@@ -121,6 +125,7 @@ const pickerRuntime = vi.hoisted(() => ({
   resolvePluginProviders: vi.fn(() => []),
   runProviderPluginAuthMethod: vi.fn(),
 }));
+// mock-isolation: Picker hooks are fixture-controlled and must not run real auth or plugin hooks.
 vi.mock("../commands/model-picker.runtime.js", () => ({ modelPickerRuntime: pickerRuntime }));
 
 async function promptDefaultPicker(

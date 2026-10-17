@@ -488,8 +488,9 @@ describe("startup recovery admission", () => {
       expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       for (const scope of [first, second]) {
-        expect(scope.readEntry()).toMatchObject({
-          status: action === "stop" ? "interrupted" : undefined,
+        const entry = scope.readEntry();
+        expect(entry?.status).toBe(action === "stop" ? "interrupted" : undefined);
+        expect(entry).toMatchObject({
           abortedLastRun: action === "stop",
         });
       }
@@ -515,10 +516,9 @@ describe("startup recovery admission", () => {
         );
       }
       if (action === "stop") {
-        expect(first.readEntry()?.mainRestartRecovery).toMatchObject({
-          chargedAttempts: 0,
-          reservation: undefined,
-        });
+        const state = first.readEntry()?.mainRestartRecovery;
+        expect(state?.chargedAttempts).toBe(0);
+        expect(state?.reservation).toBeUndefined();
       }
     },
   );
@@ -770,8 +770,9 @@ describe("startup recovery admission", () => {
           expect(entry).toMatchObject({
             sessionId: `ops-session-${index}`,
             abortedLastRun: false,
-            mainRestartRecovery: { chargedAttempts: 3, reservation: undefined },
+            mainRestartRecovery: { chargedAttempts: 3 },
           });
+          expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
         }
       }
       if (multipleStores) {
@@ -784,8 +785,9 @@ describe("startup recovery admission", () => {
           sessionId: "fresh-session",
           status: "interrupted",
           abortedLastRun: true,
-          mainRestartRecovery: { chargedAttempts: 3, tombstone: undefined },
+          mainRestartRecovery: { chargedAttempts: 3 },
         });
+        expect(freshEntry?.mainRestartRecovery?.tombstone).toBeUndefined();
       }
     };
     await (dirs.length > 1 ? withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, run) : run());

@@ -14,7 +14,11 @@ import { recoverStore } from "./main-session-restart-recovery-store.js";
 // #118873: terminal-only custody must not block foreground admission forever.
 
 const sessionKey = "agent:main:main";
-const retired = { mainRestartRecovery: undefined, restartRecoveryRuns: undefined };
+function expectRetired(entry: SessionEntry | undefined) {
+  expect(entry).toBeDefined();
+  expect(entry?.mainRestartRecovery).toBeUndefined();
+  expect(entry?.restartRecoveryRuns).toBeUndefined();
+}
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const unexpectedRuntimeCall = async (): Promise<never> => {
   throw new Error("terminal residue must not dispatch, wait, or send a notice");
@@ -90,11 +94,9 @@ describe("main session recovery terminal-only residue", () => {
         expect(entry.mainRestartRecovery).toBeDefined();
         expect(entry.restartRecoveryRuns).toHaveLength(2);
       } else {
-        expect(entry).toMatchObject({
-          abortedLastRun: false,
-          status: undefined,
-          ...retired,
-        });
+        expect(entry.abortedLastRun).toBe(false);
+        expect(entry.status).toBeUndefined();
+        expectRetired(entry);
       }
     },
   );
@@ -118,11 +120,9 @@ describe("main session recovery terminal-only residue", () => {
       });
 
       if (terminal) {
-        expect(entry).toMatchObject({
-          status: "failed",
-          restartRecoveryDeliveryRunId: undefined,
-          ...retired,
-        });
+        expect(entry.status).toBe("failed");
+        expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+        expectRetired(entry);
       } else {
         expect(entry).toEqual(before);
       }
@@ -197,7 +197,7 @@ describe("main session recovery terminal-only residue", () => {
         ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
 
         const entry = read();
-        expect(entry).toMatchObject(retired);
+        expectRetired(entry);
         if (outcome !== "terminal-only") {
           expect(entry).toMatchObject(initialEntry);
           expect(entry?.restartRecoveryTerminalRunIds).toBeUndefined();
@@ -247,7 +247,7 @@ describe("main session recovery terminal-only residue", () => {
 
       const terminal = read();
       const live = read(liveSessionKey);
-      expect(terminal).toMatchObject(retired);
+      expectRetired(terminal);
       expect(live).toMatchObject({
         sessionId: "live-session",
         restartRecoveryDeliveryRunId: "live-run",

@@ -90,7 +90,7 @@ function probeReply(route: SystemAgentConfiguredRoute, text?: string) {
 function revalidateOwner(
   binding: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>["binding"],
   createBinding = vi.fn(async () => binding),
-  route = binding.execution,
+  route: Parameters<typeof revalidateStableSetupInferenceOwner>[0]["route"] = binding.execution,
   auth = binding.auth,
 ) {
   return revalidateStableSetupInferenceOwner({

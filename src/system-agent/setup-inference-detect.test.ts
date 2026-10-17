@@ -39,6 +39,7 @@ vi.mock("./setup-native-session-catalogs.js", () => ({
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries: () => [],
 }));
+// mock-isolation: Discovery tests simulate enabling plugins without changing installed plugin state.
 vi.mock("../plugins/enable.js", () => ({
   enablePluginInConfig: (config: OpenClawConfig) => ({ enabled: true, config }),
   enablePluginWithCapabilityConsent: async (config: OpenClawConfig) => ({ enabled: true, config }),

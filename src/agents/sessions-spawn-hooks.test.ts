@@ -75,7 +75,7 @@ const requireRecord = createRequireRecord("object", "expected-label");
 
 async function spawn(
   params: Partial<Parameters<typeof spawnSubagentDirect>[0]> &
-    Parameters<typeof spawnSubagentDirect>[1] = {},
+    Partial<Parameters<typeof spawnSubagentDirect>[1]> = {},
 ) {
   const {
     task = "do thing",

@@ -126,7 +126,7 @@ function spawnTool(
   })[0]!;
 }
 
-function installDispatch(dispatch: ReturnType<typeof vi.fn>, rollback?: () => Promise<void>) {
+function installDispatch(dispatch: (runId: unknown) => void, rollback?: () => Promise<void>) {
   spawnTesting.setDepsForTest({
     resolveContextEngine: async () =>
       Object.assign(

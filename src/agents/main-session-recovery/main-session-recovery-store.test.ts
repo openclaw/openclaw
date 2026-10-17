@@ -204,13 +204,14 @@ describe("main session recovery store", () => {
   }
 
   function expectRestored(chargedAttempts: number) {
-    expect(read()).toMatchObject({
+    const entry = read();
+    expect(entry).toMatchObject({
       abortedLastRun: true,
       restartRecoveryDeliverySourceRunId: "source-1",
       mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts },
-      lifecycleRunId: undefined,
-      restartRecoveryDeliveryRunId: undefined,
     });
+    expect(entry.lifecycleRunId).toBeUndefined();
+    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
   }
 
   it.each(["interrupted", "killed"] as const)(
@@ -508,8 +509,8 @@ describe("main session recovery store", () => {
       const state = read(movedKey)?.mainRestartRecovery;
       expect(state).toMatchObject({
         chargedAttempts: kind === "cancel_reservation" ? 0 : 1,
-        reservation: undefined,
       });
+      expect(state?.reservation).toBeUndefined();
       expect(read()).toMatchObject({ sessionId: "replacement" });
     },
   );
@@ -526,21 +527,23 @@ describe("main session recovery store", () => {
       });
       await write(residue);
       await expect(inspect()).resolves.toEqual({ kind: "not_required" });
-      expect(read()).toMatchObject({
-        status,
+      const inspected = read();
+      expect(inspected.status).toBe(status);
+      expect(inspected.mainRestartRecovery).toBeUndefined();
+      expect(inspected).toMatchObject({
         abortedLastRun: residue.abortedLastRun,
         restartRecoveryRuns: residue.restartRecoveryRuns,
-        mainRestartRecovery: undefined,
       });
       expect(await claimRecovery()).toEqual({ kind: "not_required", entry: read(), sessionKey });
-      expect(read()).toMatchObject({
+      const cleared = read();
+      expect(cleared).toMatchObject({
         sessionId: "session-1",
         abortedLastRun: false,
-        status,
-        restartRecoveryRuns: undefined,
-        mainRestartRecovery: undefined,
-        restartRecoveryDeliveryRunId: undefined,
       });
+      expect(cleared.status).toBe(status);
+      expect(cleared.restartRecoveryRuns).toBeUndefined();
+      expect(cleared.mainRestartRecovery).toBeUndefined();
+      expect(cleared.restartRecoveryDeliveryRunId).toBeUndefined();
     },
   );
 
@@ -685,11 +688,12 @@ describe("main session recovery store", () => {
         },
       }),
     ).resolves.toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
-    expect(sessions.loadSessionEntry(target)).toMatchObject({
+    const settled = sessions.loadSessionEntry(target);
+    expect(settled).toMatchObject({
       status: "done",
       abortedLastRun: false,
-      pendingFinalDelivery: undefined,
     });
+    expect(settled?.pendingFinalDelivery).toBeUndefined();
     expect(dispatch).not.toHaveBeenCalled();
   });
 

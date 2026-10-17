@@ -25,7 +25,7 @@ function createGate() {
   return {
     entered: entered.promise,
     release: release.resolve,
-    async wait() {
+    wait: async () => {
       entered.resolve();
       await release.promise;
     },
