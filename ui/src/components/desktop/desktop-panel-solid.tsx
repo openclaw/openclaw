@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createSignal, onSettled } from "solid-js";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -207,7 +207,7 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
         ? "connecting"
         : props.view.content.state;
     },
-    notice(): JSX.Element {
+    notice(): SolidJSX.Element {
       return (
         <>
           <DesktopNotice
@@ -233,13 +233,13 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
         </>
       );
     },
-    picker(): JSX.Element {
+    picker(): SolidJSX.Element {
       return <DesktopPicker {...props.view.content.picker} loading={props.view.content.loading} />;
     },
-    credentials(): JSX.Element {
+    credentials(): SolidJSX.Element {
       return <DesktopCredentials {...props.view.content.credentials} />;
     },
-    recovery(): JSX.Element {
+    recovery(): SolidJSX.Element {
       return (
         <DesktopPanelRecovery
           {...props.view.content.recovery}

@@ -122,11 +122,13 @@ function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {
   return next;
 }
 
-export function ActivityPageView(props: { page: ActivityPageState }) {
-  const state = () => props.page.read();
-  const liveSnapshot = () => props.page.liveActivity.read();
+export function ActivityPageView(pageProps: { page: ActivityPageState }) {
+  const state = () => pageProps.page.read();
+  const liveSnapshot = () => pageProps.page.liveActivity.read();
   const pageRevision = () =>
-    props.page.revision() + props.page.liveActivity.revision() + props.page.agents.revision();
+    pageProps.page.revision() +
+    pageProps.page.liveActivity.revision() +
+    pageProps.page.agents.revision();
   const [filters, setFilters] = createStore({
     filterText: "",
     toolFilter: "",
@@ -154,7 +156,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
   const pending = () => !state().routeData || !state().routeLocation;
   const presence = () => projectPresencePayload(state().presencePayload).users;
   const sessionHost = () => ({
-    agentsList: props.page.agents.read().agentsList,
+    agentsList: pageProps.page.agents.read().agentsList,
     hello: state().context.gateway.snapshot.hello,
   });
   let stream: HTMLDivElement | undefined;
@@ -487,7 +489,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
               type="button"
               class="btn btn--sm danger"
               disabled={liveProps.entries.length === 0}
-              onClick={() => props.page.clearLiveActivity()}
+              onClick={() => pageProps.page.clearLiveActivity()}
             >
               {t("activity.clear")}
             </button>
@@ -587,7 +589,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                 loading={pending() || state().sessionActivity.loading}
                 retrying={state().sessionActivity.retrying}
                 error={state().sessionActivity.error}
-                onRetry={() => props.page.syncSessionActivity("retry")}
+                onRetry={() => pageProps.page.syncSessionActivity("retry")}
                 onSummaryRetry={
                   canCallGatewayMethod(
                     state().context.gateway.snapshot,
@@ -628,11 +630,11 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                   state={state().runInspector}
                   selector={runRoute()?.selector ?? null}
                   selectorId={runRoute()?.selectorId ?? null}
-                  onLoadMoreExecutions={() => props.page.loadMoreInspectorPage("executions")}
-                  onLoadMoreDecisions={() => props.page.loadMoreInspectorPage("decisions")}
-                  onRestart={() => props.page.restartRunInspector()}
+                  onLoadMoreExecutions={() => pageProps.page.loadMoreInspectorPage("executions")}
+                  onLoadMoreDecisions={() => pageProps.page.loadMoreInspectorPage("decisions")}
+                  onRestart={() => pageProps.page.restartRunInspector()}
                   onRetry={() =>
-                    props.page.syncRunInspector(
+                    pageProps.page.syncRunInspector(
                       state().context.gateway,
                       state().context.gateway.snapshot,
                       true,
@@ -654,7 +656,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                   loading={pending() || state().sessionActivity.loading}
                   incomplete={state().sessionActivity.incomplete}
                   error={state().sessionActivity.error}
-                  onRetry={() => props.page.syncSessionActivity("retry")}
+                  onRetry={() => pageProps.page.syncSessionActivity("retry")}
                 />
                 <Show when={liveSnapshot().error}>
                   <div role="alert">
@@ -662,7 +664,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                     <button
                       type="button"
                       class="btn btn--sm"
-                      onClick={() => props.page.retryLiveActivity()}
+                      onClick={() => pageProps.page.retryLiveActivity()}
                     >
                       {t("common.retry")}
                     </button>
