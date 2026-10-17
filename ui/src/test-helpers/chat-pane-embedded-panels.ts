@@ -58,7 +58,6 @@ export async function renderPanelFixture(
     narrow: false,
     panelDefinitions: definitions,
     primary,
-    requestUpdate: vi.fn(),
   });
   if (existing) {
     existing.update(props);
@@ -121,7 +120,6 @@ export function sidebarPanelFixtureParams(
     detail: {
       chat: createChatProps({ sessionKey: state.sessionKey }),
       host: state,
-      requestUpdate: vi.fn(),
     },
     workspace: createSessionWorkspaceProps(state),
     ...overrides,
