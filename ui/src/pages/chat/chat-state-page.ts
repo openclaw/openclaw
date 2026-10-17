@@ -25,13 +25,13 @@ import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { projectChatErrors } from "./chat-error-projection.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
+import { cancelPendingQueuedChatInput } from "./chat-history-actions.ts";
 import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
-import { cancelPendingQueuedChatInput } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
