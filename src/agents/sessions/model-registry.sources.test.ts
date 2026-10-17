@@ -2,11 +2,19 @@ import { describe, expect, it } from "vitest";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
+import { pluginOwnerSnapshot } from "./model-registry.test-support.js";
 
 const provider = "registry-source-example";
 const pluginId = "registry-source-owner";
 const rootUrl = "https://authored.example.test/v1";
 const catalogUrl = "https://catalog.example.test/v1";
+const authoredCompat = { maxTokensField: "max_tokens", supportsDeveloperRole: false };
+const generatedCompat = {
+  maxTokensField: "max_completion_tokens",
+  openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+  vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
+};
+const authoredHeaders = { "X-Authored-Provider": "root", "X-Authored-Model": "root" };
 const authored = {
   api: "openai-completions",
   baseUrl: rootUrl,
@@ -62,21 +70,7 @@ function createRegistry(
           }),
         },
       ],
-      pluginMetadataSnapshot: {
-        index: { plugins: [{ pluginId, enabled: true }] },
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map([[provider, [pluginId]]]),
-          modelCatalogProviders: new Map([[provider, [pluginId]]]),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-          providerAuthContributions: [],
-          modelIdNormalizationPolicies: new Map(),
-        },
-      },
+      pluginMetadataSnapshot: pluginOwnerSnapshot(provider, pluginId),
     },
   );
 }
@@ -92,17 +86,13 @@ describe("ModelRegistry source composition", () => {
       const registry = createRegistry({
         authored: {
           ...authored,
-          compat: { maxTokensField: "max_tokens", supportsDeveloperRole: false },
+          compat: authoredCompat,
           models: [{ id: "shared" }, { id: "authored-only" }],
         },
         generated: {
           ...generated,
           baseUrl,
-          compat: {
-            maxTokensField: "max_completion_tokens",
-            openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
-            vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
-          },
+          compat: generatedCompat,
           models: [
             { id: "shared", contextWindows, contextWindowDefault: "1m" },
             { id: "generated-only" },
@@ -117,20 +107,13 @@ describe("ModelRegistry source composition", () => {
           ],
         },
       });
-      expect(registry.find(provider, "generated-only")?.compat).toEqual({
-        maxTokensField: "max_completion_tokens",
-        openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
-        vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
-      });
+      expect(registry.find(provider, "generated-only")?.compat).toEqual(generatedCompat);
       expect(registry.find(provider, "model-override")?.compat).toEqual({
         maxTokensField: "max_tokens",
         openRouterRouting: { order: ["model-route"], allow_fallbacks: false },
         vercelGatewayRouting: { order: ["model-route"], only: ["shared-route"] },
       });
-      expect(registry.find(provider, "authored-only")?.compat).toEqual({
-        maxTokensField: "max_tokens",
-        supportsDeveloperRole: false,
-      });
+      expect(registry.find(provider, "authored-only")?.compat).toEqual(authoredCompat);
       const model = registry.find(provider, "shared");
       if (baseUrl === rootUrl) {
         expect(model).toMatchObject({ contextWindows, contextWindowDefault: "1m" });
@@ -139,13 +122,7 @@ describe("ModelRegistry source composition", () => {
         expect(model).toHaveProperty("contextWindowDefault", undefined);
       }
       expect(registry.find(provider, "shared")?.compat).toEqual(
-        baseUrl === rootUrl
-          ? {
-              maxTokensField: "max_completion_tokens",
-              openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
-              vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
-            }
-          : { maxTokensField: "max_tokens", supportsDeveloperRole: false },
+        baseUrl === rootUrl ? generatedCompat : authoredCompat,
       );
     },
   );
@@ -260,14 +237,12 @@ describe("ModelRegistry source composition", () => {
       },
     });
     const model = registry.find(provider, "shared");
-    expect(model?.api).toBe(api);
-    expect(model?.baseUrl).toBe(catalogUrl);
+    expect(model).toMatchObject({ api, baseUrl: catalogUrl });
     await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
       ok: true,
       apiKey: "authored-fixture-key",
       headers: {
-        "X-Authored-Provider": "root",
-        "X-Authored-Model": "root",
+        ...authoredHeaders,
         Authorization: "Bearer authored-fixture-key",
       },
     });
@@ -287,27 +262,21 @@ describe("ModelRegistry source composition", () => {
       maxTokens: 4096,
       maxTokensSource: "discovered",
     });
-    const first = registry.fork(
-      AuthStorage.inMemory({
-        [provider]: { type: "api_key", key: "first-request-key" },
-      }),
-    );
-    const second = registry.fork(
-      AuthStorage.inMemory({
-        [provider]: { type: "api_key", key: "second-request-key" },
-      }),
-    );
+    const fork = (key: string) =>
+      registry.fork(AuthStorage.inMemory({ [provider]: { type: "api_key", key } }));
+    const first = fork("first-request-key");
+    const second = fork("second-request-key");
     first.refresh();
     expect(first.getAll().map((model) => model.id)).toEqual(["shared", "Shared", "generated-only"]);
     await expect(first.getApiKeyAndHeaders(first.find(provider, "shared")!)).resolves.toEqual({
       ok: true,
       apiKey: "first-request-key",
-      headers: { "X-Authored-Provider": "root", "X-Authored-Model": "root" },
+      headers: authoredHeaders,
     });
     await expect(second.getApiKeyAndHeaders(second.find(provider, "shared")!)).resolves.toEqual({
       ok: true,
       apiKey: "second-request-key",
-      headers: { "X-Authored-Provider": "root", "X-Authored-Model": "root" },
+      headers: authoredHeaders,
     });
   });
 });
