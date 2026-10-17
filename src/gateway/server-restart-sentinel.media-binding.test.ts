@@ -56,7 +56,8 @@ async function withMediaSession(
 }
 
 async function createMediaFixture(state: OpenClawTestState, channel: "discord" | "webchat") {
-  await state.writeConfig({ agents: { ownership: "explicit", entries: { main: {} } } });
+  const config = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+  await state.writeConfig(config);
   await captureRuntimeConfigAsyncReader()();
   const scope = {
     agentId: "main",
@@ -66,11 +67,12 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
         : "agent:main:discord:channel:media-binding",
     storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
   };
-  await replaceSessionEntry(scope, {
+  const original = {
     sessionId: "original-requester",
     lifecycleRevision: "original-lifecycle",
-    updatedAt: 1,
-  });
+  };
+  const binding = { ...scope, ...original };
+  await replaceSessionEntry(scope, { ...original, updatedAt: 1 });
   const lifecycle = createMediaGenerationTaskLifecycle("image");
   const handle = await lifecycle.createTaskRun({
     sessionKey: scope.sessionKey,
@@ -152,6 +154,9 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
     lifecycle,
     handle,
     scope,
+    binding,
+    original,
+    config,
     mediaPath,
     queueContext,
     dispatch,
@@ -168,6 +173,8 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
         assertAllowed: () => {},
       }),
     events: () => loadTranscriptEvents({ ...scope, sessionId: "original-requester" }),
+    pending: () => queue.loadPendingSessionDeliveries(queueContext),
+    operation: () => findMediaGenerationOperation(handle.runId),
   };
 }
 
@@ -228,165 +235,149 @@ describe("original requester media handoff", () => {
     "generation-at-enqueue",
     "store-during-dispatch",
   ] as const)("keeps successful queue admission bound to the requester: %s", async (change) => {
-    await withMediaSession(
-      async ({ state, wake, scope, queueContext, dispatch, send, systemWake, drain }) => {
-        const mutate = async () => {
-          if (change === "generation-at-enqueue") {
-            rotateAgentEventLifecycleGeneration();
-          } else if (change.startsWith("store")) {
-            const replacementStore = state.statePath("replacement", "sessions.json");
-            await replaceSessionEntry(
-              { ...scope, storePath: replacementStore },
-              {
-                sessionId: "original-requester",
-                lifecycleRevision: "original-lifecycle",
-                updatedAt: 2,
-              },
-            );
-            setRuntimeConfigSnapshot({
-              agents: { ownership: "explicit", entries: { main: {} } },
-              session: { store: replacementStore },
-            });
-          } else {
-            await replaceSessionEntry(scope, {
-              sessionId: change.startsWith("replaced")
-                ? "replacement-requester"
-                : "original-requester",
-              lifecycleRevision: "replacement-lifecycle",
-              updatedAt: 2,
-            });
-          }
-        };
-        const enqueueOriginal = queue.enqueueClaimedSessionDelivery;
-        const enqueue = vi.spyOn(queue, "enqueueClaimedSessionDelivery");
-        if (change.endsWith("at-enqueue")) {
-          enqueue.mockImplementationOnce(async (...args) => {
-            await mutate();
-            return enqueueOriginal(...args);
+    await withMediaSession(async (fixture) => {
+      const { state, wake, scope, queueContext, dispatch, send, systemWake, drain } = fixture;
+      const mutate = async () => {
+        if (change === "generation-at-enqueue") {
+          rotateAgentEventLifecycleGeneration();
+        } else if (change.startsWith("store")) {
+          const replacementStore = state.statePath("replacement", "sessions.json");
+          await replaceSessionEntry(
+            { ...scope, storePath: replacementStore },
+            { ...fixture.original, updatedAt: 2 },
+          );
+          setRuntimeConfigSnapshot({
+            ...fixture.config,
+            session: { store: replacementStore },
           });
-        }
-        const result = await wake();
-        const entries = await queue.loadPendingSessionDeliveries(queueContext);
-        if (change.endsWith("at-enqueue")) {
-          expect(result).toEqual({ status: "permanent_failure" });
-          expect(enqueue).toHaveBeenCalledTimes(1);
-          expect(entries).toEqual([]);
         } else {
-          expect(result).toEqual({ status: "queued" });
-          expect(entries).toHaveLength(1);
-          const entry = entries[0]!;
-          expect(entry).toMatchObject({
-            requesterBinding: {
-              ...scope,
-              sessionId: "original-requester",
-              lifecycleRevision: "original-lifecycle",
-            },
+          await replaceSessionEntry(scope, {
+            sessionId: change.startsWith("replaced")
+              ? "replacement-requester"
+              : "original-requester",
+            lifecycleRevision: "replacement-lifecycle",
+            updatedAt: 2,
           });
-          if (change.endsWith("after")) {
-            await mutate();
-          }
-          if (change === "store-during-dispatch") {
-            dispatch.mockImplementationOnce(async (_method, _params, options) => {
-              await mutate();
-              options?.assertAdmissionCurrent?.();
-              throw new Error("retired requester was allowed through Gateway admission");
-            });
-          }
-          await drain(entry.id);
-          expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
-          if (change === "current") {
-            // Outbound custody carries the requester so a replay cannot outlive it.
-            expect(send.mock.calls[0]?.[3]).toEqual({
-              ...scope,
-              sessionId: "original-requester",
-              lifecycleRevision: "original-lifecycle",
-            });
-            expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
-              agentId: "main",
-              sessionKey: scope.sessionKey,
-              expectedExistingSessionId: "original-requester",
-              expectedExistingSessionLifecycleRevision: "original-lifecycle",
-            });
-          }
         }
-        expect(dispatch).toHaveBeenCalledTimes(
-          change === "current" || change === "store-during-dispatch" ? 1 : 0,
-        );
-        // A retired requester never receives the media.
-        expect(send).toHaveBeenCalledTimes(
-          change === "current" || change === "store-during-dispatch" ? 1 : 0,
-        );
-        expect(systemWake).not.toHaveBeenCalled();
-        expect(
-          await loadTranscriptEvents({ ...scope, sessionId: "replacement-requester" }),
-        ).toEqual([]);
-      },
-    );
-  });
-
-  it("retries one refused queue admission without losing media when transcript retention is also unavailable", async () => {
-    await withMediaSession(async ({ generate, schedule, queueContext, dispatch, drain }) => {
-      const firstRefused = createDeferredCore();
-      const queueSettled = createDeferredCore();
+      };
+      const enqueueOriginal = queue.enqueueClaimedSessionDelivery;
       const enqueue = vi.spyOn(queue, "enqueueClaimedSessionDelivery");
-      enqueue.mockImplementationOnce(async () => {
-        firstRefused.resolve();
-        throw new Error("temporary queue write refusal");
-      });
-      vi.spyOn(queueRuntime, "scheduleSessionDelivery").mockImplementation(async (id) => {
-        await drain(id);
-        queueSettled.resolve();
-        return true;
-      });
-      vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockRejectedValue(
-        new Error("temporary retention refusal"),
+      if (change.endsWith("at-enqueue")) {
+        enqueue.mockImplementationOnce(async (...args) => {
+          await mutate();
+          return enqueueOriginal(...args);
+        });
+      }
+      const result = await wake();
+      const entries = await queue.loadPendingSessionDeliveries(queueContext);
+      if (change.endsWith("at-enqueue")) {
+        expect(result).toEqual({ status: "permanent_failure" });
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        expect(entries).toEqual([]);
+      } else {
+        expect(result).toEqual({ status: "queued" });
+        expect(entries).toHaveLength(1);
+        const entry = entries[0]!;
+        expect(entry).toMatchObject({ requesterBinding: fixture.binding });
+        if (change.endsWith("after")) {
+          await mutate();
+        }
+        if (change === "store-during-dispatch") {
+          dispatch.mockImplementationOnce(async (_method, _params, options) => {
+            await mutate();
+            options?.assertAdmissionCurrent?.();
+            throw new Error("retired requester was allowed through Gateway admission");
+          });
+        }
+        await drain(entry.id);
+        expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        if (change === "current") {
+          // Outbound custody carries the requester so a replay cannot outlive it.
+          expect(send.mock.calls[0]?.[3]).toEqual(fixture.binding);
+          expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+            agentId: "main",
+            sessionKey: scope.sessionKey,
+            expectedExistingSessionId: "original-requester",
+            expectedExistingSessionLifecycleRevision: "original-lifecycle",
+          });
+        }
+      }
+      const deliveryCount = change === "current" || change === "store-during-dispatch" ? 1 : 0;
+      expect(dispatch).toHaveBeenCalledTimes(deliveryCount);
+      // A retired requester never receives the media.
+      expect(send).toHaveBeenCalledTimes(deliveryCount);
+      expect(systemWake).not.toHaveBeenCalled();
+      expect(await loadTranscriptEvents({ ...scope, sessionId: "replacement-requester" })).toEqual(
+        [],
       );
-      const generated = vi.fn(async () => generate());
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      const completion = schedule(generated)();
-      await firstRefused.promise;
-      await vi.advanceTimersByTimeAsync(250);
-      await Promise.race([
-        queueSettled.promise,
-        completion.then(() => {
-          throw new Error("media completion ended without durable queue custody");
-        }),
-      ]);
-      await vi.advanceTimersByTimeAsync(500);
-      await completion;
-      expect(generated).toHaveBeenCalledOnce();
-      expect(dispatch).toHaveBeenCalledOnce();
-      expect(new Set(enqueue.mock.calls.map(([payload]) => payload.idempotencyKey)).size).toBe(1);
-      expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
-      expect(getActiveMediaGenerationRunCount()).toBe(0);
     });
   });
 
-  it("ends bounded handoff without claiming durability when both storage paths remain unavailable", async () => {
-    await withMediaSession(async ({ schedule, handle, mediaPath, queueContext }) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const startedAt = Date.now();
-      vi.spyOn(queue, "enqueueClaimedSessionDelivery").mockImplementation(async () => {
-        vi.setSystemTime(startedAt + 120_001);
-        throw new Error("queue remains unavailable");
+  it.each(["retry", "exhaust"] as const)(
+    "retains media through storage refusal: %s",
+    async (mode) => {
+      await withMediaSession(async (f) => {
+        const firstRefused = createDeferredCore();
+        const queueSettled = createDeferredCore();
+        const enqueue = vi.spyOn(queue, "enqueueClaimedSessionDelivery");
+        const exhausted = mode === "exhaust";
+        vi.useFakeTimers({ toFake: exhausted ? ["Date"] : ["setTimeout", "clearTimeout", "Date"] });
+        const startedAt = Date.now();
+        enqueue[exhausted ? "mockImplementation" : "mockImplementationOnce"](async () => {
+          if (exhausted) {
+            vi.setSystemTime(startedAt + 120_001);
+          }
+          firstRefused.resolve();
+          throw new Error(
+            exhausted ? "queue remains unavailable" : "temporary queue write refusal",
+          );
+        });
+        vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockRejectedValue(
+          new Error(exhausted ? "transcript remains unavailable" : "temporary retention refusal"),
+        );
+        if (!exhausted) {
+          vi.spyOn(queueRuntime, "scheduleSessionDelivery").mockImplementation(async (id) => {
+            await f.drain(id);
+            queueSettled.resolve();
+            return true;
+          });
+        }
+        const generated = vi.fn(async () => f.generate());
+        const diagnostic = vi.fn();
+        const completion = f.schedule(generated, diagnostic)();
+        if (!exhausted) {
+          await firstRefused.promise;
+          await vi.advanceTimersByTimeAsync(250);
+          await Promise.race([
+            queueSettled.promise,
+            completion.then(() => {
+              throw new Error("media completion ended without durable queue custody");
+            }),
+          ]);
+          await vi.advanceTimersByTimeAsync(500);
+        }
+        await completion;
+        expect(getActiveMediaGenerationRunCount()).toBe(0);
+        expect(await f.pending()).toEqual([]);
+        if (exhausted) {
+          expect(f.operation()).toMatchObject({
+            terminalOutcome: "blocked",
+            terminalSummary: expect.stringContaining(f.mediaPath),
+          });
+          expect(diagnostic).toHaveBeenCalledWith(
+            "image_generate blocked completion retention failed",
+            expect.objectContaining({ error: expect.any(Error) }),
+          );
+        } else {
+          expect(generated).toHaveBeenCalledOnce();
+          expect(f.dispatch).toHaveBeenCalledOnce();
+          expect(new Set(enqueue.mock.calls.map(([payload]) => payload.idempotencyKey)).size).toBe(
+            1,
+          );
+        }
       });
-      vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockRejectedValue(
-        new Error("transcript remains unavailable"),
-      );
-      const diagnostic = vi.fn();
-      await schedule(undefined, diagnostic)();
-      expect(getActiveMediaGenerationRunCount()).toBe(0);
-      expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
-      expect(findMediaGenerationOperation(handle.runId)).toMatchObject({
-        terminalOutcome: "blocked",
-        terminalSummary: expect.stringContaining(mediaPath),
-      });
-      expect(diagnostic).toHaveBeenCalledWith(
-        "image_generate blocked completion retention failed",
-        expect.objectContaining({ error: expect.any(Error) }),
-      );
-    });
-  });
+    },
+  );
 });
 
 // Fixed provider and model I/O; admission, durable queue, recovery and transcript
@@ -395,126 +386,112 @@ describe("queued media completion past the handoff deadline", () => {
   it.each(["delivered", "delivery-failed", "generation-failed"] as const)(
     "waits for the original WebChat turn before settling: %s",
     async (outcome) => {
-      await withMediaSession(
-        async ({
-          schedule,
-          generate,
-          acquire,
-          events,
-          handle,
-          scope,
-          mediaPath,
-          queueContext,
-          dispatch,
-          drain,
-        }) => {
-          await fs.mkdir(path.dirname(mediaPath), { recursive: true });
-          await fs.writeFile(
-            mediaPath,
-            Buffer.from(
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV4kAAAAASUVORK5CYII=",
-              "base64",
-            ),
+      await withMediaSession(async (f) => {
+        await fs.mkdir(path.dirname(f.mediaPath), { recursive: true });
+        await fs.writeFile(
+          f.mediaPath,
+          Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV4kAAAAASUVORK5CYII=",
+            "base64",
+          ),
+        );
+        if (outcome === "delivery-failed") {
+          f.dispatch.mockRejectedValueOnce(
+            new SessionDeliveryDeadLetteredError("delivery permanently refused"),
           );
-          if (outcome === "delivery-failed") {
-            dispatch.mockRejectedValueOnce(
-              new SessionDeliveryDeadLetteredError("delivery permanently refused"),
+        } else if (outcome === "generation-failed") {
+          f.dispatch.mockResolvedValue({
+            status: "ok",
+            result: {
+              payloads: [{ text: "Generation failed." }],
+              deliveryStatus: { status: "sent" },
+            },
+          });
+        }
+        const originalOwner = await f.acquire();
+        const startedAt = Date.now();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const observedQueuedRetry = createDeferredCore();
+        let scheduledCount = 0;
+        let queueId: string | undefined;
+        // Advance past the producer deadline while real recovery defers the row.
+        // A repeated receipt or a terminal producer lets the baseline fail without hanging.
+        vi.spyOn(queueRuntime, "scheduleSessionDelivery").mockImplementation(async (id) => {
+          queueId = id;
+          await f.drain(id);
+          vi.setSystemTime(startedAt + 120_001);
+          if (++scheduledCount > 1) {
+            observedQueuedRetry.resolve();
+          }
+          return true;
+        });
+        const diagnostic = vi.fn();
+        const generated = vi.fn(async () => {
+          if (outcome === "generation-failed") {
+            throw new Error("provider refused generation");
+          }
+          return { ...f.generate(), wakeResult: "Generated a synthetic lighthouse." };
+        });
+        const backgroundWork = originalOwner.run(f.schedule(generated, diagnostic));
+        let beforeRelease: Awaited<ReturnType<typeof loadTranscriptEvents>>;
+        let operationBeforeRelease;
+        try {
+          await Promise.race([backgroundWork, observedQueuedRetry.promise]);
+          const pending = await f.pending();
+          expect(pending).toHaveLength(1);
+          expect(pending[0]).toMatchObject({
+            id: queueId,
+            retryCount: 0,
+            route: { channel: "webchat", to: f.scope.sessionKey },
+          });
+          expect(pending[0]?.deliveryStartedAt).toBeUndefined();
+          expect(f.dispatch).not.toHaveBeenCalled();
+          beforeRelease = await f.events();
+          operationBeforeRelease = { ...f.operation() };
+        } finally {
+          originalOwner.release();
+        }
+        if (!queueId) {
+          throw new Error("Expected durable completion custody");
+        }
+        await f.drain(queueId);
+        await backgroundWork;
+        expect(generated).toHaveBeenCalledOnce();
+        expect(f.dispatch).toHaveBeenCalledOnce();
+        expect(await f.pending()).toEqual([]);
+        const afterRelease = await f.events();
+        expect(beforeRelease).toEqual([]);
+        expect(operationBeforeRelease).toMatchObject({
+          status: "running",
+          completionDelivery: "queued",
+        });
+        expect(operationBeforeRelease.terminalOutcome).toBeUndefined();
+        const operation = f.operation();
+        expect(operation?.status).toBe(outcome === "generation-failed" ? "failed" : "succeeded");
+        expect(operation?.terminalOutcome).toBeUndefined();
+        if (outcome !== "generation-failed") {
+          expect(
+            afterRelease.filter((event) => isRecord(event) && event.type === "message"),
+          ).toHaveLength(1);
+        }
+        if (outcome === "delivery-failed") {
+          // The host already delivered the media; a refused follow-up turn
+          // must not retain it a second time as undelivered.
+          expect(JSON.stringify(afterRelease)).not.toContain(
+            "completion delivery was not confirmed",
+          );
+        } else {
+          expect(diagnostic).not.toHaveBeenCalled();
+          if (outcome === "delivered") {
+            expect(JSON.stringify(afterRelease)).toContain(
+              '"openclawDisplayContent":[{"type":"image"',
             );
-          } else if (outcome === "generation-failed") {
-            dispatch.mockResolvedValue({
-              status: "ok",
-              result: {
-                payloads: [{ text: "Generation failed." }],
-                deliveryStatus: { status: "sent" },
-              },
-            });
+            await f.drain(queueId);
+            expect(f.dispatch).toHaveBeenCalledOnce();
+            expect(await f.events()).toEqual(afterRelease);
           }
-          const originalOwner = await acquire();
-          const startedAt = Date.now();
-          vi.useFakeTimers({ toFake: ["Date"] });
-          const observedQueuedRetry = createDeferredCore();
-          let scheduledCount = 0;
-          let queueId: string | undefined;
-          // Advance past the producer deadline while real recovery defers the row.
-          // A repeated receipt or a terminal producer lets the baseline fail without hanging.
-          vi.spyOn(queueRuntime, "scheduleSessionDelivery").mockImplementation(async (id) => {
-            queueId = id;
-            await drain(id);
-            vi.setSystemTime(startedAt + 120_001);
-            if (++scheduledCount > 1) {
-              observedQueuedRetry.resolve();
-            }
-            return true;
-          });
-          const diagnostic = vi.fn();
-          const generated = vi.fn(async () => {
-            if (outcome === "generation-failed") {
-              throw new Error("provider refused generation");
-            }
-            return { ...generate(), wakeResult: "Generated a synthetic lighthouse." };
-          });
-          const backgroundWork = originalOwner.run(schedule(generated, diagnostic));
-          let beforeRelease: Awaited<ReturnType<typeof loadTranscriptEvents>>;
-          let operationBeforeRelease;
-          try {
-            await Promise.race([backgroundWork, observedQueuedRetry.promise]);
-            const pending = await queue.loadPendingSessionDeliveries(queueContext);
-            expect(pending).toHaveLength(1);
-            expect(pending[0]).toMatchObject({
-              id: queueId,
-              retryCount: 0,
-              route: { channel: "webchat", to: scope.sessionKey },
-            });
-            expect(pending[0]?.deliveryStartedAt).toBeUndefined();
-            expect(dispatch).not.toHaveBeenCalled();
-            beforeRelease = await events();
-            operationBeforeRelease = { ...findMediaGenerationOperation(handle.runId) };
-          } finally {
-            originalOwner.release();
-          }
-          if (!queueId) {
-            throw new Error("Expected durable completion custody");
-          }
-          await drain(queueId);
-          await backgroundWork;
-          expect(generated).toHaveBeenCalledOnce();
-          expect(dispatch).toHaveBeenCalledOnce();
-          expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
-          const afterRelease = await events();
-          expect(beforeRelease).toEqual([]);
-          expect(operationBeforeRelease).toMatchObject({
-            status: "running",
-            completionDelivery: "queued",
-          });
-          expect(operationBeforeRelease.terminalOutcome).toBeUndefined();
-          const operation = findMediaGenerationOperation(handle.runId);
-          expect(operation?.status).toBe(outcome === "generation-failed" ? "failed" : "succeeded");
-          expect(operation?.terminalOutcome).toBeUndefined();
-          if (outcome !== "generation-failed") {
-            expect(
-              afterRelease.filter((event) => isRecord(event) && event.type === "message"),
-            ).toHaveLength(1);
-          }
-          if (outcome === "delivery-failed") {
-            // The host already delivered the media; a refused follow-up turn
-            // must not retain it a second time as undelivered.
-            expect(JSON.stringify(afterRelease)).not.toContain(
-              "completion delivery was not confirmed",
-            );
-          } else {
-            expect(diagnostic).not.toHaveBeenCalled();
-            if (outcome === "delivered") {
-              expect(JSON.stringify(afterRelease)).toContain(
-                '"openclawDisplayContent":[{"type":"image"',
-              );
-              await drain(queueId);
-              expect(dispatch).toHaveBeenCalledOnce();
-              expect(await events()).toEqual(afterRelease);
-            }
-          }
-        },
-        "webchat",
-      );
+        }
+      }, "webchat");
     },
   );
 });

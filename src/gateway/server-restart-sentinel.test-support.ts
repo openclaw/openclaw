@@ -10,6 +10,7 @@ import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-s
 
 type LoadedSessionEntryBase = Awaited<ReturnType<typeof loadSessionEntryAsync>>;
 type MockCalls = { mock: { calls: unknown[][] } };
+type Fields = Record<string, unknown>;
 export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
   Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 
@@ -99,14 +100,11 @@ export function expectCapturedQueueContext(stateDir: string) {
   });
 }
 
-export function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
+export function expectRecordFields(record: unknown, expected: Fields): Fields {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
-  const actual = record as Record<string, unknown>;
+  const actual = record as Fields;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
   }
@@ -125,20 +123,16 @@ export function lastMockCallArg(mock: MockCalls): unknown {
   return mockCallArg(mock, mock.mock.calls.length - 1);
 }
 
-export function expectMockCallFields(
-  mock: MockCalls,
-  expected: Record<string, unknown>,
-  callIndex = 0,
-): Record<string, unknown> {
+export function expectMockCallFields(mock: MockCalls, expected: Fields, callIndex = 0): Fields {
   return expectRecordFields(mockCallArg(mock, callIndex), expected);
 }
 
 export function expectContinuationDispatchFields(
   mock: MockCalls,
-  expected: Record<string, unknown>,
-  expectedCtx?: Record<string, unknown>,
+  expected: Fields,
+  expectedCtx?: Fields,
   callIndex = 0,
-): Record<string, unknown> {
+): Fields {
   const params = expectMockCallFields(mock, expected, callIndex);
   if (expectedCtx) {
     expectRecordFields(params.ctxPayload, expectedCtx);
@@ -215,6 +209,6 @@ export function createRestartSentinelFixture(payload: RestartSentinelPayload, re
 
 export type RestartSentinelInProcessDispatchMock = (
   method: string,
-  params: Record<string, unknown>,
-  options?: Record<string, unknown>,
-) => Promise<Record<string, unknown>>;
+  params: Fields,
+  options?: Fields,
+) => Promise<Fields>;

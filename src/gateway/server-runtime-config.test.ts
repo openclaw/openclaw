@@ -36,6 +36,11 @@ function resolve(cfg: OpenClawConfig, host?: string) {
 }
 
 const allowedOrigins = ["https://control.example.com"];
+const trustedProxyGateway = {
+  bind: "lan" as const,
+  auth: TRUSTED_PROXY_AUTH,
+  controlUi: { allowedOrigins },
+};
 
 describe("resolveGatewayRuntimeConfig", () => {
   describe("unresolved external hook credentials", () => {
@@ -79,12 +84,7 @@ describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {
     it("allows lan binding", async () => {
       const result = await resolve(
-        gateway({
-          bind: "lan",
-          auth: TRUSTED_PROXY_AUTH,
-          trustedProxies: ["192.168.1.1"],
-          controlUi: { allowedOrigins },
-        }),
+        gateway({ ...trustedProxyGateway, trustedProxies: ["192.168.1.1"] }),
       );
       expect(result.authMode).toBe("trusted-proxy");
       expect(result.bindHost).toBe("0.0.0.0");
@@ -92,14 +92,7 @@ describe("resolveGatewayRuntimeConfig", () => {
 
     it("rejects lan binding without trusted proxies", async () => {
       await expect(
-        resolve(
-          gateway({
-            bind: "lan",
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: [],
-            controlUi: { allowedOrigins },
-          }),
-        ),
+        resolve(gateway({ ...trustedProxyGateway, trustedProxies: [] })),
       ).rejects.toThrow(
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       );

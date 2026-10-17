@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type TestContext } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
@@ -14,14 +14,17 @@ import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import * as managedMedia from "./managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import * as recoveryRuntime from "./server-recovery-runtime-context.js";
 import {
   configureRestartSessionEventMocks,
   createGeneratedMediaDeliveryEntry,
-  createRestartSentinelSessionFixture,
+  createRestartSentinelSessionFixture as sessionFixture,
 } from "./server-restart-sentinel.test-support.js";
 import type { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -58,37 +61,42 @@ const agentTurn = {
   messageId: "resume-1",
 } as const;
 const cases = [
-  {
-    name: "legacy system event",
-    payload: { kind: "systemEvent", sessionKey: "global", text: "resume work" },
-  },
-  {
-    name: "agent turn without a route",
-    payload: agentTurn,
-  },
-  {
-    name: "replaced agent-turn session",
-    payload: {
+  ["legacy system event", { kind: "systemEvent", sessionKey: "global", text: "resume work" }],
+  ["agent turn without a route", agentTurn],
+  [
+    "replaced agent-turn session",
+    {
       ...agentTurn,
       expectedSessionId: "old-session",
       route: { ...deliveryContext, chatType: "direct" },
     },
-  },
-] satisfies Array<{
-  name: string;
-  payload: QueuedSessionDeliveryPayload;
-}>;
+  ],
+] satisfies Array<[string, QueuedSessionDeliveryPayload]>;
 
+let state: OpenClawTestState;
+let queueContext: ReturnType<typeof captureOpenClawStateWorkerContext>;
 beforeEach(() => {
   vi.clearAllMocks();
   configureRestartSessionEventMocks(mocks, "current-session");
 });
-
 afterEach(() => vi.restoreAllMocks());
+function withFixture<Args extends unknown[]>(run: (...args: Args) => Promise<void>) {
+  return (...args: Args) =>
+    withOpenClawTestState(
+      { label: "restart-event-owner", layout: "state-only" },
+      async (fixture) => {
+        state = fixture;
+        setRuntimeConfigSnapshot({});
+        mockEventSession();
+        queueContext = captureOpenClawStateWorkerContext();
+        await run(...args);
+      },
+    );
+}
 
 function mockEventSession(agentId = "main", sessionKey = "agent:main:main") {
   mocks.loadSessionEntryAsync.mockResolvedValue({
-    ...createRestartSentinelSessionFixture(
+    ...sessionFixture(
       sessionKey,
       { sessionId: "current-session", updatedAt: 1 },
       { storePath: "/tmp/restart-owner/openclaw-agent.sqlite" },
@@ -97,19 +105,25 @@ function mockEventSession(agentId = "main", sessionKey = "agent:main:main") {
   });
 }
 
-type QueueContext = ReturnType<typeof captureOpenClawStateWorkerContext>;
 const eventPayload = {
   kind: "systemEvent",
   sessionKey: "agent:main:main",
   text: "resume work",
 } as const;
-const deliver = (
-  entry: Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
-  queueContext: QueueContext,
-) => deliverQueuedSessionDelivery({ deps: {}, entry, queueContext });
+const deliver = (entry: Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"]) =>
+  deliverQueuedSessionDelivery({ deps: {}, entry, queueContext });
+const enqueue = (payload: QueuedSessionDeliveryPayload = eventPayload) =>
+  queueStorage.enqueueSessionDelivery(payload, queueContext);
+const pending = (id: string) => queueStorage.loadPendingSessionDelivery(id, queueContext);
+async function enqueueEntry(payload: QueuedSessionDeliveryPayload) {
+  const entry = await pending(await enqueue(payload));
+  if (!entry) {
+    throw new Error("Expected queued delivery");
+  }
+  return entry;
+}
 const drainEvent = (
   id: string,
-  queueContext: QueueContext,
   onSettled?: Parameters<typeof drainPendingSessionDelivery>[0]["onSettled"],
 ) =>
   drainPendingSessionDelivery({
@@ -119,182 +133,156 @@ const drainEvent = (
     bypassBackoff: true,
     logLabel: "restart custody",
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    deliver: (entry) => deliver(entry, queueContext),
+    deliver,
   });
-async function withEventState(run: (queueContext: QueueContext) => Promise<void>) {
-  await withOpenClawTestState({ label: "restart-event-owner", layout: "state-only" }, async () => {
-    setRuntimeConfigSnapshot({});
-    mockEventSession();
-    await run(captureOpenClawStateWorkerContext());
-  });
+function expectResearchEvent(expectedTarget: object) {
+  expect(mocks.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+    "resume work",
+    expect.objectContaining({
+      agentId: "research",
+      sessionKey: "global",
+      deliveryContext,
+      source: "restart",
+      expectedTarget: expect.objectContaining(expectedTarget),
+    }),
+  );
 }
 
 it.each(cases)(
-  "binds $name to its destination without rewriting its queued key",
-  async ({ payload }) => {
-    await withEventState(async (queueContext) => {
-      mockEventSession("research", "global");
-      const id = await queueStorage.enqueueSessionDelivery(
-        { ...payload, deliveryContext },
-        queueContext,
-      );
-      const entry = (await queueStorage.loadPendingSessionDelivery(id, queueContext))!;
-      const original = structuredClone(entry);
+  "binds %s to its destination without rewriting its queued key",
+  withFixture(async (_name: string, payload: QueuedSessionDeliveryPayload) => {
+    mockEventSession("research", "global");
+    const entry = await enqueueEntry({ ...payload, deliveryContext });
+    const original = structuredClone(entry);
 
-      await deliver(entry, queueContext);
+    await deliver(entry);
 
-      expect(mocks.captureSessionEventTarget).toHaveBeenCalledExactlyOnceWith(
-        "research",
-        "global",
-        expect.objectContaining({ env: queueContext.environment }),
-      );
-      expect(mocks.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        "resume work",
-        expect.objectContaining({
-          agentId: "research",
-          sessionKey: "global",
-          deliveryContext,
-          source: "restart",
-          expectedTarget: expect.objectContaining({ agentId: "research", sessionKey: "global" }),
-        }),
-      );
-      expect(entry).toEqual(original);
-    });
-  },
+    expect(mocks.captureSessionEventTarget).toHaveBeenCalledExactlyOnceWith(
+      "research",
+      "global",
+      expect.objectContaining({ env: queueContext.environment }),
+    );
+    expectResearchEvent({ agentId: "research", sessionKey: "global" });
+    expect(entry).toEqual(original);
+  }),
 );
 
-it("carries a persisted owner through global session lookup in an explicit roster", async () => {
-  const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
-    "./session-utils-store-worker.js",
-  );
-  mocks.resolveSessionTarget.mockImplementation(actual.resolveGatewaySessionStoreTargetInWorker);
-  const handoff = await vi.importActual<
-    typeof import("../auto-reply/reply/session-event-handoff.js")
-  >("../auto-reply/reply/session-event-handoff.js");
-  mocks.captureSessionEventTarget.mockImplementation(handoff.captureSessionEventTargetForHost);
-  await withOpenClawTestState(
-    { label: "restart-queue-owner", layout: "state-only" },
-    async (state) => {
-      const config = {
-        agents: { ownership: "explicit" as const, entries: { main: {}, research: {} } },
-        session: {
-          scope: "global" as const,
-          store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-        },
-      };
-      setRuntimeConfigSnapshot(config, config);
-      for (const agentId of ["main", "research"]) {
-        await replaceSessionEntry(
-          { agentId, sessionKey: "global" },
-          { sessionId: `${agentId}-session`, updatedAt: 1 },
-        );
-      }
-      const queueContext = captureOpenClawStateWorkerContext();
-      const id = await queueStorage.enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "global",
-          agentId: "research",
-          text: "resume work",
-          deliveryContext,
-        },
-        queueContext,
+it(
+  "carries a persisted owner through global session lookup in an explicit roster",
+  withFixture(async () => {
+    const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    mocks.resolveSessionTarget.mockImplementation(actual.resolveGatewaySessionStoreTargetInWorker);
+    const handoff = await vi.importActual<
+      typeof import("../auto-reply/reply/session-event-handoff.js")
+    >("../auto-reply/reply/session-event-handoff.js");
+    mocks.captureSessionEventTarget.mockImplementation(handoff.captureSessionEventTargetForHost);
+    const config = {
+      agents: { ownership: "explicit" as const, entries: { main: {}, research: {} } },
+      session: {
+        scope: "global" as const,
+        store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    setRuntimeConfigSnapshot(config, config);
+    for (const agentId of ["main", "research"]) {
+      await replaceSessionEntry(
+        { agentId, sessionKey: "global" },
+        { sessionId: `${agentId}-session`, updatedAt: 1 },
       );
-      const entry = (await queueStorage.loadPendingSessionDelivery(id, queueContext))!;
-      await deliver(entry, queueContext);
+    }
+    queueContext = captureOpenClawStateWorkerContext();
+    const entry = await enqueueEntry({
+      kind: "systemEvent",
+      sessionKey: "global",
+      agentId: "research",
+      text: "resume work",
+      deliveryContext,
+    });
+    await deliver(entry);
 
-      expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
-        "resume work",
-        expect.objectContaining({
-          agentId: "research",
-          sessionKey: "global",
-          expectedTarget: expect.objectContaining({ sessionId: "research-session" }),
-        }),
-      );
-    },
-  );
-});
+    expectResearchEvent({ sessionId: "research-session" });
+  }),
+);
 
 it.each(["completed", "failed", "cancelled"] as const)(
   "retains durable custody until an adopted session event is %s",
-  async (status) => {
-    await withEventState(async (queueContext) => {
-      const id = await queueStorage.enqueueSessionDelivery(eventPayload, queueContext);
-      const adopted = createDeferred();
-      const outcome = createDeferred<SessionEventOutcome>();
-      mocks.enqueueSessionEvent.mockImplementationOnce((_text, options) => ({
-        id: "sentinel-event",
-        accepted: Promise.resolve({ ok: true }),
-        cancel: () => true,
-        settled: Promise.resolve().then(async () => {
-          await options.onAdopted?.();
-          adopted.resolve();
-          return outcome.promise;
-        }),
-      }));
-      const onSettled = vi.fn();
-      const drain = drainEvent(id, queueContext, onSettled);
-      try {
-        await awaitGateBeforeSettlement(
-          adopted.promise,
-          drain,
-          "Restart custody settled before adoption",
-        );
-        expect(await queueStorage.loadPendingSessionDelivery(id, queueContext)).toMatchObject({
-          id,
-          deliveryStartedAt: expect.any(Number),
-        });
-      } finally {
-        outcome.resolve({
-          status,
-          executionStarted: true,
-          delivered: status === "completed",
-          error: status === "failed" ? "model failed" : undefined,
-        });
-        await drain;
-      }
-      expect(onSettled).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ id }),
-        status === "completed" ? "recovered" : "moved-to-failed",
-        queueContext,
+  withFixture(async (status: "completed" | "failed" | "cancelled") => {
+    const id = await enqueue();
+    const adopted = createDeferred();
+    const outcome = createDeferred<SessionEventOutcome>();
+    mocks.enqueueSessionEvent.mockImplementationOnce((_text, options) => ({
+      id: "sentinel-event",
+      accepted: Promise.resolve({ ok: true }),
+      cancel: () => true,
+      settled: Promise.resolve().then(async () => {
+        await options.onAdopted?.();
+        adopted.resolve();
+        return outcome.promise;
+      }),
+    }));
+    const onSettled = vi.fn();
+    const drain = drainEvent(id, onSettled);
+    try {
+      await awaitGateBeforeSettlement(
+        adopted.promise,
+        drain,
+        "Restart custody settled before adoption",
       );
-      expect(await queueStorage.loadPendingSessionDelivery(id, queueContext)).toBeNull();
-      expect(mocks.enqueueSessionEvent).toHaveBeenCalledOnce();
-    });
-  },
+      expect(await pending(id)).toMatchObject({
+        id,
+        deliveryStartedAt: expect.any(Number),
+      });
+    } finally {
+      outcome.resolve({
+        status,
+        executionStarted: true,
+        delivered: status === "completed",
+        error: status === "failed" ? "model failed" : undefined,
+      });
+      await drain;
+    }
+    expect(onSettled).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ id }),
+      status === "completed" ? "recovered" : "moved-to-failed",
+      queueContext,
+    );
+    expect(await pending(id)).toBeNull();
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledOnce();
+  }),
 );
 
 it.each([undefined, true, false])(
   "settles an admission refusal with retryable=%s",
-  async (retryable) => {
-    await withEventState(async (queueContext) => {
-      const id = await queueStorage.enqueueSessionDelivery(eventPayload, queueContext);
-      mocks.enqueueSessionEvent.mockReturnValueOnce({
-        id: "refused-event",
-        accepted: Promise.resolve({ ok: false, error: "session is busy" }),
-        cancel: () => true,
-        settled: Promise.resolve({
-          status: "failed",
-          executionStarted: false,
-          delivered: false,
-          error: "session is busy",
-          retryable,
-        }),
-      });
-      await drainEvent(id, queueContext);
-      const pending = await queueStorage.loadPendingSessionDelivery(id, queueContext);
-      if (retryable === false) {
-        expect(pending).toBeNull();
-      } else {
-        expect(pending).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
-        expect(pending?.deliveryStartedAt).toBeUndefined();
-      }
+  withFixture(async (retryable: boolean | undefined) => {
+    const id = await enqueue();
+    mocks.enqueueSessionEvent.mockReturnValueOnce({
+      id: "refused-event",
+      accepted: Promise.resolve({ ok: false, error: "session is busy" }),
+      cancel: () => true,
+      settled: Promise.resolve({
+        status: "failed",
+        executionStarted: false,
+        delivered: false,
+        error: "session is busy",
+        retryable,
+      }),
     });
-  },
+    await drainEvent(id);
+    const entry = await pending(id);
+    if (retryable === false) {
+      expect(entry).toBeNull();
+    } else {
+      expect(entry).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
+      expect(entry?.deliveryStartedAt).toBeUndefined();
+    }
+  }),
 );
 
-it("does not hand off an event after its queue admission retires during the session read", async () => {
-  await withEventState(async (queueContext) => {
+it(
+  "does not hand off an event after its queue admission retires during the session read",
+  withFixture(async () => {
     const resolveTarget = mocks.resolveSessionTarget.getMockImplementation()!;
     mocks.resolveSessionTarget.mockImplementationOnce(async (params) => {
       const target = await resolveTarget(params);
@@ -302,125 +290,108 @@ it("does not hand off an event after its queue admission retires during the sess
       return target;
     });
     await expect(
-      deliver(
-        {
-          ...eventPayload,
-          id: "retired-read",
-          enqueuedAt: 1,
-          retryCount: 0,
-        },
-        queueContext,
-      ),
+      deliver({
+        ...eventPayload,
+        id: "retired-read",
+        enqueuedAt: 1,
+        retryCount: 0,
+      }),
     ).rejects.toThrow(StateDatabaseReadAdmissionInvalidatedError);
     expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
-  });
-});
+  }),
+);
 
-it("joins managed media promotion before publishing an internal restart delivery", async (test) => {
-  await withOpenClawTestState(
-    { layout: "state-only", label: "restart-media-custody" },
-    async (state) => {
-      setRuntimeConfigSnapshot({});
-      const sessionKey = "agent:main:media-completion";
-      const sessionId = "media-completion-session";
-      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-      const entry = { sessionId, updatedAt: 1 };
-      await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
-      mocks.loadSessionEntryAsync.mockResolvedValue({
-        ...createRestartSentinelSessionFixture(sessionKey, entry, { storePath }),
-        agentId: "main",
+it(
+  "joins managed media promotion before publishing an internal restart delivery",
+  withFixture(async (test: TestContext) => {
+    const sessionKey = "agent:main:media-completion";
+    const sessionId = "media-completion-session";
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    const entry = { sessionId, updatedAt: 1 };
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
+    mocks.loadSessionEntryAsync.mockResolvedValue({
+      ...sessionFixture(sessionKey, entry, { storePath }),
+      agentId: "main",
+    });
+    const mediaUrl = `data:image/png;base64,${createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }).toString("base64")}`;
+    const blocks = await managedMedia.createManagedOutgoingMediaBlocks({
+      sessionKey,
+      agentId: "main",
+      stateDir: state.stateDir,
+      items: [{ url: mediaUrl, trustedLocal: false }],
+    });
+    const promoting = createDeferred();
+    const release = createDeferred();
+    const attach = managedMedia.attachManagedOutgoingMediaToMessage;
+    const promotion = vi
+      .spyOn(managedMedia, "attachManagedOutgoingMediaToMessage")
+      .mockImplementationOnce(async (params) => {
+        promoting.resolve();
+        await release.promise;
+        return attach(params);
       });
-      const mediaUrl = `data:image/png;base64,${createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }).toString("base64")}`;
-      const blocks = await managedMedia.createManagedOutgoingMediaBlocks({
-        sessionKey,
-        agentId: "main",
-        stateDir: state.stateDir,
-        items: [{ url: mediaUrl, trustedLocal: false }],
-      });
-      const promoting = createDeferred();
-      const release = createDeferred();
-      const attach = managedMedia.attachManagedOutgoingMediaToMessage;
-      const promotion = vi
-        .spyOn(managedMedia, "attachManagedOutgoingMediaToMessage")
-        .mockImplementationOnce(async (params) => {
-          promoting.resolve();
-          await release.promise;
-          return attach(params);
-        });
-      const admission = vi
-        .spyOn(queueStorage, "markSessionDeliveryAttemptStarted")
-        .mockResolvedValue(undefined);
-      const dispatch = vi
-        .spyOn(recoveryRuntime, "dispatchGatewayLifecycleMethod")
-        .mockResolvedValue({
-          status: "ok",
-          result: { payloads: [{ mediaUrls: [mediaUrl] }], deliveryStatus: { status: "sent" } },
-        });
-      const updates: unknown[] = [];
-      const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
-        if (update.target?.sessionId === sessionId) {
-          updates.push(update);
-        }
-      });
-      let settled = false;
-      const queueContext = captureOpenClawStateWorkerContext();
-      const {
-        id: _id,
-        enqueuedAt: _enqueuedAt,
-        retryCount: _retryCount,
-        ...payload
-      } = createGeneratedMediaDeliveryEntry({
-        id: "unused",
-        sessionKey,
-        messageId: "image:media-completion:agent-loop",
-        idempotencyKey: "image:media-completion:agent-loop",
-        route: { channel: "webchat", to: sessionKey, chatType: "direct" },
-        expectedMediaUrls: [mediaUrl],
-        preparedMediaBlocks: { [mediaUrl]: blocks },
-      });
-      const queued = await queueStorage.loadPendingSessionDelivery(
-        await queueStorage.enqueueSessionDelivery(payload, queueContext),
-        queueContext,
+    const admission = vi
+      .spyOn(queueStorage, "markSessionDeliveryAttemptStarted")
+      .mockResolvedValue(undefined);
+    const dispatch = vi.spyOn(recoveryRuntime, "dispatchGatewayLifecycleMethod").mockResolvedValue({
+      status: "ok",
+      result: { payloads: [{ mediaUrls: [mediaUrl] }], deliveryStatus: { status: "sent" } },
+    });
+    const updates: unknown[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
+      if (update.target?.sessionId === sessionId) {
+        updates.push(update);
+      }
+    });
+    let settled = false;
+    queueContext = captureOpenClawStateWorkerContext();
+    const {
+      id: _id,
+      enqueuedAt: _enqueuedAt,
+      retryCount: _retryCount,
+      ...payload
+    } = createGeneratedMediaDeliveryEntry({
+      id: "unused",
+      sessionKey,
+      messageId: "image:media-completion:agent-loop",
+      idempotencyKey: "image:media-completion:agent-loop",
+      route: { channel: "webchat", to: sessionKey, chatType: "direct" },
+      expectedMediaUrls: [mediaUrl],
+      preparedMediaBlocks: { [mediaUrl]: blocks },
+    });
+    const outcome = deliver(await enqueueEntry(payload)).finally(() => {
+      settled = true;
+    });
+    void outcome.catch(() => {});
+    try {
+      await racePromiseWithAbortSignal(
+        awaitGateBeforeSettlement(
+          promoting.promise,
+          outcome,
+          "Delivery never entered media promotion",
+        ),
+        test.signal,
       );
-      if (!queued) {
-        throw new Error("expected queued media completion");
-      }
-      const outcome = deliver(queued, queueContext).finally(() => {
-        settled = true;
-      });
-      void outcome.catch(() => {});
-      try {
-        await racePromiseWithAbortSignal(
-          Promise.race([
-            promoting.promise,
-            outcome.then(() => {
-              throw new Error("Delivery never entered media promotion");
-            }),
-          ]),
-          test.signal,
-        );
-        expect(settled).toBe(false);
-        expect(updates).toEqual([]);
-        expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([
-          { record: { messageId: null, retentionClass: "transient" } },
-        ]);
-        release.resolve();
-        // The host message is published before the completion turn is scheduled.
-        await expect(outcome).rejects.toThrow("its completion turn follows");
-        expect(dispatch).not.toHaveBeenCalled();
-        expect(updates).toHaveLength(1);
-        expect(updates[0]).toMatchObject({ messageId: expect.any(String) });
-        expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([
-          { record: { messageId: expect.any(String), retentionClass: "history" } },
-        ]);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([outcome]);
-        unsubscribe();
-        promotion.mockRestore();
-        admission.mockRestore();
-        dispatch.mockRestore();
-      }
-    },
-  );
-});
+      expect(settled).toBe(false);
+      expect(updates).toEqual([]);
+      expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([
+        { record: { messageId: null, retentionClass: "transient" } },
+      ]);
+      release.resolve();
+      // The host message is published before the completion turn is scheduled.
+      await expect(outcome).rejects.toThrow("its completion turn follows");
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(updates).toEqual([expect.objectContaining({ messageId: expect.any(String) })]);
+      expect(await listManagedImageRecordEntries({ stateDir: state.stateDir })).toMatchObject([
+        { record: { messageId: expect.any(String), retentionClass: "history" } },
+      ]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([outcome]);
+      unsubscribe();
+      promotion.mockRestore();
+      admission.mockRestore();
+      dispatch.mockRestore();
+    }
+  }),
+);
