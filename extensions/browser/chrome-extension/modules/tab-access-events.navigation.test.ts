@@ -271,7 +271,7 @@ describe("Chrome navigation event access", () => {
         navigationEvents.map((event) => ({ type: "cdpEvent", tabId: 7, ...event })),
       );
       await expect(harness.policy.requireTab(7, harness.attachmentEpoch)).rejects.toThrow(
-        "access was revoked",
+        "document changed while the command was in flight; inspect the current page before retrying",
       );
 
       harness.send.mockClear();

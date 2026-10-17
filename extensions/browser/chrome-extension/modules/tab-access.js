@@ -597,8 +597,17 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       }
       return state.tab;
     }
-    const message =
-      TAB_ACCESS_DENIAL_MESSAGES[state.reason] ?? "is restricted or unavailable to OpenClaw";
+    // A document-only invalidation must not send users to permission recovery.
+    // Reuse the proven-tab check without relaxing the rejected command's epoch.
+    const documentChanged =
+      state.reason === "revoked" &&
+      epoch.documentRevision !== undefined &&
+      epoch.documentRevision !== (tabRevisions.get(tabId)?.document ?? 0) &&
+      groupRevocations.isCurrentInMode(mode, epoch, state.tab) &&
+      groupRevocations.isProvenCurrent(tabId, epoch, epochIsCurrent);
+    const message = documentChanged
+      ? "document changed while the command was in flight; inspect the current page before retrying"
+      : (TAB_ACCESS_DENIAL_MESSAGES[state.reason] ?? "is restricted or unavailable to OpenClaw");
     throw new Error(`tab ${tabId} ${message}`);
   }
 
