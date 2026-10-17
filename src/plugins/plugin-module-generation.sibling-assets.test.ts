@@ -4,37 +4,39 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/state-dir.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { createPluginCache, retirePluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
-import { PluginInstance } from "./plugin-instance.js";
 import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
 const { fixture, host } = createPluginModuleGenerationTestHarness();
-
-describe("plugin generation sibling assets", () => {
-  it.each([false, true])(
-    "handles a native alias companion directory (file symlinks denied: %s)",
-    (denyFileSymlinks) => {
-      const root = fixture({
-        "package.json": '{"name":"native-alias-fixture"}',
-        "platform/addon.node": "native fixture bytes",
-        "platform/helper.dat": "original real-directory companion",
-        "entry.cjs": `
+const companion = "original real-directory companion";
+function nativeAlias(files: Record<string, string> = {}) {
+  const root = fixture({
+    "package.json": '{"name":"native-alias-fixture"}',
+    "platform/addon.node": "native fixture bytes",
+    "platform/helper.dat": companion,
+    "entry.cjs": `
         const fs = require('node:fs');
         const path = require('node:path');
         exports.read = () => {
           const native = fs.realpathSync(path.join(__dirname, 'bin', 'addon.node'));
           return fs.readFileSync(path.join(path.dirname(native), 'helper.dat'), 'utf8');
         };`,
-      });
-      fs.mkdirSync(path.join(root, "bin"));
-      fs.symlinkSync("../platform/addon.node", path.join(root, "bin", "addon.node"), "file");
+    ...files,
+  });
+  fs.mkdirSync(path.join(root, "bin"));
+  fs.symlinkSync("../platform/addon.node", path.join(root, "bin", "addon.node"), "file");
+  return root;
+}
+
+describe("plugin generation sibling assets", () => {
+  it.each([false, true])(
+    "handles a native alias companion directory (file symlinks denied: %s)",
+    (denyFileSymlinks) => {
+      const root = nativeAlias();
       type NativeCompanion = { read(): string };
       const entry = path.join(root, "entry.cjs");
-      expect((createRequire(entry)(entry) as NativeCompanion).read()).toBe(
-        "original real-directory companion",
-      );
+      expect((createRequire(entry)(entry) as NativeCompanion).read()).toBe(companion);
       if (denyFileSymlinks) {
         const symlink = fs.symlinkSync;
         const denial = vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) => {
@@ -55,16 +57,15 @@ describe("plugin generation sibling assets", () => {
         return;
       }
       const captured = host(root, true).load("entry.cjs") as NativeCompanion;
-      expect(captured.read()).toBe("original real-directory companion");
+      expect(captured.read()).toBe(companion);
       fs.writeFileSync(path.join(root, "platform", "helper.dat"), "replacement companion");
-      expect(captured.read()).toBe("original real-directory companion");
+      expect(captured.read()).toBe(companion);
     },
   );
 
   it("does not require dependencies of a dependency's unused nested subproject", () => {
-    const root = fixture({
+    const root = nativeAlias({
       "package.json": '{"name":"native-scope-fixture","dependencies":{"dep":"1.0.0"}}',
-      "platform/addon.node": "native fixture bytes",
       "platform/helper.dat": "companion",
       "node_modules/dep/package.json": '{"name":"dep","main":"index.cjs"}',
       "node_modules/dep/index.cjs": "exports.value = 'dep';",
@@ -83,8 +84,6 @@ describe("plugin generation sibling assets", () => {
           ];
         };`,
     });
-    fs.mkdirSync(path.join(root, "bin"));
-    fs.symlinkSync("../platform/addon.node", path.join(root, "bin", "addon.node"), "file");
     const captured = host(root, true).load("entry.cjs") as { read(): string[] };
     expect(captured.read()).toEqual(["dep", "companion"]);
   });
@@ -106,18 +105,9 @@ describe("plugin generation sibling assets", () => {
          exports.read = name => require(name).value;`,
       );
       const cache = createPluginCache();
-      const instance = new PluginInstance("native-lazy-fixture");
+      const instance = host(root, true, cache);
       try {
-        withPluginCache(cache, () =>
-          bindPluginInstanceModuleLoader({
-            instance,
-            origin: "config",
-            source: entry,
-            rootDir: root,
-            standalone: true,
-          }),
-        );
-        const api = instance.loadModule(entry) as { native: string; read(name: string): string };
+        const api = instance.load("index.cjs") as { native: string; read(name: string): string };
         const sibling = path.join(path.dirname(api.native), "helper.cjs");
         // Native execution can request any sibling before JavaScript imports that companion.
         expect(fs.existsSync(sibling)).toBe(true);
@@ -259,16 +249,13 @@ describe("plugin generation sibling assets", () => {
       }
       type Addon = { read(): string[] };
       const entry = path.join(root, "entry.cjs");
-      const before = [
-        "before",
-        "before",
-        ...(layout === "linked" ? ["peer before", "peer before"] : []),
+      const values = (native: string, peerValue = `peer ${native}`) => [
+        native,
+        native,
+        ...(layout === "linked" ? [peerValue, peerValue] : []),
       ];
-      const after = [
-        "after",
-        "after",
-        ...(layout === "linked" ? ["peer after", "peer after"] : []),
-      ];
+      const before = values("before");
+      const after = values("after");
       expect((createRequire(entry)(entry) as Addon).read()).toEqual(before);
       const cache = createPluginCache();
       const first = host(root, false, cache);
@@ -292,12 +279,7 @@ describe("plugin generation sibling assets", () => {
       if (layout === "linked") {
         fs.writeFileSync(path.join(root, peer, "value.txt"), "peer newest");
         const peerOnlyReplacement = host(root, false, cache).load("entry.cjs") as Addon;
-        expect(peerOnlyReplacement.read()).toEqual([
-          "after",
-          "after",
-          "peer newest",
-          "peer newest",
-        ]);
+        expect(peerOnlyReplacement.read()).toEqual(values("after", "peer newest"));
         expect(replacement.read()).toEqual(after);
       }
     },

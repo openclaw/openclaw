@@ -50,9 +50,13 @@ function createInstance(rootDir = root, standalone = false, entry = "index.ts") 
   return instance;
 }
 
+function loadEntry<T>(directory = root, standalone = false, filename = "index.ts") {
+  const instance = createInstance(directory, standalone, filename);
+  return { instance, entry: instance.loadModule(path.join(directory, filename)) as T };
+}
+
 function load() {
-  const instance = createInstance();
-  const entry = instance.loadModule(path.join(root, "index.ts")) as Entry;
+  const { instance, entry } = loadEntry<Entry>();
   const api = instance.loadModule(path.join(root, "api.ts")) as { shared: Shared };
   assert.equal(entry.shared, api.shared, "entry and public API must share their helper");
   return { instance, entry, api };
@@ -116,8 +120,7 @@ try {
         "helper.jsx": `const React = { createElement: (tag, props) => [tag, props.label] };
           export const helper = <helper label="ready" />;`,
       });
-      const instance = createInstance(directory, false, entry);
-      const loaded = instance.loadModule(path.join(directory, entry)) as { value: string[][] };
+      const { instance, entry: loaded } = loadEntry<{ value: string[][] }>(directory, false, entry);
       assert.ok(Array.isArray(loaded.value), extension);
       assert.ok(loaded.value.every(Array.isArray), extension);
       assert.deepEqual(
@@ -198,10 +201,9 @@ try {
       "import.mjs": "export const value = 'import';",
       "changed.cjs": "exports.value = 'changed';",
     });
-    const instance = createInstance(directory, true);
-    const entry = instance.loadModule(path.join(directory, "index.ts")) as {
+    const { instance, entry } = loadEntry<{
       read: Record<(typeof modes)[number], (specifier: string) => string | Promise<string>>;
-    };
+    }>(directory, true);
     fs.writeFileSync(
       path.join(directory, "package.json"),
       JSON.stringify({
@@ -236,12 +238,9 @@ try {
     "node_modules/deferred-dependency/require.cjs": "exports.value = 0;",
     "node_modules/deferred-dependency/import.mjs": "export const value = 0;",
   });
-  const deferredDependencyInstance = createInstance(deferredDependencyRoot, true);
-  const deferredDependencyEntry = deferredDependencyInstance.loadModule(
-    path.join(deferredDependencyRoot, "index.ts"),
-  ) as {
+  const { instance: deferredDependencyInstance, entry: deferredDependencyEntry } = loadEntry<{
     bridge(): Promise<{ read(name: string): Promise<number>; readRequired(name: string): number }>;
-  };
+  }>(deferredDependencyRoot, true);
   retained = deferredDependencyInstance.retainConsumer();
   const deferredDependencyRetirement = deferredDependencyInstance.dispose();
   await retained.run(async () => {
@@ -299,10 +298,9 @@ try {
     path.join(linkedRoot, "node_modules/conditional-link-dependency"),
     "dir",
   );
-  const linkedInstance = createInstance(linkedRoot, true);
-  const linkedEntry = linkedInstance.loadModule(path.join(linkedRoot, "index.ts")) as {
+  const { entry: linkedEntry } = loadEntry<{
     bridge(): Promise<{ url: string; read(target: string): Promise<number> }>;
-  };
+  }>(linkedRoot, true);
   const bridge = await linkedEntry.bridge();
   const alias = path.join(
     path.dirname(fileURLToPath(bridge.url)),
@@ -331,9 +329,7 @@ try {
       path.join(conditionalDependency, "replacement.mjs"),
       "export const value = import.meta.url.endsWith('?runtime=replacement') ? 52 : 0;",
     );
-    const replacement = createInstance(linkedRoot, true).loadModule(
-      path.join(linkedRoot, "index.ts"),
-    ) as typeof linkedEntry;
+    const { entry: replacement } = loadEntry<typeof linkedEntry>(linkedRoot, true);
     assert.equal(await (await replacement.bridge()).read("conditional-link-dependency"), 52);
     assert.equal(await bridge.read("conditional-link-dependency"), 51);
   }
@@ -346,11 +342,12 @@ try {
         "export const read = async (target) => { const loaded = await import(target); return { value: loaded.value, url: loaded.url }; };",
       "value.mjs": "export const value = 'before'; export const url = import.meta.url;",
     });
-    const source = path.join(directory, "index.ts");
     const target = path.join(directory, "value.mjs");
     type NativeEntry = { read(target: string): Promise<{ value: string; url: string }> };
-    const oldInstance = createInstance(directory, standalone);
-    const oldEntry = oldInstance.loadModule(source) as NativeEntry;
+    const { instance: oldInstance, entry: oldEntry } = loadEntry<NativeEntry>(
+      directory,
+      standalone,
+    );
     retained = oldInstance.retainConsumer();
     const retiring = oldInstance.dispose();
     fs.writeFileSync(target, "export const value = 'demand'; export const url = import.meta.url;");
@@ -358,8 +355,7 @@ try {
     assert.equal(old.value, standalone ? "demand" : "before");
     assert.notEqual(fileURLToPath(old.url), target);
     fs.writeFileSync(target, "export const value = 'after'; export const url = import.meta.url;");
-    const currentInstance = createInstance(directory, standalone);
-    const currentEntry = currentInstance.loadModule(source) as NativeEntry;
+    const { entry: currentEntry } = loadEntry<NativeEntry>(directory, standalone);
     const current = await currentEntry.read(pathToFileURL(target).href);
     assert.equal(current.value, "after");
     assert.notEqual(current.url, old.url);
@@ -415,13 +411,7 @@ try {
   });
   fs.writeFileSync(path.join(home, "outside.mjs"), "export const value = 99;");
   roots.push(path.join(home, "outside.mjs"));
-  const loadNative = () => {
-    const instance = createInstance(nativeRoot, true);
-    const entry = instance.loadModule(path.join(nativeRoot, "index.ts")) as {
-      read(target?: string): Promise<number>;
-    };
-    return { instance, entry };
-  };
+  const loadNative = () => loadEntry<{ read(target?: string): Promise<number> }>(nativeRoot, true);
   const oldNative = loadNative();
   for (const filename of [
     "unrelated.mjs",

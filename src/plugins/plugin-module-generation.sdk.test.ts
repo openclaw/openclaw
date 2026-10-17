@@ -9,11 +9,22 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const execute = promisify(execFile);
 
-function write(root: string, relative: string, content: string): string {
-  const filename = path.join(root, relative);
-  fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, content);
-  return filename;
+function write(root: string, files: Record<string, string>) {
+  for (const [relative, content] of Object.entries(files)) {
+    const filename = path.join(root, relative);
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    fs.writeFileSync(filename, content);
+  }
+}
+const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
+async function probe(root: string, source: string, expected: string) {
+  write(root, { "probe.mts": source });
+  const { stdout } = await execute(process.execPath, [
+    "--import",
+    moduleUrl("scripts/tsx.mjs"),
+    path.join(root, "probe.mts"),
+  ]);
+  expect(stdout.trim()).toBe(expected);
 }
 
 describe("plugin module generation SDK identity", () => {
@@ -35,17 +46,14 @@ describe("plugin module generation SDK identity", () => {
 
   it("preserves real host command authority and Gateway execution frames in the SDK", async () => {
     const root = fs.realpathSync(temp.make("plugin-sdk-host-authority-"));
-    const entry = write(
-      root,
-      "index.ts",
-      `export { resolveCommandAuthorization } from 'openclaw/plugin-sdk/command-auth-native';
+    const entry = path.join(root, "index.ts");
+    write(root, {
+      "index.ts": `export { resolveCommandAuthorization } from 'openclaw/plugin-sdk/command-auth-native';
        import { getPluginRuntimeGatewayRequestScope } from 'openclaw/plugin-sdk/plugin-runtime';
        export const readRequest = () => getPluginRuntimeGatewayRequestScope()?.request;`,
-    );
-    const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
-    const probe = write(
+    });
+    await probe(
       root,
-      "probe.mts",
       `import assert from 'node:assert/strict';
        import { bindPluginInstanceModuleLoader } from ${JSON.stringify(moduleUrl("src/plugins/plugin-instance-module-loader.ts"))};
        import { getCachedPluginModuleLoader } from ${JSON.stringify(moduleUrl("src/plugins/plugin-module-loader-cache.ts"))};
@@ -79,13 +87,8 @@ describe("plugin module generation SDK identity", () => {
          }
          console.log('host authority preserved');
        } finally { await instance.dispose(); }`,
+      "host authority preserved",
     );
-    const { stdout } = await execute(process.execPath, [
-      "--import",
-      pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
-      probe,
-    ]);
-    expect(stdout.trim()).toBe("host authority preserved");
   });
 
   it.each([
@@ -99,10 +102,8 @@ describe("plugin module generation SDK identity", () => {
       const root = fs.realpathSync(temp.make("plugin-sdk-generation-"));
       const host = path.join(root, "host");
       const hostLink = path.join(root, "host-link");
-      write(
-        host,
-        "package.json",
-        JSON.stringify({
+      write(host, {
+        "package.json": JSON.stringify({
           name: "openclaw",
           type: "module",
           bin: { openclaw: "./openclaw.mjs" },
@@ -111,39 +112,33 @@ describe("plugin module generation SDK identity", () => {
             "./plugin-sdk/identity-peer": "./dist/plugin-sdk/identity-peer.js",
           },
         }),
-      );
+      });
       for (const [tree, extension] of [
         ["src", "ts"],
         ["dist", "js"],
       ]) {
-        write(host, `${tree}/plugin-sdk/identity.${extension}`, 'export * from "./owner.js";');
-        write(host, `${tree}/plugin-sdk/identity-peer.${extension}`, 'export * from "./owner.js";');
-        write(
-          host,
-          tree === "dist"
+        write(host, {
+          [`${tree}/plugin-sdk/identity.${extension}`]: 'export * from "./owner.js";',
+          [`${tree}/plugin-sdk/identity-peer.${extension}`]: 'export * from "./owner.js";',
+          [tree === "dist"
             ? "dist/run-embedded.runtime-abc123.mjs"
-            : `${tree}/plugin-sdk/owner.${extension}`,
-          `const bindings = new WeakMap();
+            : `${tree}/plugin-sdk/owner.${extension}`]: `const bindings = new WeakMap();
            export const identity = { tree: ${JSON.stringify(tree)} };
            export const bind = (token, value) => bindings.set(token, value);
            export const read = (token) => bindings.get(token);`,
-        );
+        });
       }
-      write(host, "dist/plugin-sdk/owner.js", 'export * from "../run-embedded.runtime.js";');
-      write(
-        host,
-        "dist/run-embedded.runtime.js",
-        'export * from "./run-embedded.runtime-abc123.mjs";',
-      );
+      write(host, {
+        "dist/plugin-sdk/owner.js": 'export * from "../run-embedded.runtime.js";',
+        "dist/run-embedded.runtime.js": 'export * from "./run-embedded.runtime-abc123.mjs";',
+      });
       fs.symlinkSync(host, hostLink, process.platform === "win32" ? "junction" : "dir");
       const plugin = path.join(root, "plugin");
       const captures = path.join(root, "captures");
       fs.mkdirSync(captures);
-      write(plugin, "package.json", JSON.stringify({ name: "fixture", type: "module" }));
-      write(
-        plugin,
-        "eager.ts",
-        `import { once } from 'node:events';
+      write(plugin, {
+        "package.json": JSON.stringify({ name: "fixture", type: "module" }),
+        "eager.ts": `import { once } from 'node:events';
          import { Worker } from 'node:worker_threads';
          import { identity } from 'openclaw/plugin-sdk/identity';
          export * from 'openclaw/plugin-sdk/identity';
@@ -159,11 +154,7 @@ describe("plugin module generation SDK identity", () => {
          }
          export const resolveSdk = () => import.meta.resolve('openclaw/plugin-sdk/identity');
          export const readResolvedSdk = () => import(import.meta.resolve('openclaw/plugin-sdk/identity'));`,
-      );
-      write(
-        plugin,
-        "worker.mjs",
-        `import { parentPort } from 'node:worker_threads';
+        "worker.mjs": `import { parentPort } from 'node:worker_threads';
          import { identity, bind } from 'openclaw/plugin-sdk/identity';
          import { identity as peer, read } from 'openclaw/plugin-sdk/identity-peer';
          const token = {};
@@ -172,16 +163,10 @@ describe("plugin module generation SDK identity", () => {
            tree: identity.tree, same: identity === peer, binding: read(token),
            url: import.meta.resolve('openclaw/plugin-sdk/identity'),
          });`,
-      );
-      write(
-        plugin,
-        "lazy.ts",
-        "export const readSdk = () => import('openclaw/plugin-sdk/identity');",
-      );
-      const moduleUrl = (relative: string) => pathToFileURL(path.resolve(relative)).href;
-      const probe = write(
+        "lazy.ts": "export const readSdk = () => import('openclaw/plugin-sdk/identity');",
+      });
+      await probe(
         root,
-        "probe.mts",
         `import assert from 'node:assert/strict';
          import fs from 'node:fs';
          import Module from 'node:module';
@@ -248,13 +233,8 @@ describe("plugin module generation SDK identity", () => {
          }
          assert.deepEqual(fs.readdirSync(captures), []);
          assert.equal(fs.existsSync(${JSON.stringify(path.join(host, "dist/plugin-sdk/identity.js"))}), true);`,
+        "shared host identity",
       );
-      const { stdout } = await execute(process.execPath, [
-        "--import",
-        pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
-        probe,
-      ]);
-      expect(stdout.trim()).toBe("shared host identity");
     },
   );
 });
