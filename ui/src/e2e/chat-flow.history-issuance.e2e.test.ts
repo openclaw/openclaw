@@ -232,82 +232,72 @@ suite.define(() => {
     },
   );
 
-  it.each(["retry", "reconnect"] as const)("recovers failed history after %s", async (recovery) => {
-    const page = await newChatPage(suite);
-    const marker = `Transcript recovered after ${recovery}.`;
-    const failure =
-      recovery === "retry"
-        ? "Chat history is temporarily unavailable."
-        : "Chat history will recover after reconnect.";
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup"],
-      historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
-    await gateway.rejectDeferred("chat.startup", {
-      code: "GATEWAY_UNAVAILABLE",
-      message: failure,
-      ...(recovery === "reconnect" ? { retryable: true } : {}),
-    });
-
-    const historyError = page.locator(".chat-history-error");
-    await historyError.waitFor({ state: "visible", timeout: 5_000 });
-    expect(await historyError.textContent()).toContain(failure);
-    expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-
-    if (recovery === "retry") {
-      await gateway.deferNext("chat.startup");
-      await historyError.getByRole("button", { name: "Retry" }).click();
-      await gateway.waitForRequest("chat.startup", { after: 1 });
-      await historyError.waitFor({ state: "detached" });
-      await page
-        .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
-        .waitFor({ state: "visible" });
-      await gateway.resolveDeferred("chat.startup");
-    } else {
-      await gateway.setOnline(false);
-      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-      await gateway.setOnline(true);
-      await gateway.waitForRequest("chat.startup", { after: 1 });
-    }
-    await textInThread(page, marker).waitFor({ state: "visible" });
-
-    expect(await gateway.getRequests("chat.startup")).toHaveLength(2);
-    expect(await page.locator(".chat-history-error").count()).toBe(0);
-  });
-  it("keeps cached history visible and actionable when a refresh fails", async () => {
-    const page = await newChatPage(suite);
-    const marker = "Cached transcript stays visible.";
-    const gateway = await installMockGateway(page, {
-      historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const cachedMessage = textInThread(page, marker);
-    await cachedMessage.waitFor({ state: "visible" });
-
-    await gateway.deferNext("chat.startup");
-    await gateway.setOnline(false);
-    await gateway.setOnline(true);
-    await gateway.waitForRequest("chat.startup", { after: 1 });
-    await gateway.rejectDeferred("chat.startup", {
-      code: "GATEWAY_ERROR",
-      message: "History refresh failed.",
-      retryable: false,
-    });
-
-    const inlineError = page.locator(".chat-history-error--inline");
-    await inlineError.waitFor({ state: "visible", timeout: 5_000 });
-    expect(await inlineError.textContent()).toContain("History refresh failed.");
-    // The stale transcript must not be displaced by the failure surface.
-    await cachedMessage.waitFor({ state: "visible" });
-
-    const startupCount = (await gateway.getRequests("chat.startup")).length;
-    await inlineError.getByRole("button", { name: "Retry" }).click();
-    await gateway.waitForRequest("chat.startup", { after: startupCount });
-    await inlineError.waitFor({ state: "hidden", timeout: 5_000 });
-    await cachedMessage.waitFor({ state: "visible" });
-  });
+  it.each(["retry", "reconnect", "cached refresh"] as const)(
+    "recovers failed history after %s",
+    async (recovery) => {
+      const page = await newChatPage(suite);
+      const cached = recovery === "cached refresh";
+      const marker = `Transcript recovered after ${recovery}.`;
+      const failure = cached
+        ? "History refresh failed."
+        : recovery === "retry"
+          ? "Chat history is temporarily unavailable."
+          : "Chat history will recover after reconnect.";
+      const gateway = await installMockGateway(page, {
+        deferredMethods: cached ? [] : ["chat.startup"],
+        historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const transcript = textInThread(page, marker);
+      if (cached) {
+        await transcript.waitFor({ state: "visible" });
+        await gateway.deferNext("chat.startup");
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+      }
+      await gateway.waitForRequest("chat.startup", { after: cached ? 1 : 0 });
+      await gateway.rejectDeferred("chat.startup", {
+        code: cached ? "GATEWAY_ERROR" : "GATEWAY_UNAVAILABLE",
+        message: failure,
+        ...(cached ? { retryable: false } : recovery === "reconnect" ? { retryable: true } : {}),
+      });
+      const historyError = page.locator(
+        cached ? ".chat-history-error--inline" : ".chat-history-error",
+      );
+      await historyError.waitFor({ state: "visible", timeout: 5_000 });
+      expect(await historyError.textContent()).toContain(failure);
+      if (cached) {
+        // Failed refreshes must leave the stale transcript available throughout retry.
+        await transcript.waitFor({ state: "visible" });
+      } else {
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+      }
+      const startupCount = (await gateway.getRequests("chat.startup")).length;
+      if (recovery === "reconnect") {
+        await gateway.setOnline(false);
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+        await gateway.setOnline(true);
+      } else {
+        if (!cached) {
+          await gateway.deferNext("chat.startup");
+        }
+        await historyError.getByRole("button", { name: "Retry" }).click();
+      }
+      await gateway.waitForRequest("chat.startup", { after: startupCount });
+      if (recovery === "retry") {
+        await historyError.waitFor({ state: "detached" });
+        await page
+          .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+          .waitFor({ state: "visible" });
+        await gateway.resolveDeferred("chat.startup");
+      } else if (cached) {
+        await historyError.waitFor({ state: "hidden", timeout: 5_000 });
+      }
+      await transcript.waitFor({ state: "visible" });
+      if (!cached) {
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(2);
+        expect(await page.locator(".chat-history-error").count()).toBe(0);
+      }
+    },
+  );
 });

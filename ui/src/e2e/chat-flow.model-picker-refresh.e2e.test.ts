@@ -11,7 +11,6 @@ import {
   thinkingLevels,
   chatSessionListResponse,
   expectRequestCountStable,
-  waitForRequests,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -38,6 +37,11 @@ const defaultsFor = (model: string) => ({
 });
 const bubble = (page: Page, text: string | RegExp) =>
   page.locator(".chat-bubble").getByText(text, { exact: true }).waitFor();
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+async function expectPatch(gateway: Gateway, params: Record<string, unknown>, after?: number) {
+  const request = await gateway.waitForRequest("sessions.patch", { after });
+  expect(requireRecord(request.params)).toMatchObject(params);
+}
 
 function roster<Row extends object, Defaults extends object>(
   session: Row,
@@ -103,11 +107,7 @@ suite.define(() => {
     await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
 
     await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).tap();
-    const request = await gateway.waitForRequest("sessions.patch");
-    expect(request.params).toMatchObject({
-      key: "agent:main:main",
-      model: "openai/gpt-5.6-terra",
-    });
+    await expectPatch(gateway, { key: session.key, model: "openai/gpt-5.6-terra" });
     await expect.poll(() => selectedModel(picker)).toBe("openai/gpt-5.6-terra");
 
     await gateway.setSessionsListResponse(
@@ -147,18 +147,17 @@ suite.define(() => {
       .poll(() =>
         configureModels.evaluate((button) => {
           const heading = button.closest<HTMLElement>("[data-chat-model-provider]");
-          if (!heading) {
-            return Number.POSITIVE_INFINITY;
-          }
-          return heading.getBoundingClientRect().right - button.getBoundingClientRect().right;
+          const gap = heading
+            ? heading.getBoundingClientRect().right - button.getBoundingClientRect().right
+            : Number.POSITIVE_INFINITY;
+          const icons = button.querySelectorAll("svg");
+          return {
+            aligned: gap <= 11,
+            smallIcon: icons.length === 1 && icons[0]!.getBoundingClientRect().width <= 12,
+          };
         }),
       )
-      .toBeLessThanOrEqual(11);
-    await expect
-      .poll(() =>
-        configureModels.locator("svg").evaluate((icon) => icon.getBoundingClientRect().width),
-      )
-      .toBeLessThanOrEqual(12);
+      .toEqual({ aligned: true, smallIcon: true });
     await configureModels.hover();
     await page.waitForTimeout(800);
     const configureModelsTooltip = page.locator(".tooltip-surface[popover]:popover-open").filter({
@@ -194,8 +193,7 @@ suite.define(() => {
     await revealChatModelOption(attr(picker, "model-default"));
 
     await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
-    const request = await gateway.waitForRequest("sessions.patch");
-    expect(request.params).toMatchObject({ key: "agent:main:main", model: null });
+    await expectPatch(gateway, { key: session.key, model: null });
     await expect.poll(() => selectedModel(picker)).toBe("");
     await attr(picker, "model-select").click();
   });
@@ -262,11 +260,11 @@ suite.define(() => {
       .toBe("anthropic/claude-sonnet-4-6");
     const patchCount = (await gateway.getRequests("sessions.patch")).length;
     await search.press("Enter");
-    const patch = await gateway.waitForRequest("sessions.patch", { after: patchCount });
-    expect(patch.params).toMatchObject({
-      key: "agent:main:main",
-      model: "anthropic/claude-sonnet-4-6",
-    });
+    await expectPatch(
+      gateway,
+      { key: "agent:main:main", model: "anthropic/claude-sonnet-4-6" },
+      patchCount,
+    );
     await expect.poll(() => picker.getAttribute("open")).toBe(null);
   });
 
@@ -308,11 +306,7 @@ suite.define(() => {
     await attr(main, "model-select").click();
     await selectChatModelOption(attr(main, "model-option", "openai/gpt-5.6-sol"));
 
-    const modelPatch = await gateway.waitForRequest("sessions.patch");
-    expect(requireRecord(modelPatch.params)).toMatchObject({
-      key: sessionKey,
-      model: "openai/gpt-5.6-sol",
-    });
+    await expectPatch(gateway, { key: sessionKey, model: "openai/gpt-5.6-sol" });
     const thinkingSlider = attr(main, "thinking-slider");
     const effortSelect = attr(main, "thinking-select");
     await effortSelect.evaluate((trigger) => {
@@ -358,11 +352,7 @@ suite.define(() => {
       slider.dispatchEvent(new Event("input", { bubbles: true }));
       slider.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    const patches = await waitForRequests(gateway, "sessions.patch", 2);
-    expect(requireRecord(patches[1]?.params)).toMatchObject({
-      key: sessionKey,
-      thinkingLevel: "ultra",
-    });
+    await expectPatch(gateway, { key: sessionKey, thinkingLevel: "ultra" }, 1);
     await expect.poll(() => page.getByText(/not supported for/u).count()).toBe(0);
   });
 
@@ -426,10 +416,7 @@ suite.define(() => {
       await gateway.deferNext("sessions.patch");
       await model.click();
       await selectChatModelOption(attr(main, "model-option", "example/example-b"));
-      expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-        key,
-        model: "example/example-b",
-      });
+      await expectPatch(gateway, { key, model: "example/example-b" });
       await expect.poll(() => model.textContent()).toContain("Example B");
       expect(await effort.getAttribute("aria-disabled")).toBe("true");
       await gateway.resolveDeferred("sessions.patch");
@@ -458,12 +445,10 @@ suite.define(() => {
       const speed = main.locator("[data-chat-speed-option=on]");
       expect(await speed.isEnabled()).toBe(true);
       await speed.click();
-      const speedPatch = await gateway.waitForRequest("sessions.patch", { after: 1 });
-      expect(speedPatch.params).toMatchObject({ key, fastMode: true });
+      await expectPatch(gateway, { key, fastMode: true }, 1);
       await speed.and(main.locator('[aria-checked="true"]')).waitFor({ state: "visible" });
       await slider.press("End");
-      const thinking = await gateway.waitForRequest("sessions.patch", { after: 2 });
-      expect(thinking.params).toMatchObject({ key, thinkingLevel: "high" });
+      await expectPatch(gateway, { key, thinkingLevel: "high" }, 2);
       await emitText(
         "The first reply is still running. Its next chunk arrived after the settings changed.",
       );

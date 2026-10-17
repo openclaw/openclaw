@@ -1,9 +1,13 @@
 import { expect, it } from "vitest";
-import { configResponse } from "./chat-flow-fixtures.test-support.ts";
+import {
+  chatFixture,
+  configResponse,
+  sendChat,
+  expectText,
+} from "./chat-flow-fixtures.test-support.ts";
 import {
   confirmIme,
   chatMessage,
-  newChatPage,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -16,10 +20,9 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 const suite = createChatFlowE2eSuite();
 const defaultSessionKey = "agent:main:main";
 
-async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) {
-  const page = await newChatPage(suite);
-  const gateway = await installMockGateway(page, options);
-  await page.goto(`${suite.server.baseUrl}chat`);
+async function openChat(options: Parameters<typeof installMockGateway>[1] = {}, route = "chat") {
+  const { page, gateway } = await chatFixture(suite, options);
+  await page.goto(`${suite.server.baseUrl}${route}`);
   const pane = page.locator(".chat-pane-cache__pane--active");
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   const button = (name: string) => pane.getByRole("button", { name, exact: true });
@@ -48,8 +51,7 @@ suite.define(() => {
     await composer.waitFor({ state: "visible", timeout: 10_000 });
 
     await composer.fill("日本語");
-    const confirmationConsumed = await confirmIme(composer, "日本語");
-    expect(confirmationConsumed).toBe(false);
+    expect(await confirmIme(composer, "日本語")).toBe(false);
     await expectUnsent("日本語");
     await composer.dispatchEvent("keyup", { key: "Enter" });
 
@@ -145,7 +147,7 @@ suite.define(() => {
     await expect.poll(() => composer.inputValue()).toBe(draft);
     await group.waitFor({ state: "visible" });
 
-    await expect.poll(() => preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+    await expectText(preview.locator(".chat-reply-preview__text"), quote);
     await button("Send message").click();
     const request = await gateway.waitForRequest("chat.send");
     await settledDraft(null, null);
@@ -294,9 +296,7 @@ suite.define(() => {
     await interrupted.waitFor({ state: "visible" });
     expect(await interrupted.textContent()).toContain("Interrupted");
     expect(await pane.getByLabel("Run status: Interrupted").count()).toBe(0);
-    await expect
-      .poll(() => pane.locator(".agent-chat__run-status-announcement").textContent())
-      .toBe("Interrupted");
+    await expectText(pane.locator(".agent-chat__run-status-announcement"), "Interrupted");
     expect(requireRecord(abort.params)).toEqual({ sessionKey, runId });
     await stop.waitFor({ state: "detached" });
     await expectDraft(composingDraft, 1);
@@ -305,13 +305,11 @@ suite.define(() => {
   it.each(["queue", "steer", "collect", "followup"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
-      const page = await newChatPage(suite);
       const inheritsQueueMode = followUpMode === "collect" || followUpMode === "followup";
       const runtimeConfig = {
         messages: { queue: { mode: inheritsQueueMode ? followUpMode : "steer" } },
       };
-      const gateway = await installMockGateway(
-        page,
+      const { page, gateway, composer } = await openChat(
         inheritsQueueMode
           ? {
               methodResponses: {
@@ -319,9 +317,9 @@ suite.define(() => {
               },
             }
           : {},
+        "settings/appearance",
       );
 
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
       const followUp = page.locator("[data-settings-follow-up-mode]");
       await followUp.waitFor({ state: "visible" });
       if (!inheritsQueueMode) {
@@ -330,12 +328,9 @@ suite.define(() => {
       await page.locator("[data-settings-send-shortcut]").selectOption("enter");
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
       const initialText = "keep the shortcut run active";
-      await composer.fill(initialText);
-      await page.getByRole("button", { name: "Send message" }).click();
-      const initialSend = await gateway.waitForRequest("chat.send");
-      const runId = requireString(requireRecord(initialSend.params).idempotencyKey, "active run");
+      const initialSend = await sendChat(page, gateway, initialText);
+      const runId = requireString(initialSend.idempotencyKey, "active run");
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
 
       const followUpText = "use the alternate follow-up action";

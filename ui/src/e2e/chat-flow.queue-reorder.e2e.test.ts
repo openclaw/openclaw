@@ -13,56 +13,45 @@ import {
   installMockGateway,
   requireRecord,
 } from "./chat-flow.test-support.ts";
-import { outboxPayloadFile, stageOutboxAttachment } from "./chat-outbox-payloads.test-support.ts";
+import {
+  outboxPayloadFile,
+  readOutboxQueue,
+  stageOutboxAttachment,
+} from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
-async function openChat(options?: Parameters<typeof installMockGateway>[1]) {
-  const page = await newChatPage(suite);
+async function openChat(options?: Parameters<typeof installMockGateway>[1], existingPage?: Page) {
+  const page = existingPage ?? (await newChatPage(suite));
   const gateway = await installMockGateway(page, options);
   await page.goto(`${suite.server.baseUrl}chat`);
   const composer = page.locator(".agent-chat__composer-combobox textarea");
-  await composer.waitFor({ state: "visible", timeout: 15_000 });
+  if (!existingPage) {
+    await composer.waitFor({ state: "visible", timeout: 15_000 });
+  }
   return { page, gateway, composer };
 }
 
-function storedQueueOrder(page: Page) {
-  return page.evaluate(() =>
-    Object.entries(sessionStorage)
-      .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
-      .flatMap(([, value]) => {
-        try {
-          const parsed = JSON.parse(value) as {
-            sessions?: Record<
-              string,
-              { queue?: { text?: unknown; orderKey?: unknown; createdAt?: unknown }[] }
-            >;
-          };
-          return Object.values(parsed.sessions ?? {}).flatMap((session) => session.queue ?? []);
-        } catch {
-          return [];
-        }
-      })
-      .toSorted(
-        (left, right) =>
-          (typeof left.orderKey === "number" ? left.orderKey : Number(left.createdAt)) -
-          (typeof right.orderKey === "number" ? right.orderKey : Number(right.createdAt)),
-      )
-      .map((item) => item.text),
-  );
+async function storedQueueOrder(page: Page) {
+  return (await readOutboxQueue(page))
+    .toSorted(
+      (left, right) => (left.orderKey ?? left.createdAt) - (right.orderKey ?? right.createdAt),
+    )
+    .map((item) => item.text);
 }
 
 suite.define(() => {
   it("delivers the reordered head after a reconnect attachment read settles", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        historyMessages: [{ role: "assistant", content: "Synthetic queue ordering proof." }],
-        sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      const { gateway, composer } = await openChat(
+        {
+          historyMessages: [{ role: "assistant", content: "Synthetic queue ordering proof." }],
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        },
+        page,
+      );
       await waitForControlUiGatewayReady(page);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
       const rows = page.locator(".chat-queue__item");
       await composer.waitFor();
       await page.getByText("Synthetic queue ordering proof.", { exact: true }).waitFor();
@@ -72,9 +61,7 @@ suite.define(() => {
       await stageOutboxAttachment(page, "A: review the attached itinerary");
       await composer.press("Enter");
       await rows.filter({ hasText: "A: review" }).waitFor();
-      await composer.fill("B: read this instruction first");
-      await composer.press("Enter");
-      await rows.filter({ hasText: "B: read" }).waitFor();
+      await queueMessages(page, ["B: read this instruction first"]);
       // Hold the browser's real Blob decoder after offline admission has stored every byte.
       const attachmentRead = await page.evaluateHandle(() => {
         const NativeFileReader = FileReader;
@@ -147,11 +134,7 @@ suite.define(() => {
         .getByText("Waiting for reconnect", { exact: true })
         .waitFor();
 
-      for (const message of QUEUED.slice(1)) {
-        await composer.fill(message);
-        await composer.press("Enter");
-        await rows.filter({ hasText: message }).waitFor();
-      }
+      await queueMessages(page, QUEUED.slice(1));
 
       const queueText = () => rows.locator(".chat-queue__text").allTextContents();
       expect(await queueText()).toEqual([QUEUED[1], QUEUED[2]]);

@@ -1,6 +1,5 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import {
   confirmIme,
   newChatPage,
@@ -123,216 +122,196 @@ suite.define(() => {
       },
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.goto(`${suite.server.baseUrl}chat?session=main`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible", timeout: 15_000 });
-      await composer.fill("keep the first run active");
-      await page.getByRole("button", { name: "Send message" }).click();
-      const active = requireRecord((await gateway.waitForRequest("chat.send")).params);
-      const activeRunId = requireString(active.idempotencyKey, "active run idempotency key");
-      await page.getByRole("button", { name: "Stop generating" }).waitFor(wait);
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+    await page.goto(`${suite.server.baseUrl}chat?session=main`);
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.waitFor({ state: "visible", timeout: 15_000 });
+    await composer.fill("keep the first run active");
+    await page.getByRole("button", { name: "Send message" }).click();
+    const active = requireRecord((await gateway.waitForRequest("chat.send")).params);
+    const activeRunId = requireString(active.idempotencyKey, "active run idempotency key");
+    await page.getByRole("button", { name: "Stop generating" }).waitFor(wait);
 
-      const acceptedSession = {
-        key: "agent:main:main",
-        sessionId: "session:agent:main:main",
-        hasActiveRun: true,
-        activeRunIds: [activeRunId],
-        status: "running",
-      };
-      const history = (sessionInfo: typeof acceptedSession) => ({
-        sessionId: acceptedSession.sessionId,
-        sessionInfo,
-        messages: [
-          {
-            role: "user",
-            content: "keep the first run active",
-            idempotencyKey: `${activeRunId}:user`,
-          },
-        ],
-      });
-      await gateway.setMethodResponse("chat.history", history(acceptedSession));
-      await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
-      await page.locator(".chat-send-status").waitFor({ state: "detached" });
+    const acceptedSession = {
+      key: "agent:main:main",
+      sessionId: "session:agent:main:main",
+      hasActiveRun: true,
+      activeRunIds: [activeRunId],
+      status: "running",
+    };
+    const history = (sessionInfo: typeof acceptedSession) => ({
+      sessionId: acceptedSession.sessionId,
+      sessionInfo,
+      messages: [
+        {
+          role: "user",
+          content: "keep the first run active",
+          idempotencyKey: `${activeRunId}:user`,
+        },
+      ],
+    });
+    await gateway.setMethodResponse("chat.history", history(acceptedSession));
+    await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
+    await page.locator(".chat-send-status").waitFor({ state: "detached" });
 
-      for (const message of ["send first", "edit before send", "remove me", "send last"]) {
-        await composer.fill(message);
-        await page.getByRole("button", { name: "Queue message" }).click();
-        await queue.row(message).waitFor(wait);
-      }
-      await queue.row("edit before send").dblclick();
-      await gateway.setOnline(false);
-      await gateway.closeLatest();
-      await page.locator(".agent-chat__input--offline").waitFor(wait);
-
-      // `hasText` stops matching once the row text becomes a textarea value.
-      const inlineEditor = page.locator(".chat-queue__edit-input");
-      await inlineEditor.waitFor(wait);
-      await inlineEditor.press("ControlOrMeta+A");
-      await page.keyboard.insertText("edited before send");
-      await inlineEditor.press("Control+Enter");
-      await queue.row("edited before send").waitFor();
-      expect(await page.getByRole("alert").count()).toBe(0);
-
-      await queue.row("send last").locator(".chat-queue__grip").focus();
-      for (const expected of [
-        ["send first", "edited before send", "send last", "remove me"],
-        ["send first", "send last", "edited before send", "remove me"],
-        ["send last", "send first", "edited before send", "remove me"],
-      ]) {
-        await page.keyboard.press("ArrowUp");
-        await expect.poll(queue.text).toEqual(expected);
-      }
-
-      const row = queue.row("remove me");
-
-      const storage = await page.evaluateHandle(() => {
-        const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem");
-        if (!descriptor || typeof descriptor.value !== "function") {
-          throw new Error("Storage.setItem is unavailable");
-        }
-        const original = descriptor.value as (this: Storage, key: string, value: string) => void;
-        Object.defineProperty(Storage.prototype, "setItem", {
-          ...descriptor,
-          value(this: Storage, ...args: [string, string]) {
-            if (this === window.sessionStorage) {
-              throw new DOMException("exceeded the quota", "QuotaExceededError");
-            }
-            return Reflect.apply(original, this, args);
-          },
-        });
-        return { restore: () => Object.defineProperty(Storage.prototype, "setItem", descriptor) };
-      });
-      await row.locator(".chat-queue__remove").click();
-
-      await page
-        .getByRole("alert")
-        .getByText("Could not store this message for reconnect.", { exact: false })
-        .waitFor(wait);
-      await row.waitFor();
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-
-      await storage.evaluate((owner) => owner.restore());
-      await storage.dispose();
-      const clicks = await page.evaluateHandle(() => {
-        const trace: Array<{ detail: number; rowText?: string }> = [];
-        document.addEventListener(
-          "click",
-          (event) => {
-            const target = event.target instanceof Element ? event.target : null;
-            trace.push({
-              detail: event.detail,
-              rowText: target?.closest(".chat-queue__item")?.querySelector(".chat-queue__text")
-                ?.textContent,
-            });
-          },
-          { capture: true },
-        );
-        return trace;
-      });
-      await row.locator(".chat-queue__remove").click();
-      await row.waitFor(detached);
-      // Queue reflow can move the next row away from the first click's coordinates.
-      // Aim the native second click at its remove control without another first click.
-      await queue.row("edited before send").locator(".chat-queue__remove").hover();
-      await page.mouse.down({ clickCount: 2 });
-      await page.mouse.up({ clickCount: 2 });
-      expect(await clicks.jsonValue()).toEqual([
-        { detail: 1, rowText: "remove me" },
-        { detail: 2, rowText: "edited before send" },
-      ]);
-      await clicks.dispose();
-      await page.getByRole("alert").waitFor(detached);
-      await expect.poll(queue.text).toEqual(["send last", "send first", "edited before send"]);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-
-      const queueDisposable = async (text: string) => {
-        await composer.fill(text);
-        await composer.press("Enter");
-        const disposable = queue.row(text);
-        await disposable.waitFor(wait);
-        return disposable;
-      };
-      const singleClickRow = await queueDisposable("single-click removal");
-      await singleClickRow.locator(".chat-queue__remove").click();
-      await singleClickRow.waitFor(detached);
-      const keyboardRow = await queueDisposable("keyboard removal");
-      await keyboardRow.locator(".chat-queue__remove").focus();
-      await page.keyboard.press("Enter");
-      await keyboardRow.waitFor(detached);
-      // Remove at the first DOM commit, before yielded delivery can resume.
-      // Programmatic activation must keep cancellation exact even at this boundary.
-      const removal = await page.evaluateHandle(() => {
-        let removed = false;
-        const observer = new MutationObserver(() => {
-          const queuedRow = [...document.querySelectorAll(".chat-queue__item")].find(
-            (item) =>
-              item.querySelector(".chat-queue__text")?.textContent === "programmatic removal",
-          );
-          const button = queuedRow?.querySelector<HTMLButtonElement>(".chat-queue__remove");
-          if (button) {
-            observer.disconnect();
-            button.click();
-            removed = true;
-          }
-        });
-        observer.observe(document, { childList: true, subtree: true });
-        return { wasRemoved: () => removed };
-      });
-      await composer.fill("programmatic removal");
-      await composer.press("Enter");
-      await expect.poll(() => removal.evaluate((proof) => proof.wasRemoved())).toBe(true);
-      await removal.dispose();
-      await queue.row("programmatic removal").waitFor(detached);
-      await expectRequestCountStable(gateway, "chat.send", 1);
-      await page.getByRole("alert").waitFor(detached);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-
-      const terminalSession = {
-        ...acceptedSession,
-        activeRunIds: [],
-        hasActiveRun: false,
-        lastRunId: activeRunId,
-        status: "done",
-      };
-      await gateway.setMethodResponse("chat.history", history(terminalSession));
-      await gateway.deferNext("chat.send");
-      await gateway.setOnline(true);
-      await page.locator(".agent-chat__input--offline").waitFor(detached);
-      await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
-      await gateway.emitGatewayEvent("sessions.changed", terminalSession);
-
-      for (const [index, ordinal] of ["First", "Second", "Third"].entries()) {
-        const send = requireRecord(
-          (await waitForRequests(gateway, "chat.send", index + 2))[index + 1]?.params,
-        );
-        const runId = requireString(send.idempotencyKey, `${ordinal} queued send idempotency key`);
-        if (index === 0) {
-          expect(send.message).toBe("send last");
-          await gateway.resolveDeferred("chat.send");
-        }
-        await gateway.emitChatFinal({ runId, text: `${ordinal} queued turn completed.` });
-      }
-      const params = (await gateway.getRequests("chat.send")).map((request) =>
-        requireRecord(request.params),
-      );
-      expect(params.map((entry) => entry.message)).toEqual([
-        "keep the first run active",
-        "send last",
-        "send first",
-        "edited before send",
-      ]);
-      expect(new Set(params.map((entry) => entry.idempotencyKey)).size).toBe(4);
-      await expectRequestCountStable(gateway, "chat.send", 4);
-      await page.locator(".chat-queue").waitFor(detached);
-    } catch (error) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: error instanceof Error ? error : new Error(String(error)),
-        label: "queue-edit-reconnect",
-      });
-      throw error;
+    for (const message of ["send first", "edit before send", "remove me", "send last"]) {
+      await composer.fill(message);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      await queue.row(message).waitFor(wait);
     }
+    await queue.row("edit before send").dblclick();
+    await gateway.setOnline(false);
+    await gateway.closeLatest();
+    await page.locator(".agent-chat__input--offline").waitFor(wait);
+
+    // `hasText` stops matching once the row text becomes a textarea value.
+    const inlineEditor = page.locator(".chat-queue__edit-input");
+    await inlineEditor.waitFor(wait);
+    await inlineEditor.press("ControlOrMeta+A");
+    await page.keyboard.insertText("edited before send");
+    await inlineEditor.press("Control+Enter");
+    await queue.row("edited before send").waitFor();
+    expect(await page.getByRole("alert").count()).toBe(0);
+
+    await queue.row("send last").locator(".chat-queue__grip").focus();
+    for (const expected of [
+      ["send first", "edited before send", "send last", "remove me"],
+      ["send first", "send last", "edited before send", "remove me"],
+      ["send last", "send first", "edited before send", "remove me"],
+    ]) {
+      await page.keyboard.press("ArrowUp");
+      await expect.poll(queue.text).toEqual(expected);
+    }
+
+    const row = queue.row("remove me");
+
+    const storage = await page.evaluateHandle(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (this: Storage, ...args: [string, string]) {
+        if (this === window.sessionStorage) {
+          throw new DOMException("exceeded the quota", "QuotaExceededError");
+        }
+        return Reflect.apply(original, this, args);
+      };
+      return {
+        restore: () => {
+          Storage.prototype.setItem = original;
+        },
+      };
+    });
+    await row.locator(".chat-queue__remove").click();
+
+    await page
+      .getByRole("alert")
+      .getByText("Could not store this message for reconnect.", { exact: false })
+      .waitFor(wait);
+    await row.waitFor();
+    expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+    await storage.evaluate((owner) => owner.restore());
+    await storage.dispose();
+    const clicks = await page.evaluateHandle(() => {
+      const trace: Array<{ detail: number; rowText?: string }> = [];
+      document.addEventListener(
+        "click",
+        (event) => {
+          const target = event.target instanceof Element ? event.target : null;
+          trace.push({
+            detail: event.detail,
+            rowText: target?.closest(".chat-queue__item")?.querySelector(".chat-queue__text")
+              ?.textContent,
+          });
+        },
+        { capture: true },
+      );
+      return trace;
+    });
+    await row.locator(".chat-queue__remove").click();
+    await row.waitFor(detached);
+    // Queue reflow can move the next row away from the first click's coordinates.
+    // Aim the native second click at its remove control without another first click.
+    await queue.row("edited before send").locator(".chat-queue__remove").hover();
+    await page.mouse.down({ clickCount: 2 });
+    await page.mouse.up({ clickCount: 2 });
+    expect(await clicks.jsonValue()).toEqual([
+      { detail: 1, rowText: "remove me" },
+      { detail: 2, rowText: "edited before send" },
+    ]);
+    await clicks.dispose();
+    await page.getByRole("alert").waitFor(detached);
+    await expect.poll(queue.text).toEqual(["send last", "send first", "edited before send"]);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+    // The preceding successful pointer removal already covers single-click activation.
+    await queueMessages(page, ["keyboard removal"]);
+    const keyboardRow = queue.row("keyboard removal");
+    await keyboardRow.locator(".chat-queue__remove").focus();
+    await page.keyboard.press("Enter");
+    await keyboardRow.waitFor(detached);
+    // Remove at the first DOM commit, before yielded delivery can resume.
+    // Programmatic activation must keep cancellation exact even at this boundary.
+    const removal = await page.evaluateHandle(() => {
+      let removed = false;
+      const observer = new MutationObserver(() => {
+        const queuedRow = [...document.querySelectorAll(".chat-queue__item")].find(
+          (item) => item.querySelector(".chat-queue__text")?.textContent === "programmatic removal",
+        );
+        const button = queuedRow?.querySelector<HTMLButtonElement>(".chat-queue__remove");
+        if (button) {
+          observer.disconnect();
+          button.click();
+          removed = true;
+        }
+      });
+      observer.observe(document, { childList: true, subtree: true });
+      return { wasRemoved: () => removed };
+    });
+    await composer.fill("programmatic removal");
+    await composer.press("Enter");
+    await expect.poll(() => removal.evaluate((proof) => proof.wasRemoved())).toBe(true);
+    await removal.dispose();
+    await queue.row("programmatic removal").waitFor(detached);
+    await expectRequestCountStable(gateway, "chat.send", 1);
+    await page.getByRole("alert").waitFor(detached);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+
+    const terminalSession = {
+      ...acceptedSession,
+      activeRunIds: [],
+      hasActiveRun: false,
+      lastRunId: activeRunId,
+      status: "done",
+    };
+    await gateway.setMethodResponse("chat.history", history(terminalSession));
+    await gateway.deferNext("chat.send");
+    await gateway.setOnline(true);
+    await page.locator(".agent-chat__input--offline").waitFor(detached);
+    await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
+    await gateway.emitGatewayEvent("sessions.changed", terminalSession);
+
+    for (const [index, ordinal] of ["First", "Second", "Third"].entries()) {
+      const send = requireRecord(
+        (await waitForRequests(gateway, "chat.send", index + 2))[index + 1]?.params,
+      );
+      const runId = requireString(send.idempotencyKey, `${ordinal} queued send idempotency key`);
+      if (index === 0) {
+        expect(send.message).toBe("send last");
+        await gateway.resolveDeferred("chat.send");
+      }
+      await gateway.emitChatFinal({ runId, text: `${ordinal} queued turn completed.` });
+    }
+    const params = (await gateway.getRequests("chat.send")).map((request) =>
+      requireRecord(request.params),
+    );
+    expect(params.map((entry) => entry.message)).toEqual([
+      "keep the first run active",
+      "send last",
+      "send first",
+      "edited before send",
+    ]);
+    expect(new Set(params.map((entry) => entry.idempotencyKey)).size).toBe(4);
+    await expectRequestCountStable(gateway, "chat.send", 4);
+    await page.locator(".chat-queue").waitFor(detached);
   });
 });
