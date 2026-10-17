@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -15,8 +17,10 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -448,6 +452,306 @@ describe.each([
         await pending;
         await Promise.all(fixture.state.tails);
       }
+    });
+  });
+});
+
+function createPreparationFixture() {
+  const dir = makePluginLoaderTempDir();
+  const id = "native-speech-preparation";
+  const key = `__openclaw_speech_preparation_${path.basename(dir)}`;
+  const connections: Array<{
+    database: DatabaseSync;
+    disposals: number;
+    cleanups: number;
+    opaque: { voiceId: string };
+  }> = [];
+  const callbacks: {
+    onMetadata?: () => void;
+    onProjection?: () => void;
+    onDispose?: () => Promise<void>;
+    trackTail?: boolean;
+  } = {};
+  const tailResume = createDeferredCore();
+  const tails: Promise<void>[] = [];
+  const consumedVoices: string[] = [];
+  const receivedOverrides: unknown[] = [];
+  const state = {
+    connections,
+    callbacks,
+    tailResume,
+    tails,
+    consumedVoices,
+    receivedOverrides,
+    trackAsyncWork,
+    dir,
+  };
+  Object.defineProperty(globalThis, key, { configurable: true, value: state });
+  const plugin = writePlugin({
+    dir,
+    id,
+    body: `const { DatabaseSync } = require("node:sqlite");
+module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  const state = globalThis[${JSON.stringify(key)}];
+  const database = new DatabaseSync(require("node:path").join(state.dir, "preparation-" + state.connections.length + ".sqlite"));
+  database.exec("CREATE TABLE fixture(value INTEGER); INSERT INTO fixture VALUES(42)");
+  const read = () => database.prepare("SELECT value FROM fixture").get().value;
+  const connection = { database, disposals: 0, cleanups: 0,
+    opaque: { get voiceId() { return "voice-" + read(); } } };
+  state.connections.push(connection);
+  api.lifecycle.registerRuntimeLifecycle({ id: "speech-preparation-resource",
+    async dispose() { await state.callbacks.onDispose?.(); read(); connection.disposals++; database.close(); },
+    cleanup() { read(); connection.cleanups++; database.close(); }
+  });
+  api.registerSpeechProvider({
+    get id() { state.callbacks.onMetadata?.(); read(); return ${JSON.stringify(id)}; },
+    aliases: [${JSON.stringify(`${id}-alias`)}], label: "Native speech preparation",
+    resolveConfig() { read(); return {}; },
+    isConfigured() { read(); return true; },
+    parseDirectiveToken({ key }) {
+      if (key !== "voice") return { handled: false };
+      read();
+      if (state.callbacks.trackTail) {
+        state.tails.push(state.trackAsyncWork(async () => { await state.tailResume.promise; read(); }));
+      }
+      return { handled: true, get overrides() {
+        state.callbacks.onProjection?.(); read(); return { voiceSettings: connection.opaque };
+      } };
+    },
+    async synthesize() { throw new Error("Buffered fixture synthesis is unused"); },
+    async synthesizeTelephony(request) {
+      read(); state.receivedOverrides.push(request.providerOverrides.voiceSettings);
+      state.consumedVoices.push(request.providerOverrides.voiceSettings.voiceId);
+      return { audioBuffer: Buffer.from([42, 0]), sampleRate: 8000, outputFormat: "pcm" };
+    }
+  });
+} };`,
+  });
+  fs.writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify({ id, contracts: { speechProviders: [id] }, configSchema: { type: "object" } }),
+  );
+  const cfg: OpenClawConfig = {
+    plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+    tts: { provider: id, providers: { [id]: {} }, modelOverrides: { allowProvider: true } },
+  };
+  const host = new LegacyPluginSdkResourceHost();
+  const runtime = createPluginRuntime();
+  const text = `Hello [[tts:provider=${id}-alias voice=fixture]]`;
+  return {
+    cfg,
+    id,
+    host,
+    runtime,
+    state,
+    prepare: () => runtime.tts.prepareTtsRequest({ cfg, text }),
+    async runTest(run: () => Promise<void>) {
+      try {
+        await withEnvAsync(
+          {
+            OPENCLAW_HOME: dir,
+            OPENCLAW_STATE_DIR: dir,
+            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
+            OPENCLAW_TTS_PREFS: path.join(dir, "prefs.json"),
+          },
+          () =>
+            host.run(async () => {
+              useNoBundledPlugins();
+              await run();
+            }),
+        );
+      } finally {
+        tailResume.resolve();
+        await Promise.allSettled(tails);
+        await host.close();
+        clearPluginMetadataLifecycleCaches();
+        try {
+          const cleanup = await waitForPluginCacheRetirement();
+          expect(cleanup.failures).toEqual([]);
+        } finally {
+          for (const { database } of connections) {
+            if (database.isOpen) {
+              database.close();
+            }
+          }
+          Reflect.deleteProperty(globalThis, key);
+        }
+      }
+    },
+  };
+}
+
+async function withInspection(
+  run: (
+    fixture: ReturnType<typeof createPreparationFixture>,
+    inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>,
+  ) => Promise<void>,
+) {
+  const fixture = createPreparationFixture();
+  await fixture.runTest(async () => {
+    const inspection = await acquirePluginRegistryForInspection({ config: fixture.cfg });
+    try {
+      await run(fixture, inspection);
+    } finally {
+      await inspection.release();
+    }
+  });
+}
+
+describe("async speech preparation resources", () => {
+  it("reuses registrations and preserves opaque overrides for synthesis after inspection retirement", async () => {
+    await withInspection(async ({ state, host, prepare, runtime, id }, inspection) => {
+      const prepared = await withPluginRuntimeRegistryScope(inspection.registry, async () => {
+        const first = await prepare();
+        for (let index = 0; index < 3; index++) {
+          const next = await prepare();
+          expect(
+            next.directives.overrides.providerOverrides?.[id]?.voiceSettings ===
+              first.directives.overrides.providerOverrides?.[id]?.voiceSettings,
+          ).toBe(true);
+        }
+        const synthesis = await runtime.tts.textToSpeechTelephony({
+          cfg: first.cfg,
+          text: first.directives.cleanedText,
+          overrides: first.directives.overrides,
+        });
+        expect(synthesis.success).toBe(true);
+        // Ordinary dispatch must restore the handle inside its exact owning plugin.
+        expect(state.receivedOverrides[0] === state.connections[0]?.opaque).toBe(true);
+        return first;
+      });
+      expect(state.connections.length).toBe(1);
+      await inspection.release();
+      expect(state.connections[0]?.database.isOpen).toBe(true);
+      expect(prepared.directives.overrides.providerOverrides?.[id]?.voiceSettings).toHaveProperty(
+        "voiceId",
+        "voice-42",
+      );
+      const result = await runtime.tts.textToSpeechTelephony({
+        cfg: prepared.cfg,
+        text: prepared.directives.cleanedText,
+        overrides: prepared.directives.overrides,
+      });
+      expect(result.success).toBe(true);
+      expect(state.consumedVoices).toEqual(["voice-42", "voice-42"]);
+      await host.close();
+      expect(state.connections.every((entry) => !entry.database.isOpen)).toBe(true);
+      expect(state.connections.every((entry) => entry.disposals === 1)).toBe(true);
+    });
+  });
+
+  it("retains the selected source before provider metadata can retire its inspection", async () => {
+    await withInspection(async ({ state, host, prepare }, inspection) => {
+      let retirement: Promise<void> | undefined;
+      state.callbacks.onMetadata = () => {
+        retirement ??= inspection.release();
+      };
+      const prepared = await withPluginRuntimeRegistryScope(inspection.registry, prepare);
+      await retirement;
+      expect(prepared.directives.hasDirective).toBe(true);
+      expect(state.connections[0]?.opaque.voiceId).toBe("voice-42");
+      await host.close();
+      expect(state.connections[0]?.disposals).toBe(1);
+    });
+  });
+
+  it.each(["dispose", "tail", "tail-failure"])(
+    "joins pending %s work before closing resources",
+    async (mode) => {
+      await withInspection(async ({ state, host, prepare }, inspection) => {
+        const disposeResume = createDeferredCore();
+        let retirement: Promise<void> | undefined;
+        const fails = mode !== "tail";
+        if (mode === "dispose") {
+          state.callbacks.onDispose = () => disposeResume.promise;
+        } else {
+          state.callbacks.trackTail = true;
+        }
+        if (fails) {
+          state.callbacks.onProjection = () => {
+            retirement ??= inspection.release();
+            throw new Error("speech directive projection failed");
+          };
+        }
+        try {
+          const preparation = withPluginRuntimeRegistryScope(inspection.registry, prepare);
+          if (fails) {
+            await expect(preparation).rejects.toThrow("speech directive projection failed");
+            if (mode === "tail-failure") {
+              await nextTurn();
+              expect(state.connections[0]?.database.isOpen).toBe(true);
+            }
+          } else {
+            await preparation;
+            expect(state.tails.length).toBe(1);
+            await inspection.release();
+          }
+          let closed = false;
+          const closing = host.close().then(() => {
+            closed = true;
+          });
+          await nextTurn();
+          expect(closed).toBe(false);
+          if (mode !== "dispose") {
+            expect(state.connections[0]?.database.isOpen).toBe(true);
+          }
+          disposeResume.resolve();
+          state.tailResume.resolve();
+          await Promise.all(state.tails);
+          await closing;
+          expect(state.connections[0]?.disposals).toBe(1);
+        } finally {
+          disposeResume.resolve();
+          state.tailResume.resolve();
+          await Promise.allSettled(state.tails);
+          await retirement;
+        }
+      });
+    },
+  );
+
+  it("rejects projection when its SDK host closes during preparation", async () => {
+    await withInspection(async ({ state, host, prepare }, inspection) => {
+      let closing: Promise<void> | undefined;
+      state.callbacks.onProjection = () => {
+        closing ??= host.close();
+      };
+      await expect(withPluginRuntimeRegistryScope(inspection.registry, prepare)).rejects.toThrow(
+        "Plugin SDK resource host is closed",
+      );
+      await closing;
+      await inspection.release();
+      expect(state.connections[0]?.disposals).toBe(1);
+    });
+  });
+
+  it.each(["active", "cold"] as const)(
+    "preserves %s raw registration lifetime and cache reuse",
+    async (mode) => {
+      const { state, host, prepare, cfg, runTest } = createPreparationFixture();
+      await runTest(async () => {
+        const registry = mode === "active" ? loadPluginRegistryHandle({ config: cfg }) : undefined;
+        for (let index = 0; index < 4; index++) {
+          const result = await withPluginRuntimeRegistryScope(registry, prepare);
+          expect(result.directives.hasDirective).toBe(true);
+        }
+        expect(state.connections.length).toBe(1);
+        await host.close();
+        expect(state.connections[0]?.database.isOpen).toBe(true);
+        expect(state.connections[0]?.disposals).toBe(0);
+      });
+      expect(state.connections[0]?.cleanups).toBe(1);
+    },
+  );
+
+  it("rejects new preparation after the SDK host closes", async () => {
+    const { state, host, prepare, runTest } = createPreparationFixture();
+    await runTest(async () => {
+      await host.close();
+      await expect(prepare().then(() => undefined)).rejects.toThrow(
+        "Plugin SDK resource host is closed",
+      );
+      expect(state.connections.length).toBe(0);
     });
   });
 });

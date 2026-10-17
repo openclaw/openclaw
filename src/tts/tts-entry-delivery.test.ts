@@ -6,7 +6,6 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTtsTool } from "../agents/tools/tts-tool.js";
 import { handleTtsCommands } from "../auto-reply/reply/commands-tts.js";
-import type { HandleCommandsParams } from "../auto-reply/reply/commands-types.js";
 import { buildCommandTestParams } from "../auto-reply/reply/commands.test-harness.js";
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
 import type { ChannelTtsVoiceDeliveryCapabilities } from "../channels/plugins/types.core.js";
@@ -31,14 +30,14 @@ const SYNTHETIC_OGG_OPUS = Buffer.from(
 const SYNTHETIC_OGG_OPUS_SHA256 =
   "08bf258f524277fa0b07e6334ebffb1eb600871d8d86ae3db139c2b968ddfb27";
 
-const converter = vi.hoisted(() => ({ requests: [] as Array<{ source: string; target: string }> }));
+const converter = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("../media/media-services.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/media-services.js")>();
   return {
     ...actual,
     transcodeAudioBuffer: async (params: Parameters<typeof actual.transcodeAudioBuffer>[0]) => {
-      converter.requests.push({ source: params.sourceExtension, target: params.targetExtension });
+      converter.count++;
       if (params.sourceExtension !== "ogg" || params.targetExtension !== "caf") {
         throw new Error("Unexpected conversion in the TTS metadata fixture");
       }
@@ -58,7 +57,7 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
 const PROVIDER = "synthetic-tts-metadata";
 const CHANNEL = "imessage";
 const SPOKEN = "This synthetic audio should keep its channel delivery decision.";
-const requests: Array<{ target: string; text: string }> = [];
+const requests: string[] = [];
 let state: OpenClawTestState;
 let cfg: OpenClawConfig;
 
@@ -68,7 +67,7 @@ function installFixture(voice: ChannelTtsVoiceDeliveryCapabilities, compatible =
     label: "Synthetic TTS metadata fixture",
     isConfigured: () => true,
     synthesize: async (request) => {
-      requests.push({ target: request.target, text: request.text });
+      requests.push(request.target);
       return {
         audioBuffer: await fs.readFile(state.path("provider.ogg")),
         fileExtension: ".ogg",
@@ -91,23 +90,6 @@ function installFixture(voice: ChannelTtsVoiceDeliveryCapabilities, compatible =
   setActivePluginRegistry(registry);
   expect(listSpeechProviders(cfg).map((entry) => entry.id)).toEqual([PROVIDER]);
   expect(resolveChannelTtsVoiceDelivery(CHANNEL)).toEqual(voice);
-}
-
-function commandParams(): HandleCommandsParams {
-  const params = buildCommandTestParams(
-    "/tts audio " + SPOKEN,
-    cfg,
-    { Provider: CHANNEL, Surface: CHANNEL },
-    { workspaceDir: state.workspaceDir },
-  );
-  params.command = {
-    ...params.command,
-    isAuthorizedSender: true,
-    senderIsOwner: true,
-    senderId: "synthetic-owner",
-    ownerList: ["synthetic-owner"],
-  };
-  return params;
 }
 
 const fileDelivery: ChannelTtsVoiceDeliveryCapabilities = {
@@ -139,7 +121,14 @@ async function observeEntries(expectedVoice: boolean): Promise<void> {
   const media = asRecord(asRecord(result.details)?.media);
   await assertStoredAudio(media?.mediaUrl);
 
-  const command = await handleTtsCommands(commandParams(), true);
+  const params = buildCommandTestParams(
+    "/tts audio " + SPOKEN,
+    cfg,
+    { Provider: CHANNEL, Surface: CHANNEL },
+    { workspaceDir: state.workspaceDir },
+  );
+  params.command.isAuthorizedSender = true;
+  const command = await handleTtsCommands(params, true);
   expect(command?.shouldContinue).toBe(false);
   await assertStoredAudio(command?.reply?.mediaUrl);
 
@@ -177,7 +166,7 @@ describe("TTS real synthesis owner to public output entries", () => {
     cfg = { tts: { auto: "always", provider: PROVIDER } };
     await fs.writeFile(state.path("provider.ogg"), SYNTHETIC_OGG_OPUS);
     requests.length = 0;
-    converter.requests.length = 0;
+    converter.count = 0;
   });
 
   afterEach(async () => {
@@ -195,10 +184,8 @@ describe("TTS real synthesis owner to public output entries", () => {
         !voice,
       );
       await observeEntries(voice);
-      expect(requests.map((request) => request.target)).toEqual(
-        Array(4).fill(voice ? "voice-note" : "audio-file"),
-      );
-      expect(converter.requests).toHaveLength(voice ? 0 : 4);
+      expect(requests).toEqual(Array(4).fill(voice ? "voice-note" : "audio-file"));
+      expect(converter.count).toBe(voice ? 0 : 4);
     },
   );
 

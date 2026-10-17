@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { mockFirstObjectArg } from "../test-utils/mock-call-assertions.js";
@@ -27,22 +28,21 @@ vi.mock("./provider-registry.js", async () => {
   };
 });
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = vi.hoisted(() => ({
+  postJsonRequestMock: vi.fn(),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
-  const { readProviderBinaryResponse } = await import("../agents/provider-http-errors.js");
+  const { assertOkOrThrowHttpError, readProviderBinaryResponse } =
+    await import("../agents/provider-http-errors.js");
   return {
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    assertOkOrThrowHttpError,
     postJsonRequest: postJsonRequestMock,
     readProviderBinaryResponse,
     resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
@@ -83,7 +83,6 @@ function mockAudioResponse(bytes = [4, 5, 6]) {
 
 describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
     resolveProviderHttpRequestConfigMock.mockClear();
     providerState.provider = undefined;
@@ -106,9 +105,6 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       await provider.synthesize({
         ...defaultRequest,
         providerConfig: { apiKey: "test-key" },
-        text: "Hosted speech can take longer. Keep the operator's timeout.",
-        cfg,
-        target: "audio-file",
         timeoutMs: resolveSpeechProviderTimeoutMs({
           config: resolveTtsConfig(cfg),
           provider,
@@ -127,7 +123,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     [{ speakerVoice: " ", speakerVoiceId: " ", voice: " ", voiceId: " d " }, "d"],
     [{}, "alloy"],
   ] as const)(
-    "preserves %j as %s through direct, normalized, runtime, and Talk synthesis",
+    "preserves %j as %s through direct, runtime, and Talk synthesis",
     async (selection, expected) => {
       const provider = createOpenAiCompatibleSpeechProvider(demoOptions);
       providerState.provider = provider;
@@ -135,7 +131,6 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       const providerConfig = { apiKey: "test-key", ...selection };
       const rawConfig = { provider: "demo", providers: { demo: providerConfig } };
       const cfg = { tts: rawConfig };
-      const normalized = provider.resolveConfig?.({ cfg, rawConfig, timeoutMs: 1000 });
       const resolved = getResolvedSpeechProviderConfig(resolveTtsConfig(cfg), "demo", cfg);
       const talkConfig = provider.resolveTalkConfig?.({
         cfg,
@@ -151,7 +146,6 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       });
       for (const config of [
         providerConfig,
-        expectDefined(normalized, "normalized provider config"),
         resolved,
         expectDefined(talkConfig, "Talk provider config"),
         expectDefined(inheritedTalkConfig, "inherited Talk provider config"),
@@ -159,14 +153,9 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
         await provider.synthesize({
           ...defaultRequest,
           providerConfig: config,
-          text: "Voice precedence",
-          cfg,
-          target: "audio-file",
-          timeoutMs: 1000,
         });
       }
       expect(postJsonRequestMock.mock.calls.map(([request]) => request.body.voice)).toEqual([
-        expected,
         expected,
         expected,
         Object.keys(selection).length === 0 ? "base-voice" : expected,
@@ -187,23 +176,21 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       },
     });
 
+    const normalize = (demo: Record<string, unknown>) =>
+      provider.resolveConfig?.({
+        cfg: {},
+        rawConfig: { providers: { demo } },
+        timeoutMs: 30_000,
+      });
     expect(provider.defaultModel).toBe("demo-tts");
     expect(
-      provider.resolveConfig?.({
-        cfg: {} as never,
-        timeoutMs: 30_000,
-        rawConfig: {
-          providers: {
-            demo: {
-              apiKey: "sk-demo",
-              baseUrl: "https://example.test/v1/",
-              modelId: "custom-tts",
-              voiceId: "nova",
-              speed: 1.25,
-              responseFormat: " PCM ",
-            },
-          },
-        },
+      normalize({
+        apiKey: "sk-demo",
+        baseUrl: "https://example.test/v1/",
+        modelId: "custom-tts",
+        voiceId: "nova",
+        speed: 1.25,
+        responseFormat: " PCM ",
       }),
     ).toEqual({
       apiKey: "sk-demo",
@@ -214,13 +201,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       responseFormat: "pcm",
     });
     const apiKey = { source: "env", provider: "default", id: "UNRESOLVED_SPEECH_KEY" } as const;
-    expect(() =>
-      provider.resolveConfig?.({
-        cfg: {},
-        rawConfig: { providers: { demo: { apiKey } } },
-        timeoutMs: 1000,
-      }),
-    ).toThrow("tts.providers.demo.apiKey");
+    expect(() => normalize({ apiKey })).toThrow("tts.providers.demo.apiKey");
     expect(() =>
       provider.resolveTalkConfig?.({
         cfg: {},
@@ -242,10 +223,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       responseFormats: ["mp3", "opus"],
       voiceCompatibleResponseFormats: ["opus"],
       baseUrlPolicy: { kind: "trim-trailing-slash" },
-      readExtraConfig: (raw) =>
-        typeof raw?.routing === "object" && raw.routing !== null && !Array.isArray(raw.routing)
-          ? { routing: raw.routing as Record<string, unknown> }
-          : {},
+      readExtraConfig: (raw) => ({ routing: asOptionalRecord(raw?.routing) }),
       extraJsonBodyFields: [{ configKey: "routing", requestKey: "provider" }],
     });
 

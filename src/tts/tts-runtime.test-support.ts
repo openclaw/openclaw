@@ -256,21 +256,15 @@ export async function expectTtsPayloadResult(params: {
   if (params.providerResult) {
     synthesizeMock.mockResolvedValueOnce(params.providerResult);
   }
-  const cfg = createTtsConfig(params.prefsName);
   await withTtsPayload(
     {
       payload: { text: params.text },
-      cfg,
+      cfg: createTtsConfig(params.prefsName),
       channel: params.channel,
       kind: params.kind ?? "final",
     },
     (result) => {
-      expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireRecord(
-        synthesizeMock.mock.calls.at(-1)?.[0],
-        "latest synthesis request",
-      );
-      expect(request.target).toBe(params.target);
+      expect(synthesizeMock.mock.lastCall?.[0]?.target).toBe(params.target);
       expect(result.audioAsVoice).toBe(params.audioAsVoice);
       expect(result.mediaUrl).toMatch(
         new RegExp(`voice---[a-f0-9-]+\\.${params.mediaExtension ?? "ogg"}$`),
