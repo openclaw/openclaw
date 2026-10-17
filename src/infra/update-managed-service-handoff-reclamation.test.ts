@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -102,15 +103,8 @@ await withUpdateCommandExecutor(runId, async (executor) => {
     assertManagedHandoffTestConsumer(binding, result.pid, path.resolve("src"));
     const original = store.read(install),
       occupied = store.read(slot);
-    expect(original.kind).toBe("current");
-    expect(occupied.kind).toBe("current");
-    if (original.kind !== "current" || occupied.kind !== "current") {
-      throw new Error("Missing crash pair");
-    }
-    expect(occupied.lease.version).toBe(2);
-    if (occupied.lease.version !== 2) {
-      throw new Error("Unexpected occupied-slot format");
-    }
+    assert(original.kind === "current" && occupied.kind === "current", "Missing crash pair");
+    assert(occupied.lease.version === 2, "Unexpected occupied-slot format");
     expect(occupied.lease.mutationOriginal?.key).toBe(install);
     return { original, occupied };
   };
@@ -120,11 +114,7 @@ await withUpdateCommandExecutor(runId, async (executor) => {
       fence.assertCurrent();
       const original = store.read(install),
         occupied = store.read(slot);
-      expect(original.kind).toBe("current");
-      expect(occupied.kind).toBe("current");
-      if (original.kind !== "current" || occupied.kind !== "current") {
-        throw new Error("Missing new pair");
-      }
+      assert(original.kind === "current" && occupied.kind === "current", "Missing new pair");
       expect(original.lease.helper.pid).toBe(process.pid);
       expect(occupied.lease.owner).toBe(original.lease.owner);
       expect(store.current(original.lease)).toBe(true);
@@ -142,9 +132,7 @@ it("preserves both old generations while the occupied slot still has a live exec
   const closed = once(holder, "close");
   try {
     await once(holder, "spawn");
-    if (!holder.pid) {
-      throw new Error("Missing holder pid");
-    }
+    assert(holder.pid, "Missing holder pid");
     const before = f.crash("ordinary", holder.pid);
     await expect(f.retry()).rejects.toThrow("Another update executor");
     expect(f.store.read(f.install)).toEqual(before.original);
@@ -177,9 +165,7 @@ it.each(["release", "releaseAll"] as const)(
       originalUpdateKey: f.install,
     });
     const original = store.acquire(f.install, "original", { kind: "update" });
-    if (original.kind !== "acquired") {
-      throw new Error("Original acquisition failed");
-    }
+    assert(original.kind === "acquired", "Original acquisition failed");
     const occupied = store.acquire(
       f.slot,
       "original",
@@ -188,9 +174,7 @@ it.each(["release", "releaseAll"] as const)(
       undefined,
       original.lease,
     );
-    if (occupied.kind !== "acquired") {
-      throw new Error("Occupied acquisition failed");
-    }
+    assert(occupied.kind === "acquired", "Occupied acquisition failed");
     const beforeOriginal = store.read(f.install);
     const beforeOccupied = store.read(f.slot);
     expect(
@@ -203,9 +187,7 @@ it.each(["release", "releaseAll"] as const)(
     expect(store.acquire(f.install, "contender", { kind: "update" }).kind).toBe("busy");
 
     const rebound = store.bind(occupied.lease, process.pid);
-    if (!rebound) {
-      throw new Error("Occupied rebinding failed");
-    }
+    assert(rebound, "Occupied rebinding failed");
     expect(store.releaseAll([original.lease, occupied.lease])).toBe(false);
     expect(store.read(f.install)).toEqual(beforeOriginal);
     expect(store.current(rebound)).toBe(true);
@@ -213,10 +195,7 @@ it.each(["release", "releaseAll"] as const)(
     expect(store.read(f.install).kind).toBe("absent");
     expect(store.read(f.slot).kind).toBe("absent");
     const next = store.acquire(f.install, "next", { kind: "update" });
-    expect(next.kind).toBe("acquired");
-    if (next.kind !== "acquired") {
-      throw new Error("Next generation acquisition failed");
-    }
+    assert(next.kind === "acquired", "Next generation acquisition failed");
     expect(store.release(next.lease)).toBe(true);
   },
 );
@@ -334,10 +313,7 @@ it.skipIf(process.platform === "win32").each([
   f.store.read(f.install);
   expect(f.rows()).toEqual(before);
   const repaired = f.store.acquire(f.install, "repair", { kind: "update" });
-  expect(repaired.kind).toBe("acquired");
-  if (repaired.kind !== "acquired") {
-    throw new Error("Expected repaired installation admission");
-  }
+  assert(repaired.kind === "acquired", "Expected repaired installation admission");
   expect(f.rows().map((row) => row.install_root)).toEqual([f.install]);
   expect(f.store.release(repaired.lease)).toBe(true);
   expect(f.rows()).toEqual([]);
@@ -370,9 +346,7 @@ it.skipIf(process.platform === "win32")(
     const f = retainedCommandFixture();
     const rootBefore = f.store.read(f.install);
     const isDead = vi.mocked(processIdentity.isPidDefinitelyDead).getMockImplementation();
-    if (!isDead) {
-      throw new Error("Missing process observation fixture");
-    }
+    assert(isDead, "Missing process observation fixture");
     let replaced = false;
     vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) => {
       if (pid === f.helper.pid && !replaced) {

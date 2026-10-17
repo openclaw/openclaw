@@ -232,16 +232,25 @@ function createBoundary(action: "update" | "triage" = "update") {
   };
 }
 
+async function startSettlement(fixture = createBoundary()) {
+  const completed = fixture.settle();
+  await awaitGateBeforeSettlement(
+    fixture.terminalStarted.promise,
+    completed,
+    "finalization not reached",
+  );
+  return { fixture, completed };
+}
+
+function expectNoReplacement(fixture: ReturnType<typeof createBoundary>) {
+  expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
+  expect(fixture.process.execve).not.toHaveBeenCalled();
+}
+
 it.each(["finalization", "diagnostics"] as const)(
   "joins settlement before cleanup after SIGTERM during %s",
   async (stage) => {
-    const fixture = createBoundary();
-    const completed = fixture.settle();
-    await awaitGateBeforeSettlement(
-      fixture.terminalStarted.promise,
-      completed,
-      "finalization not reached",
-    );
+    const { fixture, completed } = await startSettlement();
     if (stage === "diagnostics") {
       fixture.terminalFinished.resolve();
       await awaitGateBeforeSettlement(
@@ -258,8 +267,7 @@ it.each(["finalization", "diagnostics"] as const)(
     fixture.terminalFinished.resolve();
     fixture.diagnosticFinished.resolve();
     await completed;
-    expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
-    expect(fixture.process.execve).not.toHaveBeenCalled();
+    expectNoReplacement(fixture);
     expect(fixture.leaseStore.release).toHaveBeenCalledExactlyOnceWith(fixture.lease);
     expect(fixture.order).toEqual(
       stage === "finalization"
@@ -284,13 +292,7 @@ it.each(["finalization", "diagnostics"] as const)(
 it.each([true, false])(
   "revalidates lease authority before diagnostics (current=%s)",
   async (current) => {
-    const fixture = createBoundary();
-    const completed = fixture.settle();
-    await awaitGateBeforeSettlement(
-      fixture.terminalStarted.promise,
-      completed,
-      "finalization not reached",
-    );
+    const { fixture, completed } = await startSettlement();
     fixture.authority.current = current;
     fixture.terminalFinished.resolve();
     fixture.diagnosticFinished.resolve();
@@ -312,8 +314,7 @@ it.each([true, false])(
         "Reuse this diagnostic context on the Gateway host: openclaw triage --run --update-result /fixture/failure.json",
       );
     }
-    expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
-    expect(fixture.process.execve).not.toHaveBeenCalled();
+    expectNoReplacement(fixture);
     expect(fixture.process.exitCode).toBe(1);
   },
 );
@@ -325,19 +326,13 @@ it("revalidates the lease before admitting the diagnostic child", async () => {
       fixture.authority.current = false;
     }
   });
-  const completed = fixture.settle();
-  await awaitGateBeforeSettlement(
-    fixture.terminalStarted.promise,
-    completed,
-    "finalization not reached",
-  );
+  const { completed } = await startSettlement(fixture);
   fixture.terminalFinished.resolve();
   await completed;
   expect(fixture.spawn).toHaveBeenCalledTimes(2);
   expect(fixture.children[1]?.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
   expect(fixture.order).not.toContain("diagnostic:start");
-  expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
-  expect(fixture.process.execve).not.toHaveBeenCalled();
+  expectNoReplacement(fixture);
   expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
   expect(fixture.process.exitCode).toBe(1);
 });

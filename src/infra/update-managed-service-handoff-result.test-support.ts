@@ -8,11 +8,25 @@ import type {
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
+type RunBoundary = (
+  kind: "systemd" | "launchd",
+  options?: ManagedServiceManagerBoundaryOptions,
+) => Promise<ManagedServiceManagerBoundaryResult>;
+const gitRecovery = (buildId = "original-git-build") => ({
+  serviceRestartSafe: true,
+  version: "1.0.0",
+  buildId,
+});
+const restoreStep = (exitCode: number) => ({
+  name: "service-restore",
+  log: {
+    exitCode,
+    ...(exitCode ? { stderrTail: "managed-service-handoff-restore-failed" } : {}),
+  },
+});
+
 export function registerManagedTerminalResultTests(
-  runManagedServiceManagerBoundary: (
-    kind: "systemd" | "launchd",
-    options?: ManagedServiceManagerBoundaryOptions,
-  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  runManagedServiceManagerBoundary: RunBoundary,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
   tempDirs: ManagedHandoffTempDirTracker,
@@ -136,7 +150,7 @@ export function registerManagedTerminalResultTests(
           mode: "git",
           steps: [],
           durationMs: 100,
-          recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "original-git-build" },
+          recovery: gitRecovery(),
         } satisfies UpdateRunResult,
         recordedFailure: {
           result: {
@@ -163,10 +177,7 @@ export function registerManagedTerminalResultTests(
 }
 
 export function registerManagedRecoveryOutcomeTests(
-  runManagedServiceManagerBoundary: (
-    kind: "systemd" | "launchd",
-    options?: ManagedServiceManagerBoundaryOptions,
-  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  runManagedServiceManagerBoundary: RunBoundary,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
   kinds: readonly ("systemd" | "launchd")[],
@@ -348,7 +359,7 @@ export function registerManagedRecoveryOutcomeTests(
           status,
           reason,
           mode: "git",
-          recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "original-git-build" },
+          recovery: gitRecovery(),
         },
       });
       expect(
@@ -370,7 +381,7 @@ export function registerManagedRecoveryOutcomeTests(
             status,
             stats: {
               reason,
-              steps: [{ name: "service-restore", log: { exitCode: 0 } }],
+              steps: [restoreStep(0)],
             },
           },
         });
@@ -455,7 +466,7 @@ export function registerManagedRecoveryOutcomeTests(
             status: "skipped",
             reason: "no-upstream",
             mode: "git",
-            recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "original-git-build" },
+            recovery: gitRecovery(),
           },
         });
         expect(state).toMatchObject({ restored: true, healthProbeCount: 1 });
@@ -464,15 +475,7 @@ export function registerManagedRecoveryOutcomeTests(
             status: "error",
             stats: {
               reason: "no-upstream",
-              steps: [
-                {
-                  name: "service-restore",
-                  log: {
-                    exitCode: 1,
-                    stderrTail: "managed-service-handoff-restore-failed",
-                  },
-                },
-              ],
+              steps: [restoreStep(1)],
             },
           },
         });
@@ -538,7 +541,7 @@ export function registerManagedRecoveryOutcomeTests(
             status: "error",
             reason: "preflight-fetch",
             mode: "git",
-            recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "restored-git-build" },
+            recovery: gitRecovery("restored-git-build"),
           },
           gatewayHealth,
         });
@@ -552,15 +555,7 @@ export function registerManagedRecoveryOutcomeTests(
             stats: {
               reason: "preflight-fetch",
               steps: expect.arrayContaining([
-                expect.objectContaining({
-                  name: "service-restore",
-                  log: {
-                    exitCode: gatewayHealth === "ready" ? 0 : 1,
-                    ...(gatewayHealth === "ready"
-                      ? {}
-                      : { stderrTail: "managed-service-handoff-restore-failed" }),
-                  },
-                }),
+                expect.objectContaining(restoreStep(gatewayHealth === "ready" ? 0 : 1)),
               ]),
             },
           },

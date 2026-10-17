@@ -6,6 +6,13 @@ import type {
   ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 
+const failedUpdate = (reason: string, version = "1.0.0") => ({
+  status: "error" as const,
+  mode: "npm" as const,
+  reason,
+  recovery: { serviceRestartSafe: true, version },
+});
+
 export function registerManagedUpdateHandoffTriageTests(
   runManagedServiceManagerBoundary: (
     kind: "systemd",
@@ -27,12 +34,7 @@ export function registerManagedUpdateHandoffTriageTests(
         updaterExitCode: 7,
         helperExitCode: 7,
         updaterNotification: "consumed",
-        updaterResult: {
-          status: "error",
-          mode: "npm",
-          reason: "build failed",
-          recovery: { serviceRestartSafe: true, version: "1.0.0" },
-        },
+        updaterResult: failedUpdate("build failed"),
       });
       expect(state).toMatchObject({ restored: true, healthProbeCount: 1 });
       expect(state.triageCalls).toBeUndefined();
@@ -63,12 +65,7 @@ export function registerManagedUpdateHandoffTriageTests(
         updaterExitCode: 7,
         helperExitCode: 7,
         updaterNotification: "published",
-        updaterResult: {
-          status: "error",
-          mode: "npm",
-          reason: "global-install-failed",
-          recovery: { serviceRestartSafe: true, version: "2026.8.1" },
-        },
+        updaterResult: failedUpdate("global-install-failed", "2026.8.1"),
         recordedFailure: {
           error: `Original update failed token=${secret}`,
           result: {
@@ -174,12 +171,7 @@ export function registerManagedUpdateHandoffTriageTests(
         ...options,
         updaterExitCode: 7,
         helperExitCode: 7,
-        updaterResult: {
-          status: "error",
-          mode: "npm",
-          reason: "build failed",
-          recovery: { serviceRestartSafe: true, version: "1.0.0" },
-        },
+        updaterResult: failedUpdate("build failed"),
         recordedFailure: {
           error: "Original package build diagnostic",
           result: {
