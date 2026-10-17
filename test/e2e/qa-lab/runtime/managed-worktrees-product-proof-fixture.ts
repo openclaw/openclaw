@@ -10,6 +10,8 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
+export const readText = (root: string, name: string) => fs.readFile(path.join(root, name), "utf8");
+
 export async function git(cwd: string, ...args: string[]) {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   return stdout.trimEnd();

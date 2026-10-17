@@ -35,7 +35,6 @@ const VARIANT =
 const SESSION_MODE =
   process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF_SESSION === "shared" ? "shared" : "isolated";
 const LABEL = SESSION_MODE === "shared" ? "shared" : VARIANT;
-const PROOF_OUT_DIR = process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF_OUT;
 
 const execFileAsync = promisify(execFile);
 const cleanups: Array<() => Promise<void>> = [];
@@ -60,7 +59,7 @@ type CronJob = {
 };
 type CronRunEntry = { error?: string; runId?: string; status?: string };
 type ProbeCount = { count: number; pids: number[] };
-type ProofCount = ProbeCount & { stage: string; at: string };
+type ProofCount = ProbeCount & { stage: string };
 
 function writeTextResponse(response: ServerResponse, text: string): void {
   const message = {
@@ -201,39 +200,6 @@ async function countProbeProcesses(marker: string, signal?: AbortSignal): Promis
   }
 }
 
-type GatewayLogSource = { workspaceDir: string; tempRoot: string };
-
-async function readLogFiles(gateway: GatewayLogSource): Promise<Map<string, string>> {
-  const logsDir = path.join(gateway.workspaceDir, "logs");
-  const names = (await fs.readdir(logsDir).catch(() => [])).filter((name) => name.endsWith(".log"));
-  const files = [
-    ...names.toSorted().map((name) => path.join(logsDir, name)),
-    path.join(gateway.tempRoot, "gateway.stdout.log"),
-    path.join(gateway.tempRoot, "gateway.stderr.log"),
-  ];
-  return new Map(
-    await Promise.all(
-      files.map(async (file) => [file, await fs.readFile(file, "utf8").catch(() => "")] as const),
-    ),
-  );
-}
-
-function redact(text: string, replacements: Array<[string, string]>): string {
-  let out = text;
-  for (const [needle, label] of replacements) {
-    if (needle) {
-      out = out.replaceAll(needle, label);
-    }
-  }
-  // Bearer credentials first: the generic key/value pass would otherwise
-  // consume the scheme word and leave the token behind it intact.
-  return out
-    .replace(/bearer\s+\S+/gi, "Bearer <redacted>")
-    .replace(/(token|secret|apiKey|api_key|authorization)(["'=: ]+)[^\s"',}]+/gi, "$1$2<redacted>")
-    .replace(/\/(?:home|Users)\/[^/\s"'│]+/g, "<home>")
-    .replaceAll(os.hostname(), "<host>");
-}
-
 it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
   `retires the isolated heartbeat MCP stdio child after each run (${LABEL})`,
   { timeout: TEST_TIMEOUT_MS },
@@ -251,10 +217,8 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
       const entry = {
         stage,
         ...(probe ?? (await countProbeProcesses(marker))),
-        at: new Date().toISOString(),
       };
       counts.push(entry);
-      console.log(JSON.stringify({ phase: "hb-mcp-count", variant: LABEL, ...entry }));
       return entry;
     };
     // Settlement doesn't prove process closure; poll until the signal aborts.
@@ -352,15 +316,6 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
     if (!monitor) {
       throw new Error("system-owned qa heartbeat monitor was not listed");
     }
-    console.log(JSON.stringify({ phase: "hb-mcp-monitor", monitor }));
-
-    const heartbeatStatuses: Array<{
-      run: number;
-      runId: string;
-      status?: string;
-      error?: string;
-      providerRequests: number;
-    }> = [];
     for (let run = 1; run <= HEARTBEAT_RUNS; run += 1) {
       const requestsBefore = provider.responsesRequests;
       const responseEntered = provider.holdNextResponse();
@@ -403,76 +358,16 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
       sharedPid ??= peak.pids[0];
       await record(`during-heartbeat-${run}-peak`, peak);
       const status = {
-        run,
-        runId: forced.runId,
         status: entry?.status,
-        error: entry?.error,
         providerRequests: provider.responsesRequests - requestsBefore,
       };
-      heartbeatStatuses.push(status);
-      console.log(JSON.stringify({ phase: "hb-mcp-heartbeat", variant: LABEL, ...status }));
       expect(status.status).toBe("ok");
       expect(status.providerRequests).toBeGreaterThan(0);
       await settle(`after-heartbeat-${run}`, expectedAfterRun(run));
     }
 
-    const logs = await readLogFiles(gateway);
-    const replacements: Array<[string, string]> = [
-      [gateway.tempRoot, "<tempRoot>"],
-      [gateway.workspaceDir, "<workspaceDir>"],
-      [scriptPath, "<probeScript>"],
-      [repoRoot, "<repoRoot>"],
-      [os.homedir(), "<home>"],
-    ];
-    const interesting = /leakprobe|leak_probe|bundle-mcp|heartbeat|agent cleanup/i;
-    const excerpts = [...logs]
-      .map(([file, text]) => ({
-        file: redact(file, replacements),
-        lines: text
-          .split("\n")
-          .filter((line) => interesting.test(line))
-          .map((line) => redact(line, replacements)),
-      }))
-      .filter((entry) => entry.lines.length > 0);
-
-    const packageVersion = (
-      JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8")) as {
-        version?: string;
-      }
-    ).version;
-    const gitHead = (
-      await execFileAsync("git", ["rev-parse", "--short", "HEAD"], { cwd: repoRoot }).catch(() => ({
-        stdout: "unknown",
-      }))
-    ).stdout.trim();
-    const gatewayVersion = `${packageVersion ?? "unknown"}@${gitHead}`;
-
     await stopQaGatewayFixture(gatewayOwner);
     await settle("after-gateway-stop", (probe) => probe.count === 0);
-
-    const proof = {
-      variant: LABEL,
-      build: VARIANT,
-      sessionMode: SESSION_MODE,
-      issue: 143381,
-      marker,
-      counts: counts.map(({ stage, count }) => ({ stage, count })),
-      countsDetailed: counts,
-      heartbeatStatuses,
-      gatewayVersion,
-      timestamps: { startedAt: counts[0]?.at, finishedAt: new Date().toISOString() },
-    };
-    console.log(`HB_MCP_RETIRE_PROOF ${JSON.stringify(proof)}`);
-    if (PROOF_OUT_DIR) {
-      await fs.mkdir(PROOF_OUT_DIR, { recursive: true });
-      const write = (name: string, text: string) =>
-        fs.writeFile(path.join(PROOF_OUT_DIR, name), text, "utf8");
-      await write(`proof-${LABEL}.json`, `${JSON.stringify(proof, null, 2)}\n`);
-      await write(
-        `gateway-log-excerpts-${LABEL}.txt`,
-        excerpts.map((entry) => `### ${entry.file}\n${entry.lines.join("\n")}\n`).join("\n"),
-      );
-    }
 
     const afterRuns = counts.filter((entry) => entry.stage.startsWith("after-heartbeat-"));
     const peaks = counts.filter((entry) => entry.stage.startsWith("during-heartbeat-"));

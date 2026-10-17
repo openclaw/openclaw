@@ -14,7 +14,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-import { git, initializeRepository } from "./managed-worktrees-product-proof-fixture.js";
+import { git, initializeRepository, readText } from "./managed-worktrees-product-proof-fixture.js";
 
 const WORKTREE_NAME = "qa-managed-worktree";
 
@@ -98,7 +98,6 @@ it(
       baseRef: "HEAD",
       ownerKind: "manual",
       id: expect.any(String),
-      repoFingerprint: expect.any(String),
       createdAt: expect.any(Number),
       lastActiveAt: expect.any(Number),
     });
@@ -109,9 +108,7 @@ it(
 
     await expectProvisionedFiles(created.path);
 
-    const setupPaths = (await fs.readFile(path.join(created.path, "setup-marker.txt"), "utf8"))
-      .trim()
-      .split("\n");
+    const setupPaths = (await readText(created.path, "setup-marker.txt")).trim().split("\n");
     expect(setupPaths).toHaveLength(2);
     expect(await fs.realpath(setupPaths[0]!)).toBe(repo);
     expect(await fs.realpath(setupPaths[1]!)).toBe(await fs.realpath(created.path));
@@ -123,9 +120,6 @@ it(
     const expectedSnapshotRef = `refs/openclaw/snapshots/${created.id}`;
     expect(removed).toEqual({ removed: true, snapshotRef: expectedSnapshotRef });
     const snapshotCommit = await git(repo, "rev-parse", expectedSnapshotRef);
-    expect(await git(repo, "show-ref", "--verify", expectedSnapshotRef)).toContain(
-      expectedSnapshotRef,
-    );
     await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
 
     const removedList = await worktrees<WorktreeListJson>("list");
@@ -142,12 +136,8 @@ it(
     expect(restored.removedAt).toBeUndefined();
     const status = await git(restored.path, "status", "--porcelain");
     expect(status.split("\n")).toEqual(expect.arrayContaining([" M README.md", "?? notes.txt"]));
-    await expect(fs.readFile(path.join(restored.path, "README.md"), "utf8")).resolves.toBe(
-      "dirty tracked change\n",
-    );
-    await expect(fs.readFile(path.join(restored.path, "notes.txt"), "utf8")).resolves.toBe(
-      "restored note\n",
-    );
+    await expect(readText(restored.path, "README.md")).resolves.toBe("dirty tracked change\n");
+    await expect(readText(restored.path, "notes.txt")).resolves.toBe("restored note\n");
     await expectProvisionedFiles(restored.path);
     expect(await git(repo, "rev-parse", `refs/heads/${created.branch}`)).toBe(baseCommit);
     expect((await git(repo, "log", "--format=%H", created.branch)).split("\n")).not.toContain(
@@ -161,12 +151,9 @@ it(
       snapshotsPruned: expect.any(Number),
     });
     const activeList = await worktrees<WorktreeListJson>("list");
-    expect(activeList.worktrees).toContainEqual(
-      expect.objectContaining({ id: created.id, ownerKind: "manual" }),
-    );
-    expect(
-      activeList.worktrees.find((record) => record.id === created.id)?.removedAt,
-    ).toBeUndefined();
+    const active = activeList.worktrees.find((record) => record.id === created.id);
+    expect(active).toMatchObject({ id: created.id, ownerKind: "manual" });
+    expect(active?.removedAt).toBeUndefined();
     await fs.access(created.path);
   },
 );

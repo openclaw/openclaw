@@ -11,6 +11,7 @@ import type {
 import {
   git,
   initializeRepository,
+  readText,
   useWorktreeGateway,
 } from "./managed-worktrees-product-proof-fixture.js";
 
@@ -143,9 +144,7 @@ it(
     );
     expect(retained).toMatchObject({ id: clean.worktree.id, ownerId: clean.key });
     expect(retained).not.toHaveProperty("removedAt");
-    await expect(fs.readFile(path.join(clean.worktree.path, "README.md"), "utf8")).resolves.toBe(
-      "base\n",
-    );
+    await expect(readText(clean.worktree.path, "README.md")).resolves.toBe("base\n");
 
     await deleteSession(clean);
     const cleanSnapshotRef = `refs/openclaw/snapshots/${clean.worktree.id}`;

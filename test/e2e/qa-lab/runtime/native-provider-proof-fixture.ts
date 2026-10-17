@@ -39,12 +39,13 @@ export function writeNativeCompletion(
   response: ServerResponse,
   id: string,
   model: string,
-  delta: Record<string, unknown>,
-  finish: string,
+  delta: Record<string, unknown> | string,
+  finish = "stop",
 ) {
+  const content = typeof delta === "string" ? { role: "assistant", content: delta } : delta;
   response.writeHead(200, { "content-type": "text/event-stream" });
   for (const [part, finish_reason] of [
-    [delta, null],
+    [content, null],
     [{}, finish],
   ]) {
     response.write(

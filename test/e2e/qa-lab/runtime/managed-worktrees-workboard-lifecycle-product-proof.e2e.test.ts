@@ -112,41 +112,6 @@ async function waitForMaterializedWorktree(params: {
   }
 }
 
-async function dispatchCardAndWaitForWorktree(params: {
-  boardId: string;
-  cardId: string;
-  name: string;
-  stateDir: string;
-  signal: AbortSignal;
-}): Promise<{ materializedPath: string; started: WorkboardDispatchResult["started"][number] }> {
-  const dispatchPromise = harness.call<WorkboardDispatchResult>("workboard.cards.dispatch", {
-    boardId: params.boardId,
-  });
-  const observation = new AbortController();
-  const materializedPromise = waitForMaterializedWorktree({
-    name: params.name,
-    stateDir: params.stateDir,
-    dispatch: dispatchPromise,
-    signal: AbortSignal.any([params.signal, observation.signal]),
-  });
-  void materializedPromise.catch(() => {});
-  try {
-    const dispatch = await withinTest(dispatchPromise, params.signal);
-    expect(dispatch.startFailures).toEqual([]);
-    expect(dispatch.started).toEqual([
-      expect.objectContaining({ cardId: params.cardId, runId: expect.any(String) }),
-    ]);
-    return {
-      materializedPath: await withinTest(materializedPromise, params.signal),
-      started: dispatch.started[0]!,
-    };
-  } finally {
-    // Join the observer before afterEach removes the fixture or dispatch failure escapes.
-    observation.abort();
-    await materializedPromise.catch(() => {});
-  }
-}
-
 async function waitForWorktreeState(id: string, outcome: "removed-lossless" | "retained-dirty") {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -237,17 +202,43 @@ describe("managed worktrees Workboard-owner product proof", () => {
       await git(remote, "symbolic-ref", "HEAD", "refs/heads/main");
       const activeHarness = await startHarness();
       const stateDir = path.join(await fs.realpath(activeHarness.gateway.tempRoot), "state");
+      const createCardWorktree = async (boardId: string, title: string) => {
+        const card = await createCard(boardId, repo, title);
+        const name = managedWorktreeName(card.id);
+        const dispatchPromise = harness.call<WorkboardDispatchResult>("workboard.cards.dispatch", {
+          boardId,
+        });
+        const observation = new AbortController();
+        const materialized = waitForMaterializedWorktree({
+          name,
+          stateDir,
+          dispatch: dispatchPromise,
+          signal: AbortSignal.any([signal, observation.signal]),
+        });
+        void materialized.catch(() => {});
+        try {
+          const dispatch = await withinTest(dispatchPromise, signal);
+          expect(dispatch.startFailures).toEqual([]);
+          expect(dispatch.started).toEqual([
+            expect.objectContaining({ cardId: card.id, runId: expect.any(String) }),
+          ]);
+          return {
+            card,
+            name,
+            materializedPath: await withinTest(materialized, signal),
+            started: dispatch.started[0]!,
+          };
+        } finally {
+          // Join the observer before fixture cleanup or a failed dispatch escapes.
+          observation.abort();
+          await materialized.catch(() => {});
+        }
+      };
       const boardId = "qa-worktree-clean";
-      const card = await createCard(boardId, repo, "Clean worktree lifecycle");
-      const name = managedWorktreeName(card.id);
-
-      const { materializedPath, started } = await dispatchCardAndWaitForWorktree({
+      const { card, name, materializedPath, started } = await createCardWorktree(
         boardId,
-        cardId: card.id,
-        name,
-        stateDir,
-        signal,
-      });
+        "Clean worktree lifecycle",
+      );
 
       const cards = await activeHarness.call<WorkboardListResult>("workboard.cards.list", {
         boardId,
@@ -300,17 +291,12 @@ describe("managed worktrees Workboard-owner product proof", () => {
       );
       expect(completed.card).toMatchObject({ id: card.id, status: "done" });
 
-      const dirtyBoardId = "qa-worktree-dirty";
-      const dirtyCard = await createCard(dirtyBoardId, repo, "Dirty worktree retention");
-      const dirtyName = managedWorktreeName(dirtyCard.id);
-      const { materializedPath: dirtyPath, started: dirtyStarted } =
-        await dispatchCardAndWaitForWorktree({
-          boardId: dirtyBoardId,
-          cardId: dirtyCard.id,
-          name: dirtyName,
-          stateDir,
-          signal,
-        });
+      const {
+        card: dirtyCard,
+        name: dirtyName,
+        materializedPath: dirtyPath,
+        started: dirtyStarted,
+      } = await createCardWorktree("qa-worktree-dirty", "Dirty worktree retention");
       const dirtyFile = path.join(dirtyPath, "untracked-note.txt");
       await fs.writeFile(dirtyFile, "retain this worktree\n");
       const dirtyRecord = (await listWorktrees()).worktrees.find(

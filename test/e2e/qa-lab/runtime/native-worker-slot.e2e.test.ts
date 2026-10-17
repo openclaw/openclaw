@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
@@ -55,16 +54,7 @@ async function providerFixture() {
       requests.push(marker);
       entered[marker].resolve();
       await releases[marker].promise;
-      writeNativeCompletion(
-        response,
-        "native-slot-" + marker,
-        modelId!,
-        {
-          role: "assistant",
-          content: "NATIVE-SLOT-" + marker,
-        },
-        "stop",
-      );
+      writeNativeCompletion(response, "native-slot-" + marker, modelId!, "NATIVE-SLOT-" + marker);
     },
     (error, response) => {
       errors.push(error);
@@ -127,8 +117,6 @@ it.skipIf(process.platform === "win32")(
         const identity = loadOrCreateDeviceIdentity({
           path: path.join(root, "node-identity.sqlite"),
         });
-        const nodeHostRoot = path.join(root, "node-state", "node-host");
-        await mkdir(nodeHostRoot, { recursive: true });
         const config: OpenClawConfig = {
           models: {
             providers: {
@@ -214,6 +202,17 @@ it.skipIf(process.platform === "win32")(
             { runId, timeoutMs: PROOF_TIMEOUT_MS },
             { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
           );
+        const finish = async (suffix: "A" | "B", placement: Record<string, unknown> = {}) => {
+          provider.releases[suffix].resolve();
+          expect(await wait("native-slot-" + suffix.toLowerCase())).toMatchObject({ status: "ok" });
+          await settlement.wait(operator!, keys[suffix], signal);
+          expect(readPlacement(gateway, keys[suffix])).toMatchObject({
+            placement: { state: "active", turn_claim_id: null, ...placement },
+            pending: undefined,
+          });
+          await node!.waitForWorkersIdle();
+          expect(await node!.supervisor.hasActiveWork()).toBe(false);
+        };
         await start(keys.A, "NATIVE-SLOT-A", "native-slot-a");
         await withinTest(provider.entered.A.promise, signal);
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
@@ -228,26 +227,11 @@ it.skipIf(process.platform === "win32")(
         });
         expect(provider.requests).toEqual(["A"]);
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
-        provider.releases.A.resolve();
-        expect(await wait("native-slot-a")).toMatchObject({ status: "ok" });
-        await settlement.wait(operator, keys.A, signal);
-        const settled = readPlacement(gateway, keys.A);
-        expect(settled).toMatchObject({
-          placement: {
-            state: "active",
-            turn_claim_id: null,
-            workspace_base_manifest_ref: expect.stringMatching(/^sha256:/u),
-          },
-          pending: undefined,
-        });
-        await node.waitForWorkersIdle();
-        expect(await node.supervisor.hasActiveWork()).toBe(false);
+        await finish("A", { workspace_base_manifest_ref: expect.stringMatching(/^sha256:/u) });
         const history = await operator.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: keys.A,
         });
-        expect(
-          history.messages.some((message) => wireMessageText(message) === "NATIVE-SLOT-A"),
-        ).toBe(true);
+        expect(history.messages.map(wireMessageText)).toContain("NATIVE-SLOT-A");
         await operator.request("sessions.delete", { key: keys.A });
         expect(readPlacement(gateway, keys.A).placement).toBeUndefined();
         await node.disconnect();
@@ -274,15 +258,7 @@ it.skipIf(process.platform === "win32")(
           }),
         ).toBeUndefined();
         expect(await node.supervisor.status(activeB.launchId)).toMatchObject({ state: "running" });
-        provider.releases.B.resolve();
-        expect(await wait("native-slot-b")).toMatchObject({ status: "ok" });
-        await settlement.wait(operator, keys.B, signal);
-        expect(readPlacement(gateway, keys.B)).toMatchObject({
-          placement: { state: "active", turn_claim_id: null },
-          pending: undefined,
-        });
-        await node.waitForWorkersIdle();
-        expect(await node.supervisor.hasActiveWork()).toBe(false);
+        await finish("B");
         expect(provider.requests).toEqual(["A", "B"]);
         expect(provider.errors).toEqual([]);
         expect(node.invokeErrors).toEqual([]);

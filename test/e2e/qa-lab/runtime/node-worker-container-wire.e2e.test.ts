@@ -4,7 +4,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import type { Browser, BrowserContext, Page } from "playwright";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createQaGatewayChild,
@@ -57,31 +56,20 @@ type ObservedWorkerContainer = {
   mounts: Array<{ Source: string; Destination: string; RW: boolean }>;
 };
 
-type ControlUiProof = {
-  artifactDir: string;
-  browser: Browser;
-  context: BrowserContext;
-  page: Page;
-  requests: Array<{
-    method: string;
-    params?: {
-      key?: string;
-      agentId?: string;
-      deviceId?: string;
-      message?: string;
-      idempotencyKey?: string;
-      runId?: string;
-      sessionKey?: string;
-      permissionMode?: string;
-    };
-  }>;
-  fullAccessPatch: {
-    arm(sessionKey: string): void;
-    held: Promise<void>;
-    prematureChatSend: Promise<"premature-chat-send">;
-    release(): void;
+type WireRequest = {
+  method: string;
+  params?: {
+    key?: string;
+    agentId?: string;
+    deviceId?: string;
+    message?: string;
+    idempotencyKey?: string;
+    runId?: string;
+    sessionKey?: string;
+    permissionMode?: string;
   };
 };
+type ControlUiProof = Awaited<ReturnType<typeof startControlUiProof>>;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const waitForProof = (callback: () => unknown, interval = 100) =>
@@ -98,7 +86,7 @@ async function dockerOutput(args: string[]): Promise<string> {
 }
 
 const containerIds = (filter: string) =>
-  dockerOutput(["ps", "--all", "--filter", filter, "--format", "{{.ID}}"]);
+  dockerOutput(["ps", "-aq", "--no-trunc", "--filter", filter]);
 
 async function expectAssistantMarker(operator: GatewayClient, sessionKey: string, marker: string) {
   const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
@@ -126,19 +114,10 @@ async function expectNoApprovalUi(proof: ControlUiProof) {
 }
 
 async function observeWorkerContainer(launchId: string): Promise<ObservedWorkerContainer> {
-  const encodedLaunch = Buffer.from(launchId).toString("base64url");
   let observed: ObservedWorkerContainer | undefined;
   await vi.waitFor(
     async () => {
-      const id = await dockerOutput([
-        "ps",
-        "--all",
-        "--no-trunc",
-        "--filter",
-        `label=openclaw.node-worker.launch=${encodedLaunch}`,
-        "--format",
-        "{{.ID}}",
-      ]);
+      const id = await containerIds(launchFilter(launchId));
       expect(id).toMatch(/^[a-f0-9]{64}$/u);
       const metadata = JSON.parse(
         await dockerOutput(["inspect", "--format", CONTAINER_INSPECT_FORMAT, id]),
@@ -154,28 +133,21 @@ async function observeWorkerContainer(launchId: string): Promise<ObservedWorkerC
   return observed;
 }
 
-async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof> {
+async function startControlUiProof(gateway: WireGateway) {
   await vi.waitFor(
     async () => {
       const response = await fetch(`${gateway.baseUrl}/new`);
-      const body = await response.text();
-      expect({ status: response.status, body: body.slice(0, 160) }).toMatchObject({ status: 200 });
+      expect(response.status, await response.text()).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
     },
     { timeout: 60_000, interval: 250 },
   );
   const { chromium } = await import("playwright");
-  const artifactDir = path.resolve(
-    process.env.OPENCLAW_DOCKER_NODE_WORKER_ARTIFACT_DIR ??
-      ".artifacts/control-ui-e2e/node-worker-container-wire",
-  );
-  await fs.mkdir(artifactDir, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1280 },
-    recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
   });
   await context.addInitScript(
     ({ gatewayUrl, token }) => {
@@ -183,31 +155,18 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
         configurable: true,
         value: { gatewayUrl, token },
       });
-      document.addEventListener(
-        "DOMContentLoaded",
-        () => {
-          const mask = document.createElement("style");
-          mask.textContent = '[data-chat-model-select="true"] { visibility: hidden !important; }';
-          document.head.append(mask);
-        },
-        { once: true },
-      );
     },
     { gatewayUrl: gateway.wsUrl, token: gateway.token },
   );
-  let patchArmed = false;
   let patchSessionKey: string | undefined;
   let releaseHeldPatch: (() => void) | undefined;
-  const requests: ControlUiProof["requests"] = [];
+  const requests: WireRequest[] = [];
   const patchHeld = createDeferred();
   const prematureChatSend = createDeferred<"premature-chat-send">();
   await context.routeWebSocket(gateway.wsUrl, (socket) => {
     const upstream = socket.connectToServer();
     socket.onMessage((message) => {
-      const request = JSON.parse(message.toString()) as {
-        method?: string;
-        params?: ControlUiProof["requests"][number]["params"];
-      };
+      const request = JSON.parse(message.toString()) as Partial<WireRequest>;
       if (
         request.method === "sessions.create" ||
         request.method === "sessions.dispatch" ||
@@ -218,12 +177,12 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
         requests.push({ method: request.method, params: request.params });
       }
       if (
-        patchArmed &&
         request.method === "sessions.patch" &&
+        patchSessionKey !== undefined &&
         request.params?.key === patchSessionKey &&
         request.params?.permissionMode === "full"
       ) {
-        patchArmed = false;
+        patchSessionKey = undefined;
         releaseHeldPatch = () => {
           releaseHeldPatch = undefined;
           upstream.send(message);
@@ -238,25 +197,18 @@ async function startControlUiProof(gateway: WireGateway): Promise<ControlUiProof
     });
   });
   return {
-    artifactDir,
     browser,
-    context,
     page: await context.newPage(),
     requests,
     fullAccessPatch: {
-      arm: (sessionKey) => {
+      arm: (sessionKey: string) => {
         patchSessionKey = sessionKey;
-        patchArmed = true;
       },
       held: patchHeld.promise,
       prematureChatSend: prematureChatSend.promise,
       release: () => releaseHeldPatch?.(),
     },
   };
-}
-
-async function captureControlUiProof(proof: ControlUiProof, name: string): Promise<void> {
-  await proof.page.screenshot({ path: path.join(proof.artifactDir, `${name}.png`) });
 }
 
 it.runIf(CONTAINER_WIRE_ENABLED)(
@@ -319,9 +271,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
           session?: {
             execCwd?: string;
             spawnedCwd?: string;
-            status?: string;
-            lastRunError?: string;
-            placement?: { state?: string; remoteWorkspaceDir?: string; recoveryError?: string };
+            placement?: { state?: string; remoteWorkspaceDir?: string };
           };
         }>;
 
@@ -367,12 +317,10 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         );
         await device.waitFor({ state: "visible", timeout: 30_000 });
         expect(await device.isEnabled()).toBe(true);
-        await captureControlUiProof(controlUiProof, "01-remote-device-available");
         await device.click();
         await expect
           .poll(() => where.getAttribute("data-device-id"))
           .toBe(workerNode.identity.deviceId);
-        await captureControlUiProof(controlUiProof, "02-remote-device-selected");
         await controlUiProof.page.locator(".new-session-page__message").fill(INITIAL_PROMPT);
         await controlUiProof.page.getByRole("button", { name: "Start session" }).click();
         await waitForProof(() =>
@@ -457,26 +405,19 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         expect(sendOrdering).toBe("queued-behind-settings");
         controlUiProof.fullAccessPatch.release();
         await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
-        await captureControlUiProof(controlUiProof, "03-full-access-selected");
         const activeOperator = operator;
         await waitForProof(async () => {
           expect(launchId).toBeTruthy();
           expect(browserRunId).toBeTruthy();
           await expectAssistantMarker(activeOperator, sessionKey, EXEC_MARKER);
         }, 250);
-        const completed = await waitForRun(browserRunId);
-        if (completed.status !== "ok") {
-          throw new Error(
-            `browser container worker turn failed: ${JSON.stringify(completed)}\n${gateway.logs().slice(-12_000)}`,
-          );
-        }
+        await expect(waitForRun(browserRunId)).resolves.toMatchObject({ status: "ok" });
         await controlUiProof.page
           .locator(".chat-group.assistant")
           .getByText(EXEC_MARKER, { exact: true })
           .last()
           .waitFor({ state: "visible", timeout: PROOF_TIMEOUT_MS });
         await expectNoApprovalUi(controlUiProof);
-        await captureControlUiProof(controlUiProof, "04-full-access-completed-without-alerts");
       } else {
         const runId = `node-worker-container-yolo-${Date.now()}`;
         await expect(
@@ -487,12 +428,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
             idempotencyKey: runId,
           }),
         ).resolves.toMatchObject({ runId, status: "started" });
-        const completed = await waitForRun(runId);
-        if (completed.status !== "ok") {
-          throw new Error(
-            `container worker turn failed: ${JSON.stringify(completed)}\n${gateway.logs().slice(-12_000)}`,
-          );
-        }
+        await expect(waitForRun(runId)).resolves.toMatchObject({ status: "ok" });
       }
 
       expect(launchId).toBeTruthy();
@@ -571,21 +507,7 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         await controlUiProof.page.getByRole("button", { name: "Stop generating" }).waitFor();
         releasePendingCancellation();
         releasePendingCancellation = undefined;
-        const recovered = await waitForRun(recoveryRunId);
-        if (recovered.status !== "ok") {
-          const recoveryPlacement = await describeSession();
-          const cancelled = await workerNode.supervisor.status(cancelledLaunchId);
-          throw new Error(
-            `replacement worker turn failed: ${JSON.stringify({
-              result: recovered,
-              sessionStatus: recoveryPlacement.session?.status,
-              lastRunError: recoveryPlacement.session?.lastRunError,
-              placement: recoveryPlacement.session?.placement,
-              cancelledState: cancelled?.state,
-              cancelledError: cancelled?.errorText,
-            })}\n${gateway.logs().slice(-12_000)}`,
-          );
-        }
+        await expect(waitForRun(recoveryRunId)).resolves.toMatchObject({ status: "ok" });
         await workerNode.waitForWorkersIdle();
         await expect(workerNode.supervisor.status(cancelledLaunchId)).resolves.toMatchObject({
           state: "cancelled",
@@ -594,7 +516,6 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         await expect(fs.stat(path.join(remoteWorkspaceDir!, CANCEL_LATE_FILE))).rejects.toThrow();
         await expectAssistantMarker(operator, sessionKey, RECOVERY_MARKER);
         await expectNoApprovalUi(controlUiProof);
-        await captureControlUiProof(controlUiProof, "05-cancelled-worker-continues-without-alerts");
       }
       await expect(operator.request("exec.approval.list", {})).resolves.toEqual([]);
       expect(approvalEvents).toEqual([]);
@@ -607,7 +528,6 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
       runProof,
       () => releasePendingCancellation?.(),
       () => controlUiProof?.fullAccessPatch.release(),
-      async () => controlUiProof?.context.close(),
       async () => controlUiProof?.browser.close(),
       async () => {
         const cleanup = await Promise.allSettled([
@@ -625,13 +545,6 @@ it.runIf(CONTAINER_WIRE_ENABLED)(
         }
         if (failures.length > 1) {
           throw new AggregateError(failures, "node worker container wire cleanup failed");
-        }
-      },
-      () => {
-        if (controlUiProof) {
-          console.info(
-            `[node-worker-container-wire] Control UI proof artifacts: ${controlUiProof.artifactDir}`,
-          );
         }
       },
     );
