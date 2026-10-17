@@ -2,7 +2,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -10,8 +10,6 @@ import * as sessions from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -24,6 +22,46 @@ import { sessionAbortHandlers } from "./sessions-abort.js";
 useChatAbortRegistryFixture();
 const parentKey = "agent:main:direct:embedded-parent";
 const parentId = "embedded-parent-session";
+type Request = Parameters<typeof handleGatewayRequest>[0];
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ ...getRuntimeConfig(), ...rolePolicyConfig() });
+});
+
+function stop(
+  options: Pick<Request, "client" | "respond" | "sessionMutationCommitGuard"> &
+    Partial<Pick<Request, "context">>,
+  method: "chat.abort" | "sessions.abort" = "chat.abort",
+) {
+  return handleGatewayRequest({
+    req: {
+      type: "req",
+      id: "admitted-stop",
+      method,
+      params: method === "chat.abort" ? { sessionKey: parentKey } : { key: parentKey },
+    },
+    context: options.context ?? createDirectChatContext({ getRuntimeConfig }),
+    isWebchatConnect: () => false,
+    extraHandlers: {
+      "chat.abort": handleChatAbortRequest,
+      "sessions.abort": sessionAbortHandlers["sessions.abort"]!,
+    },
+    ...options,
+  });
+}
+
+function interruptRun(runId: string, interrupted?: () => void) {
+  const controller = new AbortController();
+  const onInterrupt = vi.fn((reason?: Error) => {
+    if (controller.signal.aborted) {
+      return undefined;
+    }
+    controller.abort(reason);
+    interrupted?.();
+    return { runId };
+  });
+  return { controller, onInterrupt };
+}
 
 async function seedAdmittedSession(runId: string, profileId: string) {
   const target = { agentId: "main", sessionKey: parentKey };
@@ -46,15 +84,7 @@ async function seedAdmittedSession(runId: string, profileId: string) {
 }
 
 async function admitSessionRun(runId: string, interrupted?: () => void) {
-  const controller = new AbortController();
-  const onInterrupt = vi.fn((reason?: Error) => {
-    if (controller.signal.aborted) {
-      return undefined;
-    }
-    controller.abort(reason);
-    interrupted?.();
-    return { runId };
-  });
+  const { controller, onInterrupt } = interruptRun(runId, interrupted);
   const admission = await beginSessionWorkAdmission({
     scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
     identities: [parentKey, parentId],
@@ -75,29 +105,18 @@ async function exerciseAdmittedStop(
     | "hidden"
     | "missing-session-id",
 ) {
-  ensureUserProfilesSchema({});
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const runId = "http-admitted-run";
   const client = roleClient("write", "admitted-stop-operator");
   if (mode === "old-incarnation") {
     client.connect.scopes = ["operator.sessions.write"];
   }
-  const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-  setRuntimeConfigSnapshot(cfg);
   const target = await seedAdmittedSession(runId, client.authenticatedUserProfile!.profileId);
-  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  const controller = new AbortController();
+  const context = createDirectChatContext({ getRuntimeConfig });
+  const { controller, onInterrupt } = interruptRun(runId);
   const originalReason = new Error("owner already stopped");
   if (mode === "already-aborted") {
     controller.abort(originalReason);
   }
-  const onInterrupt = vi.fn((reason?: Error) => {
-    if (controller.signal.aborted) {
-      return undefined;
-    }
-    controller.abort(reason);
-    return { runId };
-  });
   const run = {
     runId,
     sessionKey: parentKey,
@@ -131,29 +150,14 @@ async function exerciseAdmittedStop(
   try {
     await withExecRequestTurn({ identity: run }, async () => {
       const admission = await beginSessionWorkAdmission({
-        scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+        scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
         identities: [parentKey, run.sessionId],
         run,
         onInterrupt,
         assertAllowed: () => {},
       });
       try {
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "admitted-stop",
-            method,
-            params: method === "chat.abort" ? { sessionKey: parentKey } : { key: parentKey },
-          },
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: {
-            "chat.abort": handleChatAbortRequest,
-            "sessions.abort": sessionAbortHandlers["sessions.abort"]!,
-          },
-        });
+        await stop({ client, context, respond }, method);
       } finally {
         admission.release();
       }
@@ -212,13 +216,9 @@ it.each([
 it.each(["forbidden", "allowed"] as const)(
   "chat.abort enforces session access before admitted Stop effects (%s)",
   async (access) => {
-    ensureUserProfilesSchema({});
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const owner = roleClient("none", "admitted-session-owner");
     const client = access === "allowed" ? owner : roleClient("none", "admitted-session-outsider");
     client.connect.scopes = ["operator.sessions.write"];
-    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-    setRuntimeConfigSnapshot(cfg);
     const runId = "shared-admitted-run";
     const target = await seedAdmittedSession(runId, owner.authenticatedUserProfile!.profileId);
     const before = sessions.loadSessionEntry(target);
@@ -226,19 +226,7 @@ it.each(["forbidden", "allowed"] as const)(
     const { admission, onInterrupt } = await admitSessionRun(runId);
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "shared-admitted-stop",
-          method: "chat.abort",
-          params: { sessionKey: parentKey },
-        },
-        client,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { "chat.abort": handleChatAbortRequest },
-      });
+      await stop({ client, respond });
       expect(respond).toHaveBeenCalledOnce();
       const after = sessions.loadSessionEntry({ ...target, readConsistency: "latest" });
       if (access === "forbidden") {
@@ -271,18 +259,14 @@ it.each(["forbidden", "allowed"] as const)(
 it.each(["before signal", "after signal"] as const)(
   "chat.abort fences admitted Stop effects when authority is revoked %s",
   async (timing) => {
-    ensureUserProfilesSchema({});
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const client = roleClient("none", "revoked-admitted-owner");
     client.connId = "revoked-admitted-connection";
     client.connect.scopes = ["operator.sessions.write"];
-    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-    setRuntimeConfigSnapshot(cfg);
     const runId = "revoked-admitted-run";
     const target = await seedAdmittedSession(runId, client.authenticatedUserProfile!.profileId);
     const before = sessions.loadSessionEntry(target);
     expect(before).toMatchObject({ lifecycleRunId: runId, abortedLastRun: false });
-    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const context = createDirectChatContext({ getRuntimeConfig });
     const queued = createActiveRun(parentKey, {
       sessionId: parentId,
       agentId: "main",
@@ -308,23 +292,15 @@ it.each(["before signal", "after signal"] as const)(
     const revoked = new Error("admitted Stop authority revoked");
     try {
       const outcome = await Promise.allSettled([
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "revoked-admitted-stop",
-            method: "chat.abort",
-            params: { sessionKey: parentKey },
-          },
+        stop({
           client,
           context,
           respond,
-          isWebchatConnect: () => false,
           sessionMutationCommitGuard: () => {
             if (!current) {
               throw revoked;
             }
           },
-          extraHandlers: { "chat.abort": handleChatAbortRequest },
         }),
       ]);
       expect(queued.controller.signal.aborted).toBe(true);
@@ -350,12 +326,8 @@ it.each(["before signal", "after signal"] as const)(
 );
 
 it("chat.abort fences the second admitted interruption after the first revokes authority", async () => {
-  ensureUserProfilesSchema({});
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const client = roleClient("none", "two-admission-owner");
   client.connect.scopes = ["operator.sessions.write"];
-  const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-  setRuntimeConfigSnapshot(cfg);
   const firstRunId = "first-admitted-run";
   const target = await seedAdmittedSession(firstRunId, client.authenticatedUserProfile!.profileId);
   const before = sessions.loadSessionEntry(target);
@@ -369,23 +341,14 @@ it("chat.abort fences the second admitted interruption after the first revokes a
   const revoked = new Error("admitted Stop authority revoked");
   try {
     const outcome = await Promise.allSettled([
-      handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "two-admission-stop",
-          method: "chat.abort",
-          params: { sessionKey: parentKey },
-        },
+      stop({
         client,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
         respond,
-        isWebchatConnect: () => false,
         sessionMutationCommitGuard: () => {
           if (!current) {
             throw revoked;
           }
         },
-        extraHandlers: { "chat.abort": handleChatAbortRequest },
       }),
     ]);
     expect(first.onInterrupt).toHaveBeenCalledOnce();

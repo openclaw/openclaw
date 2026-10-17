@@ -109,12 +109,19 @@ async function setup() {
   };
 }
 
-function followup(prompt: string, targetSessionId = sessionId) {
+function followup(
+  prompt: string,
+  targetSessionId = sessionId,
+  agentId = "main",
+  sessionKey = key,
+  admissionSessionId?: string,
+) {
   const run = createQueueTestRun({ prompt });
-  Object.assign(run.run, { agentId: "main", sessionKey: key, sessionId: targetSessionId });
+  Object.assign(run.run, { agentId, sessionKey, sessionId: targetSessionId });
+  run.admissionSessionId = admissionSessionId;
   const settled = vi.fn();
   run.turnAdoptionLifecycle = { admission: "cancel-only", onAdopted: () => {}, onSettled: settled };
-  enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
+  enqueueFollowupRun(sessionKey, run, createQueueSettings(), "none", undefined, false);
   return { run, settled };
 }
 
@@ -204,33 +211,18 @@ it.each([true, false])(
         { sessionId: researchSessionId, updatedAt: 1 },
       );
     }
-    const enqueueSharedFollowup = (
-      agentId: string,
-      targetSessionId: string,
-      admissionSessionId?: string,
-    ) => {
-      const run = createQueueTestRun({ prompt: agentId });
-      Object.assign(run.run, { agentId, sessionKey: sharedKey, sessionId: targetSessionId });
-      run.admissionSessionId = admissionSessionId;
-      const settled = vi.fn();
-      run.turnAdoptionLifecycle = {
-        admission: "cancel-only",
-        onAdopted: () => {},
-        onSettled: settled,
-      };
-      enqueueFollowupRun(sharedKey, run, createQueueSettings(), "none", undefined, false);
-      return { run, settled };
-    };
-    const foreign = enqueueSharedFollowup("main", "main-shared");
-    const owned = enqueueSharedFollowup("research", researchSessionId);
-    const otherIncarnation = enqueueSharedFollowup(
+    const foreign = followup("main", "main-shared", "main", sharedKey);
+    const owned = followup("research", researchSessionId, "research", sharedKey);
+    const otherIncarnation = followup(
       "research",
       "research-previous",
+      "research",
+      sharedKey,
       "research-next",
     );
+    const lane = resolveEmbeddedSessionLane(sharedKey);
     const entered = createDeferred();
     const release = createDeferred();
-    const lane = resolveEmbeddedSessionLane(sharedKey);
     const blocker = enqueueCommandInLane(lane, async () => {
       entered.resolve();
       await release.promise;

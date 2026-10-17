@@ -42,6 +42,47 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function yieldTool(requesterTurnRunId: string) {
+  const onYield = vi.fn();
+  const tool = createSessionsYieldTool({
+    sessionId: `${requesterSessionKey}-session`,
+    onYield,
+    claimYield: createRequesterYieldCallback({
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId,
+    }),
+  });
+  return { tool, onYield };
+}
+
+function observeCohortWrites(onFirstCommit?: () => void | Promise<void>) {
+  const counter = { writes: 0 };
+  const worker = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: async (...args) => {
+              const result = await scope.execute(...args);
+              if (args[0].type === "subagents.persistChanges" && ++counter.writes === 1) {
+                const pending = onFirstCommit?.();
+                if (pending) {
+                  await pending;
+                }
+              }
+              return result;
+            },
+          }),
+        options,
+      ),
+    );
+  return { counter, worker };
+}
+
 async function createYieldedChild(withSibling = false) {
   const requesterTurnRunId = "staged-cohort-parent";
   const runId = "staged-cohort-child";
@@ -82,16 +123,7 @@ async function createYieldedChild(withSibling = false) {
   const nativePersistence = await vi.importActual<typeof registryPersistence>(
     "../../agents/subagents/registry/subagent-registry-persistence.js",
   );
-  const onYield = vi.fn();
-  const tool = createSessionsYieldTool({
-    sessionId: `${requesterSessionKey}-session`,
-    onYield,
-    claimYield: createRequesterYieldCallback({
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-    }),
-  });
+  const { tool, onYield } = yieldTool(requesterTurnRunId);
   await expect(tool.execute("yield-cohort", {})).resolves.toMatchObject({
     details: { status: "yielded" },
   });
@@ -158,16 +190,7 @@ it.each(["unchanged", "empty"] as const)(
         return result;
       });
     const preparations = vi.spyOn(sessionSharing, "prepareSessionMutationFacts");
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: `${requesterSessionKey}-session`,
-      onYield,
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey,
-        requesterAgentId: "main",
-        requesterTurnRunId,
-      }),
-    });
+    const { tool, onYield } = yieldTool(requesterTurnRunId);
     const hostSql = observeParentSqlite();
     try {
       await withRequesterTestAuthority(requesterTurnRunId, requesterSessionKey, async () => {
@@ -225,34 +248,13 @@ it.each(["source retirement", "transport failure after commit"] as const)(
   async (outcome) => {
     vi.useFakeTimers();
     const { entry, settle, nativePersistence } = await createYieldedChild();
-    let writes = 0;
     let closing: Promise<void> | undefined;
-    const runWorker = runSubagentStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        runWorker(
-          context,
-          (scope) =>
-            operation({
-              ...scope,
-              execute: async (...args) => {
-                const result = await scope.execute(...args);
-                if (args[0].type === "subagents.persistChanges" && ++writes === 1) {
-                  if (outcome === "transport failure after commit") {
-                    throw new SqliteWorkerError(
-                      "cohort release acknowledgement lost",
-                      "outcome-unknown",
-                    );
-                  }
-                  closing = closeOpenClawStateDatabaseAsync();
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const { counter, worker } = observeCohortWrites(() => {
+      if (outcome === "transport failure after commit") {
+        throw new SqliteWorkerError("cohort release acknowledgement lost", "outcome-unknown");
+      }
+      closing = closeOpenClawStateDatabaseAsync();
+    });
     try {
       if (outcome === "source retirement") {
         await expect(settle()).rejects.toMatchObject({
@@ -264,10 +266,10 @@ it.each(["source retirement", "transport failure after commit"] as const)(
         await expect(settle()).resolves.toBe(true);
         expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBeUndefined();
       }
-      expect(writes).toBe(1);
+      expect(counter.writes).toBe(1);
       expect(fixture.wake).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(writes).toBe(1);
+      expect(counter.writes).toBe(1);
       expect(fixture.wake).not.toHaveBeenCalled();
       await closing;
       await closeOpenClawStateDatabaseAsync();
@@ -277,7 +279,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
       expect(restored.requesterTurnRunId).toBeUndefined();
       expect(restored.requesterTurnYielded).toBeUndefined();
       expect(restored.requesterSettleWake?.rearmGeneration).toBe(1);
-      expect(writes).toBe(1);
+      expect(counter.writes).toBe(1);
     } finally {
       await closing;
       worker.mockRestore();
@@ -288,25 +290,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
 it("recovers an untransferred requester cohort after restart in one write", async () => {
   vi.useFakeTimers();
   const { entries } = await createYieldedChild(true);
-  let writes = 0;
-  const worker = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      runSubagentStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            ...scope,
-            execute: (...args) => {
-              if (args[0].type === "subagents.persistChanges") {
-                writes += 1;
-              }
-              return scope.execute(...args);
-            },
-          }),
-        options,
-      ),
-    );
+  const { counter, worker } = observeCohortWrites();
   try {
     await resetSubagentRegistryForTests({ persist: false });
     await closeOpenClawStateDatabaseAsync();
@@ -324,7 +308,7 @@ it("recovers an untransferred requester cohort after restart in one write", asyn
       batchRunIds: entries.map((entry) => entry.runId).toSorted(),
       rearmGeneration: 1,
     });
-    expect(writes).toBe(1);
+    expect(counter.writes).toBe(1);
     expect(fixture.wake).not.toHaveBeenCalled();
   } finally {
     await resetSubagentRegistryForTests({ persist: false });
@@ -338,28 +322,10 @@ it.each([false, true])(
     const { entry, settle } = await createYieldedChild();
     const acknowledged = createDeferred();
     const releaseAcknowledgement = createDeferred();
-    let writes = 0;
-    const runWorker = runSubagentStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        runWorker(
-          context,
-          (scope) =>
-            operation({
-              ...scope,
-              execute: async (...args) => {
-                const result = await scope.execute(...args);
-                if (args[0].type === "subagents.persistChanges" && ++writes === 1) {
-                  acknowledged.resolve();
-                  await releaseAcknowledgement.promise;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const { counter, worker } = observeCohortWrites(async () => {
+      acknowledged.resolve();
+      await releaseAcknowledgement.promise;
+    });
     const first = settle(requesterYielded);
     void first.catch(() => {});
     let opposite: Promise<boolean> | undefined;
@@ -376,7 +342,7 @@ it.each([false, true])(
       releaseAcknowledgement.resolve();
       await expect(first).resolves.toBe(true);
       await expect(opposite).rejects.toThrow("Another requester transfer is already pending");
-      expect(writes).toBe(1);
+      expect(counter.writes).toBe(1);
       const { loadSubagentRegistryFromSqlite } = await vi.importActual<
         typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
       >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
@@ -439,40 +405,13 @@ it("rejects an overlapping claim without releasing the first authority preparati
     });
   const acknowledged = createDeferred();
   const releaseAcknowledgement = createDeferred();
-  let writes = 0;
-  const runWorker = runSubagentStateWorkerOperation;
-  const worker = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      runWorker(
-        context,
-        (scope) =>
-          operation({
-            ...scope,
-            execute: async (...args) => {
-              const result = await scope.execute(...args);
-              if (args[0].type === "subagents.persistChanges" && ++writes === 1) {
-                acknowledged.resolve();
-                await releaseAcknowledgement.promise;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
+  const { counter, worker } = observeCohortWrites(async () => {
+    acknowledged.resolve();
+    await releaseAcknowledgement.promise;
+  });
   try {
     await withRequesterTestAuthority(requesterTurnRunId, requesterSessionKey, async () => {
-      const onYield = vi.fn();
-      const tool = createSessionsYieldTool({
-        sessionId: `${requesterSessionKey}-session`,
-        onYield,
-        claimYield: createRequesterYieldCallback({
-          requesterSessionKey,
-          requesterAgentId: "main",
-          requesterTurnRunId,
-        }),
-      });
+      const { tool, onYield } = yieldTool(requesterTurnRunId);
       const first = tool.execute("first-authority-yield", {});
       void first.catch(() => {});
       let second: ReturnType<typeof tool.execute> | undefined;
@@ -497,7 +436,7 @@ it("rejects an overlapping claim without releasing the first authority preparati
         expect(onYield).toHaveBeenCalledOnce();
         releaseSecondRead.resolve();
         await expect(second).rejects.toThrow("Another requester transfer is already pending");
-        expect(writes).toBe(1);
+        expect(counter.writes).toBe(1);
         expect(reads).toBe(2);
         expect(onYield).toHaveBeenCalledOnce();
         expect(releases[0]).not.toHaveBeenCalled();
