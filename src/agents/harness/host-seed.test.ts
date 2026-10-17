@@ -46,9 +46,19 @@ const allowance = {
   requestTokens: 128,
   expectedBytes: 512,
 };
+type SeedCase = Partial<typeof allowance> & {
+  name: string;
+  summary?: string;
+  expected?: number;
+  revoke?: boolean;
+  replaceWriter?: boolean;
+  decline?: boolean;
+  oversizedSummary?: boolean;
+  oversizedTail?: boolean;
+};
 
 const generatedSummary = "covered old discussion; recent request";
-it.each([
+it.each<SeedCase>([
   { name: "small history", oldBytes: 20, summary: undefined, expected: 0 },
   { name: "unsummarized history", oversizedTail: true },
   { name: "declined summary", summary: "existing", decline: true, oversizedTail: true },
