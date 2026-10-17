@@ -1,5 +1,6 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { sql } from "kysely";
+import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -442,13 +443,8 @@ function readVisibleDeltaMetadata(
             eb(
               "active.message_position",
               "in",
-              getActiveTranscriptKysely(projection.database)
-                .selectFrom((json) =>
-                  json
-                    .fn<{ value: number }>("json_each", [json.val(JSON.stringify(keptHead))])
-                    .as("requested"),
-                )
-                .select("requested.value"),
+              /* kysely-allow-raw: Retained positions are numeric on both engines and use one binding. */
+              sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(keptHead)))})`,
             ),
           ]),
         );
