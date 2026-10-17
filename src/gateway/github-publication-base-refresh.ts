@@ -154,20 +154,53 @@ export async function refreshManagedWorkspaceBase(params: {
               identity.env,
             );
           }
-          await requireGitHubPublicationCommit(
-            run,
-            target.repository,
-            baseCommit,
-            target.githubHost,
-            cwd,
-            {
-              ...identity.env,
-              GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-              GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-            },
-            "The selected repository base contents could not be fetched; retry refresh_base.",
-            { contents: true, commitPresent: continuingIntegration },
-          );
+          const prepareContents = (commit: string, commitPresent: boolean) =>
+            requireGitHubPublicationCommit(
+              run,
+              target.repository,
+              commit,
+              target.githubHost,
+              cwd,
+              {
+                ...identity.env,
+                GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+                GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+              },
+              "The selected repository base contents could not be fetched; retry refresh_base.",
+              { contents: true, commitPresent },
+            );
+          await prepareContents(baseCommit, continuingIntegration);
+          const mergeBases = async (left: string, right: string) => {
+            const bases = await probe(["merge-base", "--all", left, right]);
+            if (bases.code === 1) {
+              return [];
+            }
+            if (bases.code !== 0) {
+              throw new Error("The selected base ancestry could not be verified.");
+            }
+            return bases.stdout.trim().split(/\s+/u);
+          };
+          const inputs = await mergeBases("HEAD", baseCommit);
+          if (!inputs.length) {
+            throw new Error("The selected base could not be integrated; saved work was preserved.");
+          }
+          const discovered = new Set([baseCommit, ...inputs]);
+          // Git combines multiple merge bases using their own common ancestors.
+          // Prepare that closure of trees without fetching every historical file version.
+          for (let index = 0; index < inputs.length; index++) {
+            const input = inputs[index]!;
+            if (input !== baseCommit) {
+              await prepareContents(input, true);
+            }
+            for (let previous = 0; previous < index; previous++) {
+              for (const ancestor of await mergeBases(input, inputs[previous]!)) {
+                if (!discovered.has(ancestor)) {
+                  discovered.add(ancestor);
+                  inputs.push(ancestor);
+                }
+              }
+            }
+          }
           if (!continuingIntegration) {
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0) {

@@ -683,10 +683,33 @@ describe("session PR actions through the agent tool and registered Gateway metho
     const upstream = path.join(path.dirname(local.cwd), "upstream");
     await local.git("clone", "--no-local", "--branch", "main", local.cwd, upstream);
     await fs.writeFile(path.join(upstream, "artifact.txt"), "upstream change\n");
-    await fs.writeFile(path.join(upstream, "upstream.txt"), "unrelated upstream file\n");
+    await fs.writeFile(path.join(upstream, ".gitignore"), ".env.local\n.guest-cache\n");
     await local.git("-C", upstream, "add", "-A");
     await local.git("-C", upstream, "commit", "-m", "Advance selected base");
     let baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
+    const ancestorCommit = await local.git(
+      "-C",
+      upstream,
+      "merge-base",
+      first.headCommit,
+      baseCommit,
+    );
+    const ancestorBlob = await local.git(
+      "-C",
+      upstream,
+      "rev-parse",
+      `${ancestorCommit}:artifact.txt`,
+    );
+    // Criss-cross tips have two merge bases; merging those bases needs their older blob too.
+    await local.git("-C", upstream, "checkout", "-b", "feature", first.headCommit);
+    await local.git("-C", upstream, "merge", "--no-edit", "-s", "ours", baseCommit);
+    const featureMerge = await local.git("-C", upstream, "rev-parse", "HEAD");
+    await local.git("-C", upstream, "checkout", "main");
+    await local.git("-C", upstream, "merge", "--no-edit", "-s", "ours", first.headCommit);
+    await fs.writeFile(path.join(upstream, "upstream.txt"), "unrelated upstream file\n");
+    await local.git("-C", upstream, "add", "upstream.txt");
+    await local.git("-C", upstream, "commit", "-m", "Advance selected contents");
+    baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
     const partialBase = baseCommit;
     const missingBlob = await local.git("-C", upstream, "rev-parse", "HEAD:upstream.txt");
     const upstreamUrl = pathToFileURL(upstream).href;
@@ -694,16 +717,27 @@ describe("session PR actions through the agent tool and registered Gateway metho
     await local.git("config", "remote.fixture.url", upstreamUrl);
     await local.git("config", "remote.fixture.promisor", "true");
     await local.git("fetch", "--filter=blob:none", "--no-write-fetch-head", "fixture", baseCommit);
+    await local.git(
+      "fetch",
+      "--filter=blob:none",
+      "--no-write-fetch-head",
+      "fixture",
+      featureMerge,
+    );
+    await local.git("update-ref", `refs/heads/${first.branch}`, featureMerge);
     await local.git("update-ref", "refs/heads/main", baseCommit);
+    expect((await local.git("merge-base", "--all", "HEAD", baseCommit)).split("\n")).toHaveLength(
+      2,
+    );
     await local.git("config", "remote.fixture.url", path.join(upstream, "unavailable-promisor"));
-    const missingContents = () =>
+    const missingContents = (commit = partialBase) =>
       local.git(
         "rev-list",
         "--objects",
         "--missing=print",
         "--no-object-names",
         "--max-count=1",
-        partialBase,
+        commit,
       );
     expect(await missingContents()).toContain(`?${missingBlob}`);
     let rejectContentFetch = true;
@@ -844,6 +878,40 @@ describe("session PR actions through the agent tool and registered Gateway metho
       );
       return result.details;
     };
+    // Snapshot preparation can pack a second copy; retain every other object in one promisor pack.
+    const hostObjects = path.join(local.cwd, ".git", "objects");
+    const hostPackDirectory = path.join(hostObjects, "pack");
+    const hostPacks = (await fs.readdir(hostPackDirectory)).filter((file) =>
+      file.endsWith(".pack"),
+    );
+    const retainedHostObjects = (
+      await local.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
+    )
+      .split("\n")
+      .filter((object) => object !== ancestorBlob);
+    const partialHostPack = await runCommandBuffered(
+      ["git", "pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
+      { cwd: local.cwd, input: `${retainedHostObjects.join("\n")}\n`, timeoutMs: 10_000 },
+    );
+    expect(partialHostPack.code).toBe(0);
+    const importedHostPack = await runCommandBuffered(
+      ["git", "index-pack", "--stdin", "--promisor"],
+      { cwd: local.cwd, input: partialHostPack.stdout, timeoutMs: 10_000 },
+    );
+    expect(importedHostPack.code).toBe(0);
+    const hostPackHash = importedHostPack.stdout.toString().trim().split(/\s+/u).at(-1);
+    for (const pack of hostPacks) {
+      if (pack === `pack-${hostPackHash}.pack`) {
+        continue;
+      }
+      for (const extension of ["pack", "idx", "rev", "promisor", "bitmap"]) {
+        await fs.rm(path.join(hostPackDirectory, pack.replace(/\.pack$/u, `.${extension}`)), {
+          force: true,
+        });
+      }
+    }
+    await fs.rm(path.join(hostObjects, ancestorBlob.slice(0, 2), ancestorBlob.slice(2)));
+    expect(await missingContents(ancestorCommit)).toContain(`?${ancestorBlob}`);
     const beforeAdmission = await local.git("rev-parse", "HEAD");
     await expect(invoke({ action: "refresh_base" }, null)).rejects.toThrow("sandboxed agent");
     await expect(
@@ -1192,7 +1260,8 @@ describe("session PR actions through the agent tool and registered Gateway metho
       "upstream before interrupted import",
     );
     expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
-    expect(contentFetches).toBe(2);
+    expect(contentFetches).toBe(3);
+    expect(await missingContents(ancestorCommit)).not.toContain("?");
     expect(await missingContents()).not.toContain("?");
     const transfersBeforeRevocation = reviewTransferBytes.length;
     let revokedAfterProbe = false;
