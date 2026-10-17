@@ -165,6 +165,19 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: params.runLegacyStateHealth,
     }),
+    createDoctorHealthContribution("doctor:native-command-archives", "Native command archives", {
+      updateWork: { kind: "standalone" },
+      async run(ctx) {
+        const { noteArchivedNativeCommandSources, repairArchivedNativeCommandSources } =
+          await import("../commands/doctor-native-command-archives.js");
+        const scanParams = { cfg: ctx.cfg, env: ctx.env ?? process.env };
+        if (ctx.options.repair === true) {
+          await repairArchivedNativeCommandSources(scanParams);
+        } else {
+          noteArchivedNativeCommandSources(scanParams);
+        }
+      },
+    }),
     createDoctorHealthContribution("doctor:session-transcripts", "Session transcripts", {
       healthChecks: {
         description: "Legacy or branchy session transcript files are represented as findings.",

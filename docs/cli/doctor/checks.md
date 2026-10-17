@@ -52,6 +52,34 @@ After its checks finish, `doctor --fix` settles its own inspection workers while
 
 ## Session state and cron
 
+### Archived command sessions
+
+Doctor warns when an internal Discord or default Slack command session is
+archived. These sessions are separate from conversation history; archiving one
+can prevent native commands such as `/new`, `/reset`, or `/compact` from running.
+Doctor reports the affected key and session ID. Plain `doctor` and `doctor --yes`
+do not restore it. A standalone `openclaw doctor --fix` restores only matching
+internal source sessions under Doctor's exclusive Gateway maintenance ownership;
+the updater's Doctor pass does not run this repair.
+
+If a user encounters this warning or a failed slash command:
+
+1. Ask the Gateway operator to run `openclaw doctor` and check the Gateway logs.
+2. Run `openclaw doctor --fix` from outside the Gateway process tree. Alternatively,
+   in the Control UI open **Sessions** → **Archived**, search for the exact key,
+   review its session ID, and choose **Restore** for that session only.
+3. Retry the original command. Failed commands are not replayed automatically.
+
+Do not delete or reset the hidden session to repair its archive state, and do not
+restore unrelated conversation archives. If Doctor reports no matching session,
+investigate the logged failure instead of assuming archiving caused it. Custom
+Slack command prefixes are not diagnosed by this check.
+
+Internal Discord and default Slack command sessions are protected from new
+archive requests and automatic maintenance. Existing archives remain unchanged
+until an operator explicitly runs standalone `doctor --fix` or restores them in
+the Control UI.
+
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
 - Doctor reports cron jobs with an explicit `payload.model` override, including provider-namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.

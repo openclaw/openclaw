@@ -12,6 +12,7 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { isNativeCommandSourceSessionKey } from "./native-command-source-session-key.js";
 import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import {
@@ -411,6 +412,9 @@ function isProtectedSessionMaintenanceEntry(
   // Primary sessions are operator-facing and must survive maintenance even without an active
   // admission. Global scope uses the literal `global` key instead of `agent:<id>:main`.
   if (isPrimarySessionMaintenanceKey(sessionKey)) {
+    return true;
+  }
+  if (isNativeCommandSourceSessionKey(sessionKey)) {
     return true;
   }
   if (parseThreadSessionSuffix(sessionKey).threadId) {

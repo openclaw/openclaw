@@ -52,6 +52,20 @@ function createMaintenanceArtifacts() {
 }
 
 describe("pruneStaleEntries", () => {
+  it("preserves stale native command sources but archives an ordinary session", () => {
+    const old = Date.now() - 31 * DAY_MS;
+    const sourceKey = "agent:main:discord:slash:user-1";
+    const conversationKey = "agent:main:ordinary-history";
+    const store = makeStore([
+      [sourceKey, makeEntry(old)],
+      [conversationKey, makeEntry(old)],
+    ]);
+
+    pruneStaleEntries(store, 30 * DAY_MS);
+    expect(store[sourceKey]?.archivedAt).toBeUndefined();
+    expect(store[conversationKey]?.archiveReason).toBe("age-retention");
+  });
+
   it.each([
     ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }, "age-retention"],
     ["agent:main:subagent:child", {}, undefined],
@@ -380,6 +394,19 @@ describe("pruneStaleModelRunEntries", () => {
 });
 
 describe("capEntryCount", () => {
+  it("preserves native command sources under entry pressure", () => {
+    const sourceKey = "agent:main:slack:slash:team:t123:user:u123";
+    const conversationKey = "agent:main:ordinary-history";
+    const store = makeStore([
+      [sourceKey, makeEntry(1)],
+      [conversationKey, makeEntry(2)],
+    ]);
+
+    expect(capEntryCount(store, 1, { nowMs: 3 })).toBe(1);
+    expect(store[sourceKey]?.archivedAt).toBeUndefined();
+    expect(store[conversationKey]?.archiveReason).toBe("active-session-cap");
+  });
+
   it("removes synthetic cap overflow while retaining newer sessions", () => {
     const now = Date.now();
     const syntheticKey = "agent:main:subagent:old";

@@ -185,7 +185,11 @@ placement, the Gateway first stops the worker, reconciles its workspace, and
 reclaims the environment. If the placement is still transitioning or failed
 without proof that its environment is gone, the session remains unarchived;
 wait for the placement to settle, then retry. Agent main sessions remain
-protected. Already archived sessions are successful no-ops. Use `--dry-run` to
+protected, as are internal Discord and default Slack slash-command sessions.
+These internal sessions are needed to handle commands; archive conversation
+histories instead. For an already archived command session, run `openclaw doctor`
+and follow its [explicit restoration guidance](/cli/doctor/checks#archived-command-sessions).
+Already archived sessions are successful no-ops. Use `--dry-run` to
 validate every key and preview the result without changing session state.
 
 Archive reasons are assigned automatically and displayed as human-readable text

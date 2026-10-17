@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { isNativeCommandSourceSessionKey } from "../../config/sessions/native-command-source-session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
@@ -184,6 +185,12 @@ export function resolveProtectedSessionVisibilityError(
   }
   if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `Cannot ${action} an agent's main session.`);
+  }
+  if (action === "archive" && isNativeCommandSourceSessionKey(canonicalKey)) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `Cannot ${action} an internal slash-command session needed for commands; it is not a conversation history.`,
+    );
   }
   return undefined;
 }

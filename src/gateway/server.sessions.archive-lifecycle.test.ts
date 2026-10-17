@@ -615,6 +615,67 @@ test("sessions.patch rejects unknown without materializing a session entry", asy
   expectNoSessionQueueCleanup();
 });
 
+test("sessions.patch refuses native command source archives but permits restoring a legacy archive", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:discord:slash:user-1";
+  const conversationKey = "agent:main:ordinary-history";
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("slash-source"),
+      [conversationKey]: sessionStoreEntry("ordinary-history"),
+    },
+  });
+
+  const refused = await directSessionReq("sessions.patch", {
+    key,
+    archived: true,
+    expectedSessionId: "slash-source",
+  });
+  expect(refused).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("internal slash-command") },
+  });
+  expect(refused.error?.message).toContain("not a conversation history");
+  expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+  expectNoSessionQueueCleanup();
+
+  const batch = await directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
+    "sessions.patchMany",
+    { targets: [archiveTarget(key, "slash-source")], patch: { archived: true } },
+  );
+  expect(batch.payload?.outcomes).toEqual([expect.objectContaining({ key, ok: false })]);
+  expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+  expectNoSessionQueueCleanup();
+
+  const conversation = await directSessionReq("sessions.patch", {
+    key: conversationKey,
+    archived: true,
+    expectedSessionId: "ordinary-history",
+  });
+  expect(conversation).toMatchObject({ ok: true });
+  expect(loadSessionEntry({ storePath, sessionKey: conversationKey })?.archivedAt).toEqual(
+    expect.any(Number),
+  );
+
+  await writeSessionStore({
+    entries: { [key]: sessionStoreEntry("slash-source", { archivedAt: 1 }) },
+  });
+  const listed = await directSessionReq<{
+    sessions: Array<{ key: string; sessionId: string; archived: boolean }>;
+  }>("sessions.list", { archived: true, search: key });
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions).toEqual([
+    expect.objectContaining({ key, sessionId: "slash-source", archived: true }),
+  ]);
+  const restored = await directSessionReq("sessions.patch", {
+    key,
+    archived: false,
+    expectedSessionId: "slash-source",
+  });
+  expect(restored).toMatchObject({ ok: true });
+  expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+});
+
 test("sessions.patchMany prepares independent archive drains concurrently and releases in target order", ({
   signal,
 }) =>

@@ -2143,6 +2143,7 @@ scripts/pr-lib/merge-prior-ci-cancellation.mjs
 scripts/pr-lib/merge-prior-ci-security.mjs
 src/config/sessions/legacy-sqlite-marker.ts
 src/config/sessions/lifecycle-timestamps.ts
+src/config/sessions/native-command-source-session-key.ts
 src/config/sessions/session-accessor.sqlite-scope.ts
 src/config/sessions/session-accessor.sqlite-transcript-anchor.ts
 src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts
