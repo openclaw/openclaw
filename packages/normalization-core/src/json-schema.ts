@@ -1,7 +1,7 @@
 // Browser-safe JSON Schema normalization and value checks shared by core and Control UI.
 import { Guard } from "typebox/guard";
 import { Check } from "typebox/schema";
-import { isRecord } from "./record-coerce.js";
+import { isRecord, isStringArray } from "./record-coerce.js";
 
 type JsonSchemaObject = Record<string, unknown>;
 export type JsonSchemaValue = JsonSchemaObject | boolean;
@@ -264,10 +264,6 @@ function normalizeJsonSchemaNode(schema: unknown, options: NormalizationOptions)
         return [key, value];
       }),
   );
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function isJsonValue(

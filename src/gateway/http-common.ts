@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import { sendJson } from "../infra/http-json.js";
 import {
   clearHttpResponseRepresentationHeaders,
   sendHttpRequestRejection,
@@ -64,11 +65,7 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
   }
 }
 
-export function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
-}
+export { sendJson };
 
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);

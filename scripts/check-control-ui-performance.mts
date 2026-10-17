@@ -56,7 +56,7 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 27,
   newBootJsRequests: 22,
-  // Measured 1,503,201 / 1,045,414 B; retain under 1% headroom.
+  // Measured 1,503,763 / 1,045,677 B; retain under 1% headroom.
   chatBootJsGzipBytes: 1_515_000,
   newBootJsGzipBytes: 1_055_000,
   startupCssRequests: 1,

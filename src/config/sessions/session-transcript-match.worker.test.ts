@@ -3,9 +3,12 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
+import { readSessionMessageByIdAsync } from "../../gateway/session-transcript-readers.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.js";
 import { findSessionTranscriptArchiveEventReadOnly } from "./session-accessor.sqlite-history.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
@@ -168,6 +171,7 @@ it("recovers the exact complete child answer without preventing host event progr
 
 it("keeps match filters and active anchors authoritative across worker payload encodings", async () => {
   await withOpenClawTestState({ label: "transcript-match-encodings" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     for (const compressed of [false, true]) {
       const sessionId = compressed ? "compressed-matches" : "identity-matches";
       const scope = {
@@ -206,7 +210,44 @@ it("keeps match filters and active anchors authoritative across worker payload e
         role: "user",
         idempotencyKey: "shared-key",
       });
-      const active = encodedAssistant("active", "branch-run");
+      const widget = encodedAssistant("widget", "widget-run", {
+        role: "toolResult",
+        toolName: "show_widget",
+        isError: false,
+        details: {
+          kind: "canvas",
+          view: { id: "cv_saved" },
+          presentation: { target: "assistant_message" },
+        },
+      });
+      const nestedWidget = {
+        ...encodedAssistant(
+          "nested-widget",
+          "widget-run",
+          createNestedToolActivity({
+            runId: "widget-run",
+            scopeId: "widget-scope",
+            afterEntryId: "widget",
+            startOrder: 0,
+            toolCallId: "nested-call",
+            toolName: "show_widget",
+            input: {},
+            result: {
+              content: [],
+              details: {
+                kind: "canvas",
+                view: { id: "cv_nested" },
+                presentation: { target: "assistant_message" },
+              },
+            },
+            isError: false,
+            startedAt: 1,
+            timestamp: 2,
+          }),
+        ),
+        parentId: "widget",
+      };
+      const active = { ...encodedAssistant("active", "branch-run"), parentId: "nested-widget" };
       const inactive = encodedAssistant("inactive", "branch-run");
       const leaf = { type: "leaf", id: "leaf", parentId: "inactive", targetId: "active" };
       const events = [
@@ -226,11 +267,17 @@ it("keeps match filters and active anchors authoritative across worker payload e
         deliveryMirror,
         ordinary,
         user,
+        widget,
+        nestedWidget,
         active,
         inactive,
         leaf,
       ];
       await replaceTranscriptEvents(scope, events);
+      // Prepare the projection before observing the worker-only match reads.
+      await expect(readSessionMessageByIdAsync(scope, "active")).resolves.toMatchObject({
+        found: true,
+      });
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
       expect(
         database.db
@@ -256,6 +303,8 @@ it("keeps match filters and active anchors authoritative across worker payload e
         { match: { kind: "idempotency", key: "absent-key" } },
         { match: { kind: "visible-final", runId: "branch-run" }, event: inactive },
         { match: { kind: "active-assistant", runId: "branch-run" }, event: active },
+        { match: { kind: "canvas-widget", docId: "cv_saved" }, event: widget },
+        { match: { kind: "canvas-widget", docId: "cv_nested" }, event: nestedWidget },
         { match: { kind: "latest" }, event: leaf },
       ];
       const hostSql = observeHostDataSql();

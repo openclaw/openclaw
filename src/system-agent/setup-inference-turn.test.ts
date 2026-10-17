@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
 import {
   createPluginMetadataSnapshot,
@@ -20,6 +22,7 @@ import {
 import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -39,10 +42,15 @@ import {
 } from "./setup-inference-turn.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 
+// mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+
 const mocks = vi.hoisted(() => ({ loadAgentRuntimePluginRegistryHandle: vi.fn() }));
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
 }));
+
+afterEach(() => vi.restoreAllMocks());
 
 function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConfiguredRoute {
   const config: OpenClawConfig = {
@@ -86,17 +94,14 @@ describe("setup inference plugin ownership", () => {
         },
       };
       let retryConnectionErrors: boolean | undefined;
+      vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+        retryConnectionErrors = params.retryConnectionErrors;
+        throw new FailoverError("Connection error.", { reason: "timeout", code });
+      });
       const result = await runSetupInferenceTurn({
         route,
         requireExecutionOwner: false,
-        deps: {
-          createTempDir: async () => "/tmp/openclaw-setup-inference-test",
-          removeTempDir: async () => {},
-          runEmbeddedAgent: async (params) => {
-            retryConnectionErrors = params.retryConnectionErrors;
-            throw new FailoverError("Connection error.", { reason: "timeout", code });
-          },
-        },
+        deps: {},
       });
       expect(result).toMatchObject({
         ok: false,
@@ -116,7 +121,7 @@ describe("setup inference plugin ownership", () => {
     const route = embeddedRoute();
     const cleanupStarted = createDeferred();
     const releaseCleanup = createDeferred();
-    const removeTempDir = vi.fn(async () => {});
+    const removeTempDir = vi.spyOn(fs, "rm");
     const runEmbeddedAgent = vi.fn(async () => {
       const trackOwner = captureAsyncWorkTracker();
       void trackOwner(async () => {
@@ -135,14 +140,11 @@ describe("setup inference plugin ownership", () => {
       };
     });
 
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
     let settled = false;
     const turn = runSetupInferenceTurn({
       route,
-      deps: {
-        createTempDir: async () => "/tmp/openclaw-setup-inference-test",
-        removeTempDir,
-        runEmbeddedAgent,
-      },
+      deps: {},
       requireExecutionOwner: false,
     }).finally(() => {
       settled = true;
@@ -234,10 +236,12 @@ describe("setup inference plugin ownership", () => {
         }),
       );
       const previousMetadata = getCurrentPluginMetadataSnapshot();
-      const resolveMetadataSnapshot = vi.fn(() => {
-        order.push("metadata");
-        return metadataSnapshot;
-      });
+      const resolveMetadataSnapshot = vi
+        .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+        .mockImplementation(async () => {
+          order.push("metadata");
+          return metadataSnapshot;
+        });
       mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
         order.push("load");
         expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
@@ -261,7 +265,6 @@ describe("setup inference plugin ownership", () => {
             stagedOwnerPluginArtifacts: binding,
             deps: {
               createSystemAgentVerifiedInferenceBinding,
-              resolvePluginMetadataSnapshot: resolveMetadataSnapshot,
             },
           }),
         ).resolves.toBe(binding);
@@ -356,42 +359,41 @@ describe("setup probe projection", () => {
       let runId: string | undefined;
       let unsubscribe = () => {};
       try {
+        vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+          runId = params.runId;
+          unsubscribe = onAgentEventForRun(params.runId, (event) => events.push(event));
+          sessionMessageSubscribers.subscribe("probe-viewer", params.sessionKey!);
+          emitAgentEvent({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
+            stream: "assistant",
+            data: { text: "Internal setup response" },
+          });
+          emitAgentEvent({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
+            stream: "lifecycle",
+            data: {
+              phase,
+              executionSettled: true,
+              ...(phase === "error" ? { error: "provider refused probe" } : {}),
+            },
+          });
+          if (phase === "error") {
+            throw new Error("provider refused probe");
+          }
+          return {
+            meta: {
+              durationMs: 1,
+              finalAssistantVisibleText: "Internal setup response",
+              executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
+            },
+          };
+        });
         const result = await runSetupInferenceTurn({
           route,
           requireExecutionOwner: false,
-          deps: {
-            runEmbeddedAgent: async (params) => {
-              runId = params.runId;
-              unsubscribe = onAgentEventForRun(params.runId, (event) => events.push(event));
-              sessionMessageSubscribers.subscribe("probe-viewer", params.sessionKey!);
-              emitAgentEvent({
-                runId: params.runId,
-                sessionKey: params.sessionKey,
-                stream: "assistant",
-                data: { text: "Internal setup response" },
-              });
-              emitAgentEvent({
-                runId: params.runId,
-                sessionKey: params.sessionKey,
-                stream: "lifecycle",
-                data: {
-                  phase,
-                  executionSettled: true,
-                  ...(phase === "error" ? { error: "provider refused probe" } : {}),
-                },
-              });
-              if (phase === "error") {
-                throw new Error("provider refused probe");
-              }
-              return {
-                meta: {
-                  durationMs: 1,
-                  finalAssistantVisibleText: "Internal setup response",
-                  executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
-                },
-              };
-            },
-          },
+          deps: {},
         });
         expect(result).toMatchObject(
           phase === "end"

@@ -17,9 +17,8 @@ for coverage; selecting PostgreSQL does not move every local file into the serve
 
 <Warning>
   PostgreSQL and mixed-engine operation remain experimental. Native credential
-  and execution-approval work is not fully cut over. Full-archive extraction also
-  does not recreate PostgreSQL namespaces;
-  read [Backup and restore](#backup-and-restore) before relying on it for recovery.
+  and execution-approval work is not fully cut over. Read
+  [Backup and restore](#backup-and-restore) before relying on it for recovery.
 </Warning>
 
 ## When to use PostgreSQL
@@ -356,56 +355,85 @@ machine-state keys, and generated model-catalog credentials. Keep Logbook images
 transcript blobs, workspaces, config includes, and local state with the database
 backup. Neither a server dump alone nor a copied anchor covers the installation.
 
-### Current restore limits
+### Restore all PostgreSQL stores
+
+`openclaw backup verify <archive>` checks the PostgreSQL capsules declared by the
+backup producer, including plugin stores and retained Matrix roots. The archive
+records each generated capsule's archive path and manifest hash; verification
+checks that binding, its artifact hashes, and its matching anchor.
 
 `openclaw backup restore <archive> --target <directory>` verifies and extracts
-into a fresh staging directory. It **does not import PostgreSQL rows or recreate
-namespaces**. Moving the extracted anchor into place cannot recover a lost server.
-`openclaw backup sqlite restore` is SQLite-only.
+into a fresh staging directory, then imports every captured PostgreSQL store into
+a fresh namespace: shared state, agents, Workboard, Logbook, Team Reports, and
+retained Matrix roots. It publishes matching anchors only after all stores pass
+their providers' verification. A failed restore discards its new namespaces and
+cleans the incomplete staging tree. Original namespaces are left untouched.
 
-The engine supports verified restore into a fresh owned PostgreSQL namespace,
-with anchor publication after verification. Current Git backup CLI exposes this
-for **shared state and individually selected agents**. It has no plugin-store
-restore selector. Complete archive-to-PostgreSQL rehydration and plugin-store CLI
-restore remain gaps; do not treat full-archive verification as proof of complete
-disaster recovery. Keep a tested PostgreSQL-native recovery procedure for stores
-outside the CLI restore scopes, preserving their matching local anchors.
+Restore imports and consumes only producer-declared capsules. A copied export
+in a workspace or another archived directory is ordinary user data: restore
+preserves it without importing it or deleting its members. Consuming generated
+capsules after successful import lets a restored installation create another
+full backup without colliding with the previous exports.
 
-### Disaster recovery for shared state and agents
+Older archives without the capsule inventory can automatically recover only the
+global and agent snapshots declared by their existing database inventory. Other
+exports remain unchanged as files. Verification and restore warn when an older
+archive contains unlisted exports: re-run backup with this version on the source
+installation to capture plugin PostgreSQL stores with ownership metadata before
+activating a full recovery. Unmanaged SQLite files also remain opaque.
+
+Archive restore validates its captured configuration under offline custody and
+uses its family selections. Supply the captured configuration's external
+connection SecretRef before restoring; point that secret at the recovery server
+when recovering to another server. The live installation's selections do not
+override the archive. Restore publishes the recovered configuration last, after
+all stores and their matching anchors pass verification.
+`openclaw backup sqlite restore` remains SQLite-only.
+
+Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
+plugin or additional-root identities. Use the identity recorded under `stores/`
+in the Git repository. Each restore creates a fresh namespace and publishes its
+matching local anchor after verification.
+
+### Disaster recovery from Git
 
 Prepare explicit Git recovery points while offline, alongside the full archive:
 
 ```bash
 openclaw backup git init --repository ~/Backups/openclaw-git
-openclaw backup git create --repository ~/Backups/openclaw-git --global --agent main
+openclaw backup git create --repository ~/Backups/openclaw-git --all --exclude-secrets
 openclaw backup git log --repository ~/Backups/openclaw-git
 ```
 
-Repeat `--agent` for each configured agent. Use explicit scopes: the current
-`--all` PostgreSQL discovery path does not distinguish every additional plugin
-or retained root reliably. Record the resulting commit and keep the repository
-private. Git database backups do not replace file/config backups.
+`--all` captures configured agents and discovered PostgreSQL plugin stores and
+retained roots with distinct identities. Record the resulting commit and keep
+the repository private. Git database backups do not replace file/config backups.
 
-`openclaw backup git verify` currently exercises restore for PostgreSQL: it needs
-the configured database and offline custody, and creates a new server namespace.
-It is not a files-only verification command. `openclaw backup verify <archive>`
-checks archive structure and layout without proving PostgreSQL rehydration.
+`openclaw backup git verify` checks PostgreSQL export hashes and the matched
+anchor locally. It does not connect to PostgreSQL or create a scratch namespace.
+New Git captures also bind the source store to the scope manifest, so verification
+and restore reject a capsule copied from another store. Older captures remain
+readable; keep their complete scope artifacts together when editing Git history.
+SQLite verification retains its private restore and integrity checks.
 
 To recover these scopes:
 
 1. Keep all writers stopped. Provision a compatible PostgreSQL server, a fresh
    database, runtime role, and required extensions as above.
-2. Stage the backed-up config and files using the [archive restore workflow](/install/backups#restore-a-full-archive).
-   Set the recovery installation's state/config paths and agent directories;
+2. Set the recovery installation's state/config paths and agent directories;
    supply its external connection secret separately, pointing at the recovery
    database. Preserve the matching `database.engine` and `database.families`
    selections, and use a compatible OpenClaw version and matching plugins.
+   Recover the matching non-database files alongside the Git snapshots. A full
+   archive restore already rehydrates its PostgreSQL stores; use Git restore
+   when recovering selected database scopes instead.
 3. Restore each Git scope from the **same recorded commit** to a nonexistent
    local target, outside the backup repository:
 
    ```bash
    openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> --global --target ./recovered/openclaw.sqlite
    openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> --agent main --target ./recovered/main/openclaw-agent.sqlite
+   openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> --store workboard --target ./recovered/workboard.sqlite
    ```
 
    Each PostgreSQL restore loads a fresh namespace using the configured
@@ -413,10 +441,9 @@ To recover these scopes:
    It does not overwrite an existing target or restore into a live namespace.
 
 4. Put those verified anchors at the recovery installation's corresponding
-   shared-state and agent database paths, replacing only staged historical
+   shared-state, agent, or plugin database paths, replacing only staged historical
    anchors while offline. Preserve the old installation and namespaces until
-   recovery is confirmed. Recover any other PostgreSQL store through its tested
-   server recovery procedure before starting the installation.
+   recovery is confirmed. Restore every required store before starting the installation.
 5. Run `openclaw doctor`, start through the service owner, then check
    `openclaw health`, `openclaw status`, representative sessions, search, and
    enabled plugins. Review pending approvals and channel relinking needs after

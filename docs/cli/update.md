@@ -310,8 +310,9 @@ not grant update ownership.
 Preparation resolves official `main` once, or accepts an exact
 `--sha <40-hex-commit>`, builds off-path, verifies and seals the candidate, and
 records its preparation. Preparation failure leaves the serving generation in
-place; an already-current target skips the build. Existing adoption records
-remain preparation-only. Native activation requires explicit
+place; an already-current target skips the build. Default update builds include
+the Plugin SDK declarations required by the sealed generation's package exports.
+Existing adoption records remain preparation-only. Native activation requires explicit
 `adopt-immutable --enable-activation` consent recorded in the installation's
 control database. No `openclaw.json` option enables it. `--no-restart` keeps an
 enabled installation preparation-only for that invocation.

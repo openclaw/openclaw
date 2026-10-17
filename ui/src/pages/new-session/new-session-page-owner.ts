@@ -391,7 +391,7 @@ export class NewSessionPageOwner {
       get submitting() {
         return submission.submitting;
       },
-      textareaController: submission.composerTextarea,
+      composerTextarea: submission.composerTextarea,
 
       get messageLocked() {
         return Boolean(submission.pendingPlacement.sessionKey);

@@ -1,5 +1,4 @@
 // Playback transcode policy and lazy media-store cache ownership.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity, type ExactFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -7,6 +6,7 @@ import { fileStore } from "@openclaw/fs-safe/store";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -109,18 +109,16 @@ const log = createSubsystemLogger("media/playback");
 
 /** Hashes the immutable source identity used by playback cache file names. */
 function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        source.path,
-        source.size,
-        source.mtimeMs,
-        source.ctimeMs,
-        source.exactIdentity.dev.toString(),
-        source.exactIdentity.ino.toString(),
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      source.path,
+      source.size,
+      source.mtimeMs,
+      source.ctimeMs,
+      source.exactIdentity.dev.toString(),
+      source.exactIdentity.ino.toString(),
+    ]),
+  );
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

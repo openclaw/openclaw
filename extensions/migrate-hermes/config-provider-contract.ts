@@ -1,4 +1,3 @@
-// Hermes provider config contract parsing and normalization.
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNonArrayRecord,
