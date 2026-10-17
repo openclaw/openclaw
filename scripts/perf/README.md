@@ -214,7 +214,8 @@ state, and apply the sandbox rules below to every Team command.
 Add `--writer-reads --clients 150` to measure read traffic competing with startup
 writes. This enables the Prometheus plugin, makes each synthetic catalog request
 read its persisted plugin metadata, and adds `sessions.github.options` for an
-owned synthetic session to each client's polling batch. GitHub accounts remain
+owned synthetic session plus `agents.list` to each client's polling batch. Agent
+listing exercises persisted provenance presentation reads. GitHub accounts remain
 disconnected; no external publication occurs. At five minutes from restart spawn
 (or the requested shorter duration), the driver saves `writer-metrics.prom` and
 includes writer queue wait sums/counts by request class in `result.json`. These

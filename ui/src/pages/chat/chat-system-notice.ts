@@ -24,6 +24,7 @@ export function projectChatSystemNotice(
         key: item.key,
         timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
         icon: "cpu",
+        systemEvent: "delivery-warning",
         text: extractTextCached(item.message) ?? "",
       },
     ];
@@ -101,6 +102,7 @@ export function projectChatSystemNotice(
       kind: "notice",
       key: item.key,
       icon: noticeKind?.icon ?? "cpu",
+      ...(pending ? {} : { systemEvent: "info" as const }),
       label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
       ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
       ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),

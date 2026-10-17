@@ -5,6 +5,7 @@ import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-
 import { notifyListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
+import { listen } from "../reactive/listener.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -36,7 +37,7 @@ const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
 const storedChatOutboxChangeListeners = new Set<() => void>();
-let storageChangeListenerInstalled = false;
+let stopStorageChanges: (() => void) | undefined;
 
 export type ChatComposerScope = {
   client?: OfflineStorageClient | null;
@@ -123,19 +124,14 @@ const pendingLegacyTransfers = new WeakMap<
 const projectedStoreByStorage = new WeakMap<Storage, Map<string, StoredComposerState>>();
 export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
   storedChatOutboxChangeListeners.add(listener);
-  if (!storageChangeListenerInstalled && typeof window !== "undefined") {
-    storageChangeListenerInstalled = true;
-    window.addEventListener("storage", handleStoredChatOutboxStorageChange);
+  if (!stopStorageChanges && typeof window !== "undefined") {
+    stopStorageChanges = listen(window, "storage", handleStoredChatOutboxStorageChange);
   }
   return () => {
     storedChatOutboxChangeListeners.delete(listener);
-    if (
-      storageChangeListenerInstalled &&
-      storedChatOutboxChangeListeners.size === 0 &&
-      typeof window !== "undefined"
-    ) {
-      storageChangeListenerInstalled = false;
-      window.removeEventListener("storage", handleStoredChatOutboxStorageChange);
+    if (storedChatOutboxChangeListeners.size === 0) {
+      stopStorageChanges?.();
+      stopStorageChanges = undefined;
     }
   };
 }

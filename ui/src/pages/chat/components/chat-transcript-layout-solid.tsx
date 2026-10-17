@@ -28,6 +28,7 @@ import {
   WorkGroupSummary,
 } from "./chat-message-stream-view.tsx";
 import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
+import { ChatSystemEvents } from "./chat-system-events.tsx";
 import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
@@ -42,6 +43,9 @@ import { TurnRecapRow } from "./chat-working-indicator.tsx";
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   return (
     <Switch>
+      <Match when={props.value.kind === "system-events" ? props.value : undefined}>
+        {(view) => <ChatSystemEvents item={view().item} />}
+      </Match>
       <Match when={props.value.kind === "group" ? props.value : undefined}>
         {(view) => <MessageGroup {...view()} />}
       </Match>

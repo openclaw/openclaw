@@ -6,8 +6,8 @@ vi.mock("typebox", () => {
 });
 
 it("loads report eligibility without evaluating protocol schema builders", async () => {
-  await expect(import("./update-failure-report-controller.ts")).resolves.toMatchObject({
+  await expect(import("./update-failure-report-owner.ts")).resolves.toMatchObject({
     canReportUpdateFailure: expect.any(Function),
-    createUpdateFailureReportController: expect.any(Function),
+    createUpdateFailureReportOwner: expect.any(Function),
   });
 });

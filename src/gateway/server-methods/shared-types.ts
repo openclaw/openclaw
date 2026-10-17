@@ -485,6 +485,8 @@ export type GatewayRequestContext = GatewayKernelContext &
 export type GatewayRequestOptions = {
   /** Transport can forward trusted worker JSON without materializing it. */
   acceptsSerializedJson?: boolean;
+  /** Transport can reuse worker-produced raw deflate with the default 15-bit window. */
+  acceptsDeflatedSegments?: boolean;
   req: RequestFrame;
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;

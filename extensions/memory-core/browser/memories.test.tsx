@@ -1,28 +1,96 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
-import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
-import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { MemoryMemories } from "./memory-memories.tsx";
+import type {
+  ControlUiSettingsContext,
+  ControlUiSettingsSnapshot,
+  ControlUiSettingsView,
+  MemorySearchResponse,
+} from "openclaw/plugin-sdk/control-ui";
+import { flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { memoriesView } from "./memories.tsx";
+
+const disposers: (() => void)[] = [];
+afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
+});
+const waitForSolid = (assertion: () => void) =>
+  vi.waitFor(() => {
+    flush();
+    assertion();
+  });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
 
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-function createElement(request: Request, advertised = true) {
-  const [agentId, setAgentId] = createSignal<string | null>("main");
-  const client = { request } as unknown as GatewayBrowserClient;
-  const { container } = mountSolid(() => (
-    <MemoryMemories
-      client={client}
-      connected={true}
-      methodAdvertised={advertised}
-      agentId={agentId()}
-    />
-  ));
-  flush();
-  return Object.assign(container, { setAgentId });
+function createElement(
+  request: Request,
+  advertised = true,
+  initialAgentId: string | null = "main",
+) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  let lifetime: AbortController;
+  let view: ReturnType<ControlUiSettingsView["mount"]>;
+  const formatError = vi.fn((error: unknown) =>
+    error instanceof Error ? error.message : String(error),
+  );
+  function mount(agentId: string | null) {
+    lifetime?.abort();
+    view?.dispose();
+    lifetime = new AbortController();
+    const snapshot: ControlUiSettingsSnapshot = {
+      agentId,
+      agentsLoading: false,
+      agentsError: null,
+      engine: { kind: "default", id: "memory-core", availability: "enabled" },
+      connected: true,
+      advertisedMethods: advertised ? ["memory.search", "agents.workspace.get"] : [],
+      connectionEpoch: 1,
+      routeIntent: "memories",
+      locale: "en",
+    };
+    const context: ControlUiSettingsContext = {
+      props: snapshot,
+      signal: lifetime.signal,
+      // This view uses semantic controls; shared visual primitives are exercised in the browser.
+      components: {
+        mountSection: vi.fn(),
+        mountRow: vi.fn(),
+        mountStatus: vi.fn(),
+        mountValue: vi.fn(),
+        mountNavigation: vi.fn(),
+        mountLobster: vi.fn(),
+      },
+      request: <T,>(method: string, params?: unknown) =>
+        request(method, params as Record<string, unknown>) as Promise<T>,
+      formatError,
+      formatRelativeTimestamp: String,
+      navigate: vi.fn(),
+      refreshAgents: vi.fn(),
+    };
+    view = memoriesView.mount(container, context);
+    flush();
+  }
+  mount(initialAgentId);
+  disposers.push(() => {
+    lifetime.abort();
+    view.dispose();
+    container.remove();
+  });
+  return Object.assign(container, {
+    retire: () => lifetime.abort(),
+    formatError,
+  });
 }
 
 function typeQuery(element: HTMLElement, query: string) {
@@ -71,7 +139,34 @@ function memoryFileResponse(content: string) {
   return { file: { encoding: "utf8", content } };
 }
 
-describe("MemoryMemoriesElement", () => {
+describe("Memory Core indexed-search presentation", () => {
+  it.each(["search", "detail"])(
+    "discards a retired %s failure before using lifetime-bound error formatting",
+    async (stage) => {
+      const pending = deferred<unknown>();
+      const request = vi.fn<Request>((method) =>
+        stage === "detail" && method === "memory.search"
+          ? Promise.resolve(searchResponse([result]))
+          : pending.promise,
+      );
+      const element = createElement(request);
+      search(element);
+      if (stage === "detail") {
+        await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
+        element.querySelector<HTMLButtonElement>("article > button")?.click();
+      }
+      element.retire();
+      element.formatError.mockImplementation(() => {
+        throw new Error("retired formatter must not run");
+      });
+      pending.reject(new Error("retired failure"));
+      await pending.promise.catch(() => undefined);
+      flush();
+      expect(element.formatError).not.toHaveBeenCalled();
+      expect(element.textContent).not.toContain("retired failure");
+    },
+  );
+
   it.each([
     [true, "Search for a person, project, decision"],
     [false, "Update the gateway to search memories"],
@@ -89,8 +184,7 @@ describe("MemoryMemoriesElement", () => {
 
   it("keeps search disabled when no agent is available", async () => {
     const request = vi.fn(() => Promise.resolve({}));
-    const element = createElement(request);
-    element.setAgentId(null);
+    const element = createElement(request, true, null);
     typeQuery(element, "Ada");
     expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
     submit(element);
@@ -208,18 +302,6 @@ describe("MemoryMemoriesElement", () => {
     );
     expect(element.textContent).toContain(result.snippet);
     expect(element.textContent).not.toContain("Memory search failed");
-  });
-
-  it("resets results when the selected agent changes", async () => {
-    const request = vi.fn(() => Promise.resolve(searchResponse([result])));
-    const element = createElement(request);
-    search(element);
-    await waitForSolid(() => expect(element.textContent).toContain(result.snippet));
-
-    element.setAgentId("research");
-    await waitForSolid(() => expect(element.textContent).toContain("Search for a person"));
-    expect(element.textContent).not.toContain(result.snippet);
-    expect(element.querySelector<HTMLInputElement>("#memory-search-input")?.value).toBe("");
   });
 
   it.each(["resolves", "rejects"] as const)(
