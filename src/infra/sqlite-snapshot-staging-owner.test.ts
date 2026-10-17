@@ -8,6 +8,7 @@ import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createRetainedOperation,
+  flatMapRetainedOperation,
   type RetainedOperation,
   type RetainedOutcome,
 } from "@openclaw/worker-runtime/lifecycle";
@@ -141,31 +142,16 @@ function retainTaskRelease<Output>(
       if (held) {
         return held;
       }
-      let release: RetainedOperation<void> | undefined;
       const retained = createRetainedOperation<void>(() => {
-        if (!gate.open || retained.operation.read().status !== "pending") {
-          return;
-        }
-        if (!release) {
-          release = task.release(options);
-          void release.result.then(
-            () => retained.operation.service(),
-            () => retained.operation.service(),
-          );
-        }
-        release.service();
-        const settled = release.read();
-        if (settled.status === "fulfilled") {
+        if (gate.open) {
           retained.resolve(undefined);
-        } else if (settled.status === "rejected") {
-          retained.reject(settled.error);
         }
       });
-      held = retained.operation;
-      gate.advance = () => retained.operation.service();
+      held = flatMapRetainedOperation(retained.operation, () => task.release(options));
+      gate.advance = () => held?.service();
       gate.entered.resolve();
-      retained.operation.service();
-      return retained.operation;
+      held.service();
+      return held;
     },
   };
 }
@@ -229,9 +215,31 @@ function holdReply(kind: ReplyGate["kind"]): ReplyGate {
   return (observation.replyGate = { kind, entered: createDeferredCore(), open: false });
 }
 
+const disposals: Array<() => Promise<unknown>> = [];
+const cancellations: Array<() => void> = [];
+async function disposeRequests() {
+  for (const cancel of cancellations.splice(0)) {
+    cancel();
+  }
+  for (const dispose of disposals.splice(0).toReversed()) {
+    await dispose();
+  }
+}
+
+function allocate(root: string, signal?: AbortSignal) {
+  const pending = createSqliteSnapshotStagingDirectory(root, false, signal, true);
+  disposals.push(async () => {
+    const [result] = await Promise.allSettled([pending]);
+    if (result.status === "fulfilled") {
+      expect(await removeTempDirectoryAsync(result.value)).toBe(true);
+    }
+  });
+  return pending;
+}
+
 function startPreparation(root: string, pathname: string, signal?: AbortSignal) {
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
-  return captureSqliteSnapshotStagingOwner().start(
+  const request = captureSqliteSnapshotStagingOwner().start(
     {
       type: "prepare",
       root,
@@ -243,6 +251,11 @@ function startPreparation(root: string, pathname: string, signal?: AbortSignal) 
     },
     signal,
   );
+  disposals.push(async () => {
+    await Promise.allSettled([request.result]);
+    await request.startClose().result;
+  });
+  return request;
 }
 
 beforeEach(() => {
@@ -259,6 +272,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     releaseReplyGate(observation.replyGate);
     releaseGate(observation.gate);
+    await disposeRequests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await cleanupSnapshotOperations();
@@ -288,11 +302,9 @@ it.each(["pre-aborted", "queued", "accepted"] as const)(
     const pathname = createProbe(root);
     const controller = new AbortController();
     const reason = new Error("snapshot caller canceled");
+    cancellations.push(() => controller.abort(reason));
     const gate = phase === "queued" ? holdRelease(1) : undefined;
-    const first = gate
-      ? createSqliteSnapshotStagingDirectory(root, false, undefined, true)
-      : undefined;
-    let request: ReturnType<typeof startPreparation> | undefined;
+    const first = gate ? allocate(root) : undefined;
     // oxlint-disable-next-line typescript/unbound-method -- call keeps the real MessagePort receiver.
     const nativePost = MessagePort.prototype.postMessage;
     const posts = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
@@ -312,39 +324,30 @@ it.each(["pre-aborted", "queued", "accepted"] as const)(
         controller.abort(reason);
       }
     });
-    try {
-      if (gate && first) {
-        await waitForGate(gate, first);
-      }
-      if (phase === "pre-aborted") {
-        controller.abort(reason);
-      }
-      request = startPreparation(root, pathname, controller.signal);
-      const rejected =
-        phase === "accepted"
-          ? expect(request.result).rejects.toThrow("SQLite snapshot preparation stopped")
-          : expect(request.result).rejects.toBe(reason);
-      if (phase === "queued") {
-        expect(observation.admitted).toHaveLength(1);
-        controller.abort(reason);
-      }
-      releaseGate(gate);
-      await rejected;
-      expect(
-        posts.mock.calls.filter(([message]) => isRecord(message) && message.type === "abort"),
-      ).toHaveLength(phase === "accepted" ? 1 : 0);
-      expect(
-        observation.admitted.filter((input) => isRecord(input) && input.type === "prepare"),
-      ).toHaveLength(phase === "accepted" ? 1 : 0);
-    } finally {
-      releaseGate(gate);
-      controller.abort(reason);
-      await Promise.allSettled([request?.result]);
-      await request?.startClose().result;
-      if (first) {
-        expect(await removeTempDirectoryAsync(await first)).toBe(true);
-      }
+    if (gate && first) {
+      await waitForGate(gate, first);
     }
+    if (phase === "pre-aborted") {
+      controller.abort(reason);
+    }
+    const request = startPreparation(root, pathname, controller.signal);
+    const rejected =
+      phase === "accepted"
+        ? expect(request.result).rejects.toThrow("SQLite snapshot preparation stopped")
+        : expect(request.result).rejects.toBe(reason);
+    if (phase === "queued") {
+      expect(observation.admitted).toHaveLength(1);
+      controller.abort(reason);
+    }
+    releaseGate(gate);
+    await rejected;
+    expect(
+      posts.mock.calls.filter(([message]) => isRecord(message) && message.type === "abort"),
+    ).toHaveLength(phase === "accepted" ? 1 : 0);
+    expect(
+      observation.admitted.filter((input) => isRecord(input) && input.type === "prepare"),
+    ).toHaveLength(phase === "accepted" ? 1 : 0);
+    await disposeRequests();
     expect(fs.readdirSync(root)).toEqual([path.basename(pathname)]);
   },
 );
@@ -357,64 +360,54 @@ it.each(["queued", "accepted"] as const)(
     let replyGate: ReplyGate | undefined;
     const controller = new AbortController();
     const reason = new Error("snapshot caller canceled");
-    const first = createSqliteSnapshotStagingDirectory(root, false, undefined, true);
-    let second: Promise<string> | undefined;
-    try {
-      if (gate) {
-        await waitForGate(gate, first);
-      } else {
-        await first;
-        replyGate = holdReply("allocated");
-      }
-      second = createSqliteSnapshotStagingDirectory(root, false, controller.signal, true);
-      const rejected = expect(second).rejects.toBe(reason);
-      if (replyGate) {
-        await waitForGate(replyGate, second);
-      } else {
-        await nextTurn();
-      }
-      expect(observation.tasks).toBe(2);
-      expect(observation.admitted).toHaveLength(phase === "queued" ? 1 : 2);
-      expect(observation.allocated).toHaveLength(1);
-      if (replyGate) {
-        expect(observation.taskReads.get(2)?.()).toEqual({ status: "pending" });
-        expect(replyGate.directory).toBeDefined();
-        expect(fs.existsSync(replyGate.directory!)).toBe(true);
-        expect(fs.readdirSync(root).toSorted()).toEqual(
-          [observation.allocated[0]!, replyGate.directory!]
-            .map((directory) => path.basename(directory))
-            .toSorted(),
-        );
-      }
-      const sibling = observation.allocated[0]!;
-      const sentinel = path.join(sibling, "retained.txt");
-      fs.writeFileSync(sentinel, "sibling snapshot bytes");
-      controller.abort(reason);
-      await nextTurn();
-      if (replyGate) {
-        expect(observation.taskReads.get(2)?.()).toEqual({ status: "pending" });
-      }
-      expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
-      expect([...observation.snapshots].some((snapshot) => snapshot().workers === 1)).toBe(true);
-      releaseGate(gate);
-      releaseReplyGate(replyGate);
-      expect(await first).toBe(sibling);
-      await rejected;
-      expect(observation.admitted).toHaveLength(phase === "queued" ? 1 : 2);
-      expect(observation.allocated).toHaveLength(phase === "queued" ? 1 : 2);
-      expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
-      expect(fs.readdirSync(root)).toEqual([path.basename(sibling)]);
-      expect([...observation.snapshots].some((snapshot) => snapshot().workers === 1)).toBe(true);
-    } finally {
-      releaseReplyGate(replyGate);
-      releaseGate(gate);
-      controller.abort(reason);
-      for (const result of await Promise.allSettled([first, second])) {
-        if (result.status === "fulfilled" && result.value) {
-          expect(await removeTempDirectoryAsync(result.value)).toBe(true);
-        }
-      }
+    cancellations.push(() => controller.abort(reason));
+    const first = allocate(root);
+    if (gate) {
+      await waitForGate(gate, first);
+    } else {
+      await first;
+      replyGate = holdReply("allocated");
     }
+    const second = allocate(root, controller.signal);
+    const rejected = expect(second).rejects.toBe(reason);
+    if (replyGate) {
+      await waitForGate(replyGate, second);
+    } else {
+      await nextTurn();
+    }
+    expect(observation.tasks).toBe(2);
+    expect(observation.admitted).toHaveLength(phase === "queued" ? 1 : 2);
+    expect(observation.allocated).toHaveLength(1);
+    if (replyGate) {
+      expect(observation.taskReads.get(2)?.()).toEqual({ status: "pending" });
+      expect(replyGate.directory).toBeDefined();
+      expect(fs.existsSync(replyGate.directory!)).toBe(true);
+      expect(fs.readdirSync(root).toSorted()).toEqual(
+        [observation.allocated[0]!, replyGate.directory!]
+          .map((directory) => path.basename(directory))
+          .toSorted(),
+      );
+    }
+    const sibling = observation.allocated[0]!;
+    const sentinel = path.join(sibling, "retained.txt");
+    fs.writeFileSync(sentinel, "sibling snapshot bytes");
+    controller.abort(reason);
+    await nextTurn();
+    if (replyGate) {
+      expect(observation.taskReads.get(2)?.()).toEqual({ status: "pending" });
+    }
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
+    expect([...observation.snapshots].some((snapshot) => snapshot().workers === 1)).toBe(true);
+    releaseGate(gate);
+    releaseReplyGate(replyGate);
+    expect(await first).toBe(sibling);
+    await rejected;
+    expect(observation.admitted).toHaveLength(phase === "queued" ? 1 : 2);
+    expect(observation.allocated).toHaveLength(phase === "queued" ? 1 : 2);
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
+    expect(fs.readdirSync(root)).toEqual([path.basename(sibling)]);
+    expect([...observation.snapshots].some((snapshot) => snapshot().workers === 1)).toBe(true);
+    await disposeRequests();
     expect(fs.readdirSync(root)).toEqual([]);
   },
 );
@@ -565,24 +558,19 @@ it("retains an early preparation close until its original accepted result joins"
   const source = createProbe(root, "source", "early");
   const gate = holdReply("prepared");
   const request = startPreparation(root, source);
-  try {
-    await waitForGate(gate, request.result);
-    const closing = request.startClose();
-    expect(request.read().status).toBe("pending");
-    expect(closing.read().status).toBe("pending");
-    expect(fs.existsSync(gate.directory!)).toBe(true);
-    releaseReplyGate(gate);
-    const reply = await request.result;
-    expect(reply.type).toBe("prepared");
-    await closing.result;
-    expect(fs.existsSync(reply.directory)).toBe(false);
-    expect(request.read()).toEqual({ status: "fulfilled", value: reply });
-    await expect(request.startClose().result).resolves.toBeUndefined();
-  } finally {
-    releaseReplyGate(gate);
-    await Promise.allSettled([request.result]);
-    await request.startClose().result;
-  }
+  await waitForGate(gate, request.result);
+  const closing = request.startClose();
+  expect(request.read().status).toBe("pending");
+  expect(closing.read().status).toBe("pending");
+  expect(fs.existsSync(gate.directory!)).toBe(true);
+  releaseReplyGate(gate);
+  const reply = await request.result;
+  expect(reply.type).toBe("prepared");
+  await closing.result;
+  expect(fs.existsSync(reply.directory)).toBe(false);
+  expect(request.read()).toEqual({ status: "fulfilled", value: reply });
+  await expect(request.startClose().result).resolves.toBeUndefined();
+  await disposeRequests();
 });
 
 it("keeps an unbound snapshot reader alive across retained generation close and subsequent admission", async () => {

@@ -21,11 +21,29 @@ function withDatabase<T>(file: string, readOnly: boolean, run: (db: DatabaseSync
   }
 }
 
-function assertSnapshot(file: string, query: string, expected: unknown) {
+function assertSnapshot(file: string) {
   withDatabase(file, true, (db) => {
-    expect(db.prepare(query).all()).toEqual(expected);
+    expect(db.prepare("SELECT rowid,value FROM evidence").all()).toEqual([
+      { rowid: 71, value: "keep" },
+    ]);
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   });
+}
+
+function fixture(target = "target.sqlite") {
+  const directory = fsSync.realpathSync(directories.make("sqlite-snapshot-file-"));
+  const sourcePath = path.join(directory, "source.sqlite");
+  withDatabase(sourcePath, false, (database) =>
+    database.exec(
+      "CREATE TABLE evidence(value TEXT); INSERT INTO evidence(rowid,value) VALUES(71,'keep');",
+    ),
+  );
+  return {
+    directory,
+    sourcePath,
+    targetPath: path.join(directory, target),
+    bytes: fsSync.readFileSync(sourcePath),
+  };
 }
 
 function changeSnapshotBytes(file: string) {
@@ -45,16 +63,8 @@ it.each([
   "restore",
 ] as const)("preserves exact file identities above 2^53 (%s)", async (operationKind) => {
   const replace = operationKind.startsWith("replacement");
-  const directory = await fs.realpath(directories.make("sqlite-file-id-"));
-  const sourcePath = path.join(directory, "source.sqlite");
-  const targetPath = path.join(directory, "target.sqlite");
+  const { directory, sourcePath, targetPath, bytes } = fixture();
   const displacedPath = path.join(directory, "displaced.sqlite");
-  withDatabase(sourcePath, false, (database) => {
-    database.exec(
-      "CREATE TABLE evidence(value TEXT); INSERT INTO evidence(rowid,value) VALUES(71,'keep');",
-    );
-  });
-  const bytes = await fs.readFile(sourcePath);
   const native = getFsSafeNativeConfig();
   const open = fs.open.bind(fs);
   const lstat = fs.lstat.bind(fs);
@@ -174,9 +184,7 @@ it.each([
     } else {
       await operation;
       await expect(fs.readFile(targetPath)).resolves.toEqual(bytes);
-      assertSnapshot(targetPath, "SELECT rowid,value FROM evidence", [
-        { rowid: 71, value: "keep" },
-      ]);
+      assertSnapshot(targetPath);
     }
     await expect(fs.readFile(sourcePath)).resolves.toEqual(bytes);
     expect((await fs.readdir(directory)).toSorted()).toEqual(
@@ -198,12 +206,7 @@ it.each([
 ] as const)(
   "verifies snapshot bytes despite FUSE timestamp drift (%s, changed bytes=%s)",
   async (mode, changeBytes) => {
-    const directory = directories.make("sqlite-fuse-");
-    const sourcePath = path.join(directory, "source.sqlite");
-    const targetPath = path.join(directory, "snapshot.bak");
-    withDatabase(sourcePath, false, (source) => {
-      source.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('keep');");
-    });
+    const { sourcePath, targetPath } = fixture("snapshot.bak");
     const originalOpen = fs.open.bind(fs);
     let observations = 0;
     function settleMetadata(value: BigIntStats) {
@@ -272,9 +275,11 @@ it.each([
     } else {
       const result = await operation;
       const bytes = fsSync.readFileSync(targetPath);
-      expect(result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
-      expect(result.sizeBytes).toBe(bytes.length);
-      assertSnapshot(targetPath, "SELECT value FROM records", [{ value: "keep" }]);
+      expect(result).toMatchObject({
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sizeBytes: bytes.length,
+      });
+      assertSnapshot(targetPath);
     }
     expect(observations).toBeGreaterThan(1);
   },

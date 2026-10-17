@@ -1,8 +1,4 @@
-import {
-  createRetainedOperation,
-  flatMapRetainedOperation,
-  mapRetainedOperation,
-} from "@openclaw/worker-runtime/lifecycle";
+import { createRetainedOperation, mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type {
@@ -39,22 +35,12 @@ it("does not replay a synchronously refused producer even if a second attempt co
       if (attempts === 1) {
         throw failure;
       }
-      const unexpected = completed<
-        PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation
-      >({
-        ...createSnapshot("untracked-second-snapshot.sqlite"),
-        startCleanup: () => completed(true),
-      });
       return {
-        ...unexpected,
-        startClose: () =>
-          flatMapRetainedOperation(unexpected, (prepared) =>
-            mapRetainedOperation(prepared.startCleanup(), (cleaned) => {
-              if (!cleaned) {
-                throw new Error("Unexpected snapshot cleanup failed");
-              }
-            }),
-          ),
+        ...completed<PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation>({
+          ...createSnapshot("untracked-second-snapshot.sqlite"),
+          startCleanup: () => completed(true),
+        }),
+        startClose: () => completed(undefined),
       };
     },
   );
@@ -79,17 +65,15 @@ it("services shared production and final cleanup without a host microtask turn",
   };
   const controller = new AbortController();
   const reason = new Error("one retained waiter stopped");
-  const cancelled = startSingleFlightSqliteSnapshot(
-    "retained-progress.sqlite",
-    "retained-test",
-    () => producer,
-    controller.signal,
-  );
-  const surviving = startSingleFlightSqliteSnapshot(
-    "retained-progress.sqlite",
-    "retained-test",
-    () => producer,
-  );
+  const start = (signal?: AbortSignal) =>
+    startSingleFlightSqliteSnapshot(
+      "retained-progress.sqlite",
+      "retained-test",
+      () => producer,
+      signal,
+    );
+  const cancelled = start(controller.signal);
+  const surviving = start();
   controller.abort(reason);
   expect(cancelled.read()).toEqual({ status: "rejected", error: reason });
   expect(surviving.read()).toEqual({ status: "pending" });
@@ -148,8 +132,7 @@ it.each(["all", 0, 1] as const)(
     controllers[cancelled]!.abort(new Error("one waiter cancelled"));
     await expect(operations[cancelled]).rejects.toBe(controllers[cancelled]!.signal.reason);
     const snapshot = await operations[1 - cancelled]!;
-    expect(copies).toBe(1);
-    expect(removed).toBe(false);
+    expect({ copies, removed }).toEqual({ copies: 1, removed: false });
     expect(await snapshot.cleanupAsync()).toBe(true);
     expect(removed).toBe(true);
   },
@@ -227,8 +210,7 @@ it("retains the snapshot until a signalled joined waiter acquires its lease", as
   const snapshot = await second;
   try {
     expect(await firstCleanup).toBe(true);
-    expect(copies).toBe(1);
-    expect(exists).toBe(true);
+    expect({ copies, exists }).toEqual({ copies: 1, exists: true });
   } finally {
     await snapshot.cleanupAsync();
   }

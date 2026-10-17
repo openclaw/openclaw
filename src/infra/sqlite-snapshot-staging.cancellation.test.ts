@@ -48,8 +48,16 @@ afterAll(async () => {
 
 type Worker = { child: ChildProcess; closed: Promise<void>; settled: boolean; stderr: string };
 const workers = new Map<string, Worker>();
+const fixtureCleanups: Array<() => Promise<void>> = [];
+const cancellations: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
+    for (const cancel of cancellations.splice(0)) {
+      cancel();
+    }
+    for (const close of fixtureCleanups.splice(0)) {
+      await close();
+    }
     await Promise.all([...workers.values()].map((worker) => worker.closed));
     closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
@@ -242,22 +250,32 @@ function fixture(count = 3, payloadBytes = 4096) {
       gate.exec("ROLLBACK");
     }
   };
+  const operations: Promise<unknown>[] = [];
+  const track = <T>(operation: Promise<T>) => {
+    operations.push(operation);
+    return operation;
+  };
+  const reclamation = track(reclaimAbandonedSqliteSnapshotsAsync(cache));
+  fixtureCleanups.push(async () => {
+    release();
+    await Promise.allSettled(operations);
+    await workers.get(path.resolve(cache))?.closed;
+    gate.close();
+  });
   return {
     cache,
     source,
     roots,
     entered,
     release,
+    reclamation,
+    track,
     worker() {
       const worker = workers.get(path.resolve(cache));
       if (!worker) {
         throw new Error("Reclaim child was not observed");
       }
       return worker;
-    },
-    close() {
-      release();
-      gate.close();
     },
   };
 }
@@ -277,17 +295,16 @@ async function readSnapshot(source: string, signal?: AbortSignal): Promise<void>
   }
 }
 
-it("keeps cancelled and surviving callers independent of idle reclamation", async ({ signal }) => {
-  for (const mode of ["snapshot", "update"] as const) {
+it.for(["snapshot", "update"] as const)(
+  "keeps cancelled and surviving %s callers independent of idle reclamation",
+  async (mode, { signal }) => {
     const f = mode === "snapshot" ? fixture(64, 4 * 1024 * 1024) : fixture();
     const controller = new AbortController();
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
-    const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
-    let operation: Promise<unknown> | undefined;
-    let survivor: Promise<void> | undefined;
-    try {
-      const entered = await withinTest(f.entered(reclamation), signal);
-      operation = withSqliteReadOnlyWorkerScope(async () => {
+    cancellations.push(() => controller.abort(reason));
+    const entered = await withinTest(f.entered(f.reclamation), signal);
+    const operation = f.track(
+      withSqliteReadOnlyWorkerScope(async () => {
         if (mode === "snapshot") {
           await readSnapshot(f.source, controller.signal);
         } else {
@@ -300,74 +317,54 @@ it("keeps cancelled and surviving callers independent of idle reclamation", asyn
       }).then(
         () => undefined,
         (error: unknown) => error,
-      );
-      if (mode === "snapshot") {
-        survivor = readSnapshot(f.source);
-      }
-      controller.abort(reason);
-      const error = await withinTest(operation, signal);
-      // Cancellation must settle while reclamation is still held at the native gate.
-      expect(error).toBe(reason);
-      expect(error).toMatchObject({ name: "AbortError" });
-      expect(f.worker().settled, mode).toBe(false);
-      expect(fs.existsSync(entered.file), mode).toBe(true);
-      await survivor;
-      expect(f.worker().settled, mode).toBe(false);
-      f.release();
-      await reclamation;
-      await f.worker().closed;
-      expect(fs.existsSync(entered.claimedRoot)).toBe(false);
-      expect(f.worker().child.exitCode).toBe(0);
-      expect(f.worker().child.signalCode).toBeNull();
-      expect(fs.readdirSync(f.cache)).toEqual([]);
-    } finally {
-      controller.abort(reason);
-      f.release();
-      await Promise.allSettled([operation, survivor]);
-      await reclamation;
-      await workers.get(path.resolve(f.cache))?.closed;
-      f.close();
-    }
-  }
-});
+      ),
+    );
+    const survivor = mode === "snapshot" ? f.track(readSnapshot(f.source)) : undefined;
+    controller.abort(reason);
+    const error = await withinTest(operation, signal);
+    // Cancellation must settle while reclamation is still held at the native gate.
+    expect(error).toBe(reason);
+    expect(error).toMatchObject({ name: "AbortError" });
+    expect(f.worker().settled, mode).toBe(false);
+    expect(fs.existsSync(entered.file), mode).toBe(true);
+    await survivor;
+    expect(f.worker().settled, mode).toBe(false);
+    f.release();
+    await f.reclamation;
+    await f.worker().closed;
+    expect(fs.existsSync(entered.claimedRoot)).toBe(false);
+    expect(f.worker().child).toMatchObject({ exitCode: 0, signalCode: null });
+    expect(fs.readdirSync(f.cache)).toEqual([]);
+  },
+);
 
 it("stops idle reclamation at the next directory boundary on shutdown", async ({ signal }) => {
   const f = fixture();
-  const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
-  let shutdown: Promise<void> | undefined;
-  try {
-    const entered = await withinTest(f.entered(reclamation), signal);
-    // Payload removal precedes the rename, so identify the fenced root directly.
-    const untouched = f.roots.filter((root) => root !== entered.claimedRoot && fs.existsSync(root));
-    expect(f.roots).toContain(entered.claimedRoot);
-    expect(untouched).toHaveLength(f.roots.length - 1);
-    const stdin = f.worker().child.stdin;
-    if (!stdin) {
-      throw new Error("Reclaim child stdin was not observed");
-    }
-    const ended = once(stdin, "finish");
-    shutdown = waitForSignalExitBarriers();
-    await withinTest(ended, signal);
-    expect(stdin.writableEnded).toBe(true);
-    expect(f.worker().settled).toBe(false);
-    f.release();
-    await shutdown;
-    await reclamation;
-    await f.worker().closed;
-    expect(f.worker().child.exitCode).toBe(0);
-    expect(f.worker().child.signalCode).toBeNull();
-    expect(fs.existsSync(entered.claimedRoot)).toBe(false);
-    expect(f.roots.filter((root) => fs.existsSync(root))).toEqual(untouched);
-    for (const root of untouched) {
-      expect(fs.readdirSync(root)).toEqual(["openclaw"]);
-    }
-    // A foreground read must not resume the idle pass it does not own.
-    await readSnapshot(f.source);
-    expect(f.roots.filter((root) => fs.existsSync(root))).toEqual(untouched);
-  } finally {
-    f.release();
-    await Promise.allSettled([reclamation, shutdown]);
-    await workers.get(path.resolve(f.cache))?.closed;
-    f.close();
+  const entered = await withinTest(f.entered(f.reclamation), signal);
+  // Payload removal precedes the rename, so identify the fenced root directly.
+  const untouched = f.roots.filter((root) => root !== entered.claimedRoot && fs.existsSync(root));
+  expect(f.roots).toContain(entered.claimedRoot);
+  expect(untouched).toHaveLength(f.roots.length - 1);
+  const stdin = f.worker().child.stdin;
+  if (!stdin) {
+    throw new Error("Reclaim child stdin was not observed");
   }
+  const ended = once(stdin, "finish");
+  const shutdown = f.track(waitForSignalExitBarriers());
+  await withinTest(ended, signal);
+  expect(stdin.writableEnded).toBe(true);
+  expect(f.worker().settled).toBe(false);
+  f.release();
+  await shutdown;
+  await f.reclamation;
+  await f.worker().closed;
+  expect(f.worker().child).toMatchObject({ exitCode: 0, signalCode: null });
+  expect(fs.existsSync(entered.claimedRoot)).toBe(false);
+  expect(f.roots.filter((root) => fs.existsSync(root))).toEqual(untouched);
+  for (const root of untouched) {
+    expect(fs.readdirSync(root)).toEqual(["openclaw"]);
+  }
+  // A foreground read must not resume the idle pass it does not own.
+  await readSnapshot(f.source);
+  expect(f.roots.filter((root) => fs.existsSync(root))).toEqual(untouched);
 });

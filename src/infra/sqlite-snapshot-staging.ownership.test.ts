@@ -163,6 +163,20 @@ function ageSnapshotTree(directory: string, ageMs = 25 * 60 * 60 * 1000): void {
   fs.utimesSync(directory, stale, stale);
 }
 
+function legacySnapshot(
+  cache: string,
+  name: string,
+  bytes: string | Buffer,
+  relative = "database.sqlite",
+) {
+  const root = path.join(cache, `openclaw-sqlite-readonly-12345-${name}`);
+  const location = path.join(root, relative);
+  fs.mkdirSync(path.dirname(location), { recursive: true });
+  fs.writeFileSync(location, bytes);
+  ageSnapshotTree(root);
+  return { root, location };
+}
+
 function runChild(script: string, signal?: NodeJS.Signals) {
   const result = spawnSync(process.execPath, [...nodeArguments, script], {
     encoding: "utf8",
@@ -275,13 +289,7 @@ it("keeps timers responsive while async allocation reclaims a legacy backlog", a
   setLoggerOverride({ level: "silent", file: path.join(root, "cleanup.log") });
   const payload = Buffer.alloc(1024 * 1024);
   for (let index = 0; index < 429; index++) {
-    const directory = path.join(
-      cache,
-      `openclaw-sqlite-readonly-12345-${index.toString(36).padStart(6, "0")}`,
-    );
-    fs.mkdirSync(directory);
-    fs.writeFileSync(path.join(directory, "database.sqlite"), payload);
-    ageSnapshotTree(directory);
+    legacySnapshot(cache, index.toString(36).padStart(6, "0"), payload);
   }
 
   let previous = performance.now();
@@ -303,36 +311,50 @@ it("keeps timers responsive while async allocation reclaims a legacy backlog", a
   } finally {
     clearInterval(timer);
   }
-  console.log(JSON.stringify({ backlogDirectories: 429, longestGapMs }));
   expect(longestGapMs).toBeLessThan(100);
   expect(fs.readdirSync(cache)).toEqual([]);
 });
 
-it("reclaims released-worker cache layouts only after 24 hours", async () => {
-  for (const fresh of [false, true]) {
+it.each(["worker", "legacy"] as const)(
+  "reclaims only stale %s snapshots without modifying recent descendants",
+  async (layout) => {
     const { root, cache, source } = createFixture();
-    const parent = path.join(cache, "openclaw-sqlite-readonly-12345-Parent");
-    const inner = path.join(parent, "openclaw", "openclaw-sqlite-readonly-12345-Worker");
-    const copy = path.join(inner, "database.sqlite");
-    fs.mkdirSync(inner, { recursive: true });
-    fs.copyFileSync(source, copy);
-    ageSnapshotTree(parent);
-    if (fresh) {
-      const now = new Date();
-      fs.utimesSync(copy, now, now);
-    }
+    const nested = path.join(
+      "openclaw",
+      "openclaw-sqlite-readonly-12345-Worker",
+      "database.sqlite",
+    );
+    const bytes =
+      layout === "worker" ? fs.readFileSync(source) : Buffer.from("legacy interrupted snapshot");
+    const old = legacySnapshot(
+      cache,
+      "Older1",
+      bytes,
+      layout === "worker" ? nested : "database.sqlite",
+    );
+    const young = legacySnapshot(
+      cache,
+      "Young1",
+      layout === "worker" ? bytes : "recently active legacy copy",
+      layout === "worker" ? nested : "first",
+    );
+    const recent = new Date(Date.now() - (layout === "worker" ? 0 : 23 * 60 * 60 * 1000));
+    fs.utimesSync(young.location, recent, recent);
+    const mtime = fs.statSync(young.root).mtimeMs;
     const log = await reclaimWithLog(root, cache);
-    expect(fs.existsSync(parent)).toBe(fresh);
-    if (fresh) {
-      assertReadable(copy);
-      expect(fs.existsSync(path.join(parent, "owner.sqlite"))).toBe(false);
-      expect(fs.existsSync(path.join(inner, "owner.sqlite"))).toBe(false);
+    expect([fs.existsSync(old.root), fs.existsSync(young.root)]).toEqual([false, true]);
+    expect(log).toContain(`Reclaimed ${bytes.length} bytes`);
+    if (layout === "worker") {
+      assertReadable(young.location);
       expect(log).toContain("Skipped SQLite snapshot reclamation");
+      expect(fs.existsSync(path.join(path.dirname(young.location), "owner.sqlite"))).toBe(false);
     } else {
-      expect(log).toContain(`Reclaimed ${fs.statSync(source).size} bytes`);
+      expect(fs.readFileSync(young.location, "utf8")).toBe("recently active legacy copy");
+      expect(fs.statSync(young.root).mtimeMs).toBe(mtime);
     }
-  }
-});
+    expect(fs.existsSync(path.join(young.root, "owner.sqlite"))).toBe(false);
+  },
+);
 
 it.each(["sync", "async"] as const)(
   "revisits expired current snapshots in the same %s owner",
@@ -389,32 +411,6 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
       removeTempDirectory(directory);
     }
   }
-});
-
-it("reclaims only legacy snapshots older than 24 hours", async () => {
-  const { root, cache } = createFixture();
-  const old = path.join(cache, "openclaw-sqlite-readonly-12345-Older1");
-  const young = path.join(cache, "openclaw-sqlite-readonly-12345-Young1");
-  const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
-  const oldBytes = Buffer.from("legacy interrupted snapshot");
-  for (const directory of [old, young]) {
-    fs.mkdirSync(directory);
-  }
-  fs.writeFileSync(path.join(old, "database.sqlite"), oldBytes);
-  fs.utimesSync(path.join(old, "database.sqlite"), stale, stale);
-  fs.utimesSync(old, stale, stale);
-  fs.writeFileSync(path.join(young, "first"), "recently active legacy copy");
-  const recent = new Date(Date.now() - 23 * 60 * 60 * 1000);
-  fs.utimesSync(path.join(young, "first"), recent, recent);
-  // A stale root does not authorize removing or refreshing a recent descendant.
-  fs.utimesSync(young, stale, stale);
-  const youngDirectoryMtime = fs.statSync(young).mtimeMs;
-  const log = await reclaimWithLog(root, cache);
-  expect(fs.existsSync(old)).toBe(false);
-  expect(fs.readFileSync(path.join(young, "first"), "utf8")).toBe("recently active legacy copy");
-  expect(fs.statSync(young).mtimeMs).toBe(youngDirectoryMtime);
-  expect(fs.existsSync(path.join(young, "owner.sqlite"))).toBe(false);
-  expect(log).toContain(`Reclaimed ${oldBytes.length} bytes`);
 });
 
 it.skipIf(process.platform === "win32")(
