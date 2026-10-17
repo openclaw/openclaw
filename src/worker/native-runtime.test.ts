@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, realpath, rename, symlink, unlink, writeFile } from "node:fs/promises";
-import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import type { Server } from "node:http";
 import path from "node:path";
-import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { getDefaultAiTransportHost, type Context } from "@openclaw/ai";
 import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
@@ -16,6 +16,7 @@ import {
   type NativeRuntime,
   type NativeRuntimeResolved,
 } from "./native-runtime.js";
+import { closeNativeServers, nativeProviderFixture } from "./native-worker.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtimes: NativeRuntime[] = [];
@@ -24,17 +25,7 @@ afterEach(async () => {
   for (const runtime of runtimes.splice(0)) {
     runtime.close();
   }
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.closeAllConnections();
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-    ),
-  );
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
+  await closeNativeServers(servers);
 });
 const binding = {
   workspacePath: undefined,
@@ -43,21 +34,6 @@ const binding = {
 const selection = { provider: "openai", modelId: "local-model" };
 const turn = { binding, selection };
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
-
-function completionEvent(
-  delta: { role?: string; content?: string },
-  finishReason: string | null,
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
-) {
-  return `data: ${JSON.stringify({
-    id: "fixture-completion",
-    object: "chat.completion.chunk",
-    created: 1,
-    model: "local-model",
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-    ...(usage ? { usage } : {}),
-  })}\n\n`;
-}
 
 function trackedEnv(reads: PropertyKey[], value?: string): NodeJS.ProcessEnv {
   return new Proxy(
@@ -104,36 +80,8 @@ async function start(
   runtimes.push(runtime);
   return runtime;
 }
-async function providerServer() {
-  const requests: { headers: IncomingHttpHeaders; body: Record<string, unknown>; url?: string }[] =
-    [];
-  const server = createServer((request, response) => {
-    void (async () => {
-      requests.push({
-        headers: request.headers,
-        body: JSON.parse(await text(request)),
-        url: request.url,
-      });
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write(completionEvent({ role: "assistant", content: "native response" }, null));
-      response.end(
-        completionEvent({}, "stop", { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }) +
-          "data: [DONE]\n\n",
-      );
-    })().catch((error: unknown) =>
-      response.destroy(error instanceof Error ? error : new Error(String(error))),
-    );
-  });
-  servers.push(server);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected local provider port");
-  }
-  return { requests, baseUrl: "http://127.0.0.1:" + address.port + "/v1" };
-}
+const providerServer = () =>
+  nativeProviderFixture(servers, "local-model", () => "native response", "native response");
 const bundles = useAutoCleanupTempDirTracker(afterAll);
 let probeEntry: string;
 beforeAll(async () => {
@@ -159,20 +107,15 @@ async function probe(scenario: string, config: NativeRuntimeConfig, env: NodeJS.
     env,
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
-  return new Promise<Record<string, unknown>>((resolve, reject) => {
-    let result: Record<string, unknown> | undefined;
-    child.on("message", (message) => {
-      result = message as Record<string, unknown>;
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0 && result) {
-        resolve(result);
-      } else {
-        reject(new Error("Native owner probe failed: " + code));
-      }
-    });
+  let result: Record<string, unknown> | undefined;
+  child.on("message", (message) => {
+    result = message as Record<string, unknown>;
   });
+  const [code] = await once(child, "exit");
+  if (code !== 0 || !result) {
+    throw new Error("Native owner probe failed: " + code);
+  }
+  return result;
 }
 
 describe("native runtime startup authority", () => {
@@ -291,20 +234,12 @@ describe("native runtime startup authority", () => {
     });
     expect(gatewayHost.resolveSecretSentinel(known)).toBe("synthetic-local-provider-value");
     expect(() => gatewayHost.resolveSecretSentinel(unknown)).toThrow("not registered");
-    const requests: Headers[] = [];
-    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-      requests.push(new Request(input, init).headers);
-      return new Response(
-        completionEvent({ role: "assistant", content: "native response" }, "stop") +
-          "data: [DONE]\n\n",
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    });
+    const provider = await providerServer();
     const workspace = tempDirs.make("native-opaque-host-");
     const values = [known, "prefix-" + unknown + "-suffix"];
     await Promise.all(
       values.map(async (value) => {
-        const config = configFor(workspace, "https://proxy.example.test/v1");
+        const config = configFor(workspace, provider.baseUrl);
         config.models[0]!.headers = { "x-custom-auth": value };
         const runtime = await start(config, { NATIVE_TEST_KEY: value });
         await runtime.withTurn(turn, async (resolved) => {
@@ -316,9 +251,9 @@ describe("native runtime startup authority", () => {
       }),
     );
     const sortedHeader = (name: string) =>
-      requests
-        .map((headers) => headers.get(name))
-        .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
+      provider.requests
+        .map(({ headers }) => String(headers[name] ?? ""))
+        .toSorted((a, b) => a.localeCompare(b));
     expect(sortedHeader("authorization")).toEqual(
       values.map((value) => "Bearer " + value).toSorted((a, b) => a.localeCompare(b)),
     );

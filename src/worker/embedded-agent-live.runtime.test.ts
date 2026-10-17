@@ -10,7 +10,11 @@ import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-
 import { readAgentAssistantSource } from "../infra/agent-events.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
-function liveFixture(preview = true, terminal = false) {
+const tool = { toolCallId: "tool-1", toolName: "read" };
+const textMessage = (text: string) =>
+  makeAgentAssistantMessage({ content: [{ type: "text", text }] });
+
+function liveFixture(preview = true) {
   const emitted: WorkerLiveEvent[] = [];
   const runtime = createWorkerLiveRuntime({
     enqueuePreview: (event) => {
@@ -19,11 +23,7 @@ function liveFixture(preview = true, terminal = false) {
       }
       return preview;
     },
-    emitTerminal: async (event) => {
-      if (terminal) {
-        emitted.push(event);
-      }
-    },
+    emitTerminal: async (event) => void emitted.push(event),
   });
   return {
     emitted,
@@ -78,8 +78,7 @@ describe("createWorkerLiveRuntime", () => {
       expect(emitted).toHaveLength(2);
       send({
         type: "tool_execution_start",
-        toolCallId: "tool-1",
-        toolName: "read",
+        ...tool,
         args: {},
       });
       send({ type: "message_end", message });
@@ -107,15 +106,11 @@ describe("createWorkerLiveRuntime", () => {
     "handles an empty %s final after checked text was streamed",
     async (stopReason) => {
       vi.useFakeTimers({ toFake: ["Date"] });
-      const { emitted, runtime, send, end } = liveFixture(true, true);
-      const message = makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Checked partial reply." }],
-      });
+      const { emitted, runtime, send, end } = liveFixture();
+      const message = textMessage("Checked partial reply.");
       send({ type: "message_start", message });
       textUpdate(runtime, message, "Checked partial reply.");
-      const pending = makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Checked partial reply. More." }],
-      });
+      const pending = textMessage("Checked partial reply. More.");
       textUpdate(runtime, pending, " More.");
       expect(emitted).toHaveLength(1);
       const terminal = makeAgentAssistantMessage({ content: [], stopReason });
@@ -139,7 +134,7 @@ describe("createWorkerLiveRuntime", () => {
   it("flushes late commentary metadata before starting a new assistant occurrence", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const { emitted, runtime, send } = liveFixture();
-    const message = makeAgentAssistantMessage({ content: [{ type: "text", text: "Checking" }] });
+    const message = textMessage("Checking");
     send({ type: "message_start", message });
     textUpdate(runtime, message, "Checking");
     message.content = [{ type: "text", text: "Checking a detail." }];
@@ -161,7 +156,7 @@ describe("createWorkerLiveRuntime", () => {
         partial: message,
       },
     });
-    const final = makeAgentAssistantMessage({ content: [{ type: "text", text: "The answer." }] });
+    const final = textMessage("The answer.");
     send({ type: "message_start", message: final });
     send({ type: "message_end", message: final });
     expect(emitted.map((event) => event.payload)).toEqual([
@@ -209,9 +204,7 @@ describe("createWorkerLiveRuntime", () => {
 
   it("publishes attachment references only when the assistant message is complete", () => {
     const { emitted, runtime, send } = liveFixture();
-    const message = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "MEDIA:./report.txt" }],
-    });
+    const message = textMessage("MEDIA:./report.txt");
     send({ type: "message_start", message });
     textUpdate(runtime, message, "MEDIA:./report.txt");
     expect(emitted).toEqual([
@@ -232,25 +225,22 @@ describe("createWorkerLiveRuntime", () => {
   });
 
   it("redacts media payloads from tool diagnostics before cloud egress", () => {
-    const { emitted, send } = liveFixture(true, true);
+    const { emitted, send } = liveFixture();
     const events: AgentSessionEvent[] = [
       {
         type: "tool_execution_start",
-        toolCallId: "tool-1",
-        toolName: "read",
+        ...tool,
         args: { type: "video", data: Buffer.from([1, 2, 3]) },
       },
       {
         type: "tool_execution_update",
-        toolCallId: "tool-1",
-        toolName: "read",
+        ...tool,
         args: {},
         partialResult: { mimeType: "audio/mpeg", blob: new Uint8Array([4, 5, 6]) },
       },
       {
         type: "tool_execution_end",
-        toolCallId: "tool-1",
-        toolName: "read",
+        ...tool,
         result: "failed data:video/mp4;base64,QUJDRA==",
         isError: true,
       },
@@ -271,7 +261,7 @@ describe("createWorkerLiveRuntime", () => {
   ] as const)(
     "preserves deferred $stopReason terminal after preview loss (cleanup failure: $cleanupFailed)",
     async ({ stopReason, cleanupFailed, expectedStopReason }) => {
-      const { emitted, runtime, send, end } = liveFixture(false, true);
+      const { emitted, runtime, send, end } = liveFixture(false);
       send({ type: "agent_start" });
       end(
         makeAgentAssistantMessage({
@@ -313,7 +303,7 @@ describe("createWorkerLiveRuntime", () => {
   ])(
     "retains only recorded replay stops across terminal merges ($recordedStop, $aborted)",
     async ({ recordedStop, aborted }) => {
-      const { emitted, runtime, end } = liveFixture(false, true);
+      const { emitted, runtime, end } = liveFixture(false);
       const failure = Object.freeze(new Error("request timed out"));
       if (recordedStop) {
         recordModelFallbackStop(failure);
@@ -330,18 +320,17 @@ describe("createWorkerLiveRuntime", () => {
       expect(emitted[0]?.payload).toMatchObject({
         phase: "finishing",
         stopReason: aborted ? "aborted" : "error",
+        error: "later provider failure",
       });
       if (recordedStop) {
         expect(emitted[0]?.payload).toHaveProperty("replayInvalid", true);
       } else {
         expect(emitted[0]?.payload).not.toHaveProperty("replayInvalid");
       }
-      expect(emitted[0]?.payload).toHaveProperty("error", "later provider failure");
     },
   );
-
   it("retains and redacts interruption errors before terminal cloud egress", async () => {
-    const { emitted, runtime } = liveFixture(false, true);
+    const { emitted, runtime } = liveFixture(false);
 
     runtime.enqueueRunFailure({
       aborted: true,

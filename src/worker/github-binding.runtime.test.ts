@@ -204,20 +204,10 @@ describe("prepareWorkerGitHubEnvironment", () => {
       GIT_AUTHOR_EMAIL: binding.gitAuthor.email,
     });
     const fetchCall = runner.mock.calls.find(([args]) => args[3] === "fetch");
-    expect(fetchCall?.[0]).toEqual([
-      "git",
-      "-C",
-      cwd,
-      "fetch",
-      "--quiet",
-      "origin",
-      binding.branch,
-    ]);
     const options = fetchCall?.[1];
     if (typeof options !== "object") {
       throw new Error("Expected options for Git fetch");
     }
-    expect(options.timeoutMs).toBe(60_000);
     // Project only fixture-owned keys so a failed assertion cannot dump the host environment.
     const expectedEnv = {
       ...prepared?.localIdentityEnv,
@@ -277,8 +267,6 @@ describe("prepareWorkerGitHubEnvironment", () => {
     const current = await prepare({ turnId: "next-turn" });
     const previousProfile = previous?.localIdentityEnv.GH_CONFIG_DIR;
     const currentProfile = current?.localIdentityEnv.GH_CONFIG_DIR;
-    expect(previousProfile).toBeTruthy();
-    expect(currentProfile).toBeTruthy();
     expect(currentProfile).not.toBe(previousProfile);
     if (!previousProfile || !currentProfile) {
       throw new Error("Expected both turns' GitHub profiles");

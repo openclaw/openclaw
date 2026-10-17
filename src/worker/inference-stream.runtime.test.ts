@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -12,7 +13,8 @@ import {
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
-import type { Usage, AssistantMessage } from "../llm/types.js";
+import { ZERO_USAGE_FIXTURE } from "../agents/test-helpers/usage-fixtures.js";
+import type { AssistantMessage } from "../llm/types.js";
 import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
 import { createWorkerInferenceStreamAdapter } from "./inference-stream.runtime.js";
 import { buildWorkerConnectParams } from "./launch-descriptor.js";
@@ -26,32 +28,16 @@ import { createWorkerConnection } from "./worker-connection.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 
 const modelRef: WorkerInferenceModelRef = { provider: "test", model: "test-model" };
-const usage: Usage = {
+const identity = { sessionId: "session-1", runEpoch: 1, runId: "run-1", turnId: "turn-1" };
+const usage = {
+  ...ZERO_USAGE_FIXTURE,
   input: 1,
   output: 2,
-  cacheRead: 0,
-  cacheWrite: 0,
   totalTokens: 3,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
 const clients: WorkerInferenceProxyClient[] = [];
-afterEach(() => {
-  for (const client of clients.splice(0)) {
-    client.dispose();
-  }
-});
-
-function createClient() {
-  const client = new WorkerInferenceProxyClient(
-    createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: "/tmp/worker-inference-size-test.sock" },
-      connectParams: buildWorkerConnectParams(testWorkerDescriptor("/tmp/worker-inference")),
-    }),
-  );
-  clients.push(client);
-  return client;
-}
+afterEach(() => clients.splice(0).forEach((client) => client.dispose()));
 
 function done(content: AssistantMessage["content"], stopReason: "stop" | "toolUse" = "stop") {
   return {
@@ -61,23 +47,26 @@ function done(content: AssistantMessage["content"], stopReason: "stop" | "toolUs
       stopReason,
       usage,
       timestamp: 1,
-      api: "openai-responses",
       provider: modelRef.provider,
-      model: modelRef.model,
     }),
   } satisfies WorkerInferenceTerminalOutcome;
 }
 
 function createAdapterFixture(
-  computerContextEpoch?: {
-    value: number;
-    frameToolCallId?: string;
-    frameImageIdentity?: string;
-  },
+  computerContextEpoch?: Parameters<
+    typeof createWorkerInferenceStreamAdapter
+  >[0]["computerContextEpoch"],
   events: WorkerInferenceEventParams["event"][] = [],
   gap = false,
+  outcome: WorkerInferenceTerminalOutcome = done([{ type: "text", text: "Done." }]),
 ) {
-  const client = createClient();
+  const client = new WorkerInferenceProxyClient(
+    createWorkerConnection({
+      endpoint: { kind: "unix", socketPath: "/tmp/worker-inference-size-test.sock" },
+      connectParams: buildWorkerConnectParams(testWorkerDescriptor("/tmp/worker-inference")),
+    }),
+  );
+  clients.push(client);
   const start = vi.spyOn(client, "start").mockImplementation(async (request, handlers) => {
     if (gap) {
       handlers?.onStreamGap?.({ expectedSeq: 1, receivedSeq: 2 });
@@ -85,18 +74,14 @@ function createAdapterFixture(
     events.forEach((event, index) =>
       handlers?.onEvent?.({ ...request, seq: index + (gap ? 2 : 1), event }),
     );
-    return done([{ type: "text", text: "Done." }]);
+    return outcome;
   });
-  const options = {
+  const stream = createWorkerInferenceStreamAdapter({
     client,
-    sessionId: "session-1",
-    runEpoch: 1,
-    runId: "run-1",
-    turnId: "turn-1",
+    ...identity,
     modelRef,
     computerContextEpoch,
-  };
-  const stream = createWorkerInferenceStreamAdapter(options);
+  });
   return {
     start,
     stream: (context: WorkerInferenceContext = { messages: [] }) =>
@@ -112,20 +97,7 @@ function inferenceFrameBytes(request: WorkerInferenceStartParams): number {
       method: "worker.inference.start",
       params: request,
     }),
-    "utf8",
   );
-}
-
-function inferenceRequest(context: WorkerInferenceContext): WorkerInferenceStartParams {
-  return {
-    runEpoch: 1,
-    sessionId: "session-1",
-    runId: "run-1",
-    turnId: "turn-1:1",
-    modelRef,
-    context,
-    options: {},
-  };
 }
 
 it("keeps text and thinking content and signatures in their own stream blocks", async () => {
@@ -213,16 +185,15 @@ it("tolerates missing text and thinking blocks after a stream gap", async () => 
 });
 
 it("preserves the provider failure and usage after an oversized partial response", async () => {
-  const fixture = createAdapterFixture();
-  fixture.start.mockImplementation(async (request, handlers) => {
-    const events: WorkerInferenceEventParams["event"][] = [
+  const fixture = createAdapterFixture(
+    undefined,
+    [
       { type: "text_start", contentIndex: 0 },
       { type: "text_delta", contentIndex: 0, delta: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
-    ];
-    events.forEach((event, index) => handlers?.onEvent?.({ ...request, seq: index + 1, event }));
-    return { type: "error", reason: "provider-error", message: "429: rate limit exceeded", usage };
-  });
-
+    ],
+    false,
+    { type: "error", reason: "provider-error", message: "429: rate limit exceeded", usage },
+  );
   const result = await fixture.stream().result();
   expect(result).toMatchObject({
     stopReason: "error",
@@ -248,7 +219,13 @@ it.each([false, true])(
       }
     }
     const context = { messages, systemPrompt: 'Inspect café 😀 with quotes " and a slash \\.' };
-    const request = inferenceRequest(context);
+    const request: WorkerInferenceStartParams = {
+      ...identity,
+      turnId: `${identity.turnId}:1`,
+      modelRef,
+      context,
+      options: {},
+    };
     const originalBytes = inferenceFrameBytes(request);
     const expected = fitWorkerReplayImages(messages, (candidate) =>
       inferenceFrameBytes({ ...request, context: { ...context, messages: candidate } }),
@@ -298,10 +275,10 @@ it("fits observed screenshot history without changing durable messages", async (
   const current = messages.find(
     (message) => message.role === "toolResult" && message.toolCallId === "image-0",
   );
-  const image = current?.content.find((part) => part.type === "image");
-  if (image?.type !== "image") {
-    throw new Error("Missing current computer image");
-  }
+  const image = expectDefined(
+    current?.content.find((part) => part.type === "image"),
+    "current computer image",
+  );
   const computerContextEpoch = {
     value: 0,
     frameToolCallId: "image-0",
@@ -388,22 +365,14 @@ it("delays worker tool argument previews while preserving exact terminal argumen
     terminal: "exact",
   };
   const start: WorkerInferenceProxyClient["start"] = async (request, handlers) => {
-    const identity = {
-      runEpoch: request.runEpoch,
-      sessionId: request.sessionId,
-      runId: request.runId,
-      turnId: request.turnId,
-    };
     const streamEvents: WorkerInferenceEventParams["event"][] = [
       { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "write" },
       ...deltas.map((delta) => ({ type: "toolcall_delta" as const, contentIndex: 0, delta })),
       { type: "toolcall_end", contentIndex: 0 },
     ];
     for (const [index, event] of streamEvents.entries()) {
-      handlers?.onEvent?.({ ...identity, seq: index + 1, event });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      handlers?.onEvent?.({ ...request, seq: index + 1, event });
+      await setImmediate();
     }
     return done(
       [{ type: "toolCall", id: "call-1", name: "write", arguments: terminalArguments }],

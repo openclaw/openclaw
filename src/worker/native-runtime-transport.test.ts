@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import {
   createServer as createHttpServer,
@@ -15,6 +16,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
 import type { NativeRuntimeConfig } from "./native-runtime-config.js";
 import { buildNativeRuntimeFetch, isNativeRuntimeEndpoint } from "./native-runtime-transport.js";
+import {
+  closeNativeServers,
+  listenNativeServer,
+  nativeProviderFixture,
+} from "./native-worker.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const servers: Server[] = [];
@@ -43,7 +49,7 @@ const observed: boolean[] = [];
 let sinkHits = 0;
 let forwardedSensitiveHeaders = 0;
 let wrongNameOrigin: string;
-let providerHits = 0;
+let provider: Awaited<ReturnType<typeof nativeProviderFixture>>;
 let tlsOrigin: string;
 let httpOrigin: string;
 let workspace: string;
@@ -52,23 +58,11 @@ let untrusted: ChildProcess;
 let nextId = 0;
 
 async function listen(handler: RequestListener, tls = false): Promise<string> {
-  const host = "127.0.0.1";
   const server = tls
     ? createHttpsServer({ key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE }, handler)
     : createHttpServer(handler);
-  servers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, host, () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Missing fixture listener");
-  }
-  return `${tls ? "https" : "http"}://${host}:${address.port}`;
+  const port = await listenNativeServer(server, servers);
+  return `${tls ? "https" : "http"}://127.0.0.1:${port}`;
 }
 function config(api: string, baseUrl: string): NativeRuntimeConfig {
   return {
@@ -87,18 +81,15 @@ function config(api: string, baseUrl: string): NativeRuntimeConfig {
     workspace,
   };
 }
-function run(
-  child: ChildProcess,
-  api: string,
-  url: string,
-): Promise<{ stopReason: string; text?: string }> {
+type ProbeReply = { id: number; stopReason: string; text?: string };
+function run(child: ChildProcess, api: string, url: string): Promise<ProbeReply> {
   const id = ++nextId;
   return new Promise((resolve, reject) => {
     const exited = () => {
       child.off("message", received);
       reject(new Error("Transport probe exited"));
     };
-    const received = (value: { id: number; stopReason: string; text?: string }) => {
+    const received = (value: ProbeReply) => {
       if (value.id === id) {
         child.off("message", received);
         child.off("exit", exited);
@@ -150,20 +141,7 @@ beforeAll(async () => {
   };
   trusted = spawnProbe(true);
   untrusted = spawnProbe(false);
-  const upstream = await listen((req, res) => {
-    expect(req.headers.authorization).toBe("Bearer " + providerOnly);
-    providerHits++;
-    res.writeHead(200, { "content-type": "text/event-stream" });
-    res.end(
-      `data: ${JSON.stringify({
-        id: "fixture",
-        object: "chat.completion.chunk",
-        created: 1,
-        model: "fixture-model",
-        choices: [{ index: 0, delta: { content: "qualified" }, finish_reason: "stop" }],
-      })}\n\ndata: [DONE]\n\n`,
-    );
-  });
+  provider = await nativeProviderFixture(servers, "fixture-model", () => "qualified", "qualified");
   httpOrigin = await listen((req, res) => {
     sinkHits++;
     forwardedSensitiveHeaders += Number(req.headers["x-worker-session"] === sensitiveHeader);
@@ -186,7 +164,7 @@ beforeAll(async () => {
         return;
       }
       const forward = request(
-        upstream,
+        provider.baseUrl,
         { method: "POST", headers: { authorization: "Bearer " + providerOnly } },
         (reply) => {
           res.writeHead(reply.statusCode ?? 500, reply.headers);
@@ -217,23 +195,13 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await Promise.all(
-    children.map(
-      (child) =>
-        new Promise<void>((resolve) => {
-          child.once("exit", () => resolve());
-          child.disconnect();
-        }),
-    ),
+    children.map(async (child) => {
+      const exited = once(child, "exit");
+      child.disconnect();
+      await exited;
+    }),
   );
-  await Promise.all(
-    servers.map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.closeAllConnections();
-          server.close((e) => (e ? reject(e) : resolve()));
-        }),
-    ),
-  );
+  await closeNativeServers(servers);
 });
 it("rejects non-loopback plaintext configuration before any request", async () => {
   for (const endpoint of [
@@ -245,12 +213,13 @@ it("rejects non-loopback plaintext configuration before any request", async () =
   }
 });
 it("uses a trusted private CA with a separate synthetic custodian and never sends its provider key to the runtime", async () => {
-  const prior = providerHits;
+  const prior = provider.requests.length;
   expect(await run(trusted, "openai-completions", tlsOrigin + "/success/v1")).toMatchObject({
     stopReason: "stop",
     text: "qualified",
   });
-  expect(providerHits).toBe(prior + 1);
+  expect(provider.requests).toHaveLength(prior + 1);
+  expect(provider.requests[prior]?.headers.authorization).toBe("Bearer " + providerOnly);
   expect(JSON.stringify(config("openai-completions", tlsOrigin))).not.toContain(providerOnly);
 });
 it("rejects an untrusted certificate before auth reaches the endpoint", async () => {
