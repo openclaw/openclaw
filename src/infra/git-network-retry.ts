@@ -82,24 +82,25 @@ function isTransientGitFailure(operation: GitNetworkOperation, result: GitNetwor
       )
     );
   }
-  return /did not send all necessary objects|could not resolve (?:host|proxy)|temporary failure in name resolution|failed to connect|connection (?:reset|timed out|refused|closed)|remote end hung up unexpectedly|unexpected disconnect|early EOF|empty reply from server|TLS connection was non-properly terminated|SSL_ERROR_SYSCALL|HTTP\/2.*(?:stream|internal_error)|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)\b|returned error: (?:408|429|500|502|503|504)\b/iu.test(
+  // Ref advertisements can report an incomplete HTTP read without Git's RPC/curl prefix.
+  return /did not send all necessary objects|could not resolve (?:host|proxy)|temporary failure in name resolution|failed to connect|connection (?:reset|timed out|refused|closed)|transfer closed with \d+ bytes remaining to read|remote end hung up unexpectedly|unexpected disconnect|early EOF|empty reply from server|TLS connection was non-properly terminated|SSL_ERROR_SYSCALL|HTTP\/2.*(?:stream|internal_error)|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)\b|returned error: (?:408|429|500|502|503|504)\b/iu.test(
     stderr,
   );
 }
 
-/** Retry one settled network read inside its original deadline and caller-owned admission. */
+/** Retry one settled network read within its caller's optional deadline and admission. */
 export async function withGitNetworkRetry<T extends GitNetworkResult>(
   operation: GitNetworkOperation | undefined,
   options: {
-    timeoutMs: number;
+    timeoutMs?: number;
     signal?: AbortSignal;
     beforeRun?: () => void;
     startRun?: GitOperationStarter;
   },
-  run: (timeoutMs: number) => Promise<T>,
+  run: (timeoutMs: number | undefined) => Promise<T>,
 ): Promise<T> {
   const started = performance.now();
-  const attempt = (timeoutMs: number) => {
+  const attempt = (timeoutMs: number | undefined) => {
     const start = () => {
       options.beforeRun?.();
       return run(timeoutMs);
@@ -114,7 +115,10 @@ export async function withGitNetworkRetry<T extends GitNetworkResult>(
   if (options.signal?.aborted) {
     return cancelled();
   }
-  if (options.timeoutMs - (performance.now() - started) <= RETRY_DELAY_MS) {
+  if (
+    options.timeoutMs !== undefined &&
+    options.timeoutMs - (performance.now() - started) <= RETRY_DELAY_MS
+  ) {
     return result;
   }
   log.warn(`Git ${operation} hit a transient failure; retrying once`, {
@@ -135,8 +139,11 @@ export async function withGitNetworkRetry<T extends GitNetworkResult>(
   if (options.signal?.aborted) {
     return cancelled();
   }
-  const remainingMs = Math.floor(options.timeoutMs - (performance.now() - started));
-  if (remainingMs <= 0) {
+  const remainingMs =
+    options.timeoutMs === undefined
+      ? undefined
+      : Math.floor(options.timeoutMs - (performance.now() - started));
+  if (remainingMs !== undefined && remainingMs <= 0) {
     return result;
   }
   return await attempt(remainingMs);

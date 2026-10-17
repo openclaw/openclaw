@@ -5,6 +5,10 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import {
+  retryableGitNetworkOperation,
+  withGitNetworkRetry,
+} from "../../infra/git-network-retry.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -46,6 +50,7 @@ import type {
   UpdateStepProgress,
 } from "../../infra/update-runner-types.js";
 import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -302,10 +307,16 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   failureCode?: "target-git-cache-stale";
 }> {
   const runCommand: GlobalCommandRunner = (argv, options) =>
-    runCommandWithTimeout(argv, {
-      ...options,
-      env: { ...options.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
-    });
+    withGitNetworkRetry(
+      argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
+      { timeoutMs: options.timeoutMs, signal: resolveCommandProcessSignal() },
+      (timeoutMs) =>
+        runCommandWithTimeout(argv, {
+          ...options,
+          timeoutMs,
+          env: { ...options.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
+        }),
+    );
   const runTargetCommand: UpdateRunnerCommandRunner = (argv, options) =>
     runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? params.timeoutMs });
   let revision: string | null = null;
@@ -495,7 +506,7 @@ export async function updateGitInstall(params: {
     gitArtifactStorageRoot?: string,
   ) =>
     updateGitCheckout({
-      ...(await buildUpdateCommandRunner()),
+      ...(await buildUpdateCommandRunner(undefined, assertCurrent)),
       gitRoot,
       timeoutMs: params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
       startedAt: params.startedAt,

@@ -4,8 +4,11 @@ import {
   inspectImmutableInstall,
   prepareImmutableUpdate,
 } from "../../infra/update-immutable-install.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { registerSignalExitGate } from "../signal-exit-barrier.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 
 const PREPARATION_ONLY =
@@ -108,12 +111,32 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
         "Immutable updates support official main or --sha only. Use openclaw update recover --root <installation-root> for retained activation recovery; channel switching and package overrides are unsupported.",
       );
     }
-    result = await prepareImmutableUpdate({
-      root,
-      sha: opts.sha,
-      dryRun: opts.dryRun,
-      timeoutMs: parseUpdateTimeoutMs(opts.timeout),
-    });
+    const finished = createDeferredCore();
+    let interrupted = false;
+    let releaseExitGate: (() => void) | undefined;
+    try {
+      result = await withCommandProcessScope(async (stop) => {
+        releaseExitGate = registerSignalExitGate(finished.promise, () => {
+          interrupted = true;
+          stop();
+        });
+        return await prepareImmutableUpdate({
+          root,
+          sha: opts.sha,
+          dryRun: opts.dryRun,
+          timeoutMs: parseUpdateTimeoutMs(opts.timeout),
+        });
+      });
+    } finally {
+      // The scope joins its children before this completion gate releases the CLI.
+      finished.resolve();
+      releaseExitGate?.();
+    }
+    // Preparation's locks, candidate cleanup, and process scope have all settled,
+    // including an interruption accepted while the scope was joining cleanup.
+    if (interrupted) {
+      throw new DOMException("Immutable preparation interrupted.", "AbortError");
+    }
   } catch (error) {
     return reportImmutableFailure(error, opts.json);
   }

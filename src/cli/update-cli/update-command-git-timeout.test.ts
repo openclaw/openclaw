@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createNpmTarget,
@@ -11,15 +12,86 @@ import { runPackagePostInstallVerification } from "../../infra/package-update-ve
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as snapshotCapacity from "../../infra/update-candidate-snapshot.js";
 import * as globalUpdate from "../../infra/update-global.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
+import {
+  createGitFixtureCheckout,
+  runFixtureGit,
+} from "../../infra/update-runner-git-candidate.test-support.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import * as processRunner from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as shared from "./shared.js";
 import { updateGitInstall } from "./update-command-git.js";
 import * as packageUpdate from "./update-command-package.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("rechecks update ownership before retrying a failed target fetch", async () => {
+  const { root, beforeSha } = await createGitFixtureCheckout(tempDirs.make("update-git-retry-"));
+  vi.spyOn(globalUpdate, "createGlobalInstallEnv").mockResolvedValue({});
+  const execute = processRunner.runCommandWithTimeout;
+  const fetched = createDeferredCore();
+  const fetch = vi.fn(async () => {
+    fetched.resolve();
+    return {
+      code: 128,
+      stdout: "",
+      stderr: "error: RPC failed; curl 56 GnuTLS recv error (-9)\nfatal: early EOF",
+      termination: "exit" as const,
+      killed: false,
+      signal: null,
+    };
+  });
+  vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) =>
+    argv[0] === "git" && argv.includes("fetch") ? fetch() : execute(argv, options),
+  );
+  const revoked = new UpdateRequesterRevokedError();
+  let current = true;
+  const beforeGitMutation = vi.fn();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const outcome = updateGitInstall({
+    root,
+    switchToGit: false,
+    installKind: "git",
+    timeoutMs: undefined,
+    startedAt: Date.now(),
+    progress: {},
+    channel: "dev",
+    assertCurrent: () => {
+      if (!current) {
+        throw revoked;
+      }
+    },
+    inspectGitTarget: async () => {},
+    beforeGitMutation,
+    validateCandidate: async () => {},
+    getManagedServiceEnv: () => undefined,
+    getSnapshotSource: async () => ({ config: {}, env: {} }),
+    jsonMode: true,
+  }).then(
+    (result) => ({ result }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await awaitGateBeforeSettlement(fetched.promise, outcome, "update did not reach target fetch");
+    await vi.advanceTimersByTimeAsync(100);
+    current = false;
+    await vi.advanceTimersByTimeAsync(900);
+    expect(await outcome).toEqual({ error: revoked });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+    expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(beforeSha);
+  } finally {
+    vi.useRealTimers();
+    await outcome;
+  }
+});
 
 it.each(
   (["git", "package-to-git"] as const).flatMap((route) => [

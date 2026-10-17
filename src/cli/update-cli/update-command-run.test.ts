@@ -23,7 +23,10 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as updateFailureTriage from "../../infra/update-triage.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { confirmUpdateDowngrade } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -349,6 +352,10 @@ it("saves the complete error diagnostics before printing the Markdown path", asy
 // Real signals terminate a separate process; the parent never emits into Vitest.
 it.skipIf(process.platform === "win32").each([
   { signal: "SIGTERM", mode: "fresh" },
+  { signal: "SIGTERM", mode: "command-scope" },
+  { signal: "SIGINT", mode: "command-scope" },
+  { signal: "SIGTERM", mode: "no-run-scope" },
+  { signal: "SIGINT", mode: "no-run-scope" },
   { signal: "SIGTERM", mode: "resolved" },
   { signal: "SIGINT", mode: "resolved-foreign-before" },
   { signal: "SIGINT", mode: "resolved-foreign-after" },
@@ -373,15 +380,18 @@ it.skipIf(process.platform === "win32").each([
       import { registerSignalExitGate } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)};
       import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)};
       import { createRetainedUpdateRecovery } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)};
-      import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)};
+      import { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } from ${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)};
       import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)};
       import { resolveUpdateCommandTarget } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandTarget).href)};
+      import { resolveCommandProcessSignal, withCommandProcessScope } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processSpawn).href)};
       const opts = { dryRun: true };
       const mode = ${JSON.stringify(mode)};
+      const checkCommandSignal = mode === 'inherited' || mode.endsWith('scope');
       if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-      const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
+      const run = mode === 'no-run-scope' ? undefined : await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
       const preview = () => withUpdatePreviewSignals({ ...opts, run }, async () => {
-        const sibling = createUpdateRun({ trigger: 'cli' });
+        const commandSignal = checkCommandSignal ? resolveCommandProcessSignal() : undefined;
+        const sibling = mode === 'no-run-scope' ? undefined : createUpdateRun({ trigger: 'cli' });
         if (mode.startsWith('resolved')) {
           const foreign = () => recordUpdateRunPhase(run.runId, 'requested', { target: { tag: 'foreign' } });
           if (mode === 'resolved-foreign-before') foreign();
@@ -405,7 +415,7 @@ it.skipIf(process.platform === "win32").each([
         }
         if (mode === 'changed') recordUpdateRunPhase(run.runId, 'staging');
         if (mode === 'completed') finishUpdateRun(run.runId, { status: 'skipped', reason: 'dry-run' });
-        const expected = getUpdateRun(run.runId);
+        const expected = run ? getUpdateRun(run.runId) : undefined;
         if (mode === 'missing') {
           closeOpenClawStateDatabaseForTest();
           const base = ${JSON.stringify(path.join(root, "state"))};
@@ -413,26 +423,32 @@ it.skipIf(process.platform === "win32").each([
           fs.mkdirSync(family);
           fs.renameSync(base + '/openclaw.sqlite', family + '/displaced');
         }
-        process.send({ runId: run.runId, expected, sibling });
+        const originalRows = mode === 'inherited'
+          ? JSON.stringify(openOpenClawStateDatabase().db.prepare('SELECT * FROM update_runs ORDER BY run_id').all())
+          : undefined;
+        process.send({ runId: run?.runId, expected, sibling, originalRows });
         process.channel.ref();
         await new Promise(resolve => {
-          if (mode !== "inherited") process.once(${JSON.stringify(signal)}, resolve);
+          process.once(${JSON.stringify(signal)}, resolve);
         });
+        if (checkCommandSignal) {
+          fs.writeFileSync(${JSON.stringify(path.join(root, "preview-command-signal.json"))}, JSON.stringify({
+            present: commandSignal !== undefined,
+            aborted: commandSignal?.aborted === true,
+          }));
+        }
       });
-      if (mode === "inherited") await preview();
-      else {
-        let resources;
-        await withCliProcessScope(() => runCliWithExitFinalization({
-          run: () => withCliCommandCleanup(false, async cleanup => {
-            resources = cleanup.pluginResources;
-            await preview();
-            // A later command result must not overwrite the accepted signal.
-            process.exitCode = 19;
-          }),
-          onError: error => { throw error; },
-          finalize: async () => { await resources?.release(); },
-        }));
-      }
+      let resources;
+      await withCliProcessScope(() => runCliWithExitFinalization({
+        run: () => withCliCommandCleanup(false, async cleanup => {
+          resources = cleanup.pluginResources;
+          await (checkCommandSignal ? withCommandProcessScope(preview) : preview());
+          // A later command result must not overwrite the accepted signal.
+          process.exitCode = 19;
+        }),
+        onError: error => { throw error; },
+        finalize: async () => { await resources?.release(); },
+      }));
       fs.writeFileSync(${JSON.stringify(path.join(root, "signal-owner-unwound"))}, "settled");
       closeOpenClawStateDatabaseForTest();
       process.disconnect();
@@ -461,9 +477,10 @@ it.skipIf(process.platform === "win32").each([
         once(child, "message").then(
           ([payload]) =>
             payload as {
-              runId: string;
+              runId?: string;
               expected: ReturnType<typeof getUpdateRun>;
-              sibling: ReturnType<typeof createUpdateRun>;
+              sibling?: ReturnType<typeof createUpdateRun>;
+              originalRows?: string;
             },
         ),
         closed.then(() => {
@@ -483,10 +500,20 @@ it.skipIf(process.platform === "win32").each([
         }, 100);
       }
       const [code, exitSignal] = await closed;
+      if (mode === "inherited" || mode.endsWith("scope")) {
+        expect(
+          JSON.parse(fs.readFileSync(path.join(root, "preview-command-signal.json"), "utf8")),
+        ).toEqual({ present: true, aborted: true });
+      }
       expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(signal === "SIGINT" ? 130 : 143);
-      if (mode !== "inherited") {
-        expect(exitSignal).toBeNull();
-        expect(fs.readFileSync(path.join(root, "signal-owner-unwound"), "utf8")).toBe("settled");
+      expect(exitSignal).toBeNull();
+      expect(fs.readFileSync(path.join(root, "signal-owner-unwound"), "utf8")).toBe("settled");
+      if (mode === "no-run-scope") {
+        expect(fs.existsSync(path.join(root, "state"))).toBe(false);
+        return;
+      }
+      if (!message.runId || !message.sibling) {
+        throw new Error("Admitted preview omitted its run or sibling record");
       }
       const options =
         mode === "missing"
@@ -508,7 +535,12 @@ it.skipIf(process.platform === "win32").each([
           ]),
         });
       }
-      if (mode === "fresh" || mode === "repeat" || mode === "resolved") {
+      if (
+        mode === "fresh" ||
+        mode === "repeat" ||
+        mode === "resolved" ||
+        mode === "command-scope"
+      ) {
         expect(record).toMatchObject({
           status: "skipped",
           phase: "finished",
@@ -520,6 +552,12 @@ it.skipIf(process.platform === "win32").each([
         expect(record).toEqual(message.expected);
       }
       expect(getUpdateRun(message.sibling.runId, options)).toEqual(message.sibling);
+      if (mode === "inherited") {
+        const { db } = openOpenClawStateDatabase(options);
+        expect(JSON.stringify(db.prepare("SELECT * FROM update_runs ORDER BY run_id").all())).toBe(
+          message.originalRows,
+        );
+      }
       if (mode === "missing") {
         for (const suffix of ["", "-wal", "-shm"]) {
           expect(fs.existsSync(path.join(root, "state", `openclaw.sqlite${suffix}`))).toBe(false);
