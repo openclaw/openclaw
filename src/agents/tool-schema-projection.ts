@@ -86,7 +86,12 @@ function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameter
   const diagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const compatibleTools: TTool[] = [];
   for (let toolIndex = 0; toolIndex < entries.length; toolIndex += 1) {
-    const tool = entries[toolIndex];
+    let tool: TTool | undefined;
+    try {
+      tool = entries[toolIndex];
+    } catch {
+      tool = undefined;
+    }
     if (tool === undefined) {
       diagnostics.push({
         toolName: `tool[${toolIndex}]`,
