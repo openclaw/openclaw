@@ -136,26 +136,14 @@ it.each([false, true])(
     let failClose = fail;
     const gate = createDeferredCore();
     const held = {
-      agentId: "worker",
-      path: path.join(root, "selected", "worker.sqlite"),
+      ...resource("selected/worker.sqlite", () => gate.promise),
       revoke: vi.fn(() => {
         expect(() =>
-          registerKnown({
-            agentId: "reentrant",
-            path: path.join(root, "selected", "reentrant.sqlite"),
-            revoke() {},
-            close: async () => {},
-          }),
+          registerKnown({ ...resource("selected/reentrant.sqlite"), agentId: "reentrant" }),
         ).toThrow("are closing");
       }),
-      close: () => gate.promise,
     };
-    const sibling = {
-      agentId: "kept",
-      path: path.join(root, "sibling", "kept.sqlite"),
-      revoke: vi.fn(),
-      close: async () => {},
-    };
+    const sibling = { ...resource("sibling/kept.sqlite"), agentId: "kept" };
     registerKnown(held);
     registerKnown(sibling);
     const failure = new Error("independent resource close failed");
@@ -544,28 +532,13 @@ it.each([
 );
 
 it.each([
-  {
-    held: "shared.sqlite",
-    heldFamily: true,
-    incoming: "shared.child.sqlite",
-    incomingFamily: true,
-  },
-  {
-    held: "shared.child.sqlite",
-    heldFamily: true,
-    incoming: "shared.sqlite",
-    incomingFamily: true,
-  },
-  {
-    held: "shared.child.sqlite",
-    heldFamily: false,
-    incoming: "shared.sqlite",
-    incomingFamily: true,
-  },
-  { held: "shared.sqlite", heldFamily: true, incoming: "shared.new.sqlite", incomingFamily: false },
-])(
-  "retains failed sibling custody from $held to $incoming (family=$heldFamily/$incomingFamily)",
-  async ({ held, heldFamily, incoming, incomingFamily }) => {
+  ["shared.sqlite", true, "shared.child.sqlite", true],
+  ["shared.child.sqlite", true, "shared.sqlite", true],
+  ["shared.child.sqlite", false, "shared.sqlite", true],
+  ["shared.sqlite", true, "shared.new.sqlite", false],
+] as const)(
+  "retains failed sibling custody from %s (family=%s) to %s (family=%s)",
+  async (held, heldFamily, incoming, incomingFamily) => {
     let fail = true;
     const candidate = {
       ...resource(held, async () => {
