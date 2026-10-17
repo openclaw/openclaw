@@ -62,12 +62,13 @@ type CatalogCall = Parameters<
   ReturnType<typeof prepareCatalogExecutor>["toolSearchCatalogExecutor"]
 >[0];
 
-function lookupCall(toolCallId: string, text: string): CatalogCall {
+function lookupCall(
+  toolCallId: string,
+  text: string,
+  execute = async () => ({ content: [{ type: "text" as const, text }] }),
+): CatalogCall {
   return {
-    tool: {
-      name: "lookup",
-      execute: async () => ({ content: [{ type: "text", text }] }),
-    } as never,
+    tool: { name: "lookup", execute } as never,
     toolName: "lookup",
     source: "openclaw",
     toolCallId,
@@ -218,25 +219,21 @@ describe("nested tool activity ownership", () => {
         installSessionToolResultGuard(manager, {
           beforeMessageWriteHook: ({ message }) => {
             const activity = readNestedToolActivity(message);
-            return activity
-              ? {
-                  message: {
-                    ...activity,
-                    ...(malformed === "role" && activity.details.toolCallId === "current-attempt"
-                      ? { role: "user" as const }
-                      : {}),
-                    content:
-                      (malformed === "content" || malformed === "role") &&
-                      activity.details.toolCallId === "current-attempt"
-                        ? "rewritten"
-                        : "",
-                    details: {
-                      ...activity.details,
-                      result: { content: [{ type: "text", text: "canonical hook result" }] },
-                    },
-                  },
-                }
-              : undefined;
+            if (!activity) {
+              return;
+            }
+            const rewrite = activity.details.toolCallId === "current-attempt";
+            return {
+              message: {
+                ...activity,
+                role: rewrite && malformed === "role" ? "user" : activity.role,
+                content: rewrite && malformed !== "none" ? "rewritten" : "",
+                details: {
+                  ...activity.details,
+                  result: { content: [{ type: "text", text: "canonical hook result" }] },
+                },
+              },
+            };
           },
         });
         const { session } = await createTestSession({ sessionManager: manager });
@@ -286,9 +283,9 @@ describe("nested tool activity ownership", () => {
             user.anchor && { ...user.anchor, logicalTurnId: "nested-evidence-turn", role: "user" },
             () => input.onBeforeTerminalDelivery(createBeforeFinalizeEvent()),
           );
+          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
           if (malformed !== "none") {
             expect(runBeforeAgentFinalize).not.toHaveBeenCalled();
-            expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
             return;
           }
           expect(
@@ -307,7 +304,6 @@ describe("nested tool activity ownership", () => {
           );
           expect(JSON.stringify(messages)).not.toContain("previous-attempt");
           expect(JSON.stringify(messages)).not.toContain("original tool output");
-          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
         } finally {
           prepared.subscription.unsubscribe();
           session.dispose();
@@ -333,28 +329,15 @@ describe("nested tool activity ownership", () => {
         details: { id: 42, status: kind === "canonical failure" ? "error" : "success" },
       };
       const failure = kind === "thrown" ? "transport disconnected" : "declared output mismatch";
-      const toolName = "lookup";
       const input = { path: "original.txt" };
       const execution = prepared.toolSearchCatalogExecutor({
-        tool: {
-          name: toolName,
-          description: "Look up a record",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
-            additionalProperties: false,
-          },
-          execute: async () => {
-            if (kind === "thrown") {
-              throw new Error(failure);
-            }
-            return rawResult;
-          },
-        } as never,
-        toolName,
+        ...lookupCall("nested-lookup", "tool output", async () => {
+          if (kind === "thrown") {
+            throw new Error(failure);
+          }
+          return rawResult;
+        }),
         source: kind === "canonical failure" || kind === "thrown" ? "mcp" : "openclaw",
-        toolCallId: "nested-lookup",
         parentToolCallId: "outer-exec",
         input,
         acceptResultBeforeProjection: async (candidate) => {
@@ -387,7 +370,7 @@ describe("nested tool activity ownership", () => {
         if (kind === "suppressed") {
           expect(activities).toEqual([]);
           expect(manager.getEntries()).toEqual([]);
-          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual([toolName]);
+          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
           const ordinaryMessage = { role: "assistant", content: "Final answer" };
           expect(projectNestedToolActivityForHooks([ordinaryMessage], activities)).toEqual([
             ordinaryMessage,
@@ -402,11 +385,11 @@ describe("nested tool activity ownership", () => {
       expect(activities[0]?.details).toMatchObject({
         parentToolCallId: "outer-exec",
         toolCallId: "nested-lookup",
-        toolName,
+        toolName: "lookup",
         isError: kind !== "accepted",
       });
       expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(
-        kind === "accepted" ? [toolName] : [],
+        kind === "accepted" ? ["lookup"] : [],
       );
       const ordinaryMessage = { role: "assistant", content: "Final answer" };
       const hookMessages = projectNestedToolActivityForHooks([ordinaryMessage], activities);

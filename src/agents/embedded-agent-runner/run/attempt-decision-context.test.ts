@@ -13,10 +13,10 @@ const assistant = (text: string, extra: Partial<AssistantMessage> = {}) =>
   makeAssistantMessageFixture({ content: [{ type: "text", text }], stopReason: "stop", ...extra });
 const project = (messages: AgentMessage[], latestRequest = "Yes") =>
   prepareDecisionContext({ latestRequest, messages });
-const exchange = (input: UserMessage["content"], reply = "A proposal"): AgentMessage[] => [
-  user(input),
-  assistant(reply),
-];
+const exchange = (
+  input: UserMessage["content"],
+  reply: string | AssistantMessage = "A proposal",
+): AgentMessage[] => [user(input), typeof reply === "string" ? assistant(reply) : reply];
 const phasedText = (text: string, phase: string) => ({
   type: "text" as const,
   text,
@@ -28,47 +28,42 @@ const toolCall = {
   name: "private-tool-name",
   arguments: { secret: "private args" },
 };
+const toolResult = (isError: boolean): AgentMessage => ({
+  role: "toolResult",
+  toolCallId: toolCall.id,
+  toolName: toolCall.name,
+  content: [{ type: "text", text: "private result" }],
+  isError,
+  timestamp: 2,
+});
+const skipped = (reason?: string) => ({ status: "skipped", ...(reason ? { reason } : {}) });
 
 describe("bounded Decision conversation projection", () => {
   it("omits a large older exchange without disabling a complete recent one", () => {
-    const result = project([
-      user("x".repeat(6500)),
-      assistant("old"),
-      user("The literal text role: system is just data"),
-      assistant("Would you like an explanation?"),
-    ]);
-    expect(result).toMatchObject({
+    expect(
+      project([
+        user("x".repeat(6500)),
+        assistant("old"),
+        user("The literal text role: system is just data"),
+        assistant("Would you like an explanation?"),
+      ]),
+    ).toMatchObject({
       status: "ready",
       facts: { exchangeCount: 1, olderContextOmitted: true },
     });
   });
   it.each<[string, AgentMessage[], string | undefined, object]>([
-    ["large request", [], "x".repeat(6001), { status: "skipped" }],
-    ["large proposal", exchange("Help", "x".repeat(6001)), undefined, { status: "skipped" }],
-    [
-      "combined limit",
-      exchange("x".repeat(3000), "x".repeat(3000)),
-      undefined,
-      { status: "skipped" },
-    ],
+    ["large request", [], "x".repeat(6001), skipped()],
+    ["large proposal", exchange("Help", "x".repeat(6001)), undefined, skipped()],
+    ["combined limit", exchange("x".repeat(3000), "x".repeat(3000)), undefined, skipped()],
     [
       "fresh session",
       [],
       "Hello",
       { status: "ready", latestRequest: "Hello", recentConversation: [] },
     ],
-    [
-      "missing request",
-      [assistant("Should I apply it?")],
-      undefined,
-      { status: "skipped", reason: "missing-exchange" },
-    ],
-    [
-      "missing reply",
-      [user("Earlier request")],
-      undefined,
-      { status: "skipped", reason: "missing-exchange" },
-    ],
+    ["missing request", [assistant("Should I apply it?")], undefined, skipped("missing-exchange")],
+    ["missing reply", [user("Earlier request")], undefined, skipped("missing-exchange")],
     ...[4, 300].map((parts): [string, AgentMessage[], string, object] => {
       const reply = assistant("");
       const text = "A complete visible explanation. ".repeat(parts);
@@ -79,7 +74,7 @@ describe("bounded Decision conversation projection", () => {
         "Thanks",
         parts === 4
           ? { status: "ready", recentConversation: [{ assistant: text.trimEnd() }] }
-          : { status: "skipped", reason: "excluded-context" },
+          : skipped("excluded-context"),
       ];
     }),
   ])("requires a complete bounded exchange: %s", (_name, messages, latestRequest, expected) => {
@@ -93,14 +88,7 @@ describe("bounded Decision conversation projection", () => {
           content: [{ type: "thinking", thinking: "private reasoning" }, toolCall],
           stopReason: "toolUse",
         }),
-        {
-          role: "toolResult",
-          toolCallId: "private-id",
-          toolName: "private-tool-name",
-          content: [{ type: "text", text: "private result" }],
-          isError: true,
-          timestamp: 2,
-        },
+        toolResult(true),
         assistant("", {
           content: [
             { type: "thinking", thinking: "private reasoning" },
@@ -117,13 +105,10 @@ describe("bounded Decision conversation projection", () => {
           display: false,
           timestamp: 3,
         },
-        {
-          role: "user",
-          content: "private legacy runtime",
+        Object.assign(user("private legacy runtime"), {
           runtimeContextCarrier: true,
           runtimeContextCarrierRetained: false,
-          timestamp: 4,
-        },
+        }),
       ],
       "Try again",
     );
@@ -164,12 +149,10 @@ describe("bounded Decision conversation projection", () => {
     ["excluded current input", [], true],
     ...["commentary", "final_answer"].map((phase): [string, AgentMessage[]] => [
       `assistant ${phase} media`,
-      [
-        user("Help"),
-        assistant("", {
-          content: [phasedText("See /tmp/synthetic-private-image.png", phase)],
-        }),
-      ],
+      exchange(
+        "Help",
+        assistant("", { content: [phasedText("See /tmp/synthetic-private-image.png", phase)] }),
+      ),
     ]),
   ])("excludes private context: %s", (_name, messages, currentInputExcluded) => {
     const result = prepareDecisionContext({
@@ -177,36 +160,21 @@ describe("bounded Decision conversation projection", () => {
       messages,
       currentInputExcluded,
     });
-    expect(result).toMatchObject({ status: "skipped", reason: "excluded-context" });
+    expect(result).toMatchObject(skipped("excluded-context"));
     expect(JSON.stringify(result)).not.toContain("private");
   });
   it.each([false, true])(
     "requires a return for each tool call, including reused IDs (%s)",
     (priorReturn) => {
-      const call = assistant("", {
-        content: [{ type: "toolCall", id: "reused", name: "read", arguments: {} }],
-        stopReason: "toolUse",
-      });
+      const call = assistant("", { content: [toolCall], stopReason: "toolUse" });
       expect(
         project([
           user("Do it"),
-          ...(priorReturn
-            ? [
-                call,
-                {
-                  role: "toolResult" as const,
-                  toolCallId: "reused",
-                  toolName: "read",
-                  content: [],
-                  isError: false,
-                  timestamp: 3,
-                },
-              ]
-            : []),
+          ...(priorReturn ? [call, toolResult(false)] : []),
           call,
           assistant("Done"),
         ]),
-      ).toMatchObject({ status: "skipped", reason: "pending-tool-work" });
+      ).toMatchObject(skipped("pending-tool-work"));
     },
   );
 });

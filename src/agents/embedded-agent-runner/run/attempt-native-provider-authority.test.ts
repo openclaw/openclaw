@@ -25,7 +25,6 @@ import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
-// Register the shared module mocks before importing any runtime dependency.
 const { createFixture } = await vi.hoisted(
   async () => await import("./attempt-execution-phase.test-support.js"),
 );
@@ -60,7 +59,6 @@ describe("embedded native provider authority", () => {
         },
         providerRuntimeHandle,
       );
-      // Resolve the native SDK from its owning plugin, not the core package.
       const sdk: {
         BedrockRuntimeClient: {
           prototype: {
@@ -80,6 +78,7 @@ describe("embedded native provider authority", () => {
       });
       await withOpenClawTestState({ label: "cron-root-native-fence" }, async (testState) => {
         const fixture = await createFixture({ exerciseTerminalMerges: false });
+        const { attempt, runAbortController } = fixture.input;
         const target = {
           agentId: "main",
           sessionKey: key,
@@ -92,7 +91,7 @@ describe("embedded native provider authority", () => {
           updatedAt: 1,
         };
         replaceSessionEntrySync(target, original);
-        Object.assign(fixture.input.attempt, {
+        Object.assign(attempt, {
           ...target,
           config: {},
           model,
@@ -110,24 +109,23 @@ describe("embedded native provider authority", () => {
         const writer = await claimAgentSessionWriter({
           ...target,
           sessionTarget: target,
-          runId: fixture.input.attempt.runId,
+          runId: attempt.runId,
           workspaceDir: testState.workspaceDir,
           prompt: "reply",
           timeoutMs: 30_000,
         });
-        fixture.input.attempt.sessionTarget = { ...target, ...writer };
+        attempt.sessionTarget = { ...target, ...writer };
         const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
-          attempt: fixture.input.attempt,
-          runAbortController: fixture.input.runAbortController,
+          attempt,
+          runAbortController,
           externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
         });
-        fixture.input.sessionLock = transcript;
         const manager = SessionManager.open({ ...target, ...writer });
         const session = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
         bindStreamLlmRuntime(session.agent.streamFn!, defaultLlmRuntime);
         try {
           await prepareEmbeddedAttemptTransport({
-            attempt: fixture.input.attempt,
+            attempt,
             session,
             settingsManager: createAutoCompactionSettings(),
             providerThinkingLevel: undefined,
@@ -135,7 +133,7 @@ describe("embedded native provider authority", () => {
             workspaceDir: testState.workspaceDir,
             workspaceOnly: true,
             agentDir: testState.agentDir(),
-            abortSignal: fixture.input.runAbortController.signal,
+            abortSignal: runAbortController.signal,
             assertCronRootCurrent: transcript.assertCronRootCurrent,
             getProviderRuntimeHandle: () => providerRuntimeHandle,
             sandboxSessionKey: key,
@@ -174,7 +172,7 @@ describe("embedded native provider authority", () => {
           const result = await response.result();
           if (rotate) {
             expect(send).not.toHaveBeenCalled();
-            expect(fixture.input.runAbortController.signal.aborted).toBe(true);
+            expect(runAbortController.signal.aborted).toBe(true);
             expect(result.stopReason).toBe("aborted");
             expect(result.errorMessage).toContain("original session generation no longer accepts");
             await expect(
