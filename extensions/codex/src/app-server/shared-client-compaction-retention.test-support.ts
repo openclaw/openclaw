@@ -34,6 +34,8 @@ export function registerSharedClientCompactionRetentionTests() {
       resetCodexTestBindingStore();
       setRuntimeConfigSnapshot({});
       const unsubscribed: string[] = [];
+      const turn = { id: "compact-turn", status: "inProgress" };
+      const item = { id: "compact-item", type: "contextCompaction" };
       const harness = createClientHarness({
         onWrite(line, send) {
           const request = JSON.parse(line) as {
@@ -51,29 +53,13 @@ export function registerSharedClientCompactionRetentionTests() {
             });
           } else if (request.method === "thread/compact/start") {
             const threadId = request.params?.threadId;
-            send({
-              method: "turn/started",
-              params: { threadId, turn: { id: "compact-turn", status: "inProgress" } },
-            });
-            send({
-              method: "item/started",
-              params: {
-                threadId,
-                turnId: "compact-turn",
-                item: { id: "compact-item", type: "contextCompaction" },
-              },
-            });
-            send({
-              method: "item/completed",
-              params: {
-                threadId,
-                turnId: "compact-turn",
-                item: { id: "compact-item", type: "contextCompaction" },
-              },
-            });
+            send({ method: "turn/started", params: { threadId, turn } });
+            const params = { threadId, turnId: turn.id, item };
+            send({ method: "item/started", params });
+            send({ method: "item/completed", params });
             send({
               method: "turn/completed",
-              params: { threadId, turn: { id: "compact-turn", status: "completed", items: [] } },
+              params: { threadId, turn: { ...turn, status: "completed", items: [] } },
             });
             send({ id: request.id, result: {} });
           } else if (request.method === "thread/unsubscribe") {
@@ -132,9 +118,7 @@ export function registerSharedClientCompactionRetentionTests() {
               id: "child-thread",
               parentThreadId: "parent-thread",
               source: {
-                subAgent: {
-                  thread_spawn: { parent_thread_id: "parent-thread", depth: 1 },
-                },
+                subAgent: { thread_spawn: { parent_thread_id: "parent-thread", depth: 1 } },
               },
             },
           },
