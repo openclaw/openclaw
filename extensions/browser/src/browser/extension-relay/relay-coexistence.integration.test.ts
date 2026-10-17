@@ -68,10 +68,14 @@ function browserState(port: number, strict = false) {
   }
   return { state, profile };
 }
-const closeServer = (server: net.Server) =>
-  new Promise<void>((resolve, reject) => {
+async function closeServer(server: net.Server) {
+  if (!server.listening) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
+}
 
 it("reselects its initial fixture port after a bind collision", async (test) => {
   test.signal.throwIfAborted();
@@ -92,9 +96,7 @@ it("reselects its initial fixture port after a bind collision", async (test) => 
     for (const socket of sockets) {
       socket.destroy();
     }
-    if (competitor.listening) {
-      await closeServer(competitor);
-    }
+    await closeServer(competitor);
   };
   test.onTestFinished(cleanup);
   await withConnectedDaemon(
@@ -143,9 +145,11 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
   let daemon: Awaited<ReturnType<typeof runExtensionRelayDaemon>> | undefined;
   let fixturePort: number | undefined;
   const competingStarts: boolean[] = [];
+  const claimPort = (port: number) =>
+    acquireTestPortBlock({ port, offsets: [0], signal: test.signal });
   const claimContender = async (port: number) => {
     try {
-      contenderClaim = await acquireTestPortBlock({ port, offsets: [0], signal: test.signal });
+      contenderClaim = await claimPort(port);
       return true;
     } catch (error) {
       if (extractErrorCode(error) !== "EADDRINUSE") {
@@ -194,19 +198,9 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
       releaseFinalCleanup.resolve();
       daemon?.stop();
       try {
-        try {
-          await daemon?.done;
-        } finally {
-          await fixture;
-        }
+        await Promise.resolve(daemon?.done).finally(() => fixture);
       } finally {
-        try {
-          if (contender.listening) {
-            await closeServer(contender);
-          }
-        } finally {
-          await contenderClaim?.release();
-        }
+        await closeServer(contender).finally(() => contenderClaim?.release());
       }
     })());
   test.onTestFinished(cleanup);
@@ -226,11 +220,7 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
     expect(await claimContender(fixturePort)).toBe(false);
     releaseFinalCleanup.resolve();
     expect(await fixture).toBeUndefined();
-    const reacquired = await acquireTestPortBlock({
-      port: fixturePort,
-      offsets: [0],
-      signal: test.signal,
-    });
+    const reacquired = await claimPort(fixturePort);
     await reacquired.release();
   } finally {
     await cleanup();

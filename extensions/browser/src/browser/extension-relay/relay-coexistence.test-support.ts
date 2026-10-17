@@ -29,13 +29,8 @@ const FIXTURE_TAB = {
   title: "Fixture",
   active: true,
 };
-const FRAME = {
-  name: "",
-  loaderId: "loader",
-  url: FIXTURE_TAB.url,
-  securityOrigin: "https://example.com",
-  mimeType: "text/html",
-};
+const { title, url } = FIXTURE_TAB;
+const FRAME = { name: "", loaderId: "loader", url };
 
 async function exchange(extension: WebSocket, message: object, timeoutMs?: number) {
   const received = once(extension, "message", {
@@ -75,7 +70,7 @@ export async function authenticateRelayHttp(
   token: string,
   flow: "cdp" | "json-list",
 ) {
-  const request = async (pathname: string, body?: unknown) => {
+  const request = async (pathname: string, body?: unknown): Promise<unknown> => {
     const response = await connection.request(
       body === undefined ? "GET" : "POST",
       pathname,
@@ -83,29 +78,25 @@ export async function authenticateRelayHttp(
       { "Content-Type": "application/json" },
     );
     expect(response.status).toBe(200);
-    return response.body;
+    return JSON.parse(response.body);
   };
-  const challenge = JSON.parse(
-    await request(BROWSER_RELAY_AUTH_CHALLENGE_PATH, {
-      v: 2,
-      keyId: relayKeyIdFromHex(token),
-      clientNonce: randomRelayNonce(),
-      role: "cdp",
-      transport: "connection",
-      method: flow === "cdp" ? "SEQUENCE" : "GET",
-      resource: flow === "cdp" ? "/json/version -> /cdp" : "/json/list",
-      flow,
-    }),
-  ) as BrowserRelayAuthChallenge;
+  const challenge = (await request(BROWSER_RELAY_AUTH_CHALLENGE_PATH, {
+    v: 2,
+    keyId: relayKeyIdFromHex(token),
+    clientNonce: randomRelayNonce(),
+    role: "cdp",
+    transport: "connection",
+    method: flow === "cdp" ? "SEQUENCE" : "GET",
+    resource: flow === "cdp" ? "/json/version -> /cdp" : "/json/list",
+    flow,
+  })) as BrowserRelayAuthChallenge;
   expect(verifyRelayProof(token, "server", challenge, challenge.serverProof)).toBe(true);
   const clientProof = createRelayProof(token, "client", challenge);
-  const accepted = JSON.parse(
-    await request(BROWSER_RELAY_AUTH_COMPLETE_PATH, {
-      v: 2,
-      sessionId: challenge.sessionId,
-      clientProof,
-    }),
-  ) as { acceptProof: string };
+  const accepted = (await request(BROWSER_RELAY_AUTH_COMPLETE_PATH, {
+    v: 2,
+    sessionId: challenge.sessionId,
+    clientProof,
+  })) as { acceptProof: string };
   expect(verifyRelayProof(token, "accept", challenge, accepted.acceptProof, clientProof)).toBe(
     true,
   );
@@ -122,9 +113,7 @@ export async function externalRelayClient(port: number, token: string): Promise<
     const ws = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
       createConnection: () => authenticated,
     });
-    await once(ws, "open").catch((error: unknown) => {
-      throw new Error("External relay upgrade failed", { cause: error });
-    });
+    await once(ws, "open");
     return ws;
   } catch (error) {
     connection.close();
@@ -173,140 +162,128 @@ export async function withConnectedDaemon(
       await fs.writeFile(path.join(credentials, "browser-extension-relay.secret"), token, {
         mode: 0o600,
       });
-      await withEnvAsync(
-        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
-        async () => {
-          const start = async (mayReselectPort = false) => {
-            const attempts = mayReselectPort ? 3 : 1;
-            for (let attempt = 1; ; attempt += 1) {
-              portClaim ??= await acquireTestPortBlock({ offsets: [0] });
-              const port = portClaim.port;
-              const config = {
-                gateway: { auth: { mode: "token" as const, token: "coexistence-test" } },
-                browser: {
-                  profiles: { chrome: { driver: "extension" as const, cdpPort: port } },
-                },
-              };
-              setRuntimeConfigSnapshot(config, config);
-              const started = startDaemon
-                ? await startDaemon(port, stateDir, config)
-                : await runExtensionRelayDaemon({ port });
-              if (started.port === port) {
-                return { daemon: started, port };
-              }
-              started.stop();
-              const reason = await started.done;
-              if (reason === "port-in-use" && attempt < attempts) {
-                await releasePortClaim();
-                continue;
-              }
-              throw new Error(
-                `Relay fixture startup failed: expected port ${port}, got ${started.port ?? "no listener"} (${String(reason)})`,
-              );
+      const runConnected = async () => {
+        const start = async (mayReselectPort = false) => {
+          const attempts = mayReselectPort ? 3 : 1;
+          for (let attempt = 1; ; attempt += 1) {
+            portClaim ??= await acquireTestPortBlock({ offsets: [0] });
+            const port = portClaim.port;
+            const config = {
+              gateway: { auth: { mode: "token" as const, token: "coexistence-test" } },
+              browser: {
+                profiles: { chrome: { driver: "extension" as const, cdpPort: port } },
+              },
+            };
+            setRuntimeConfigSnapshot(config, config);
+            const started = startDaemon
+              ? await startDaemon(port, stateDir, config)
+              : await runExtensionRelayDaemon({ port });
+            if (started.port === port) {
+              return { daemon: started, port };
             }
-          };
-          const started = await start(true);
-          const port = started.port;
-          let daemon = started.daemon;
-          const extension = new WebSocket(
-            `ws://127.0.0.1:${port}/extension`,
-            BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
-            { origin: "chrome-extension://coexistence-test" },
-          );
-          const send = (message: Record<string, unknown>) =>
-            extension.send(JSON.stringify(message));
-          let nativeTarget = "fixture-target";
-          let detachHeld = false;
-          let detachEntered = () => {};
-          const detachReplies: Array<() => void> = [];
-          try {
-            await once(extension, "open");
-            await authenticateExtension(extension, token);
-            extension.on("message", (frame) => {
-              const command = JSON.parse(rawDataToString(frame)) as {
-                seq: number;
-                type: string;
-                method?: string;
-              };
-              if (command.type === "ping") {
-                send({ type: "pong" });
-                return;
-              }
-              if (handleExtensionCommand?.(command, send)) {
-                return;
-              }
-              if (command.type === "detach" && detachHeld) {
-                detachReplies.push(() => send({ type: "result", seq: command.seq, result: {} }));
-                detachEntered();
-                return;
-              }
-              const result =
-                command.type === "attach"
-                  ? { targetId: nativeTarget }
-                  : command.method === "Target.getTargetInfo"
-                    ? {
-                        targetInfo: {
-                          targetId: nativeTarget,
-                          title: FIXTURE_TAB.title,
-                          type: "page",
-                          url: FIXTURE_TAB.url,
-                        },
-                      }
-                    : command.method === "Page.getFrameTree"
-                      ? {
-                          frameTree: {
-                            frame: { id: nativeTarget, ...FRAME },
-                          },
-                        }
-                      : {};
-              send({ type: "result", seq: command.seq, result });
-            });
-            send({
-              type: "hello",
-              browserVersion: "Chrome/test",
-              userAgent: "coexistence-test",
-              extensionVersion: "2",
-              tabs: [FIXTURE_TAB],
-            });
+            started.stop();
+            const reason = await started.done;
+            if (reason === "port-in-use" && attempt < attempts) {
+              await releasePortClaim();
+              continue;
+            }
+            throw new Error(
+              `Relay fixture startup failed: expected port ${port}, got ${started.port ?? "no listener"} (${String(reason)})`,
+            );
+          }
+        };
+        const { port, daemon: initialDaemon } = await start(true);
+        let daemon = initialDaemon;
+        const extension = new WebSocket(
+          `ws://127.0.0.1:${port}/extension`,
+          BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
+          { origin: "chrome-extension://coexistence-test" },
+        );
+        const send = (message: Record<string, unknown>) => extension.send(JSON.stringify(message));
+        let nativeTarget = "fixture-target";
+        let detachHeld = false;
+        let detachEntered = () => {};
+        const detachReplies: Array<() => void> = [];
+        try {
+          await once(extension, "open");
+          await authenticateExtension(extension, token);
+          extension.on("message", (frame) => {
+            const command = JSON.parse(rawDataToString(frame)) as {
+              seq: number;
+              type: string;
+              method?: string;
+            };
+            if (command.type === "ping") {
+              send({ type: "pong" });
+              return;
+            }
+            if (handleExtensionCommand?.(command, send)) {
+              return;
+            }
+            if (command.type === "detach" && detachHeld) {
+              detachReplies.push(() => send({ type: "result", seq: command.seq, result: {} }));
+              detachEntered();
+              return;
+            }
+            const result =
+              command.type === "attach"
+                ? { targetId: nativeTarget }
+                : command.method === "Target.getTargetInfo"
+                  ? { targetInfo: { targetId: nativeTarget, title, type: "page", url } }
+                  : command.method === "Page.getFrameTree"
+                    ? { frameTree: { frame: { id: nativeTarget, ...FRAME } } }
+                    : {};
+            send({ type: "result", seq: command.seq, result });
+          });
+          send({
+            type: "hello",
+            browserVersion: "Chrome/test",
+            userAgent: "coexistence-test",
+            extensionVersion: "2",
+            tabs: [FIXTURE_TAB],
+          });
 
-            await run({
-              port,
-              token,
-              extension,
-              stateDir,
-              restartDaemon: async () => {
-                daemon.stop();
-                await daemon.done;
-                daemon = (await start()).daemon;
-              },
-              holdDetach: () => {
-                detachHeld = true;
-                const entered = new Promise<void>((resolve) => {
-                  detachEntered = resolve;
-                });
-                return {
-                  entered,
-                  release: () => {
-                    detachHeld = false;
-                    detachReplies.splice(0).forEach((reply) => reply());
-                  },
-                };
-              },
-              setTarget: (value) => {
-                nativeTarget = value;
-              },
-              sendTabs: (granted) => send({ type: "tabs", tabs: granted ? [FIXTURE_TAB] : [] }),
-            });
-          } finally {
-            try {
-              await stopBrowserControlService();
-            } finally {
-              extension.terminate();
+          await run({
+            port,
+            token,
+            extension,
+            stateDir,
+            restartDaemon: async () => {
               daemon.stop();
               await daemon.done;
-            }
+              daemon = (await start()).daemon;
+            },
+            holdDetach: () => {
+              detachHeld = true;
+              const entered = new Promise<void>((resolve) => {
+                detachEntered = resolve;
+              });
+              return {
+                entered,
+                release: () => {
+                  detachHeld = false;
+                  detachReplies.splice(0).forEach((reply) => reply());
+                },
+              };
+            },
+            setTarget: (value) => {
+              nativeTarget = value;
+            },
+            sendTabs: (granted) => send({ type: "tabs", tabs: granted ? [FIXTURE_TAB] : [] }),
+          });
+        } finally {
+          try {
+            await stopBrowserControlService();
+          } finally {
+            extension.terminate();
+            daemon.stop();
+            await daemon.done;
           }
-        },
+        }
+      };
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
+        runConnected,
       );
     });
   } finally {

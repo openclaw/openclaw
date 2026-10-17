@@ -59,10 +59,10 @@ it.each(["owned", "borrowed"] as const)(
               return { targetInfo: { targetId, title: "Fixture" } };
             case "Runtime.enable":
               event(1, "", true);
-              return {};
+              break;
             case "Runtime.runIfWaitingForDebugger":
               barrier.later.resolve();
-              return {};
+              break;
             case "Page.createIsolatedWorld":
               event(2, params.worldName, false);
               return { executionContextId: 2 };
@@ -79,9 +79,8 @@ it.each(["owned", "borrowed"] as const)(
               evaluated.push(value);
               return { result: { type: "object", value } };
             }
-            default:
-              return {};
           }
+          return {};
         },
       },
     });

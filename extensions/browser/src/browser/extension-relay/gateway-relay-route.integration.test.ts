@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import http, { type Server } from "node:http";
@@ -31,6 +32,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 const RELAY_KEY = relayTestKey(8);
+const chromeProfile = () => createBrowserControlContext().forProfile("chrome");
 const GATEWAY_AUTH = { mode: "token" as const, token: "gateway-integration-test" };
 const INVENTORY = {
   type: "tabs",
@@ -50,7 +52,7 @@ async function relayInventory(port: number): Promise<unknown> {
   const connection = await RawHttpConnection.connect(port);
   try {
     const request = await authenticateRelayHttp(connection, RELAY_KEY, "json-list");
-    return JSON.parse(await request("/json/list"));
+    return await request("/json/list");
   } finally {
     connection.close();
   }
@@ -74,12 +76,11 @@ function encodeUpgradeHead(messages: object[]): Buffer {
 }
 
 async function closeServer(server: Server): Promise<void> {
-  if (!server.listening) {
-    return;
+  if (server.listening) {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
 }
 
 afterEach(async () => {
@@ -134,19 +135,14 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
       withTempDir("openclaw-gateway-relay-wakeup-", async (dir) => {
         const stateDir = await fs.realpath(dir);
         const credentials = path.join(stateDir, "credentials");
+        const secretPath = path.join(credentials, "browser-extension-relay.secret");
         const gatewayPort = await getFreePort();
         let relayPort = await getFreePort();
         while (relayPort === gatewayPort) {
           relayPort = await getFreePort();
         }
         await fs.mkdir(credentials, { recursive: true });
-        await fs.writeFile(
-          path.join(credentials, "browser-extension-relay.secret"),
-          `${RELAY_KEY}\n`,
-          {
-            mode: 0o600,
-          },
-        );
+        await fs.writeFile(secretPath, `${RELAY_KEY}\n`, { mode: 0o600 });
 
         const config = {
           gateway: { port: gatewayPort, auth: GATEWAY_AUTH },
@@ -205,15 +201,13 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
               });
               expect(pairing).toMatchObject({ relayPort, topology: "local" });
               const parsed = parsePairingString(pairing.pairingString);
-              if (!parsed) {
-                throw new Error("local pairing did not parse");
-              }
+              assert(parsed, "local pairing did not parse");
 
               if (waiting) {
                 await startBrowserControlServiceFromConfig();
-                browserAvailable = createBrowserControlContext()
-                  .forProfile("chrome")
-                  .ensureBrowserAvailable({ signal: requestController.signal });
+                browserAvailable = chromeProfile().ensureBrowserAvailable({
+                  signal: requestController.signal,
+                });
               }
 
               const protocols = legacy
@@ -264,23 +258,17 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
               await expect(browserAvailable ?? Promise.resolve()).resolves.toBeUndefined();
               const relay = getBrowserControlState()?.extensionRelays?.get("chrome");
               expect(relay?.port).toBe(pairing.relayPort);
-              if (!relay) {
-                throw new Error("extension relay did not start");
-              }
+              assert(relay, "extension relay did not start");
               if (coalesced) {
                 await expect(relayInventory(relayPort)).resolves.toMatchObject(INVENTORY.tabs);
               }
               if (standalone) {
-                expect(relay.ownership).toBe("borrowed");
-                if (relay.ownership !== "borrowed") {
-                  throw new Error("Expected borrowed relay");
-                }
+                assert(relay.ownership === "borrowed", "Expected borrowed relay");
                 await expect(relay.client.status()).resolves.toMatchObject({
                   ready: true,
                   identity: { extensionVersion: "2", browserVersion: "Chrome/test" },
                 });
-                const profile = createBrowserControlContext().forProfile("chrome").profile;
-                expect(new URL(profile.cdpUrl).username).toBe("");
+                expect(new URL(chromeProfile().profile.cdpUrl).username).toBe("");
                 if (malformed) {
                   const closed = once(extension, "close");
                   extension.send("invalid client frame", { mask: false });
@@ -293,13 +281,10 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
                 await expect(contender.done).resolves.toBe("port-in-use");
                 return;
               }
-              if (relay.ownership !== "owned") {
-                throw new Error("Expected owned relay");
-              }
+              assert(relay.ownership === "owned", "Expected owned relay");
 
               for (let request = 0; request < 3; request += 1) {
-                const profile = createBrowserControlContext().forProfile("chrome").profile;
-                const cdpUrl = new URL(profile.cdpUrl);
+                const cdpUrl = new URL(chromeProfile().profile.cdpUrl);
                 expect(cdpUrl.username).toBe("openclaw-internal");
                 expect(cdpUrl.password === relay.internalToken).toBe(true);
                 expect(getBrowserControlState()?.extensionRelays?.get("chrome")).toBe(relay);
@@ -321,9 +306,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
               requestController.abort();
               await browserAvailable?.catch(() => {});
               extension?.terminate();
-              for (const socket of saturationSockets) {
-                socket.terminate();
-              }
+              saturationSockets.forEach((socket) => socket.terminate());
               await stopBrowserControlService();
               daemon?.stop();
               await daemon?.done;
