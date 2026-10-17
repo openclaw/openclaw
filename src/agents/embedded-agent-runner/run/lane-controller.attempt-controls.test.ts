@@ -15,23 +15,23 @@ import { resetCommandQueueStateForTest } from "../../../process/command-queue.te
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { isAgentRunDirectAbortReason } from "../../run-termination.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
-import { createEmbeddedRunLaneController } from "./lane-controller.js";
-import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
+import { createLaneControllerFixture } from "./lane-controller.test-support.js";
+import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS as GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 const GLOBAL_LANE = "attempt-controls-global";
 const RUNTIME_TIMEOUT_MS = 120_000;
 const cleanups: Array<() => void | Promise<void>> = [];
-type LaneController = ReturnType<typeof createEmbeddedRunLaneController>;
+type LaneController = ReturnType<typeof createLaneControllerFixture>["controller"];
 
 async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
   setRuntimeConfigSnapshot(overrides.config ?? {});
-  let lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const runId = overrides.runId ?? "attempt-controls-run";
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lane-controls-test");
   cleanups.push(admission.close);
   const admittedRunContext = await admission.admit("embedded");
-  let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+  const params: RunEmbeddedAgentParams & { sessionFile: string } = {
     lifecycleGeneration,
     prompt: "queued run",
     runId,
@@ -42,19 +42,10 @@ async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = 
     ...overrides,
     admittedRunContext,
   };
-  setRuntimeConfigSnapshot(params.config ?? {});
-  const controller = createEmbeddedRunLaneController({
-    getLifecycleGeneration: () => lifecycleGeneration,
-    getParams: () => params,
+  const { controller } = createLaneControllerFixture(params, {
     globalLane: GLOBAL_LANE,
-    initialQueuedLifecycleGeneration: lifecycleGeneration,
     sessionLane: "attempt-controls-session",
-    setLifecycleGeneration: (updated) => {
-      lifecycleGeneration = updated;
-    },
-    setParams: (updated) => {
-      params = updated;
-    },
+    lifecycleGeneration,
   });
   const createAttemptControls = (
     input: Omit<Parameters<LaneController["createAttemptControls"]>[0], "admittedRunContext"> = {},
@@ -66,14 +57,17 @@ async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = 
   return { controller, admission, createAttemptControls, runId };
 }
 
-async function holdLane(controller: LaneController) {
+async function holdLane(controller: LaneController, nested = false) {
   const entered = createDeferred();
   const finished = createDeferred();
-  const active = controller.enqueueGlobal(async () => {
+  const task = async () => {
     entered.resolve();
     await finished.promise;
     return { meta: { durationMs: 1 } };
-  });
+  };
+  const active = nested
+    ? controller.enqueueSession(() => controller.enqueueGlobal(task))
+    : controller.enqueueGlobal(task);
   const observed = active.catch((error: unknown) => error);
   cleanups.push(async () => {
     finished.resolve();
@@ -102,38 +96,24 @@ afterEach(async () => {
 });
 
 describe("runtime-owned lane deadline handoff", () => {
-  test.each([
-    { name: "bounded", kind: "bounded" },
-    { name: "unlimited", kind: "unlimited" },
-  ] as const)("publishes $name deadlines to nested session and global leases", async ({ kind }) => {
-    const { controller, createAttemptControls } = await createRunController();
-    const entered = createDeferred();
-    const finished = createDeferred();
-    const run = controller.enqueueSession(() =>
-      controller.enqueueGlobal(async () => {
-        entered.resolve();
-        await finished.promise;
-        return { meta: { durationMs: 1 } };
-      }),
-    );
-    const observed = run.catch((error: unknown) => error);
-    cleanups.push(async () => {
-      finished.resolve();
-      await observed;
-    });
-    await entered.promise;
+  test.each(["bounded", "unlimited"] as const)(
+    "publishes %s deadlines to nested session and global leases",
+    async (kind) => {
+      const { controller, createAttemptControls } = await createRunController();
+      const { observed, finish } = await holdLane(controller, true);
 
-    const controls = createAttemptControls();
-    controls.onAttemptDeadlineChanged(
-      kind === "bounded" ? { kind, deadlineAtMs: Date.now() + RUNTIME_TIMEOUT_MS } : { kind },
-    );
-    await vi.advanceTimersByTimeAsync(1_000 + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
+      const controls = createAttemptControls();
+      controls.onAttemptDeadlineChanged(
+        kind === "bounded" ? { kind, deadlineAtMs: Date.now() + RUNTIME_TIMEOUT_MS } : { kind },
+      );
+      await vi.advanceTimersByTimeAsync(1_000 + GRACE_MS + 1);
 
-    expect(controller.abortSignal.aborted).toBe(false);
-    expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
-    finished.resolve();
-    await expect(observed).resolves.toMatchObject({ meta: { durationMs: 1 } });
-  });
+      expect(controller.abortSignal.aborted).toBe(false);
+      expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
+      finish();
+      await expect(observed).resolves.toMatchObject({ meta: { durationMs: 1 } });
+    },
+  );
 
   test.each([
     { name: "seeded bounded", kind: "bounded", initialTimeoutMs: RUNTIME_TIMEOUT_MS },
@@ -151,9 +131,7 @@ describe("runtime-owned lane deadline handoff", () => {
       const queued = enqueueCommandInLane(GLOBAL_LANE, next);
       if (initialTimeoutMs === undefined) {
         controls.onAttemptDeadlineChanged({ kind: "unlimited" });
-        await vi.advanceTimersByTimeAsync(
-          DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1,
-        );
+        await vi.advanceTimersByTimeAsync(DEFAULT_AGENT_TIMEOUT_MS + GRACE_MS + 1);
         if (kind === "bounded") {
           // Terminal receipt bounds settlement, even after unlimited execution.
           controls.onAttemptDeadlineChanged({
@@ -162,15 +140,9 @@ describe("runtime-owned lane deadline handoff", () => {
           });
         }
       }
-      if (kind === "bounded") {
-        await vi.advanceTimersByTimeAsync(
-          RUNTIME_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS - 1,
-        );
-      } else {
-        await vi.advanceTimersByTimeAsync(
-          MAX_TIMER_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1,
-        );
-      }
+      await vi.advanceTimersByTimeAsync(
+        (kind === "bounded" ? RUNTIME_TIMEOUT_MS - 1 : MAX_TIMER_TIMEOUT_MS + 1) + GRACE_MS,
+      );
       expect(getCommandLaneSnapshot(GLOBAL_LANE)).toMatchObject({ activeCount: 1, queuedCount: 1 });
       expect(controls.abortSignal.aborted).toBe(false);
       expect(next).not.toHaveBeenCalled();
@@ -195,7 +167,7 @@ describe("runtime-owned lane deadline handoff", () => {
     const { observed } = await holdLane(controller);
     await vi.advanceTimersByTimeAsync(DEFAULT_AGENT_TIMEOUT_MS);
     controls.close();
-    await vi.advanceTimersByTimeAsync(1_000 + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS - 1);
+    await vi.advanceTimersByTimeAsync(1_000 + GRACE_MS - 1);
     expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
     controls.close();
     await vi.advanceTimersByTimeAsync(1);
@@ -212,9 +184,7 @@ describe("runtime-owned lane deadline handoff", () => {
     const controls = createAttemptControls();
     const { observed, finish } = await holdLane(controller);
     controls.close();
-    await vi.advanceTimersByTimeAsync(
-      DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1,
-    );
+    await vi.advanceTimersByTimeAsync(DEFAULT_AGENT_TIMEOUT_MS + GRACE_MS + 1);
     expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
     expect(controller.abortSignal.aborted).toBe(false);
     finish();
@@ -270,7 +240,7 @@ describe("attempt control authority", () => {
     controls.onAttemptDeadlineChanged({ kind: "bounded", deadlineAtMs: Date.now() });
     controls.onAttemptTimeout(new Error("late runtime timeout"));
     controls.onAttemptAbort();
-    await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
+    await vi.advanceTimersByTimeAsync(GRACE_MS + 1);
     expect(onAbort).not.toHaveBeenCalled();
     expect(controller.abortSignal.aborted).toBe(false);
     expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
