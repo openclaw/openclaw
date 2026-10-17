@@ -83,9 +83,7 @@ export async function stopForwarderFixtures(): Promise<void> {
 export const emptyRegistry = createTestRegistry([]);
 
 export async function flushPendingDelivery(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) {
-    await Promise.resolve();
-  }
+  await vi.dynamicImportSettled();
 }
 
 function isDiscordExecApprovalClientEnabledForTest(params: {
