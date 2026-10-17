@@ -233,7 +233,8 @@ async function sendSubagentAnnounceDirectlyBound(
     // including a visible continuation after the spawning turn has yielded.
     const requesterSessionBound =
       parentOnly ||
-      (sourceToolId === "subagent_settle" && params.completionRequesterSessionId !== undefined);
+      ((sourceToolId === "subagent_settle" || sourceToolId === "sessions_send") &&
+        params.completionRequesterSessionId !== undefined);
     if (
       requesterSessionBound &&
       (!params.completionRequesterSessionId ||

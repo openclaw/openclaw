@@ -5,6 +5,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { prepareEmbeddedAgentRunAbort } from "../../agents/embedded-agent-runner/runs.abort-target.js";
+import { listSessionFollowupCompletions } from "../../agents/subagents/completion/session-followup-completion.js";
 import { captureExecRequestSubagentSelection } from "../../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
@@ -57,6 +58,17 @@ export function prepareSessionRunTargetAbort(params: {
   });
   const sessionIds = new Set(operations.map((operation) => operation.sessionId));
   const explicitSessionId = normalizeOptionalString(params.sessionId);
+  const followups = key
+    ? listSessionFollowupCompletions({
+        requesterSessionKey: key,
+        requesterAgentId: params.agentId,
+      }).filter(
+        (owner) => !explicitSessionId || owner.request.requesterSessionId === explicitSessionId,
+      )
+    : [];
+  for (const owner of followups) {
+    sessionIds.add(owner.request.requesterSessionId);
+  }
   const commands =
     key || explicitSessionId
       ? captureExecRequestCancellation({
@@ -112,6 +124,19 @@ export function prepareSessionRunTargetAbort(params: {
       commands?.cancel(
         (identity) => !selectedSessionId || identity.sessionId === selectedSessionId,
       ) === true;
+    // Stop closes only this requester's captured followups. The peer may serve
+    // other requests, so its session and execution are not cancelled here.
+    for (const owner of followups) {
+      if (
+        owner.signal.aborted ||
+        (selectedSessionId && owner.request.requesterSessionId !== selectedSessionId)
+      ) {
+        continue;
+      }
+      active = true;
+      owner.close(new Error("Requester stopped delegated followup."));
+      aborted = true;
+    }
     for (const operation of selectedOperations) {
       for (const sessionId of operation.captureOwnedSessionIds()) {
         selectedSessionIds.add(sessionId);

@@ -9,6 +9,7 @@ import {
   SessionFollowupCompletion,
   getFollowupForCohort,
   promoteFollowupYield,
+  listSessionFollowupCompletions,
 } from "./session-followup-completion.js";
 
 const opened: SessionFollowupCompletion[] = [];
@@ -19,7 +20,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function fixture() {
+function fixture(accepted = true) {
   const controller = new AbortController();
   const release = vi.fn();
   const owner = SessionFollowupCompletion.bind({
@@ -27,6 +28,8 @@ function fixture() {
     requesterSessionKey: "A",
     requesterSessionId: "A-session",
     requesterAgentId: "main",
+    requesterTurnRunId: "requester-turn",
+    visibleReply: true,
     targetAgentId: "main",
     targetSessionKey: "B",
     custody: {
@@ -39,7 +42,9 @@ function fixture() {
       },
     },
   });
-  owner.markAccepted("first");
+  if (accepted) {
+    owner.markAccepted("first");
+  }
   opened.push(owner);
   return { owner, controller, release };
 }
@@ -84,6 +89,45 @@ const final = {
 };
 
 describe("session followup completion", () => {
+  it("projects only accepted source obligations and follows the requester execution until retirement", async () => {
+    const f = fixture(false);
+    const source = {
+      requesterSessionKey: "A",
+      requesterAgentId: "main",
+      requesterTurnRunId: "requester-turn",
+    };
+    expect(listSessionFollowupCompletions(source)).toEqual([]);
+    f.owner.markAccepted("first");
+    expect(listSessionFollowupCompletions(source)).toEqual([f.owner]);
+    expect(listSessionFollowupCompletions({ ...source, requesterTurnRunId: "unrelated" })).toEqual(
+      [],
+    );
+    expect(listSessionFollowupCompletions({ ...source, requesterAgentId: "other" })).toEqual([]);
+    const observed: unknown[] = [];
+    f.owner.subscribe(() => observed.push(f.owner.progress));
+    f.owner.subscribe(() => {
+      throw new Error("projection failed");
+    });
+    const c = child();
+    f.owner.promoteYield("first", [c], 1);
+    await settleExecution(f.owner, "first", { status: "ok", yielded: true });
+    const successor = f.owner.successor([c], "second", () => {});
+    await f.owner.prepareSuccessor(successor);
+    f.owner.adopt(successor);
+    f.owner.markAccepted("second");
+    await f.owner.withRequesterRun("requester-resumed", async () => {
+      expect(f.owner.progress).toEqual({ phase: "processing", runId: "requester-resumed" });
+    });
+    expect(f.owner.progress).toEqual({ phase: "processing", runId: "requester-resumed" });
+    expect(observed).toContainEqual({ phase: "waiting", runId: "second" });
+    expect(observed).toContainEqual({ phase: "processing", runId: "requester-resumed" });
+    f.owner.failProgress();
+    expect(f.owner.progress).toEqual({ phase: "failed", runId: "requester-resumed" });
+    f.owner.close();
+    expect(listSessionFollowupCompletions(source)).toEqual([]);
+    expect(f.release).toHaveBeenCalledOnce();
+  });
+
   it.each(["replacement", "cleared wake", "cleared adopted wake"] as const)(
     "retains only the canonical committed cohort after publication: %s",
     async (publication) => {

@@ -219,6 +219,14 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
       throw new TelegramRequestNotStartedError("Telegram retained progress retired");
     }
   };
+  const snapshot = turn.progressCompositor.getSnapshot();
+  // The generic seed starts the card; the adopting owner's real items replace it.
+  const initialSnapshot = {
+    ...snapshot,
+    lines: snapshot.lines.filter(
+      (line) => typeof line === "string" || line.id !== "delegation:waiting",
+    ),
+  };
   const compositor = createChannelProgressDraftCompositor({
     preparedItems: true,
     showWorkStatus: true,
@@ -229,7 +237,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     reasoningGate: false,
     toolIcons: true,
     updateOnLineChange: true,
-    initialSnapshot: turn.progressCompositor.getSnapshot(),
+    initialSnapshot,
     update: (_text, options) => {
       if (retired) {
         return;

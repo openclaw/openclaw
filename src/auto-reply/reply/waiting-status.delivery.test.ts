@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import { SubagentRegistryWriteError } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -191,6 +192,46 @@ it("does not capture hook-block rejection text as a model response", async () =>
 
   await prepare("ordinary", context);
   expect(onRawLlmResponse).not.toHaveBeenCalled();
+});
+
+describe("queued peer progress", () => {
+  it.each([undefined, "I found the first result; the peer is checking the rest."])(
+    "retains pending peer progress with acknowledgment %s",
+    async (acknowledgment) => {
+      const context = createContext();
+      context.execution.result.acceptedSessionSpawns = undefined;
+      context.execution.result.meta = { durationMs: 0 };
+      context.execution.result.payloads = acknowledgment ? [{ text: acknowledgment }] : [];
+      const custody = new AbortController();
+      const owner = SessionFollowupCompletion.bind({
+        runId: "peer-status-run",
+        requesterSessionKey: expectDefined(context.sessionKey, "peer requester"),
+        requesterSessionId: context.followupRun.run.sessionId,
+        requesterTurnRunId: runId,
+        requesterAgentId: context.followupRun.run.agentId,
+        targetSessionKey: "agent:peer:main",
+        targetAgentId: "peer",
+        visibleReply: true,
+        custody: {
+          signal: custody.signal,
+          assertCurrent: () => custody.signal.throwIfAborted(),
+          run: (work) => work(),
+          release: () => undefined,
+        },
+      });
+      onTestFinished(() => owner.close());
+      owner.markAccepted("peer-status-run");
+
+      const payloads = await prepare("queued", context);
+
+      expect(payloads.map((payload) => payload.text)).toEqual([
+        acknowledgment ?? "I’m continuing this work and will send the result when it is ready.",
+      ]);
+      const continuation = getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation;
+      expect(continuation).toBeDefined();
+      expect(continuation?.preserveReply).toBe(acknowledgment ? true : undefined);
+    },
+  );
 });
 
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {

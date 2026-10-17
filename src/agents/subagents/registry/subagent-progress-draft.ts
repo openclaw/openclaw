@@ -1,6 +1,8 @@
 import type { ProgressContinuationDraft } from "../../../channels/progress-continuation.js";
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { listSessionFollowupCompletions } from "../completion/session-followup-completion.js";
+import type { FollowupCompletionOwner } from "../completion/session-followup-completion.types.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -20,6 +22,8 @@ type LiveDraft = {
   draft: ProgressContinuationDraft;
   /** Announcing tasks, by logical task id, whose result the requester is still owed. */
   members: Map<string, Member>;
+  followups: Map<FollowupCompletionOwner, () => void>;
+  failed?: boolean;
   stopChanges: () => void;
 };
 
@@ -27,6 +31,7 @@ type LiveDraft = {
 // replacement never revives a card from stored state.
 const liveByTask = new Map<string, LiveDraft>();
 const liveByWake = new Map<string, LiveDraft>();
+const liveByFollowup = new WeakMap<FollowupCompletionOwner, LiveDraft>();
 
 const taskId = (entry: SubagentRunRecord) => entry.taskRunId ?? entry.runId;
 
@@ -137,7 +142,85 @@ function retire(live: LiveDraft): void {
   for (const id of live.members.keys()) {
     drop(live, id);
   }
-  live.draft.retire();
+  for (const [owner, stop] of live.followups) {
+    stop();
+    liveByFollowup.delete(owner);
+  }
+  live.followups.clear();
+  if (!live.failed) {
+    live.draft.retire();
+  }
+}
+
+function retireIfEmpty(live: LiveDraft): void {
+  if (live.members.size === 0 && live.followups.size === 0) {
+    retire(live);
+  }
+}
+
+function trackFollowups(live: LiveDraft, owners: readonly FollowupCompletionOwner[]): void {
+  for (const owner of owners) {
+    if (owner.signal.aborted || liveByFollowup.has(owner)) {
+      continue;
+    }
+    let stopEvents = () => {};
+    let requesterRunId: string | undefined;
+    const refresh = () => {
+      stopEvents();
+      if (requesterRunId && liveByWake.get(requesterRunId) === live) {
+        liveByWake.delete(requesterRunId);
+      }
+      const { runId, phase } = owner.progress;
+      live.failed ||= phase === "failed";
+      requesterRunId = phase === "processing" ? runId : undefined;
+      if (requesterRunId) {
+        liveByWake.set(requesterRunId, live);
+      }
+      stopEvents = follow(live, runId, `${owner.request.runId}:tool`);
+      live.draft.push({
+        itemId: owner.request.runId,
+        kind: "subagent",
+        title:
+          phase === "failed"
+            ? "Delegated follow-up failed"
+            : phase === "processing"
+              ? "Processing the result"
+              : "Delegated work",
+        phase: phase === "failed" ? "end" : "update",
+        status: phase === "failed" ? "failed" : "running",
+      });
+    };
+    const stopChanges = owner.subscribe(refresh);
+    const close = () => {
+      // A resumed requester can hand work onwards before the old obligation ends.
+      if (requesterRunId) {
+        trackFollowups(
+          live,
+          listSessionFollowupCompletions({
+            requesterSessionKey: owner.request.requesterSessionKey,
+            requesterAgentId: owner.request.requesterAgentId,
+            requesterTurnRunId: requesterRunId,
+          }),
+        );
+      }
+      stop();
+      live.followups.delete(owner);
+      liveByFollowup.delete(owner);
+      retireIfEmpty(live);
+    };
+    const stop = () => {
+      stopEvents();
+      stopChanges();
+      owner.signal.removeEventListener("abort", close);
+      if (requesterRunId && liveByWake.get(requesterRunId) === live) {
+        liveByWake.delete(requesterRunId);
+      }
+    };
+    live.followups.set(owner, stop);
+    liveByFollowup.set(owner, live);
+    owner.signal.addEventListener("abort", close, { once: true });
+    refresh();
+  }
 }
 
 /**
@@ -161,9 +244,7 @@ function reconcile(live: LiveDraft): void {
     member.row = row;
     live.draft.push(projectChild(row));
   }
-  if (live.members.size === 0) {
-    retire(live);
-  }
+  retireIfEmpty(live);
 }
 
 /**
@@ -174,12 +255,14 @@ function reconcile(live: LiveDraft): void {
 export function adoptSubagentProgressDraft(
   spawns: readonly AcceptedSessionSpawn[],
   draft: ProgressContinuationDraft,
+  followups: readonly FollowupCompletionOwner[] = [],
 ): boolean {
   const entries = spawns
     .filter((spawn) => spawn.expectsCompletionMessage === true)
     .map((spawn) => currentRow(spawn.runId, spawn.childSessionKey));
   if (
-    entries.length === 0 ||
+    (entries.length === 0 && followups.length === 0) ||
+    followups.some((owner) => owner.signal.aborted || liveByFollowup.has(owner)) ||
     !entries.every(owesCompletion) ||
     entries.some(
       (entry) =>
@@ -192,9 +275,15 @@ export function adoptSubagentProgressDraft(
   ) {
     return false;
   }
-  const live: LiveDraft = { draft, members: new Map(), stopChanges: () => undefined };
+  const live: LiveDraft = {
+    draft,
+    members: new Map(),
+    followups: new Map(),
+    stopChanges: () => undefined,
+  };
   live.stopChanges = subscribeSubagentRunChanges("projection", () => reconcile(live));
   track(live, entries);
+  trackFollowups(live, followups);
   return true;
 }
 
@@ -224,7 +313,7 @@ export function trackSubagentProgressYield(
   entries: readonly SubagentRunRecord[],
 ): void {
   const live = liveByWake.get(requesterTurnRunId);
-  if (live && live.members.size > 0) {
+  if (live && (live.members.size > 0 || live.followups.size > 0)) {
     track(live, entries);
   }
 }

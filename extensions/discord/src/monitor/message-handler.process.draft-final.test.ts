@@ -1,6 +1,8 @@
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   notifyDiscordActiveTurnThreadCreated,
@@ -14,6 +16,7 @@ import {
   createNoQueuedDispatchResult,
   deliverDiscordReply,
   dispatchInboundMessageForTest as dispatchInboundMessage,
+  dispatchBufferedReplyForTest,
   getGlobalHookRunnerForTest as getGlobalHookRunner,
   getLastDispatchReplyOptions,
   getSessionEntry,
@@ -95,6 +98,61 @@ describe("processDiscordMessage provider preview hook safety", () => {
 });
 
 describe("processDiscordMessage draft streaming final delivery", () => {
+  it.each([true, undefined] as const)(
+    "keeps the adopted progress card and honors reply preservation (%s)",
+    async (preserveReply) => {
+      const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+      const stream = createMockDraftStreamForTest();
+      const acknowledgment = "I have asked the project agent to verify the result.";
+      let retained:
+        | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
+        | undefined;
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+        "openclaw/plugin-sdk/reply-runtime",
+      );
+      dispatchBufferedReplyForTest.mockImplementationOnce((params) =>
+        actual.dispatchReplyWithBufferedBlockDispatcher({
+          ...params,
+          dispatchReplyFromConfig: async ({ dispatcher }) => {
+            const tool = { toolCallId: "exec-1", name: "exec", phase: "start" as const };
+            await params.replyOptions?.onItemEvent?.(projectAgentToolActivity(tool));
+            await params.replyOptions?.onToolStart?.(tool);
+            await elapseProgressDraftStartDelay();
+            const queuedFinal = dispatcher.sendFinalReply(
+              setReplyPayloadMetadata(
+                { text: acknowledgment },
+                {
+                  progressContinuation: {
+                    preserveReply,
+                    adopt: (draft) => {
+                      retained = draft;
+                      return true;
+                    },
+                    close: () => {},
+                  },
+                },
+              ),
+            );
+            return { queuedFinal, counts: { final: 1, tool: 0, block: 0 } };
+          },
+        }),
+      );
+      const ctx = await createAutomaticDraftContext({
+        discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(retained).toBeDefined();
+      expect(getDeliveredFinalTexts()).toEqual(preserveReply ? [acknowledgment] : []);
+      expect(stream.messageId()).toBe("preview-1");
+      expect(stream.clear).not.toHaveBeenCalled();
+      retained?.retire();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stream.clear).toHaveBeenCalledOnce();
+    },
+  );
+
   it("replaces a raw trailing-token preview with the prepared final answer", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {

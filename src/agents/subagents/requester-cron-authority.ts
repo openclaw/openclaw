@@ -520,7 +520,8 @@ function matchesAdmissionTarget(
         authority.batch.some(
           (entry) => entry.childSessionKey === params.inputProvenance?.sourceSessionKey,
         )
-      : params.inputProvenance.sourceTool === "subagent_announce" &&
+      : (params.inputProvenance.sourceTool === "subagent_announce" ||
+          params.inputProvenance.sourceTool === "sessions_send") &&
         params.inputProvenance.sourceSessionKey === authority.sourceSessionKey)
   );
 }

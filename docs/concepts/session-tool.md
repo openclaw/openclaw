@@ -286,6 +286,17 @@ separate lifecycle owners.
 - **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run and acknowledges queue admission, like `mode: "steer"`, not persistence or model consumption. This admission is not restart-durable. Use `mode: "followup"` for a separate child turn with its own completion. An idle child or one whose run rejects the steer starts a new turn. Explicit modes keep their existing behavior.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
+When a channel turn owes a visible reply, an ordinary send to another native
+session retains ownership of any result still pending after the tool returns.
+The runtime delivers the result to the original requester for a visible follow-up,
+including when the target delegates again. In Telegram, a confirmed progress
+draft follows the delegated work and the requester's processing without requiring
+an agent-authored plan. A meaningful acknowledgment stays visible beside the
+status. `/stop` or resetting the requester ends this follow-up without cancelling
+the peer's other work. This live progress ownership is process-local and is not
+restored after a Gateway restart. Explicit steering and private turns keep their
+existing reply behavior.
+
 A separate follow-up to your native child starts only after Gateway admission
 and input preparation. If admission rejects the turn, the send returns an error
 and the turn does not start. A requested state watch is installed only after

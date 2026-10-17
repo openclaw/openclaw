@@ -57,6 +57,55 @@ export function startSessionsSendReplyFlow(
           const request = completion.request;
           const idempotencyKey = `announce:sessions-send:${request.runId}:completion`;
           const timeoutMs = resolveSubagentAnnounceTimeoutMs(getRuntimeConfig());
+          if (request.visibleReply) {
+            const { sendSubagentAnnounceDirectly } =
+              await import("../subagents/announce/subagent-announce-direct-delivery.js");
+            const isCurrent = () => {
+              try {
+                completion.assertCurrent();
+                return true;
+              } catch {
+                return false;
+              }
+            };
+            const deliver = () =>
+              sendSubagentAnnounceDirectly({
+                requesterSessionKey: request.requesterSessionKey,
+                requesterAgentId: request.requesterAgentId,
+                targetRequesterSessionKey: request.requesterSessionKey,
+                completionRequesterSessionId: request.requesterSessionId,
+                completionRequesterLifecycleRevision: params.requesterSession?.lifecycleRevision,
+                triggerMessage: annotateInterSessionPromptText(
+                  `${extraSystemPrompt}\n\n${message}`,
+                  {
+                    kind: "inter_session",
+                    sourceSessionKey: request.targetSessionKey,
+                    sourceTool: "sessions_send",
+                  },
+                ),
+                sourceSessionKey: request.targetSessionKey,
+                sourceTool: "sessions_send",
+                expectsCompletionMessage: false,
+                requireVisibleReply: true,
+                requesterIsSubagent: false,
+                directIdempotencyKey: idempotencyKey,
+                directOrigin: params.requesterOrigin,
+                signal: completion.signal,
+                isSourceSessionEffectsAllowed: isCurrent,
+                isSourceSessionAdmissionAllowed: isCurrent,
+              });
+            const delivery = await completion.withRequesterRun(idempotencyKey, () =>
+              request.requesterAuthority
+                ? request.requesterAuthority.run(idempotencyKey, deliver)
+                : deliver(),
+            );
+            if (!delivery.delivered) {
+              throw new Error(
+                delivery.error ?? "Requester completion has no visible delivery receipt.",
+              );
+            }
+            return;
+          }
           let accepted = false;
           const inputProvenance = {
             kind: "inter_session" as const,
@@ -178,6 +227,7 @@ export function startSessionsSendReplyFlow(
     return runSessionsSendA2AFlow({
       ...params,
       deliverRequesterReply,
+      requireVisibleReply: completion?.request.visibleReply,
       reply: settledReply,
     });
   };
@@ -195,6 +245,7 @@ export function startSessionsSendReplyFlow(
   })
     .then(() => completion?.close())
     .catch((error: unknown) => {
+      completion?.failProgress();
       completion?.close(error);
       admitted.resolve();
       log.warn("sessions_send reply flow admission failed", {

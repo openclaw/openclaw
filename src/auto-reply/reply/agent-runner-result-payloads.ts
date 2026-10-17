@@ -1,4 +1,3 @@
-import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
@@ -26,7 +25,6 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
@@ -70,7 +68,11 @@ import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-import { buildWaitingStatusPayload, prepareWaitingStatusContinuation } from "./waiting-status.js";
+import {
+  buildWaitingStatusPayload,
+  prepareWaitingStatusContext,
+  prepareWaitingStatusContinuation,
+} from "./waiting-status.js";
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
   accounting: AccountedAgentTurn;
@@ -162,23 +164,8 @@ export async function prepareReplyAgentPayloads(state: {
     runResult.meta?.terminalReply?.disposition === "empty" &&
     runResult.meta.terminalReply.code === "message-tool-not-called" &&
     followupRun.strandedReplyRetry !== true;
-  const implicitContinuation = runResult.meta?.continuationPending === true;
-  // Completion-message children own their continuation; detached media retains its own run owner.
-  const continuationOwner =
-    implicitContinuation && hasCompletionMessageSessionSpawn(runResult.acceptedSessionSpawns)
-      ? {
-          stateContext: captureOpenClawStateWorkerContext(),
-          operationKey: replyOperation.key,
-          operationSessionId: replyOperation.sessionId,
-        }
-      : undefined;
-  const pendingContinuation =
-    runResult.meta?.yielded === true ||
-    implicitContinuation ||
-    (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
-  if (pendingContinuation && !implicitContinuation) {
-    opts?.onPendingContinuation?.();
-  }
+  const { implicitContinuation, peerFollowups, continuationOwner, pendingContinuation } =
+    prepareWaitingStatusContext(context, terminalReplyExpectation);
   const heartbeatText = isHeartbeat
     ? (runResult.meta?.finalAssistantRawText ??
       runResult.meta?.finalAssistantVisibleText ??
@@ -262,16 +249,19 @@ export async function prepareReplyAgentPayloads(state: {
     context.execution.status === "failed"
       ? undefined
       : buildWaitingStatusPayload({
-          completion,
+          completion:
+            peerFollowups.length > 0 ? resolveReplyCompletion("required", "pending") : completion,
           yielded: runResult.meta?.yielded === true,
-          continuationPending: implicitContinuation,
+          continuationPending: implicitContinuation || peerFollowups.length > 0,
+          peerContinuation: peerFollowups.length > 0,
           mediaContinuation: implicitContinuation && !continuationOwner,
           yieldAcknowledgment: runResult.meta?.yieldAcknowledgment,
           // Child spawns do not suppress a model-authored acknowledgment.
           hasVisibleMessageDelivery:
-            successfulSourceReplyDelivery ||
-            committedMessagingToolSourceReplyDelivery ||
-            runResult.didSendDeterministicApprovalPrompt === true,
+            peerFollowups.length === 0 &&
+            (successfulSourceReplyDelivery ||
+              committedMessagingToolSourceReplyDelivery ||
+              runResult.didSendDeterministicApprovalPrompt === true),
         });
   const missingReplyPayload =
     strandedFinal ||
@@ -604,7 +594,10 @@ export async function prepareReplyAgentPayloads(state: {
   }
   if (shouldDeliverTerminalFailure && !hasTerminalReply && terminalFailurePayload) {
     replyPayloads = [...replyPayloads, ...(await buildFinalPayloads([terminalFailurePayload]))];
-  } else if (waitingStatusPayload && !hasTerminalReply) {
+  } else if (
+    waitingStatusPayload &&
+    (!hasTerminalReply || (peerFollowups.length > 0 && replyPayloads.length === 0))
+  ) {
     const acknowledgmentPayloads = await buildFinalPayloads([waitingStatusPayload]);
     replyPayloads =
       acknowledgmentPayloads.length > 0
@@ -679,6 +672,8 @@ export async function prepareReplyAgentPayloads(state: {
       context,
       owner: continuationOwner,
       payload: statusPayload,
+      replyPayloads: guardedReplyPayloads,
+      followups: peerFollowups,
     });
   }
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);

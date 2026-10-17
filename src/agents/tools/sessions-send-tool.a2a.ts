@@ -84,6 +84,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterChannel?: string;
   reply?: AgentWaitResult & { replyText?: string };
   notifyRequesterOnWaitFailure?: boolean;
+  requireVisibleReply?: boolean;
   deliverRequesterReply?: (
     reply: Pick<Parameters<typeof runAgentStep>[0], "message" | "extraSystemPrompt">,
   ) => Promise<void>;
@@ -112,7 +113,7 @@ export async function runSessionsSendA2AFlow(params: {
       }));
     if (wait.status !== "ok") {
       if (
-        params.notifyRequesterOnWaitFailure === true &&
+        (params.notifyRequesterOnWaitFailure === true || params.requireVisibleReply === true) &&
         params.requesterSessionKey &&
         ((wait.status === "error" && !wait.retryableTransportError) ||
           isTerminalAgentWaitTimeout(wait))
@@ -137,6 +138,15 @@ export async function runSessionsSendA2AFlow(params: {
       !reply?.trim() ||
       reply.trim() === HEARTBEAT_TOKEN
     ) {
+      if (params.requireVisibleReply && params.requesterSessionKey) {
+        await deliverRequesterReply({
+          ...requesterStepContext,
+          sessionKey: params.requesterSessionKey,
+          message: "The delegated sessions_send task ended without a usable result.",
+          extraSystemPrompt:
+            "Your delegated task finished without a result you can use. Tell the user that its result is missing and explain the next step. Do not claim the task succeeded or resend it automatically.",
+        });
+      }
       return;
     }
 

@@ -155,6 +155,54 @@ describe("late exact requester recovery", () => {
     };
   }
 
+  it.each(["delivered", "processing only", "silent", "pending", "replaced"] as const)(
+    "requires the original peer requester and a visible receipt (%s)",
+    async (outcome) => {
+      const fixture = setup();
+      fixture.params.sourceTool = "sessions_send";
+      fixture.params.completionRequesterSessionId = "requester-session";
+      fixture.params.completionRequesterLifecycleRevision = "requester-revision";
+      if (outcome === "replaced") {
+        fixture.params.completionRequesterSessionId = "previous-requester-session";
+      }
+      fixture.dispatchDone.resolve(
+        outcome === "pending"
+          ? { status: "accepted" }
+          : {
+              status: "ok",
+              inputProcessingCompleted: true,
+              ...(outcome === "delivered"
+                ? {
+                    result: {
+                      payloads: [{ text: "Synthesized result" }],
+                      deliveryStatus: sentDeliveryStatus,
+                    },
+                  }
+                : outcome === "silent"
+                  ? { result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } } }
+                  : {}),
+            },
+      );
+      const result = await fixture.startDelivery();
+      expect(result.delivered).toBe(outcome === "delivered");
+      expect(result.requesterVisibleFinalDelivered === true).toBe(outcome === "delivered");
+      if (outcome === "replaced") {
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+      } else {
+        expect(fixture.dispatch).toHaveBeenCalledOnce();
+        expect(fixture.dispatch.mock.calls[0]?.[1]).toMatchObject({
+          expectedExistingSessionId: "requester-session",
+          expectedExistingSessionLifecycleRevision: "requester-revision",
+          deliver: true,
+          inputProvenance: expect.objectContaining({ sourceTool: "sessions_send" }),
+        });
+        expect(fixture.dispatch.mock.calls[0]?.[2]).toMatchObject({ replyExpectation: "required" });
+      }
+      expect(fixture.send).not.toHaveBeenCalled();
+      expect(fixture.steer).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["subagent_settle", "subagent_announce"])(
     "joins an interrupted %s continuation and consumes its final receipt without replay",
     async (sourceTool) => {

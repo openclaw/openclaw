@@ -33,6 +33,11 @@ const fixture = vi.hoisted(() => ({
   dispatch: vi.fn(),
   wait: vi.fn(),
   gatewayContext: {},
+  visibleDelivery: vi.fn(),
+}));
+// mock-isolation: Control delivery receipts without loading the real requester delivery runtime.
+vi.mock("../subagents/announce/subagent-announce-direct-delivery.js", () => ({
+  sendSubagentAnnounceDirectly: fixture.visibleDelivery,
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
@@ -135,11 +140,110 @@ afterEach(() => {
   revokeRequesterCronAuthority(SESSION);
   fixture.dispatch.mockReset();
   fixture.wait.mockReset();
+  fixture.visibleDelivery.mockReset();
   vi.useRealTimers();
   vi.clearAllMocks();
 });
 
 describe("child followup requester continuation", () => {
+  it.each(["delivered", "missing receipt"] as const)(
+    "keeps a public peer handback owned until its delivery result (%s)",
+    async (outcome) => {
+      const capability = createCronCreatorAuthorityCapability(
+        "original",
+        { kind: "unknown" },
+        { source: "channel-owner", isCurrent: () => true },
+        () => true,
+        undefined,
+        { senderId: "owner", channel: "telegram", accountId: "test", isCurrent: () => true },
+      )!;
+      const request = await inRun("original", () =>
+        runWithCronCreatorAuthorityCapability(capability, () =>
+          prepareSessionsSendFollowup({
+            runId: "peer-followup",
+            requesterTurnRunId: "original",
+            visibleReply: true,
+            withRequesterAuthority: bindRequesterYieldCronAuthority("original"),
+            requesterAgentId: "main",
+            requesterSessionKey: SESSION,
+            targetAgentId: "main",
+            targetSessionKey: CHILD,
+          }),
+        ),
+      );
+      expect(request).toBeDefined();
+      const completion = SessionFollowupCompletion.bind(request!);
+      completion.markAccepted(request!.runId);
+      const entered = createDeferredCore();
+      const finished = createDeferredCore();
+      const released = createDeferredCore();
+      fixture.release.mockImplementation(() => released.resolve());
+      fixture.visibleDelivery.mockImplementation(async (params) => {
+        expect(completion.progress).toEqual({
+          phase: "processing",
+          runId: params.directIdempotencyKey,
+        });
+        expect(params).toMatchObject({
+          sourceTool: "sessions_send",
+          requireVisibleReply: true,
+          expectsCompletionMessage: false,
+          completionRequesterSessionId: SESSION_ID,
+          completionRequesterLifecycleRevision: "one",
+          directOrigin: { channel: "telegram", to: "123", accountId: "test" },
+        });
+        const admission = consumeRequesterCronAuthorityAdmission({
+          runId: params.directIdempotencyKey,
+          sessionKey: SESSION,
+          sessionId: SESSION_ID,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: CHILD,
+          },
+        });
+        expect(admission).toBeDefined();
+        entered.resolve();
+        await finished.promise;
+        admission?.release?.();
+        return outcome === "delivered"
+          ? { delivered: true, path: "direct", requesterVisibleFinalDelivered: true }
+          : { delivered: false, path: "direct", reason: "visible_reply_missing" };
+      });
+      try {
+        await startSessionsSendReplyFlow({
+          completion,
+          runId: request!.runId,
+          skip: false,
+          reply: { status: "ok", replyText: "Peer result" },
+          targetSessionKey: CHILD,
+          targetAgentId: "main",
+          displayKey: CHILD,
+          requesterSessionKey: SESSION,
+          requesterAgentId: "main",
+          requesterSession: { sessionId: SESSION_ID, lifecycleRevision: "one" },
+          requesterOrigin: { channel: "telegram", to: "123", accountId: "test" },
+          replyTimeoutMs: 1000,
+          replyMode: "peer",
+        });
+        await Promise.race([
+          entered.promise,
+          released.promise.then(() => {
+            throw new Error("Peer handback ended before delivery admission");
+          }),
+        ]);
+        expect(completion.signal.aborted).toBe(false);
+        finished.resolve();
+        await released.promise;
+        expect(fixture.visibleDelivery).toHaveBeenCalledOnce();
+        expect(completion.signal.aborted).toBe(true);
+        expect(completion.progress.phase).toBe(outcome === "delivered" ? "processing" : "failed");
+      } finally {
+        finished.resolve();
+        completion.close();
+      }
+    },
+  );
+
   it("retains one timed-out inline result through busy parent admission and execution", async () => {
     vi.useFakeTimers();
     const request = await inRun("original", () =>

@@ -8,6 +8,7 @@ import {
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../../../shared/listeners.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -17,6 +18,7 @@ import type {
   FollowupSettlement,
   FollowupCompletionOwner,
   FollowupReply,
+  FollowupProgress,
   FollowupRequest,
   FollowupSuccessor,
 } from "./session-followup-completion.types.js";
@@ -27,6 +29,23 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sessions.followupCompl
   // Logical obligations are indexed by their current physical execution only.
   executions: new Map<string, SessionFollowupCompletion>(),
 }));
+/** Project accepted public result obligations from their existing execution owner. */
+export function listSessionFollowupCompletions(params: {
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  requesterTurnRunId?: string;
+}): FollowupCompletionOwner[] {
+  return [...new Set(state.executions.values())].filter(
+    (owner) =>
+      owner.accepted &&
+      !owner.signal.aborted &&
+      owner.request.visibleReply === true &&
+      owner.request.requesterSessionKey === params.requesterSessionKey &&
+      owner.request.requesterAgentId === params.requesterAgentId &&
+      (params.requesterTurnRunId === undefined ||
+        owner.request.requesterTurnRunId === params.requesterTurnRunId),
+  );
+}
 export function withFollowupRequest<T>(request: FollowupRequest, run: () => T): T {
   return state.requests.run(request, run);
 }
@@ -81,6 +100,9 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   private readonly result = createDeferredCore<FollowupReply>();
   private terminal?: FollowupReply;
   private acceptedExecution = false;
+  private readonly listeners = new Set<() => void>();
+  private requesterRunId?: string;
+  private progressFailed = false;
   private taking = false;
   private consumed = false;
   private readonly revoked: () => void;
@@ -121,12 +143,37 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   get accepted() {
     return this.acceptedExecution;
   }
+  get progress(): FollowupProgress {
+    return {
+      phase: this.progressFailed ? "failed" : this.requesterRunId ? "processing" : "waiting",
+      runId: this.requesterRunId ?? this.execution.runId,
+    };
+  }
+  subscribe(listener: () => void) {
+    return registerListener(this.listeners, listener);
+  }
+  failProgress() {
+    try {
+      this.assertCurrent();
+    } catch {
+      return;
+    }
+    this.progressFailed = true;
+    notifyListeners(this.listeners, undefined);
+  }
+  async withRequesterRun<T>(runId: string, run: () => Promise<T>): Promise<T> {
+    this.assertCurrent();
+    this.requesterRunId = runId;
+    notifyListeners(this.listeners, undefined);
+    return await run();
+  }
   markAccepted(runId: string) {
     this.assertCurrent();
     if (!this.ownsExecution(runId)) {
       throw new Error("Followup acceptance belongs to another execution.");
     }
     this.acceptedExecution = true;
+    notifyListeners(this.listeners, undefined);
   }
   finishExecution(runId: string) {
     if (!this.ownsExecution(runId)) {
@@ -227,6 +274,7 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     this.cohort = undefined;
     this.acceptedExecution = false;
     state.executions.set(successor.runId, this);
+    notifyListeners(this.listeners, undefined);
   }
   async settle(
     runId: string,
@@ -306,6 +354,7 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     this.result.reject(error ?? new Error("Followup completion custody ended."));
     this.request.custody.signal.removeEventListener("abort", this.revoked);
     this.request.custody.release();
+    this.listeners.clear();
   }
 }
 

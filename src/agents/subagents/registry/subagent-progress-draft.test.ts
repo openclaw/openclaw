@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { prepareSessionRunTargetAbort } from "../../../auto-reply/reply/abort-operation.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -16,6 +17,7 @@ import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryTestDeps,
 } from "../announce/subagent-announce-overrides.test-support.js";
+import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { adoptSubagentProgressDraft } from "./subagent-progress-draft.js";
 import {
@@ -127,6 +129,106 @@ function answerWakes(
 
 type TestDraft = { push: Mock; retire: Mock };
 const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
+
+function bindPeer(
+  runId: string,
+  requesterTurnRunId = "parent-turn",
+  sessionId = "requester-session",
+) {
+  const lifetime = new AbortController();
+  const owner = SessionFollowupCompletion.bind({
+    runId,
+    requesterTurnRunId,
+    visibleReply: true,
+    requesterSessionKey: requesterKey,
+    requesterSessionId: sessionId,
+    requesterAgentId: "main",
+    targetSessionKey: "agent:peer:main",
+    targetAgentId: "peer",
+    custody: {
+      signal: lifetime.signal,
+      assertCurrent: () => lifetime.signal.throwIfAborted(),
+      run: (work) => work(),
+      release: () => lifetime.abort(),
+    },
+  });
+  owner.markAccepted(runId);
+  return owner;
+}
+
+it("keeps a peer card through the requester and its next delegation without exposing private text", async () => {
+  const peer = bindPeer("peer-run");
+  const draft = newDraft();
+  expect(adoptSubagentProgressDraft([], draft, [peer])).toBe(true);
+  emitAgentEvent({
+    runId: "peer-run",
+    stream: "item",
+    data: {
+      itemId: "private-tool",
+      kind: "tool",
+      name: "read",
+      status: "running",
+      text: CHILD_RESULT,
+      arguments: CHILD_RESULT,
+      result: CHILD_RESULT,
+    },
+  });
+  let next: SessionFollowupCompletion | undefined;
+  try {
+    await peer.withRequesterRun("requester-return", async () => {
+      expect(draft.push).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Processing the result" }),
+      );
+      next = bindPeer("next-peer-run", "requester-return");
+      expect(draft.retire).not.toHaveBeenCalled();
+    });
+    peer.close();
+    expect(draft.retire).not.toHaveBeenCalled();
+    expect(draft.push).toHaveBeenCalledWith(expect.objectContaining({ itemId: "next-peer-run" }));
+    expectNoChildResultPushed(draft);
+    next?.close();
+    expect(draft.retire).toHaveBeenCalledOnce();
+  } finally {
+    peer.close();
+    next?.close();
+  }
+});
+
+it("stop retires only the original requester's detached peer card", async () => {
+  const original = bindPeer("original-peer");
+  const replacement = bindPeer("replacement-peer", "next-turn", "replacement-session");
+  const draft = newDraft();
+  expect(adoptSubagentProgressDraft([], draft, [original])).toBe(true);
+  try {
+    const abort = prepareSessionRunTargetAbort({
+      agentId: "main",
+      key: requesterKey,
+      sessionId: "requester-session",
+    });
+    const result = abort();
+    expect(result.aborted).toBe(true);
+    await result.retirement;
+    expect(original.signal.aborted).toBe(true);
+    expect(replacement.signal.aborted).toBe(false);
+    expect(draft.retire).toHaveBeenCalledOnce();
+  } finally {
+    original.close();
+    replacement.close();
+  }
+});
+
+it("leaves a terminal failure visible when the requester result could not be delivered", () => {
+  const owner = bindPeer("failed-peer");
+  const draft = newDraft();
+  expect(adoptSubagentProgressDraft([], draft, [owner])).toBe(true);
+  owner.failProgress();
+  owner.close(new Error(CHILD_RESULT));
+  expect(draft.push).toHaveBeenLastCalledWith(
+    expect.objectContaining({ phase: "end", status: "failed" }),
+  );
+  expect(draft.retire).not.toHaveBeenCalled();
+  expectNoChildResultPushed(draft);
+});
 
 function expectNoChildResultPushed(draft: TestDraft) {
   expect(JSON.stringify(draft.push.mock.calls)).not.toContain(CHILD_RESULT);

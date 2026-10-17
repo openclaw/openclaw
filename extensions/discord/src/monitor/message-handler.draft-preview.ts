@@ -257,7 +257,7 @@ export function createDiscordDraftPreviewController(params: {
     freezeProgress,
     async adoptProgressDraft(payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) {
       const stream = draftStream;
-      const adopt = info.adoptProgressDraft;
+      const adopt = info.adoptProgressDraftWithReply ?? info.adoptProgressDraft;
       if (
         !stream ||
         discordStreamMode !== "progress" ||

@@ -16,6 +16,8 @@ export type FollowupRequest = {
   runId: string;
   requesterSessionKey: string;
   requesterSessionId: string;
+  requesterTurnRunId?: string;
+  visibleReply?: boolean;
   requesterAgentId: string;
   targetSessionKey: string;
   targetAgentId: string;
@@ -31,12 +33,18 @@ export type FollowupSuccessor = {
   assertCurrent(): void;
 };
 
+export type FollowupProgress = { phase: "waiting" | "processing" | "failed"; runId: string };
+
 export type FollowupSettlement = { kind: "yielded" } | { kind: "terminal"; reply: FollowupReply };
 /** Logical result custody outlives each physical execution and its projections. */
 export interface FollowupCompletionOwner {
   readonly request: FollowupRequest;
   readonly signal: AbortSignal;
   readonly accepted: boolean;
+  readonly progress: FollowupProgress;
+  subscribe(listener: () => void): () => void;
+  failProgress(): void;
+  withRequesterRun<T>(runId: string, run: () => Promise<T>): Promise<T>;
   assertCurrent(): void;
   markAccepted(runId: string): void;
   finishExecution(runId: string): void;

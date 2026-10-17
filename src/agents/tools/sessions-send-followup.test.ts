@@ -3,14 +3,23 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayClient } from "../../gateway/server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
+import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { readFollowupRequest } from "../subagents/completion/session-followup-completion.js";
+import {
+  SessionFollowupCompletion,
+  listSessionFollowupCompletions,
+  readFollowupRequest,
+} from "../subagents/completion/session-followup-completion.js";
 import type {
   FollowupRequest,
   FollowupCompletionOwner,
 } from "../subagents/completion/session-followup-completion.types.js";
+import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
-import { startSessionsSendFollowup } from "./sessions-send-followup.js";
+import {
+  dispatchSessionsSendFollowup,
+  startSessionsSendFollowup,
+} from "./sessions-send-followup.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 vi.mock("./sessions-send-reply-flow.js", () => ({ startSessionsSendReplyFlow: vi.fn() }));
 const mocks = vi.hoisted(() => ({
@@ -122,6 +131,99 @@ function target() {
   return value;
 }
 describe("followup retained session authorization", () => {
+  it.each(["required", "optional", "no route", "steer"] as const)(
+    "retains ordinary peer result custody only for a public obligation (%s)",
+    async (scope) => {
+      let completion: SessionFollowupCompletion | undefined;
+      const callGateway: AgentToolGatewayRequestCaller = async <T>() => {
+        const request = readFollowupRequest(input.runId, input.targetSessionKey);
+        if (request) {
+          active.push(request);
+          completion = SessionFollowupCompletion.bind(request);
+          request.completion = completion;
+          completion.markAccepted(input.runId);
+        }
+        // The fixture supplies the agent admission response through the generic RPC boundary.
+        return { runId: input.runId } as T;
+      };
+      const result = await dispatchSessionsSendFollowup(
+        {
+          cfg: mocks.config(),
+          callGateway,
+          runId: input.runId,
+          mode: scope === "steer" ? "steer" : undefined,
+          sessionKey: input.targetSessionKey,
+          sessionStoreTarget: {
+            agentId: "main",
+            canonicalKey: input.targetSessionKey,
+            storePath: "/synthetic/agent.sqlite",
+          },
+          sendParams: {
+            agentId: "main",
+            message: "followup",
+            sourceReplyDeliveryMode: "message_tool_only",
+            inputProvenance: { kind: "inter_session", sourceSessionKey: input.requesterSessionKey },
+          },
+        },
+        {
+          callGateway,
+          targetSessionKey: input.targetSessionKey,
+          targetAgentId: "main",
+          displayKey: input.targetSessionKey,
+          replyTimeoutMs: 30000,
+          replyMode: "peer",
+          requesterSessionKey: input.requesterSessionKey,
+          requesterAgentId: "main",
+          requesterSession: { sessionId: "requester-id" },
+          requesterOrigin:
+            scope === "no route" ? undefined : { channel: "telegram", to: "chat-123" },
+        },
+        {
+          message: "followup",
+          ownChild: false,
+          nativeChild: true,
+          watch: false,
+          requesterSessionKey: input.requesterSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: "source-turn",
+          requesterReplyExpectation: scope === "optional" ? "optional" : "required",
+        },
+      );
+      try {
+        expect(result.completion).toBe(completion);
+        expect(Boolean(completion)).toBe(scope === "required");
+        expect(
+          listSessionFollowupCompletions({
+            requesterAgentId: "main",
+            requesterSessionKey: input.requesterSessionKey,
+            requesterTurnRunId: "source-turn",
+          }),
+        ).toEqual(completion ? [completion] : []);
+      } finally {
+        completion?.close();
+      }
+    },
+  );
+
+  it("retires retained custody on committed source reset without cancelling the peer", async () => {
+    const request = await prepare();
+    const owner = SessionFollowupCompletion.bind(request);
+    owner.markAccepted(input.runId);
+    emitSessionIdentityMutation({
+      databaseIdentity: "fixture",
+      agentId: "main",
+      kind: "reset",
+      previous: {
+        sessionId: `${input.requesterSessionKey}-id`,
+        sessionKeys: [input.requesterSessionKey],
+      },
+      current: { sessionId: "replacement", sessionKeys: [input.requesterSessionKey] },
+    });
+    expect(owner.signal.aborted).toBe(true);
+    expect(() => request.custody.assertCurrent()).toThrow("reset or replaced");
+    expect(mocks.release).toHaveBeenCalledOnce();
+  });
+
   it("retains exact requester incarnation and route when an accepted start loses its ACK", async () => {
     const request = await prepare();
     const unexpected = () => {
@@ -132,6 +234,10 @@ describe("followup retained session authorization", () => {
       request,
       signal: new AbortController().signal,
       accepted: true,
+      progress: { phase: "waiting", runId: input.runId },
+      subscribe: unexpected,
+      failProgress: unexpected,
+      withRequesterRun: unexpected,
       assertCurrent: unexpected,
       markAccepted: unexpected,
       finishExecution: unexpected,

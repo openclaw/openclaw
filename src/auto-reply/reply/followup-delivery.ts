@@ -16,6 +16,7 @@ import {
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import { listSessionFollowupCompletions } from "../../agents/subagents/completion/session-followup-completion.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -57,7 +58,10 @@ import {
 } from "./stalled-turn-recovery.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
-import { buildWaitingStatusPayload } from "./waiting-status.js";
+import {
+  attachWaitingStatusProgressContinuation,
+  buildWaitingStatusPayload,
+} from "./waiting-status.js";
 
 type FollowupDeliveryDecision =
   | {
@@ -222,9 +226,18 @@ export async function resolveFollowupDeliveryDecision(params: {
     result.didSendDeterministicApprovalPrompt !== true &&
     !accounting.terminalFailurePayload &&
     result.meta?.terminalReply?.disposition === "silent";
+  const peerFollowups =
+    terminalReplyExpectation === "required"
+      ? listSessionFollowupCompletions({
+          requesterSessionKey: turn.queued.run.sessionKey ?? "",
+          requesterAgentId: turn.queued.run.agentId,
+          requesterTurnRunId: execution.runId,
+        })
+      : [];
   const pendingContinuation =
     result.meta?.yielded === true ||
     result.meta?.continuationPending === true ||
+    peerFollowups.length > 0 ||
     (result.meta?.pendingToolCalls?.length ?? 0) > 0;
   const directBlockDeliveries = execution.outcome.directBlockDeliveries;
   const sourceReplyDelivery = resolveSourceReplyDelivery(
@@ -324,8 +337,10 @@ export async function resolveFollowupDeliveryDecision(params: {
     opts?.onAgentRunTerminalOutcome?.("failed");
   }
   const waitingStatusParams = {
-    completion,
-    continuationPending: result.meta?.continuationPending === true,
+    completion:
+      peerFollowups.length > 0 ? resolveReplyCompletion("required", "pending") : completion,
+    continuationPending: result.meta?.continuationPending === true || peerFollowups.length > 0,
+    peerContinuation: peerFollowups.length > 0,
     mediaContinuation:
       result.meta?.continuationPending === true &&
       !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns),
@@ -334,9 +349,10 @@ export async function resolveFollowupDeliveryDecision(params: {
     // Child spawns are side effects, not user-visible messages. They must not
     // suppress the explicit waiting reply for the parent turn.
     hasVisibleMessageDelivery:
-      hasCommittedSourceReplyDeliveryEvidence(result) ||
-      hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
-      result.didSendDeterministicApprovalPrompt === true,
+      peerFollowups.length === 0 &&
+      (hasCommittedSourceReplyDeliveryEvidence(result) ||
+        hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
+        result.didSendDeterministicApprovalPrompt === true),
   };
   const waitingStatusPayload = terminalRunFailed
     ? undefined
@@ -389,6 +405,16 @@ export async function resolveFollowupDeliveryDecision(params: {
     if (payloads.length === 0) {
       return { kind: "suppress", reason: "message-tool-only" };
     }
+  }
+  if (!explicitSilence && peerFollowups.length > 0) {
+    await attachWaitingStatusProgressContinuation({
+      payload: payloads.find(
+        (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
+      ),
+      replyPayloads: payloads,
+      followups: peerFollowups,
+      operation: turn.operation,
+    });
   }
   return payloads.length > 0
     ? { kind: "deliver", payloads, resolved: runtimeResolved }

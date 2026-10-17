@@ -14,6 +14,7 @@ import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { InstalledSkill } from "./installed-skill-catalog.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
+import type { ReplyExpectation } from "./reply-completion.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -53,6 +54,8 @@ export type OpenClawSharedToolsOptions = {
   /** One-shot local CLI runs release plugin-owned resources after their result. */
   oneShotCliRun?: boolean;
   runId?: string;
+  /** Host-resolved source reply obligation; never a model-facing tool argument. */
+  requesterReplyExpectation?: ReplyExpectation;
   computerTransport?: import("./tools/computer-tool.js").ComputerToolTransport | null;
   /** Current runtime directory used as the default project for follow-up suggestions. */
   cwd?: string;

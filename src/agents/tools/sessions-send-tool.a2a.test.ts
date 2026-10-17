@@ -56,6 +56,33 @@ function firstMockArg(
 }
 
 describe("runSessionsSendA2AFlow reply delivery", () => {
+  it.each([undefined, "NO_REPLY"])(
+    "reports a missing peer result when a public reply is owed (%s)",
+    async (replyText) => {
+      const deliverRequesterReply = vi.fn(async () => {});
+      await runSessionsSendA2AFlow({
+        targetAgentId: "peer",
+        targetSessionKey: "agent:peer:main",
+        displayKey: "Peer",
+        requesterSessionKey: "agent:main:telegram:group:123",
+        requesterAgentId: "main",
+        runId: "missing-peer",
+        replyTimeoutMs: 1000,
+        replyMode: "peer",
+        requireVisibleReply: true,
+        reply: { status: "ok", replyText },
+        deliverRequesterReply,
+      });
+      expect(deliverRequesterReply).toHaveBeenCalledOnce();
+      expect(deliverRequesterReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "The delegated sessions_send task ended without a usable result.",
+          sourceTool: "sessions_send",
+        }),
+      );
+    },
+  );
+
   let gatewayCalls: CallGatewayOptions[];
   let sessionListRows: GatewaySessionListRow[];
 

@@ -27,6 +27,8 @@ export type ProgressContinuationDraft = {
 };
 
 export type ProgressContinuationCapability = {
+  /** Keep a meaningful reply alongside the retained draft. */
+  preserveReply?: true;
   adopt: (this: void, draft: ProgressContinuationDraft) => boolean;
   close: () => void;
 };
