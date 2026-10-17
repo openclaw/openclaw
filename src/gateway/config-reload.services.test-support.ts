@@ -20,8 +20,7 @@ import {
   closeTestConfigReloaders,
   createWriteReloaderHarness,
   flushReload,
-  makeSnapshot,
-  makeZeroDebounceHookWrite,
+  makeWrite,
 } from "./config-reload.test-support.js";
 
 const pluginEntries = await Promise.all(
@@ -34,12 +33,16 @@ const pluginEntries = await Promise.all(
   }),
 );
 
-const { default: browser } = await loadBundledPluginFacade<{
-  default: OpenClawPluginDefinition;
-}>({
+const { default: browser } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
   pluginId: "browser",
   artifactBasename: "index.ts",
 });
+
+function serviceRegistrar(registry: ReturnType<typeof createTestRegistry>, pluginId: string) {
+  return (service: Parameters<typeof createServiceRegistration>[0]) => {
+    registry.services.push(createServiceRegistration(service, { pluginId, origin: "bundled" }));
+  };
+}
 
 export function registerPluginServiceReloadTests() {
   const emptyRegistry = createTestRegistry([]);
@@ -56,11 +59,7 @@ export function registerPluginServiceReloadTests() {
             openKeyedStore: vi.fn(),
           },
         } as never,
-        registerService(service) {
-          registry.services.push(
-            createServiceRegistration(service, { pluginId: "browser", origin: "bundled" }),
-          );
-        },
+        registerService: serviceRegistrar(registry, "browser"),
       }),
     );
     registry.reloads.push({
@@ -106,11 +105,7 @@ export function registerPluginServiceReloadTests() {
           createTestPluginApi({
             id: pluginId,
             runtimeSource,
-            registerService(service) {
-              serviceRegistry.services.push(
-                createServiceRegistration(service, { pluginId, origin: "bundled" }),
-              );
-            },
+            registerService: serviceRegistrar(serviceRegistry, pluginId),
             registerRuntimeLifecycle(lifecycle) {
               if (lifecycle.dispose) {
                 disposals.push(lifecycle.dispose);
@@ -132,22 +127,9 @@ export function registerPluginServiceReloadTests() {
       ];
       const harness = createWriteReloaderHarness({ initialConfig });
       await harness.reloader.ready;
-      harness.emitWrite({
-        ...makeZeroDebounceHookWrite("sandbox-allowlist"),
-        sourceConfig: nextConfig,
-        runtimeConfig: nextConfig,
-        snapshot: makeSnapshot({ config: nextConfig, hash: "sandbox-allowlist" }),
-      });
+      harness.emitWrite(makeWrite(nextConfig, "sandbox-allowlist"));
       await flushReload(harness.reloader);
-      expect(
-        harness.onHotReload,
-        JSON.stringify({
-          errors: harness.log.error.mock.calls,
-          warnings: harness.log.warn.mock.calls,
-          info: harness.log.info.mock.calls,
-          reload: harness.reloader.hotReloadStatus(),
-        }),
-      ).toHaveBeenCalledOnce();
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
       expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
         changedPaths: ["agents.entries.roboclaw.tools.sandbox.tools.alsoAllow"],
         restartGateway: false,
