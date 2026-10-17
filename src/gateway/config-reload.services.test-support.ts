@@ -110,9 +110,9 @@ export function registerPluginServiceReloadTests() {
             id: pluginId,
             runtimeSource,
             registerService: serviceRegistrar(serviceRegistry, pluginId),
-            registerRuntimeLifecycle(lifecycle) {
-              if (lifecycle.dispose) {
-                disposals.push(lifecycle.dispose);
+            registerRuntimeLifecycle({ dispose }) {
+              if (dispose) {
+                disposals.push(dispose);
               }
             },
           }),
@@ -137,7 +137,6 @@ export function registerPluginServiceReloadTests() {
         reloadPlugins: false,
       });
       expect(harness.onRestart).not.toHaveBeenCalled();
-      await harness.reloader.stop();
 
       const sole = agentConfig();
       const cases: Array<[OpenClawConfig, boolean, boolean?, OpenClawConfig?]> = [

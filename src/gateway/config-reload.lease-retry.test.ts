@@ -38,7 +38,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function busyError(reason: "lifecycle-busy" | "sqlite-busy" = "lifecycle-busy") {
+function unavailableError(
+  reason: "lifecycle-busy" | "sqlite-busy" | "storage-error" = "lifecycle-busy",
+) {
   return new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
     kind: "store-unavailable",
     reason,
@@ -52,14 +54,20 @@ async function readyHarness(
   const write = makeZeroDebounceHookWrite(hash);
   const harness = createReloaderHarness(async () => write.snapshot, options);
   await harness.reloader.ready;
-  return { ...harness, write };
+  const admit = (overrides: Partial<typeof write> = {}) => {
+    const application = createRuntimeConfigWriteApplication();
+    harness.emitWrite(attachRuntimeConfigWriteApplication({ ...write, ...overrides }, application));
+    return application;
+  };
+  return { ...harness, write, admit };
 }
 
 async function admittedWrite(hash: string) {
   const harness = await readyHarness(hash);
-  const application = createRuntimeConfigWriteApplication();
-  harness.emitWrite(attachRuntimeConfigWriteApplication(harness.write, application));
-  return { ...harness, application };
+  const application = harness.admit();
+  const settled = vi.fn();
+  void application.result.then(settled);
+  return { ...harness, application, settled };
 }
 
 it("coalesces config writes after a delayed Gateway scheduler wake", async () => {
@@ -125,17 +133,10 @@ it("applies an automatic write after the same source was accepted without runtim
   expect(harness.onEffectiveConfigUnchanged).not.toHaveBeenCalled();
   expect(harness.onConfigAccepted.mock.calls.at(-1)?.[3]).toEqual({ runtimeApplied: false });
 
-  const application = createRuntimeConfigWriteApplication();
-  harness.emitWrite(
-    attachRuntimeConfigWriteApplication(
-      {
-        ...harness.write,
-        revision: 2,
-        preparedCandidate: { runtimeConfig: initialConfig, compareConfig: initialConfig },
-      },
-      application,
-    ),
-  );
+  const application = harness.admit({
+    revision: 2,
+    preparedCandidate: { runtimeConfig: initialConfig, compareConfig: initialConfig },
+  });
   await flushReload(harness.reloader);
 
   await expect(application.result).resolves.toBe("applied");
@@ -198,7 +199,7 @@ it.each([
   async ({ source, reason }) => {
     const acquire = vi
       .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
-      .mockRejectedValueOnce(busyError(reason));
+      .mockRejectedValueOnce(unavailableError(reason));
     const harness = await readyHarness("lease-retry");
 
     if (source === "write") {
@@ -226,10 +227,9 @@ it("settles an exhausted admission receipt and retries a later observation with 
   const withLease = pluginLifecycleLease.withPluginLifecycleLease;
   const acquire = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
-    .mockRejectedValue(busyError());
+    .mockRejectedValue(unavailableError());
   const harness = await admittedWrite("backoff");
-  const settled = vi.fn();
-  void harness.application.result.then(settled);
+  const { settled } = harness;
   await flushReload(harness.reloader);
 
   for (const delayMs of [250, 500, 1000, 2000, 4000, 5000]) {
@@ -250,7 +250,7 @@ it("settles an exhausted admission receipt and retries a later observation with 
   expect(harness.onHotReload).toHaveBeenCalledOnce();
   expect(settled).toHaveBeenCalledExactlyOnceWith("failed");
 
-  acquire.mockRejectedValueOnce(busyError());
+  acquire.mockRejectedValueOnce(unavailableError());
   harness.watcher.emit("change");
   await flushReload(harness.reloader);
   const attempts = acquire.mock.calls.length;
@@ -262,7 +262,7 @@ it("settles an exhausted admission receipt and retries a later observation with 
 it("cancels a pending admission retry on shutdown without applying or leaking timers", async () => {
   const acquire = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
-    .mockRejectedValueOnce(busyError());
+    .mockRejectedValueOnce(unavailableError());
   const harness = await admittedWrite("shutdown");
   await flushReload(harness.reloader);
   expect(vi.getTimerCount()).toBe(1);
@@ -279,10 +279,7 @@ it("cancels a pending admission retry on shutdown without applying or leaking ti
 });
 
 const nonRetryableErrors = [
-  new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
-    kind: "store-unavailable",
-    reason: "storage-error",
-  }),
+  unavailableError("storage-error"),
   new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
     kind: "aborted",
     reason: "caller-signal",
@@ -294,7 +291,7 @@ const nonRetryableErrors = [
 
 it.each([
   ...nonRetryableErrors.map((error) => ({ error, entered: false })),
-  { error: busyError(), entered: true },
+  { error: unavailableError(), entered: true },
 ])("does not retry $error after callback entry: $entered", async ({ error, entered }) => {
   const withLease = pluginLifecycleLease.withPluginLifecycleLease;
   const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease");
@@ -309,8 +306,7 @@ it.each([
     acquire.mockRejectedValueOnce(error);
   }
   const harness = await admittedWrite("permanent-failure");
-  const settled = vi.fn();
-  void harness.application.result.then(settled);
+  const { settled } = harness;
   await flushReload(harness.reloader);
   await flushReload(harness.reloader, 10_000);
   expect(acquire).toHaveBeenCalledTimes(1);
@@ -327,11 +323,10 @@ it("settles a superseded write while lease admission is still pending", async ({
     return lease.promise;
   });
   const harness = await admittedWrite("superseded");
-  const { application, write } = harness;
-  const replacement = createRuntimeConfigWriteApplication();
+  const { application } = harness;
   await vi.advanceTimersByTimeAsync(0);
   await entered.promise;
-  harness.emitWrite(attachRuntimeConfigWriteApplication({ ...write, revision: 2 }, replacement));
+  const replacement = harness.admit({ revision: 2 });
   try {
     await expect(withinTest(application.result, signal)).resolves.toBe("superseded");
   } finally {

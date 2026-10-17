@@ -20,8 +20,9 @@ import {
 } from "./config-reload.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 
-const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl>>();
+type Reloader = ReturnType<typeof startGatewayConfigReloaderImpl>;
 type ReloadOptions = Parameters<typeof startGatewayConfigReloaderImpl>[0];
+const activeReloaders = new Set<Reloader>();
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
 function mockCallback<F extends (...args: never[]) => unknown>(
@@ -146,8 +147,8 @@ export function createRecoveryRestartMock() {
 export function startGatewayConfigReloader({
   scheduler = createTestGatewayScheduler("fake-timers"),
   ...opts
-}: Omit<Parameters<typeof startGatewayConfigReloaderImpl>[0], "scheduler"> & {
-  scheduler?: Parameters<typeof startGatewayConfigReloaderImpl>[0]["scheduler"];
+}: Omit<ReloadOptions, "scheduler"> & {
+  scheduler?: ReloadOptions["scheduler"];
 }) {
   const reloader = startGatewayConfigReloaderImpl({ ...opts, scheduler });
   activeReloaders.add(reloader);
@@ -184,10 +185,7 @@ export async function waitForReloadState(isSettled: () => boolean) {
   );
 }
 
-export async function flushReload(
-  reloader: Pick<ReturnType<typeof startGatewayConfigReloaderImpl>, "isReloading">,
-  delayMs = 0,
-) {
+export async function flushReload(reloader: Pick<Reloader, "isReloading">, delayMs = 0) {
   await vi.advanceTimersByTimeAsync(delayMs);
   await waitForReloadState(() => !reloader.isReloading());
 }
