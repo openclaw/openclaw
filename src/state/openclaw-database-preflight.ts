@@ -83,6 +83,7 @@ export async function assertOpenClawDatabasesReady(
   options: {
     env: NodeJS.ProcessEnv;
     onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
+    onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];
   } & (
     | {
         operation: "doctor";
@@ -99,6 +100,7 @@ export async function assertOpenClawDatabasesReady(
     {
       env: options.env,
       onAgentInspection: options.onAgentInspection,
+      onRegisteredAgentDatabases: options.onRegisteredAgentDatabases,
       verifyCurrentSchemaShape: true,
       ...(options.config
         ? {
@@ -670,5 +672,6 @@ export async function preflightOpenClawDatabaseSchemas(
     options.onAgentDatabaseDiscovery?.(preparedDiscovery);
   }
   options.onAgentInspection?.(stats);
+  options.onRegisteredAgentDatabases?.(registeredDatabases);
   return result;
 }

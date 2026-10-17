@@ -426,6 +426,7 @@ row for session certification. Offline import, Doctor repair, and main-key
 policy changes explicitly queue validation and revoke the shared readiness cell
 and persisted receipt; rollback may conservatively leave readiness revoked.
 Those operations require exclusive offline or startup maintenance custody.
+Startup and Doctor reuse a valid canonical receipt without querying pending rows again.
 Physical integrity admission remains valid independently of session readiness.
 The schema 25 migration seeds every existing node before admission; see
 [session writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
