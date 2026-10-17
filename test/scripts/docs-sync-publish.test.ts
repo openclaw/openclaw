@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -16,9 +15,16 @@ const sourceSlugifyVersion = JSON.parse(
   fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
 ).devDependencies[slugifyPackage] as string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type NavGroup = { group: string; pages: Array<string | NavGroup> };
+type NavTab = { tab: string; groups: NavGroup[] };
+type DocsConfig = { navigation: { languages: Array<{ language: string; tabs: NavTab[] }> } };
+const navGroup = (name: string, pages: NavGroup["pages"]): NavGroup => ({ group: name, pages });
+const navFixture = (tab: string, name: string, pages: NavGroup["pages"]) => ({
+  tabs: [{ tab, groups: [navGroup(name, pages)] }],
+});
 
-function publisherDependencies(version: string) {
-  const devDependencies = { [slugifyPackage]: version, "markdown-it": "15.0.0" };
+function publisherDependencies(version: string, markdownVersion = "15.0.0") {
+  const devDependencies = { [slugifyPackage]: version, "markdown-it": markdownVersion };
   return {
     packageJson: { name: "docs-test", private: true, devDependencies },
     packageLock: {
@@ -27,7 +33,7 @@ function publisherDependencies(version: string) {
       packages: {
         "": { name: "docs-test", devDependencies: { ...devDependencies } },
         [`node_modules/${slugifyPackage}`]: { version },
-        "node_modules/markdown-it": { version: "15.0.0" },
+        "node_modules/markdown-it": { version: markdownVersion },
       },
     },
   };
@@ -114,73 +120,69 @@ function findNestedGroupByPage(pages: unknown, page: string) {
 
 describe("docs-sync-publish", () => {
   it("reuses only exact successful page checks and checks docs.json on warm runs", () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mdx-cache-")));
-    try {
-      const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
-      fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
-      for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
-        fs.copyFileSync(path.join("scripts", name), path.join(root, ".openclaw-sync", name));
-      }
-      fs.symlinkSync(
-        path.resolve("node_modules"),
-        path.join(root, ".openclaw-sync", "node_modules"),
-        "junction",
-      );
-      fs.mkdirSync(path.join(root, "node_modules"));
-      // Synthetic requested/installed lock inputs; dependency code stays in the
-      // read-only shared install. This fixture never runs npm.
-      for (const name of ["package.json", "package-lock.json", "node_modules/.package-lock.json"]) {
-        fs.writeFileSync(path.join(root, name), "{}\n");
-      }
-      fs.mkdirSync(path.join(root, "docs"));
-      const page = path.join(root, "docs", "a.md");
-      const config = path.join(root, "docs", "docs.json");
-      const cache = path.join(root, "cache.json");
-      const reportPath = path.join(root, "report.json");
-      fs.writeFileSync(page, "# A\n");
-      fs.writeFileSync(path.join(root, "docs", "b.mdx"), "# B\n");
-      fs.writeFileSync(config, "{}");
-      const run = (status = 0) => {
-        const result = spawnSync(
-          process.execPath,
-          [checker, "docs", "--cache-file", cache, "--json-out", reportPath],
-          { cwd: root, encoding: "utf8" },
-        );
-        expect(result.status, result.stderr).toBe(status);
-        return JSON.parse(fs.readFileSync(reportPath, "utf8"));
-      };
-      expect(run().cacheHits).toBe(0);
-      expect(run().cacheHits).toBe(2);
-      const successful = fs.readFileSync(cache, "utf8");
-      fs.writeFileSync(page, "---\nsummary: functions.exec\n---\n# A\n");
-      expect(run(1).errors[0].type).toBe("poison-text");
-      expect(fs.readFileSync(cache, "utf8")).toBe(successful);
-      fs.writeFileSync(page, "# Changed\n");
-      expect(run().cacheHits).toBe(1);
-      fs.writeFileSync(config, '{"navigation":{"language":"unknown"}}');
-      expect(run(1)).toMatchObject({ cacheHits: 2, errors: [{ type: "docs-json" }] });
-      fs.writeFileSync(config, "{}");
-      fs.unlinkSync(page);
-      fs.renameSync(path.join(root, "docs", "b.mdx"), path.join(root, "docs", "b.MD"));
-      expect(run().cacheHits).toBe(0);
-      expect(Object.keys(JSON.parse(fs.readFileSync(cache, "utf8")).files)).toEqual(["docs/b.MD"]);
-      for (const name of [
-        ".openclaw-sync/check-docs-mdx.mts",
-        "package-lock.json",
-        "node_modules/.package-lock.json",
-      ]) {
-        fs.appendFileSync(path.join(root, name), "\n");
-        expect(run().cacheHits).toBe(0);
-      }
-      fs.writeFileSync(cache, "{corrupt");
-      expect(run().cacheHits).toBe(0);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+    const root = fs.realpathSync(tempDirs.make("openclaw-mdx-cache-"));
+    const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
+    fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
+    for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
+      fs.copyFileSync(path.join("scripts", name), path.join(root, ".openclaw-sync", name));
     }
+    fs.symlinkSync(
+      path.resolve("node_modules"),
+      path.join(root, ".openclaw-sync", "node_modules"),
+      "junction",
+    );
+    fs.mkdirSync(path.join(root, "node_modules"));
+    // Synthetic requested/installed lock inputs; dependency code stays in the
+    // read-only shared install. This fixture never runs npm.
+    for (const name of ["package.json", "package-lock.json", "node_modules/.package-lock.json"]) {
+      fs.writeFileSync(path.join(root, name), "{}\n");
+    }
+    fs.mkdirSync(path.join(root, "docs"));
+    const page = path.join(root, "docs", "a.md");
+    const config = path.join(root, "docs", "docs.json");
+    const cache = path.join(root, "cache.json");
+    const reportPath = path.join(root, "report.json");
+    fs.writeFileSync(page, "# A\n");
+    fs.writeFileSync(path.join(root, "docs", "b.mdx"), "# B\n");
+    fs.writeFileSync(config, "{}");
+    const run = (status = 0) => {
+      const result = spawnSync(
+        process.execPath,
+        [checker, "docs", "--cache-file", cache, "--json-out", reportPath],
+        { cwd: root, encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(status);
+      return JSON.parse(fs.readFileSync(reportPath, "utf8"));
+    };
+    expect(run().cacheHits).toBe(0);
+    expect(run().cacheHits).toBe(2);
+    const successful = fs.readFileSync(cache, "utf8");
+    fs.writeFileSync(page, "---\nsummary: functions.exec\n---\n# A\n");
+    expect(run(1).errors[0].type).toBe("poison-text");
+    expect(fs.readFileSync(cache, "utf8")).toBe(successful);
+    fs.writeFileSync(page, "# Changed\n");
+    expect(run().cacheHits).toBe(1);
+    fs.writeFileSync(config, '{"navigation":{"language":"unknown"}}');
+    expect(run(1)).toMatchObject({ cacheHits: 2, errors: [{ type: "docs-json" }] });
+    fs.writeFileSync(config, "{}");
+    fs.unlinkSync(page);
+    fs.renameSync(path.join(root, "docs", "b.mdx"), path.join(root, "docs", "b.MD"));
+    expect(run().cacheHits).toBe(0);
+    expect(Object.keys(JSON.parse(fs.readFileSync(cache, "utf8")).files)).toEqual(["docs/b.MD"]);
+    for (const name of [
+      ".openclaw-sync/check-docs-mdx.mts",
+      "package-lock.json",
+      "node_modules/.package-lock.json",
+    ]) {
+      fs.appendFileSync(path.join(root, name), "\n");
+      expect(run().cacheHits).toBe(0);
+    }
+    fs.writeFileSync(cache, "{corrupt");
+    expect(run().cacheHits).toBe(0);
   });
 
   it("executes the copied MDX checker and shared anchor runtime closures", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
+    const tempRoot = tempDirs.make("openclaw-docs-sync-runtime-");
     const publishRoot = path.join(tempRoot, "publish");
     const clawhubRoot = path.join(tempRoot, "clawhub");
     const minimalMdx = path.join(tempRoot, "valid.mdx");
@@ -199,39 +201,38 @@ describe("docs-sync-publish", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    try {
-      execFileSync(
-        process.execPath,
-        ["scripts/docs-sync-publish.mjs", "--target", publishRoot, "--clawhub-repo", clawhubRoot],
-        { stdio: "pipe" },
-      );
-      execFileSync(
-        process.execPath,
-        [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
-        { cwd: publishRoot, stdio: "pipe" },
-      );
-      expect(fs.readFileSync(path.join(publishRoot, "docs", "fa", "index.md"), "utf8")).toBe(
-        translation,
-      );
-      // Repository instruction exclusions must not hide the public workspace template.
-      expect(
-        fs.readFileSync(
-          path.join(publishRoot, "docs", "reference", "templates", "AGENTS.md"),
-          "utf8",
-        ),
-      ).toBe(fs.readFileSync(path.join("docs", "reference", "templates", "AGENTS.md"), "utf8"));
-      const published = JSON.parse(
-        fs.readFileSync(path.join(publishRoot, "docs", "docs.json"), "utf8"),
-      );
-      expect(
-        published.navigation.languages.map((entry: { language: string }) => entry.language),
-      ).toEqual(expect.arrayContaining(["fa", "th"]));
-      const anchors = execFileSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          String.raw`
+    execFileSync(
+      process.execPath,
+      ["scripts/docs-sync-publish.mjs", "--target", publishRoot, "--clawhub-repo", clawhubRoot],
+      { stdio: "pipe" },
+    );
+    execFileSync(
+      process.execPath,
+      [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
+      { cwd: publishRoot, stdio: "pipe" },
+    );
+    expect(fs.readFileSync(path.join(publishRoot, "docs", "fa", "index.md"), "utf8")).toBe(
+      translation,
+    );
+    // Repository instruction exclusions must not hide the public workspace template.
+    expect(
+      fs.readFileSync(
+        path.join(publishRoot, "docs", "reference", "templates", "AGENTS.md"),
+        "utf8",
+      ),
+    ).toBe(fs.readFileSync(path.join("docs", "reference", "templates", "AGENTS.md"), "utf8"));
+    const published = JSON.parse(
+      fs.readFileSync(path.join(publishRoot, "docs", "docs.json"), "utf8"),
+    );
+    expect(
+      published.navigation.languages.map((entry: { language: string }) => entry.language),
+    ).toEqual(expect.arrayContaining(["fa", "th"]));
+    const anchors = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        String.raw`
         import assert from 'node:assert/strict';
         import { parseDocsDocument } from './.openclaw-sync/lib/docs-markdown.mjs';
         import { resolveRedirects } from './.openclaw-sync/lib/docs-redirects.mjs';
@@ -262,13 +263,10 @@ describe("docs-sync-publish", () => {
         console.log(JSON.stringify(parseDocsDocument('## agents.defaults.cwd').ids));
         console.log(resolveRedirects({redirects: [], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x}).length);
       `,
-        ],
-        { cwd: publishRoot, encoding: "utf8" },
-      );
-      expect(anchors).toBe('["agents.defaults.cwd","agents-defaults-cwd"]\n0\n');
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+      ],
+      { cwd: publishRoot, encoding: "utf8" },
+    );
+    expect(anchors).toBe('["agents.defaults.cwd","agents-defaults-cwd"]\n0\n');
   });
 
   it.each([
@@ -345,17 +343,11 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
 
     // Post-rebase validation compares with fresh publisher main, not the clone's
     // old dependency snapshot. Losing an unrelated maintainer update must fail.
-    const freshMain = structuredClone(baseline);
-    freshMain.packageJson.devDependencies["markdown-it"] = "15.0.1";
-    freshMain.packageLock.packages[""].devDependencies["markdown-it"] = "15.0.1";
-    freshMain.packageLock.packages["node_modules/markdown-it"].version = "15.0.1";
+    const freshMain = publisherDependencies("2.2.0", "15.0.1");
     expect(() => validateDocsSyncDependencies(publishRoot, freshMain)).toThrow(
       "changed unrelated publisher dependencies",
     );
-    const rebased = structuredClone(freshMain);
-    rebased.packageJson.devDependencies[slugifyPackage] = sourceSlugifyVersion;
-    rebased.packageLock.packages[""].devDependencies[slugifyPackage] = sourceSlugifyVersion;
-    rebased.packageLock.packages[`node_modules/${slugifyPackage}`].version = sourceSlugifyVersion;
+    const rebased = publisherDependencies(sourceSlugifyVersion, "15.0.1");
     writePublisherDependencies(publishRoot, rebased);
     const reordered = Object.fromEntries(Object.entries(rebased.packageLock).toReversed());
     fs.writeFileSync(
@@ -390,7 +382,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
   });
 
   it("defers orphan locale deletion to translation finalization", () => {
-    const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-"));
+    const docsDir = tempDirs.make("openclaw-docs-sync-");
     const mirroredEnglish = path.join(docsDir, "clawhub", "api.md");
     const localizedMirror = path.join(docsDir, "de", "clawhub", "api.md");
     const orphan = path.join(docsDir, "de", "removed.md");
@@ -401,49 +393,24 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     fs.writeFileSync(localizedMirror, "# ClawHub-API\n");
     fs.writeFileSync(orphan, "# Removed\n");
 
-    try {
-      expect(reportOrphanLocaleDocs(docsDir)).toBe(1);
-      expect(fs.existsSync(localizedMirror)).toBe(true);
-      expect(fs.existsSync(orphan)).toBe(true);
-    } finally {
-      fs.rmSync(docsDir, { recursive: true, force: true });
-    }
+    expect(reportOrphanLocaleDocs(docsDir)).toBe(1);
+    expect(fs.existsSync(localizedMirror)).toBe(true);
+    expect(fs.existsSync(orphan)).toBe(true);
   });
 
   it("overlays deep groups without changing the input or ambiguously labeling siblings", () => {
-    const source = {
-      tabs: [
-        {
-          tab: "Tools",
-          groups: [
-            {
-              group: "Guides",
-              pages: [
-                { group: "Browser", pages: [{ group: "Setup", pages: ["tr/browser/setup"] }] },
-                { group: "Search", pages: ["tr/search"] },
-              ],
-            },
-          ],
-        },
-      ],
-    };
+    const source = navFixture("Tools", "Guides", [
+      navGroup("Browser", [navGroup("Setup", ["tr/browser/setup"])]),
+      navGroup("Search", ["tr/search"]),
+    ]);
     const before = structuredClone(source);
-    const result = applyLocaleNavLabelOverlay(source, {
-      tabs: [
-        {
-          tab: "Araçlar",
-          groups: [
-            {
-              group: "Kılavuzlar",
-              pages: [
-                { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
-                { group: "Combined", pages: ["tr/browser/setup", "tr/search"] },
-              ],
-            },
-          ],
-        },
-      ],
-    });
+    const result = applyLocaleNavLabelOverlay(
+      source,
+      navFixture("Araçlar", "Kılavuzlar", [
+        navGroup("Tarayıcı", [navGroup("Kurulum", ["tr/browser/setup"])]),
+        navGroup("Combined", ["tr/browser/setup", "tr/search"]),
+      ]),
+    );
     expect(source).toEqual(before);
     expect(collectPages(result)).toEqual(collectPages(source));
     expect(result.tabs[0].groups[0]).toEqual({
@@ -456,11 +423,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
   });
 
   it("covers every published Swedish navigation label with a matching English anchor", () => {
-    type NavGroup = { group: string; pages: Array<string | NavGroup> };
-    type NavTab = { tab: string; groups: NavGroup[] };
-    const source = JSON.parse(fs.readFileSync("docs/docs.json", "utf8")) as {
-      navigation: { languages: Array<{ language: string; tabs: NavTab[] }> };
-    };
+    const source = JSON.parse(fs.readFileSync("docs/docs.json", "utf8")) as DocsConfig;
     const englishTabs = source.navigation.languages
       .find((entry) => entry.language === "en")!
       .tabs.filter((tab) => tab.tab !== "ClawHub");
@@ -491,30 +454,17 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
   });
 
   it("keeps generated locale navigation aligned with English routes", () => {
-    const config = composeDocsConfig() as {
-      navigation: {
-        languages: Array<{
-          language: string;
-          tabs: Array<{
-            tab: string;
-            groups?: Array<{ group: string; pages?: unknown }>;
-          }>;
-        }>;
-      };
-    };
-    const english = config.navigation.languages.find((entry) => entry.language === "en");
-    const simplifiedChinese = config.navigation.languages.find(
-      (entry) => entry.language === "zh-Hans",
-    );
-    const german = config.navigation.languages.find((entry) => entry.language === "de");
-
-    expect(english).toBeDefined();
-    expect(simplifiedChinese).toBeDefined();
-    expect(german).toBeDefined();
-    const turkish = config.navigation.languages.find((entry) => entry.language === "tr");
-    expect(turkish).toBeDefined();
-    const swedish = config.navigation.languages.find((entry) => entry.language === "sv");
-    expect(swedish).toBeDefined();
+    const config = composeDocsConfig() as DocsConfig;
+    const [english, simplifiedChinese, german, turkish, swedish] = [
+      "en",
+      "zh-Hans",
+      "de",
+      "tr",
+      "sv",
+    ].map((code) => config.navigation.languages.find((entry) => entry.language === code));
+    for (const locale of [english, simplifiedChinese, german, turkish, swedish]) {
+      expect(locale).toBeDefined();
+    }
     const sourceConfig = JSON.parse(
       fs.readFileSync(path.join("docs", "docs.json"), "utf8"),
     ) as typeof config;

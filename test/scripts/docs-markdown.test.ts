@@ -1,46 +1,53 @@
 import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 
-describe("docs Markdown rendering", () => {
-  it.each([{ fence: "```", newline: "\r\n" }])(
-    "preserves nested fence indentation for $fence with newline %j",
-    ({ fence, newline }) => {
-      const body = '{\n  "features": {\n    "example": "<Tab title=\\"literal\\">"\n  }\n}';
-      const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content";
-      const source = [
-        "<Tabs>",
-        '  <Tab title="Manifest">',
-        "    <Steps>",
-        '      <Step title="Create app">',
-        "        <CodeGroup>",
-        `${fence}json Recommended`,
-        ...body.split("\n"),
-        fence,
-        `          ${fence}json Minimal`,
-        ...body.split("\n").map((line) => `          ${line}`),
-        `          ${fence}`,
-        `  ${fence}yaml`,
-        ...yaml.split("\n").map((line) => `  ${line}`),
-        `  ${fence}`,
-        "        </CodeGroup>",
-        "      </Step>",
-        "    </Steps>",
-        "  </Tab>",
-        "</Tabs>",
-        '<ParamField path="live">[Visible](/visible)</ParamField>',
-        `${fence}json`,
-        ...body.split("\n"),
-        fence,
-      ].join(newline);
-      const document = parseDocsDocument(source);
+const mapLink = (href: string, line: number | undefined) => ({ href, line });
+function render(source: string, mapLines = false) {
+  const md = createDocsMarkdown();
+  const document = parseDocsDocument(source, md, mapLines ? { mapLink } : undefined);
+  return { document, html: md.renderer.render(document.tokens, md.options, document.env) };
+}
 
-      expect(
-        document.tokens.filter((token) => token.type === "fence").map((token) => token.content),
-      ).toEqual([`${body}\n`, `${body}\n`, `${yaml}\n`, `${body}\n`]);
-      expect(document.ids).toContain("param-live");
-      expect(document.links).toEqual(["/visible"]);
-    },
-  );
+const visibleParam = '<ParamField path="live">\n[Visible](/visible)\n</ParamField>';
+
+describe("docs Markdown rendering", () => {
+  it("preserves nested fence indentation with CRLF", () => {
+    const { fence, newline } = { fence: "```", newline: "\r\n" };
+    const body = '{\n  "features": {\n    "example": "<Tab title=\\"literal\\">"\n  }\n}';
+    const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content";
+    const source = [
+      "<Tabs>",
+      '  <Tab title="Manifest">',
+      "    <Steps>",
+      '      <Step title="Create app">',
+      "        <CodeGroup>",
+      `${fence}json Recommended`,
+      ...body.split("\n"),
+      fence,
+      `          ${fence}json Minimal`,
+      ...body.split("\n").map((line) => `          ${line}`),
+      `          ${fence}`,
+      `  ${fence}yaml`,
+      ...yaml.split("\n").map((line) => `  ${line}`),
+      `  ${fence}`,
+      "        </CodeGroup>",
+      "      </Step>",
+      "    </Steps>",
+      "  </Tab>",
+      "</Tabs>",
+      '<ParamField path="live">[Visible](/visible)</ParamField>',
+      `${fence}json`,
+      ...body.split("\n"),
+      fence,
+    ].join(newline);
+    const document = parseDocsDocument(source);
+
+    expect(
+      document.tokens.filter((token) => token.type === "fence").map((token) => token.content),
+    ).toEqual([`${body}\n`, `${body}\n`, `${yaml}\n`, `${body}\n`]);
+    expect(document.ids).toContain("param-live");
+    expect(document.links).toEqual(["/visible"]);
+  });
 
   it.each([
     {
@@ -96,11 +103,7 @@ describe("docs Markdown rendering", () => {
         "</code>",
         "~~~",
       ].join("\n");
-      const md = createDocsMarkdown();
-      const document = parseDocsDocument(source, md, {
-        mapLink: (href: string, line: number | undefined) => ({ href, line }),
-      });
-      const html = md.renderer.render(document.tokens, md.options, document.env);
+      const { document, html } = render(source, true);
 
       expect(
         document.tokens.filter((token) => token.type === "fence").map((token) => token.content),
@@ -117,45 +120,34 @@ describe("docs Markdown rendering", () => {
     },
   );
 
-  it.each(["<pre>\n> raw literal quote\n</pre>\n"])(
-    "removes comment-owned quote and indentation prefixes after %j",
-    (prefix) => {
-      const source =
-        prefix +
-        [
-          "{/*",
-          "    hidden indented comment",
-          "",
-          "> hidden quoted comment",
-          '    <Card href="/hidden">hidden card</Card>',
-          "*/}",
-          "",
-          '<ParamField path="live">',
-          "[Visible](/visible)",
-          "</ParamField>",
-        ].join("\n");
-      const md = createDocsMarkdown();
-      const document = parseDocsDocument(source, md);
-      const html = md.renderer.render(document.tokens, md.options, document.env);
+  it("removes comment-owned quote and indentation prefixes after raw HTML", () => {
+    const prefix = "<pre>\n> raw literal quote\n</pre>\n";
+    const source =
+      prefix +
+      [
+        "{/*",
+        "    hidden indented comment",
+        "",
+        "> hidden quoted comment",
+        '    <Card href="/hidden">hidden card</Card>',
+        "*/}",
+        "",
+        visibleParam,
+      ].join("\n");
+    const { document, html } = render(source);
 
-      expect(html).not.toContain("hidden");
-      expect(html).not.toContain("<blockquote>");
-      if (prefix) {
-        expect(html).toContain(prefix.trimEnd());
-      }
-      expect(document.ids).toContain("param-live");
-      expect(document.links).toEqual(["/visible"]);
-    },
-  );
+    expect(html).not.toContain("hidden");
+    expect(html).not.toContain("<blockquote>");
+    expect(html).toContain(prefix.trimEnd());
+    expect(document.ids).toContain("param-live");
+    expect(document.links).toEqual(["/visible"]);
+  });
 
   it("retains only the containing quote when removing JSX comments", () => {
-    const md = createDocsMarkdown();
-    const document = parseDocsDocument(
+    const { document, html } = render(
       "> {/*\n> > hidden nested quote\n> */}\n>\n> [Visible](/visible)",
-      md,
-      { mapLink: (href: string, line: number | undefined) => ({ href, line }) },
+      true,
     );
-    const html = md.renderer.render(document.tokens, md.options, document.env);
 
     expect(html.match(/<blockquote>/g)).toHaveLength(1);
     expect(html).not.toContain("hidden");
@@ -175,23 +167,19 @@ describe("docs Markdown rendering", () => {
     expect(document.links).toEqual(["/visible"]);
   });
 
-  it.each(["- Example\n\n  ~~~html\n  example\n\n"])(
-    "keeps apparent fences inside raw HTML opaque after %j",
-    (prefix) => {
-      const literal = '<pre>\n~~~text\n<Card href="/hidden">literal</Card>\n</pre>';
-      const source = `${prefix}${literal}\n\n<ParamField path="live">\n[Visible](/visible)\n</ParamField>`;
-      const md = createDocsMarkdown();
-      const document = parseDocsDocument(source, md);
-      const html = md.renderer.render(document.tokens, md.options, document.env);
+  it("keeps apparent fences inside raw HTML opaque after a list fence", () => {
+    const prefix = "- Example\n\n  ~~~html\n  example\n\n";
+    const literal = '<pre>\n~~~text\n<Card href="/hidden">literal</Card>\n</pre>';
+    const { document, html } = render(`${prefix}${literal}\n\n${visibleParam}`);
 
-      expect(html).toContain(literal);
-      expect(html).not.toContain("<ParamField");
-      expect(document.ids).toContain("param-live");
-      expect(document.links).toEqual(["/visible"]);
-    },
-  );
+    expect(html).toContain(literal);
+    expect(html).not.toContain("<ParamField");
+    expect(document.ids).toContain("param-live");
+    expect(document.links).toEqual(["/visible"]);
+  });
 
-  it.each(["pre"])("keeps inline <%s> examples literal before a later HTML example", (tag) => {
+  it("keeps inline pre examples literal before a later HTML example", () => {
+    const tag = "pre";
     const source = [
       `Intro with \`<${tag}>\`.`,
       "",
@@ -208,9 +196,7 @@ describe("docs Markdown rendering", () => {
       "",
       "[Related](/related)",
     ].join("\n");
-    const md = createDocsMarkdown();
-    const document = parseDocsDocument(source, md);
-    const html = md.renderer.render(document.tokens, md.options, document.env);
+    const { document, html } = render(source);
     expect(html).toContain(`<code>&lt;${tag}&gt;</code>`);
     expect(html).toContain(`<code>&lt;${tag}&gt; with a \` backtick</code>`);
     expect(html).toContain(`<code>&lt;${tag}&gt; attributes</code>`);
@@ -221,11 +207,10 @@ describe("docs Markdown rendering", () => {
     expect(document.links).toEqual(["/related"]);
   });
 
-  it.each(["Unmatched `\n\n"])("preserves raw HTML containing backticks after %j", (prefix) => {
+  it("preserves raw HTML containing backticks after an unmatched backtick", () => {
+    const prefix = "Unmatched `\n\n";
     const literal = '<script>const example = `<Card href="/hidden" />`;</script>';
-    const md = createDocsMarkdown();
-    const document = parseDocsDocument(`${prefix}${literal}\n\n[Visible](/visible)`, md);
-    const html = md.renderer.render(document.tokens, md.options, document.env);
+    const { document, html } = render(`${prefix}${literal}\n\n[Visible](/visible)`);
     expect(html).toContain(literal);
     expect(html).not.toContain("OPENCLAW_DOCS_MARKER");
     expect(document.links).toEqual(["/visible"]);

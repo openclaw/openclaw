@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 const SCRIPT_PATH = "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs";
 const MAX_STATS_SAMPLE_LINE_BYTES = 1024 * 1024;
 const tempRoots: string[] = [];
+const sample = (MemUsage = "128MiB / 2GiB", CPUPerc = "25.0%") =>
+  JSON.stringify({ MemUsage, CPUPerc }) + "\n";
 
 function writeStats(contents: string): string {
   const root = mkdtempSync(join(tmpdir(), "openclaw-docker-stats-"));
@@ -38,6 +40,19 @@ function validStatsLineWithBytes(byteLength: number): string {
   const paddingLength = byteLength - Buffer.byteLength(prefix + suffix, "utf8");
   expect(paddingLength).toBeGreaterThan(0);
   return `${prefix}${"x".repeat(paddingLength)}${suffix}`;
+}
+
+function expectRejected(
+  contents: string,
+  message: string,
+  memory = "512",
+  cpu = "100",
+  env: NodeJS.ProcessEnv = {},
+) {
+  const result = runAssert(writeStats(contents), memory, cpu, env);
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(message);
+  return result;
 }
 
 afterEach(() => {
@@ -75,58 +90,17 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
   );
 
   it("rejects invalid resource limits instead of disabling the ceiling", () => {
-    const result = runAssert(
-      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
-      "nope",
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("max memory MiB must be a finite non-negative number");
-
-    const exponent = runAssert(
-      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
-      "1e3",
-    );
-
-    expect(exponent.status).not.toBe(0);
-    expect(exponent.stderr).toContain("max memory MiB must be a finite non-negative number");
-
-    const cpuExponent = runAssert(
-      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
-      "512",
-      "1e3",
-    );
-
-    expect(cpuExponent.status).not.toBe(0);
-    expect(cpuExponent.stderr).toContain("max CPU percent must be a finite non-negative number");
+    for (const memory of ["nope", "1e3"]) {
+      expectRejected(sample(), "max memory MiB must be a finite non-negative number", memory);
+    }
+    expectRejected(sample(), "max CPU percent must be a finite non-negative number", "512", "1e3");
   });
 
   it.each(["", "true"])("rejects invalid samples in Actions mode %s", (actions) => {
     const env = { GITHUB_ACTIONS: actions };
-    const missing = runAssert(writeStats("{}\n"), "512", "100", env);
-
-    expect(missing.status).not.toBe(0);
-    expect(missing.stderr).toContain("had invalid MemUsage");
-
-    const malformed = runAssert(
-      writeStats('{"MemUsage":"bad","CPUPerc":"bad"}\n'),
-      "512",
-      "100",
-      env,
-    );
-
-    expect(malformed.status).not.toBe(0);
-    expect(malformed.stderr).toContain("had invalid MemUsage");
-
-    const looseCpu = runAssert(
-      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"1e3%"}\n'),
-      "512",
-      "100",
-      env,
-    );
-
-    expect(looseCpu.status).not.toBe(0);
-    expect(looseCpu.stderr).toContain("had invalid CPUPerc");
+    expectRejected("{}\n", "had invalid MemUsage", "512", "100", env);
+    expectRejected(sample("bad", "bad"), "had invalid MemUsage", "512", "100", env);
+    expectRejected(sample(undefined, "1e3%"), "had invalid CPUPerc", "512", "100", env);
   });
 
   it("parses mixed stats lines, enforces peaks, and ignores terminal samples", () => {
@@ -156,25 +130,19 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
   });
 
   it("rejects oversized stats sample lines before parsing JSON", () => {
-    const result = runAssert(writeStats(`{"padding":"${"x".repeat(1024 * 1024)}"}\n`));
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("exceeded 1048576 bytes");
+    const result = expectRejected(
+      `{"padding":"${"x".repeat(1024 * 1024)}"}\n`,
+      "exceeded 1048576 bytes",
+    );
     expect(result.stderr).not.toContain("was not valid JSON");
   });
 
   it("still fails when only terminal zero-capacity samples were captured", () => {
-    const result = runAssert(writeStats('{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n'));
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("no docker stats samples captured");
+    expectRejected(sample("0B / 0B", "0.0%"), "no docker stats samples captured");
   });
 
   it("rejects zero-memory Docker stats samples as invalid proof", () => {
-    const result = runAssert(writeStats('{"MemUsage":"0B / 2GiB","CPUPerc":"0.0%"}\n'));
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("had non-positive MemUsage");
+    expectRejected(sample("0B / 2GiB", "0.0%"), "had non-positive MemUsage");
   });
 });
 

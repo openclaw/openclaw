@@ -93,30 +93,13 @@ if [[ "\${1:-}" == "compose" ]]; then
     exit 1
   fi
   echo "compose $*" >>"$log"
-  if [[ "$*" == *"config get gateway.controlUi.allowedOrigins"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"
-    exit 0
-  fi
-  if [[ "$*" == *"config get gateway.publicOrigin"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_PUBLIC_ORIGIN:-}"
-    exit 0
-  fi
-  if [[ "$*" == *"config get tools.sandbox.tools --json"* ]]; then
-    if [[ -n "\${DOCKER_STUB_SANDBOX_TOOLS_JSON:-}" ]]; then
-      printf '%s\n' "$DOCKER_STUB_SANDBOX_TOOLS_JSON"
-    else
-      printf '{}\n'
-    fi
-    exit 0
-  fi
-  if [[ "$*" == *"config get agents --json"* ]]; then
-    if [[ -n "\${DOCKER_STUB_AGENTS_JSON:-}" ]]; then
-      printf '%s\n' "$DOCKER_STUB_AGENTS_JSON"
-    else
-      printf '{}\n'
-    fi
-    exit 0
-  fi
+  empty_json='{}'
+  case "$*" in
+    *"config get gateway.controlUi.allowedOrigins"*) printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"; exit 0 ;;
+    *"config get gateway.publicOrigin"*) printf '%s\n' "\${DOCKER_STUB_PUBLIC_ORIGIN:-}"; exit 0 ;;
+    *"config get tools.sandbox.tools --json"*) printf '%s\n' "\${DOCKER_STUB_SANDBOX_TOOLS_JSON:-$empty_json}"; exit 0 ;;
+    *"config get agents --json"*) printf '%s\n' "\${DOCKER_STUB_AGENTS_JSON:-$empty_json}"; exit 0 ;;
+  esac
   args=("$@")
   for ((i = 0; i + 4 < \${#args[@]}; i++)); do
     if [[ "\${args[$i]}" == "--entrypoint" &&
@@ -159,8 +142,6 @@ export async function expectMissingPath(path: string): Promise<void> {
 export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   const rootDir = await sandboxRootTracker.make("suite");
   const scriptPath = join(rootDir, "scripts", "docker", "setup.sh");
-  const dockerfilePath = join(rootDir, "Dockerfile");
-  const composePath = join(rootDir, "docker-compose.yml");
   const binDir = join(rootDir, "bin");
   const logPath = join(rootDir, "docker-stub.log");
 
@@ -179,9 +160,9 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
     await copyFile(join(repoRoot, "scripts", "lib", file), join(rootDir, "scripts", "lib", file));
   }
   await chmod(scriptPath, 0o755);
-  await writeFile(dockerfilePath, "FROM scratch\n");
+  await writeFile(join(rootDir, "Dockerfile"), "FROM scratch\n");
   await writeFile(
-    composePath,
+    join(rootDir, "docker-compose.yml"),
     "services:\n  openclaw-gateway:\n    image: noop\n  openclaw-cli:\n    image: noop\n",
   );
   await writeDockerStub(binDir, logPath);
@@ -214,33 +195,26 @@ export async function readDockerLogLines(sandbox: DockerSetupSandbox) {
   return (await readDockerLog(sandbox)).split("\n").filter(Boolean);
 }
 
-export function collectMatchingLines(
-  lines: string[],
-  predicate: (line: string) => boolean,
-): string[] {
-  return lines.filter(predicate);
-}
-
 export function isGatewayStartLine(line: string) {
   return line.includes("compose") && line.includes(" up -d") && line.includes("openclaw-gateway");
 }
 
 export function findGatewayStartLineIndex(lines: string[]) {
-  return lines.findIndex((line) => isGatewayStartLine(line));
+  return lines.findIndex(isGatewayStartLine);
 }
 
 export function expectOfflineComposePolicy(
   lines: string[],
   options: { gatewayStarts?: boolean } = {},
 ) {
-  const composeLines = collectMatchingLines(lines, (line) => line.startsWith("compose "));
+  const composeLines = lines.filter((line) => line.startsWith("compose "));
   expect(composeLines.length).toBeGreaterThan(0);
   for (const line of composeLines) {
     if (line.includes(" run ")) {
       expect(line).toContain(" run --pull never ");
     }
   }
-  const gatewayStarts = collectMatchingLines(composeLines, (line) => isGatewayStartLine(line));
+  const gatewayStarts = composeLines.filter(isGatewayStartLine);
   if (options.gatewayStarts === false) {
     expect(gatewayStarts).toHaveLength(0);
     return;

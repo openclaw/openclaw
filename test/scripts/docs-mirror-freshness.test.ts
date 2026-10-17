@@ -25,6 +25,8 @@ type Scenario = {
   active?: number;
 };
 type Request = { method: string; pathname: string; search: string };
+const commitFiles = (...filenames: string[]): CommitFile[] =>
+  filenames.map((filename) => ({ filename }));
 
 function runScenario(scenario: Scenario) {
   const root = createTempDir("openclaw-docs-mirror-");
@@ -170,45 +172,29 @@ describe("docs mirror freshness", () => {
     },
   );
 
-  it.each<{ name: string; files: CommitFile[] | null; stale: boolean }>([
-    { name: "authoring instructions", files: [{ filename: "docs/AGENTS.md" }], stale: false },
-    {
-      name: "translation instructions",
-      files: [{ filename: "docs/.i18n/README.md" }],
-      stale: false,
-    },
-    {
-      name: "both excluded files and unrelated code",
-      files: [
-        { filename: "docs/AGENTS.md" },
-        { filename: "docs/.i18n/README.md" },
-        { filename: "src/index.ts" },
-      ],
-      stale: false,
-    },
-    {
-      name: "a mixed public-docs change",
-      files: [{ filename: "docs/AGENTS.md" }, { filename: "docs/guide.md" }],
-      stale: true,
-    },
-    {
-      name: "the public AGENTS template",
-      files: [{ filename: "docs/reference/templates/AGENTS.md" }],
-      stale: true,
-    },
-    {
-      name: "a public page renamed to an excluded file",
-      files: [{ filename: "docs/AGENTS.md", previous_filename: "docs/guide.md" }],
-      stale: true,
-    },
-    { name: "an unavailable file inventory", files: null, stale: true },
-    { name: "an empty file inventory", files: [], stale: true },
-    {
-      name: "a full page that may omit a public file",
-      files: Array.from({ length: 100 }, (_, index) => ({ filename: "src/file-" + index + ".ts" })),
-      stale: true,
-    },
-  ])("handles $name using the publish workflow's paths", ({ files, stale }) => {
+  it.each<[string, CommitFile[] | null, boolean]>([
+    ["authoring instructions", commitFiles("docs/AGENTS.md"), false],
+    ["translation instructions", commitFiles("docs/.i18n/README.md"), false],
+    [
+      "both excluded files and unrelated code",
+      commitFiles("docs/AGENTS.md", "docs/.i18n/README.md", "src/index.ts"),
+      false,
+    ],
+    ["a mixed public-docs change", commitFiles("docs/AGENTS.md", "docs/guide.md"), true],
+    ["the public AGENTS template", commitFiles("docs/reference/templates/AGENTS.md"), true],
+    [
+      "a public page renamed to an excluded file",
+      [{ filename: "docs/AGENTS.md", previous_filename: "docs/guide.md" }],
+      true,
+    ],
+    ["an unavailable file inventory", null, true],
+    ["an empty file inventory", [], true],
+    [
+      "a full page that may omit a public file",
+      commitFiles(...Array.from({ length: 100 }, (_, index) => "src/file-" + index + ".ts")),
+      true,
+    ],
+  ])("handles %s using the publish workflow's paths", (_name, files, stale) => {
     const run = runScenario({
       workflow: syncWorkflow,
       mirror: baseSha,

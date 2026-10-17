@@ -6,7 +6,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   cleanupDockerSetupSandboxRoot,
-  collectMatchingLines,
   createDockerSetupSandbox,
   expectMissingPath,
   expectOfflineComposePolicy,
@@ -88,6 +87,16 @@ async function runDockerSetupWithUnsetGatewayToken(
 
 describe("scripts/docker/setup.sh", () => {
   let sandbox: DockerSetupSandbox;
+
+  async function runLoggedSetup(
+    overrides: Record<string, string | undefined> = {},
+    args: string[] = [],
+  ) {
+    await resetDockerLog(sandbox);
+    const result = runDockerSetup(sandbox, overrides, args);
+    const log = await readDockerLog(sandbox);
+    return { result, log, lines: log.split("\n").filter(Boolean) };
+  }
 
   beforeAll(async () => {
     await setupDockerSetupSandboxRoot();
@@ -244,14 +253,12 @@ describe("scripts/docker/setup.sh", () => {
   it.each(["curl wget httpie", ""])(
     "prefers an explicit image apt package value %j over the legacy fallback",
     async (packages) => {
-      await resetDockerLog(sandbox);
-      const result = runDockerSetup(sandbox, {
+      const { result, log } = await runLoggedSetup({
         OPENCLAW_IMAGE_APT_PACKAGES: packages,
         OPENCLAW_DOCKER_APT_PACKAGES: "curl wget",
       });
       expect(result.status).toBe(0);
       const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
-      const log = await readDockerLog(sandbox);
       expect(envFile).toContain(`OPENCLAW_IMAGE_APT_PACKAGES=${packages}`);
       expect(envFile).not.toContain("OPENCLAW_DOCKER_APT_PACKAGES");
       expect(log).toContain(`--build-arg OPENCLAW_IMAGE_APT_PACKAGES=${packages}`);
@@ -265,25 +272,21 @@ describe("scripts/docker/setup.sh", () => {
   );
 
   it("pins prestart CLI state inside the container without depending on its network namespace", async () => {
-    await resetDockerLog(sandbox);
-    const result = runDockerSetup(sandbox, {
+    const { result, lines } = await runLoggedSetup({
       OPENCLAW_HOME: "/mnt/c/Users/Trevor",
       OPENCLAW_STATE_DIR: "/mnt/c/Users/Trevor/.openclaw",
       OPENCLAW_CONFIG_PATH: "/mnt/c/Users/Trevor/.openclaw/openclaw.json",
     });
     expect(result.status).toBe(0);
 
-    const lines = await readDockerLogLines(sandbox);
     const gatewayStartIdx = findGatewayStartLineIndex(lines);
     expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
 
     const prestartLines = lines.slice(0, gatewayStartIdx);
     expect(
-      collectMatchingLines(prestartLines, (line) =>
-        /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line),
-      ),
+      prestartLines.filter((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line)),
     ).toStrictEqual([]);
-    const prestartConfigLines = collectMatchingLines(prestartLines, (line) =>
+    const prestartConfigLines = prestartLines.filter((line) =>
       line.includes(" dist/index.js config "),
     );
     expect(prestartConfigLines.length).toBeGreaterThan(0);
@@ -309,12 +312,11 @@ describe("scripts/docker/setup.sh", () => {
       });
 
       expect(result.status).toBe(0);
-      const buildLines = collectMatchingLines(await readDockerLogLines(sandbox), (line) =>
+      const buildLines = (await readDockerLogLines(sandbox)).filter((line) =>
         line.startsWith("build "),
       );
       expect(buildLines.length).toBeGreaterThanOrEqual(2);
-      const buildLinesWithoutBuildKit = collectMatchingLines(
-        buildLines,
+      const buildLinesWithoutBuildKit = buildLines.filter(
         (line) => !line.includes("DOCKER_BUILDKIT=1"),
       );
       expect(buildLinesWithoutBuildKit).toStrictEqual([]);
@@ -324,10 +326,8 @@ describe("scripts/docker/setup.sh", () => {
   it.each([false, true])(
     "requires the offline main image to be preloaded (missing=%s)",
     async (missing) => {
-      await resetDockerLog(sandbox);
       const image = `ghcr.io/openclaw/openclaw:${missing ? "offline" : "latest"}`;
-      const result = runDockerSetup(
-        sandbox,
+      const { result, log, lines } = await runLoggedSetup(
         {
           OPENCLAW_IMAGE: image,
           OPENCLAW_SKIP_ONBOARDING: missing ? undefined : "1",
@@ -335,8 +335,6 @@ describe("scripts/docker/setup.sh", () => {
         },
         ["--offline"],
       );
-      const lines = await readDockerLogLines(sandbox);
-      const log = lines.join("\n");
       expect(log).toContain(`image inspect ${image}`);
       expect(log).not.toMatch(/^build /m);
       expect(log).not.toMatch(/^pull /m);
@@ -359,14 +357,12 @@ describe("scripts/docker/setup.sh", () => {
       join(sandbox.rootDir, "scripts", "docker", "sandbox", "Dockerfile"),
       "FROM scratch\n",
     );
-    await resetDockerLog(sandbox);
     const socketPath = join(sandbox.rootDir, "sb.sock");
 
     await withUnixSocket(socketPath, async () => {
       const defaultImage = "registry.example/openclaw-sandbox:approved";
       const agentImage = " registry.example/openclaw-sandbox:agent ";
-      const result = runDockerSetup(
-        sandbox,
+      const { result, log, lines } = await runLoggedSetup(
         {
           OPENCLAW_SANDBOX: "1",
           OPENCLAW_SKIP_ONBOARDING: "1",
@@ -387,8 +383,6 @@ describe("scripts/docker/setup.sh", () => {
         "Offline sandbox prerequisites are incomplete; sandbox configuration was not changed",
       );
 
-      const lines = await readDockerLogLines(sandbox);
-      const log = lines.join("\n");
       expect(log).toContain("image inspect openclaw:local");
       expect(log).not.toContain(`image inspect ${defaultImage}`);
       expect(log).toContain(`image inspect ${agentImage} host=unix://${socketPath}`);
@@ -402,7 +396,6 @@ describe("scripts/docker/setup.sh", () => {
   });
 
   it("offline sandbox validates only effective Docker and browser images", async () => {
-    await resetDockerLog(sandbox);
     const socketPath = join(sandbox.rootDir, "eff.sock");
 
     await withUnixSocket(socketPath, async () => {
@@ -415,8 +408,7 @@ describe("scripts/docker/setup.sh", () => {
         "registry.example/openclaw-sandbox:off",
         "registry.example/openclaw-sandbox-browser:denied",
       ];
-      const result = runDockerSetup(
-        sandbox,
+      const { result, log, lines } = await runLoggedSetup(
         {
           OPENCLAW_SANDBOX: "1",
           OPENCLAW_SKIP_ONBOARDING: "1",
@@ -456,8 +448,6 @@ describe("scripts/docker/setup.sh", () => {
       expect(result.stdout).toContain(`  - ${defaultImage}`);
       expect(result.stdout).toContain(`  - ${browserImage}`);
 
-      const lines = await readDockerLogLines(sandbox);
-      const log = lines.join("\n");
       expect(log).toContain(`image inspect ${defaultImage} host=unix://${socketPath}`);
       expect(log).toContain(`image inspect ${browserImage} host=unix://${socketPath}`);
       for (const image of ignoredImages) {
@@ -469,13 +459,11 @@ describe("scripts/docker/setup.sh", () => {
   });
 
   it("offline sandbox rejects an incompatible browser image", async () => {
-    await resetDockerLog(sandbox);
     const socketPath = join(sandbox.rootDir, "br.sock");
 
     await withUnixSocket(socketPath, async () => {
       const browserImage = "registry.example/openclaw-sandbox-browser:stale";
-      const result = runDockerSetup(
-        sandbox,
+      const { result, log, lines } = await runLoggedSetup(
         {
           OPENCLAW_SANDBOX: "1",
           OPENCLAW_SKIP_ONBOARDING: "1",
@@ -497,8 +485,6 @@ describe("scripts/docker/setup.sh", () => {
         "Offline sandbox prerequisites are incomplete; sandbox configuration was not changed",
       );
 
-      const lines = await readDockerLogLines(sandbox);
-      const log = lines.join("\n");
       expect(log).toContain(`image inspect ${browserImage} host=unix://${socketPath}`);
       expect(log).not.toContain("config set agents.defaults.sandbox.mode off");
       expect(log).not.toContain("config set agents.defaults.sandbox.mode non-main");
@@ -625,9 +611,7 @@ describe("scripts/docker/setup.sh", () => {
   );
 
   it("treats OPENCLAW_SANDBOX=0 as disabled", async () => {
-    await resetDockerLog(sandbox);
-
-    const result = runDockerSetup(sandbox, {
+    const { result, log } = await runLoggedSetup({
       OPENCLAW_SANDBOX: "0",
     });
 
@@ -635,14 +619,12 @@ describe("scripts/docker/setup.sh", () => {
     const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_SANDBOX=");
 
-    const log = await readDockerLog(sandbox);
     expect(log).toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=");
     expect(log).not.toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1");
     expect(log).toContain("config set agents.defaults.sandbox.mode off");
   });
 
   it("resets stale sandbox mode and overlay when sandbox is not active", async () => {
-    await resetDockerLog(sandbox);
     await writeFile(
       join(sandbox.rootDir, "docker-compose.sandbox.yml"),
       "services:\n  openclaw-gateway:\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n",
@@ -650,7 +632,7 @@ describe("scripts/docker/setup.sh", () => {
     const socketPath = join(sandbox.rootDir, "missing-cli.sock");
 
     await withUnixSocket(socketPath, async () => {
-      const result = runDockerSetup(sandbox, {
+      const { result, log } = await runLoggedSetup({
         OPENCLAW_SANDBOX: "1",
         OPENCLAW_DOCKER_SOCKET: socketPath,
         DOCKER_STUB_FAIL_MATCH: "--entrypoint docker openclaw-gateway --version",
@@ -658,19 +640,16 @@ describe("scripts/docker/setup.sh", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toContain("Sandbox requires Docker CLI");
-      const log = await readDockerLog(sandbox);
       expect(log).toContain("config set agents.defaults.sandbox.mode off");
       await expectMissingPath(join(sandbox.rootDir, "docker-compose.sandbox.yml"));
     });
   });
 
   it("keeps offline policy when sandbox config writes fail and the gateway rolls back", async () => {
-    await resetDockerLog(sandbox);
     const socketPath = join(sandbox.rootDir, "sandbox.sock");
 
     await withUnixSocket(socketPath, async () => {
-      const result = runDockerSetup(
-        sandbox,
+      const { result, log, lines } = await runLoggedSetup(
         {
           OPENCLAW_SANDBOX: "1",
           OPENCLAW_DOCKER_SOCKET: socketPath,
@@ -683,9 +662,7 @@ describe("scripts/docker/setup.sh", () => {
       expect(result.stderr).toContain("Failed to set agents.defaults.sandbox.scope");
       expect(result.stderr).toContain("Skipping gateway restart to avoid exposing Docker socket");
 
-      const lines = await readDockerLogLines(sandbox);
-      const log = lines.join("\n");
-      const gatewayStarts = collectMatchingLines(lines, (line) => isGatewayStartLine(line));
+      const gatewayStarts = lines.filter(isGatewayStartLine);
       expect(gatewayStarts).toHaveLength(2);
       expect(log).toContain(
         "run --pull never --rm --no-deps openclaw-cli config set agents.defaults.sandbox.mode non-main",
@@ -722,10 +699,8 @@ describe("scripts/docker/setup.sh", () => {
   });
 
   it.each(["1", "0"])("normalizes OPENCLAW_SKIP_ONBOARDING=%s", async (value) => {
-    await resetDockerLog(sandbox);
-    const result = runDockerSetup(sandbox, { OPENCLAW_SKIP_ONBOARDING: value });
+    const { result, log } = await runLoggedSetup({ OPENCLAW_SKIP_ONBOARDING: value });
     expect(result.status).toBe(0);
-    const log = await readDockerLog(sandbox);
     const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
     if (value === "1") {
       expect(log).not.toContain("onboard");
