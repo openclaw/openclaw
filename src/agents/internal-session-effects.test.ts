@@ -28,59 +28,54 @@ describe("internal session effects", () => {
   });
   const scope = () => ({ agentId: "main", storePath });
   const prepare = (runId: string) => prepareInternalSessionEffectsSession({ ...scope(), runId });
-  async function incognito(run: () => Promise<void>) {
+  it("does not archive an incognito internal-effects transcript during rotation", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: dir }, async () => {
       storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
       try {
-        await run();
+        const target = await prepare("incognito-run");
+        expect(target.sessionKey).toMatch(
+          /^agent:main:internal-session-effects:incognito-incognito-run-/,
+        );
+        expect(loadExactSessionEntry(target)?.entry.incognito).toBe(true);
+        const previousTranscript = path.join(dir, "private-internal.jsonl");
+        const header = {
+          type: "session",
+          version: 3,
+          id: target.sessionId,
+          timestamp: new Date().toISOString(),
+        };
+        await fs.writeFile(previousTranscript, `${JSON.stringify(header)}\n`, "utf8");
+        const previousEntry = await upsertSessionEntryCore(target, {
+          ...target.sessionEntry,
+          sessionFile: previousTranscript,
+        });
+        if (!previousEntry) {
+          throw new Error("failed to seed incognito internal-effects entry");
+        }
+        const nextTranscript = path.join(dir, "next-internal.jsonl");
+
+        const reset = await resetSessionEntryLifecycle({
+          ...scope(),
+          target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+          buildNextEntry: () => ({
+            ...previousEntry,
+            sessionFile: nextTranscript,
+            sessionId: "internal-session-effects-rotated",
+            updatedAt: Date.now(),
+          }),
+          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: dir },
+        });
+
+        expect(reset.archivedTranscripts).toEqual([]);
+        expect(loadExactSessionEntry(target)?.entry).toMatchObject({
+          sessionId: "internal-session-effects-rotated",
+          sessionFile: nextTranscript,
+        });
+        expect(await fs.readdir(dir)).toContain("private-internal.jsonl");
+        expect((await fs.readdir(dir)).some((name) => name.includes(".reset."))).toBe(false);
       } finally {
         memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
       }
-    });
-  }
-  it("does not archive an incognito internal-effects transcript during rotation", async () => {
-    await incognito(async () => {
-      const target = await prepare("incognito-run");
-      expect(target.sessionKey).toMatch(
-        /^agent:main:internal-session-effects:incognito-incognito-run-/,
-      );
-      expect(loadExactSessionEntry(target)?.entry.incognito).toBe(true);
-      const previousTranscript = path.join(dir, "private-internal.jsonl");
-      const header = {
-        type: "session",
-        version: 3,
-        id: target.sessionId,
-        timestamp: new Date().toISOString(),
-      };
-      await fs.writeFile(previousTranscript, `${JSON.stringify(header)}\n`, "utf8");
-      const previousEntry = await upsertSessionEntryCore(target, {
-        ...target.sessionEntry,
-        sessionFile: previousTranscript,
-      });
-      if (!previousEntry) {
-        throw new Error("failed to seed incognito internal-effects entry");
-      }
-      const nextTranscript = path.join(dir, "next-internal.jsonl");
-
-      const reset = await resetSessionEntryLifecycle({
-        ...scope(),
-        target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
-        buildNextEntry: () => ({
-          ...previousEntry,
-          sessionFile: nextTranscript,
-          sessionId: "internal-session-effects-rotated",
-          updatedAt: Date.now(),
-        }),
-        resetBoundary: { context: "preserve-tail", reason: "reset", cwd: dir },
-      });
-
-      expect(reset.archivedTranscripts).toEqual([]);
-      expect(loadExactSessionEntry(target)?.entry).toMatchObject({
-        sessionId: "internal-session-effects-rotated",
-        sessionFile: nextTranscript,
-      });
-      expect(await fs.readdir(dir)).toContain("private-internal.jsonl");
-      expect((await fs.readdir(dir)).some((name) => name.includes(".reset."))).toBe(false);
     });
   });
 

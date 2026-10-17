@@ -7,10 +7,11 @@ import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { commandResult } from "./github-identity.test-support.js";
 import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
-const mocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
-vi.mock("../process/exec.js", () => ({ runCommandBuffered: mocks.runCommandBuffered }));
+const { run } = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("../process/exec.js", () => ({ runCommandBuffered: run }));
 
 import {
   clearRuntimeConfigSnapshot,
@@ -33,7 +34,7 @@ const enterprise = (host: string) => ({ gateway: { github: { host } } });
 const account = (id = 101, login = "native-user") => Response.json({ id, login, avatar_url: null });
 
 beforeEach(() => {
-  mocks.runCommandBuffered.mockReset();
+  run.mockReset();
   vi.stubEnv("GH_TOKEN", undefined);
   vi.stubEnv("GITHUB_TOKEN", undefined);
 });
@@ -43,14 +44,46 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-function commandResult(stdout = "", code = 0, stderr = "") {
+function pausedAuthority() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
   return {
-    stdout: Buffer.from(stdout),
-    stderr: Buffer.from(stderr),
-    code,
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+    async reject(pending: Promise<unknown>, reason: string, revoke: () => void) {
+      const outcome = pending.then(
+        () => "delivered",
+        () => "refused",
+      );
+      try {
+        expect(await Promise.race([entered.promise.then(() => "checking"), outcome])).toBe(
+          "checking",
+        );
+        revoke();
+        release.resolve();
+        await expect(pending).rejects.toThrow(reason);
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+    },
+  };
+}
+
+function startAdmitted(state: { admitted: boolean }, assertCurrent = () => {}) {
+  return async <T>(start: () => T): Promise<Awaited<T>> => {
+    await Promise.resolve();
+    assertCurrent();
+    state.admitted = true;
+    let result: T;
+    try {
+      result = start();
+    } finally {
+      state.admitted = false;
+    }
+    return await result;
   };
 }
 
@@ -62,6 +95,7 @@ describe("native GitHub identity absence", () => {
     error: Object.assign(new Error("Synthetic launch failure"), { code }),
   });
   const absentEnvironment = () => {
+    run.mockResolvedValue(launchFailure());
     const root = tempDirs.make("github-native-absence-");
     return { PATH: root, GH_CONFIG_DIR: root, GH_TOKEN: undefined, GITHUB_TOKEN: undefined };
   };
@@ -69,16 +103,14 @@ describe("native GitHub identity absence", () => {
   it("refuses present native hosts.yml rather than treating it as anonymous", async () => {
     const env = absentEnvironment();
     await fs.writeFile(path.join(env.GH_CONFIG_DIR, "hosts.yml"), "{}\n");
-    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
     await expect(native(env)).rejects.toMatchObject({ reason: "unavailable" });
-    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("rejects a symbolic native configuration directory", async () => {
     const env = absentEnvironment();
     const link = path.join(env.GH_CONFIG_DIR, "native-link");
     await fs.symlink(env.GH_CONFIG_DIR, link, "junction");
-    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
     await expect(native({ ...env, GH_CONFIG_DIR: link })).rejects.toMatchObject({
       reason: "unavailable",
     });
@@ -86,7 +118,6 @@ describe("native GitHub identity absence", () => {
 
   it("does not interpret unreadable configuration metadata as absence", async () => {
     const env = absentEnvironment();
-    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
     vi.spyOn(fs, "lstat").mockRejectedValue(
       Object.assign(new Error("Synthetic permission failure"), { code: "EACCES" }),
     );
@@ -103,13 +134,11 @@ describe("native GitHub identity absence", () => {
       { mode: 0o755 },
     );
     expect(resolveExecutablePath("gh", { env, cwd })).toBeUndefined();
-    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
     await expect(native(env)).rejects.toMatchObject({ reason: "unverified" });
   });
 
   it("rejects an ENOENT caused by an unavailable working directory", async () => {
     const env = absentEnvironment();
-    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
     vi.spyOn(process, "cwd").mockImplementation(() => {
       throw Object.assign(new Error("Missing cwd"), { code: "ENOENT" });
     });
@@ -126,12 +155,12 @@ describe("native GitHub identity absence", () => {
     await expect(native({ GH_TOKEN: " \n", GITHUB_TOKEN: "synthetic-secondary" })).rejects.toThrow(
       "one non-empty line",
     );
-    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("does not pass public ambient credentials to a ghe.com tenant profile lookup", async () => {
     setRuntimeConfigSnapshot(enterprise("tenant.ghe.com"));
-    mocks.runCommandBuffered.mockImplementation(async (_argv, options) =>
+    run.mockImplementation(async (_argv, options) =>
       commandResult(options.env.GH_TOKEN || options.env.GITHUB_TOKEN || "stored-tenant-token"),
     );
     await expect(
@@ -150,14 +179,14 @@ describe("native GitHub identity absence", () => {
       GH_ENTERPRISE_TOKEN: undefined,
       GITHUB_ENTERPRISE_TOKEN: undefined,
     };
-    mocks.runCommandBuffered
+    run
       .mockResolvedValueOnce(commandResult("host-a-token"))
       .mockResolvedValueOnce(commandResult("host-b-token"));
     setRuntimeConfigSnapshot(enterprise("a.ghe.example.test"));
     await expect(readCachedNativeGitHubToken(env)).resolves.toBe("host-a-token");
     setRuntimeConfigSnapshot(enterprise("b.ghe.example.test"));
     await expect(readCachedNativeGitHubToken(env)).resolves.toBe("host-b-token");
-    expect(mocks.runCommandBuffered.mock.calls.map(([argv]) => argv)).toEqual([
+    expect(run.mock.calls.map(([argv]) => argv)).toEqual([
       ["gh", "auth", "token", "--hostname", "a.ghe.example.test"],
       ["gh", "auth", "token", "--hostname", "b.ghe.example.test"],
     ]);
@@ -172,7 +201,7 @@ describe("native GitHub identity absence", () => {
     await expect(readCachedNativeGitHubToken(env)).rejects.toMatchObject({
       reason: "unverified",
     });
-    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("preserves explicit undefined scrubs over inherited native environment tokens", async () => {
@@ -180,7 +209,6 @@ describe("native GitHub identity absence", () => {
     await expect(
       native({ GH_TOKEN: undefined, GITHUB_TOKEN: "synthetic-source-token" }),
     ).resolves.toBe("synthetic-source-token");
-    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
     await expect(native(absentEnvironment())).resolves.toBeUndefined();
   });
 
@@ -189,7 +217,7 @@ describe("native GitHub identity absence", () => {
     ["", "C:\\roaming", "C:\\roaming\\GitHub CLI"],
     ["", "", "C:\\user\\.config\\gh"],
   ])("checks Windows config precedence (%s, %s)", async (xdg, appData, expected) => {
-    mocks.runCommandBuffered.mockResolvedValue(launchFailure());
+    run.mockResolvedValue(launchFailure());
     const metadata = vi
       .spyOn(fs, "lstat")
       .mockRejectedValue(Object.assign(new Error("Absent fixture"), { code: "ENOENT" }));
@@ -220,7 +248,7 @@ describe("native GitHub identity absence", () => {
     { label: "missing host map", stdout: "{}", code: 0 },
   ])("does not treat $label as anonymous native identity", async ({ stdout, code }) => {
     const outputs: ReturnType<typeof commandResult>[] = [];
-    mocks.runCommandBuffered.mockImplementation(async (argv: string[]) => {
+    run.mockImplementation(async (argv: string[]) => {
       const result =
         argv[2] === "status"
           ? commandResult(stdout, code, "synthetic-native-diagnostic")
@@ -229,7 +257,7 @@ describe("native GitHub identity absence", () => {
       return result;
     });
     await expect(native({})).rejects.toThrow(/could not be verified|credential is unavailable/u);
-    expect(mocks.runCommandBuffered.mock.calls.map(([argv]) => argv)).toEqual([
+    expect(run.mock.calls.map(([argv]) => argv)).toEqual([
       ["gh", "auth", "token", "--hostname", "github.com"],
       ["gh", "auth", "status", "--active", "--hostname", "github.com", "--json", "hosts"],
     ]);
@@ -239,7 +267,7 @@ describe("native GitHub identity absence", () => {
           out.every((byte) => byte === 0) && stderr.every((byte) => byte === 0),
       ),
     ).toBe(true);
-    const statusOptions = mocks.runCommandBuffered.mock.calls[1]?.[1];
+    const statusOptions = run.mock.calls[1]?.[1];
     expect(statusOptions.timeoutMs).toBeGreaterThan(0);
     expect(statusOptions.timeoutMs).toBeLessThanOrEqual(15_000);
     expect(statusOptions.maxOutputBytes).toBe(32 * 1024);
@@ -286,34 +314,34 @@ describe("prepared GitHub read authority", () => {
     );
     await expect(identity.revalidate()).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledOnce();
-    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("observes host token rotation after 60 seconds while publication always reads it live", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
     let token = "native-before-ttl";
-    mocks.runCommandBuffered.mockImplementation(async () => commandResult(token));
+    run.mockImplementation(async () => commandResult(token));
     const options = readOptions();
     const identity = await prepareGitHubReadIdentity(options);
     token = "native-after-ttl";
     now += 59_999;
     await expect(identity.revalidate()).resolves.toBeUndefined();
-    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
     const publication = await prepareGitHubPublicationIdentity(options);
     expect(publication.env.GH_TOKEN).toBe(token);
     expect(publication.env.GH_ENTERPRISE_TOKEN).toBe(token);
-    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(2);
     now += 1;
     await expect(identity.revalidate()).rejects.toMatchObject({ reason: "changed" });
-    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(3);
+    expect(run).toHaveBeenCalledTimes(3);
     expect((await prepareGitHubReadIdentity(options)).token).toBe(token);
   });
 
   it("shares concurrent native reads without letting an invalidated in-flight read refill the cache", async () => {
     const pending = createDeferredCore<ReturnType<typeof commandResult>>();
     const entered = createDeferredCore();
-    mocks.runCommandBuffered
+    run
       .mockImplementationOnce(() => {
         entered.resolve();
         return pending.promise;
@@ -324,41 +352,38 @@ describe("prepared GitHub read authority", () => {
     await entered.promise;
     // Let all admitted callers reach the shared pending native read.
     await Promise.resolve();
-    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
     clearGitHubCredentialVerificationCache();
     expect((await prepareGitHubReadIdentity(options)).token).toBe("native-new-generation");
     pending.resolve(commandResult("native-old-generation"));
     await Promise.all(readers);
     expect((await prepareGitHubReadIdentity(options)).token).toBe("native-new-generation");
-    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("separates native command environments and immediately observes environment token changes", async () => {
-    mocks.runCommandBuffered.mockImplementation(async (_argv, { env }) =>
-      commandResult(`native-${env.GH_CONFIG_DIR}`),
-    );
+    run.mockImplementation(async (_argv, { env }) => commandResult(`native-${env.GH_CONFIG_DIR}`));
     const env: NodeJS.ProcessEnv = { GH_CONFIG_DIR: "first-profile", GH_TOKEN: undefined };
     const first = await prepareGitHubReadIdentity(readOptions(env));
     const other = await prepareGitHubReadIdentity(readOptions({ GH_CONFIG_DIR: "second-profile" }));
     expect(other.token).not.toBe(first.token);
-    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(2);
     env.GH_TOKEN = "native-from-environment";
     await expect(first.revalidate()).rejects.toMatchObject({ reason: "changed" });
     expect((await prepareGitHubReadIdentity(readOptions(env))).token).toBe(env.GH_TOKEN);
-    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it.each(["refresh", "credential", "probe", "delivery"] as const)(
     "awaits caller authority before %s during identity preparation",
     async (stage) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const pause = pausedAuthority();
       let phase = "refresh";
       let allowed = true;
       const refresh = vi.fn(async () => {
         phase = "credential";
       });
-      mocks.runCommandBuffered.mockImplementation(async () => {
+      run.mockImplementation(async () => {
         phase = "probe";
         return commandResult(`native-authority-${stage}`);
       });
@@ -370,8 +395,7 @@ describe("prepared GitHub read authority", () => {
         ...readOptions(),
         startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
           if (phase === stage) {
-            entered.resolve();
-            await release.promise;
+            await pause.wait();
           }
           if (!allowed) {
             throw new Error("grant revoked");
@@ -381,38 +405,23 @@ describe("prepared GitHub read authority", () => {
         refresh,
       };
       const preparing = prepareGitHubReadIdentity(options);
-      const outcome = preparing.then(
-        () => "delivered",
-        () => "refused",
-      );
-      try {
-        expect(await Promise.race([entered.promise.then(() => "checking"), outcome])).toBe(
-          "checking",
-        );
+      await pause.reject(preparing, "grant revoked", () => {
         expect(refresh).toHaveBeenCalledTimes(stage === "refresh" ? 0 : 1);
-        expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(
-          stage === "refresh" || stage === "credential" ? 0 : 1,
-        );
+        expect(run).toHaveBeenCalledTimes(stage === "refresh" || stage === "credential" ? 0 : 1);
         expect(fetch).toHaveBeenCalledTimes(stage === "delivery" ? 1 : 0);
         allowed = false;
-        release.resolve();
-        await expect(preparing).rejects.toThrow("grant revoked");
-      } finally {
-        release.resolve();
-        await outcome;
-      }
+      });
     },
   );
 
   it.each(["before", "after"] as const)(
     "rechecks live selection after delayed caller authority %s a retained credential read",
     async (stage) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const pause = pausedAuthority();
       let phase = "preparing";
       let active = true;
       const config = {};
-      mocks.runCommandBuffered.mockImplementation(async () => {
+      run.mockImplementation(async () => {
         if (phase === "before") {
           phase = "after";
         }
@@ -427,40 +436,26 @@ describe("prepared GitHub read authority", () => {
         },
         startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
           if (phase === stage) {
-            entered.resolve();
-            await release.promise;
+            await pause.wait();
           }
           return await start();
         },
       });
       clearGitHubCredentialVerificationCache();
-      mocks.runCommandBuffered.mockClear();
+      run.mockClear();
       phase = "before";
-      const checking = identity.revalidate();
-      const outcome = checking.then(
-        () => "delivered",
-        () => "refused",
-      );
-      try {
-        expect(await Promise.race([entered.promise.then(() => "checking"), outcome])).toBe(
-          "checking",
-        );
-        expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(stage === "before" ? 0 : 1);
+      await pause.reject(identity.revalidate(), "caller closed", () => {
+        expect(run).toHaveBeenCalledTimes(stage === "before" ? 0 : 1);
         active = false;
-        release.resolve();
-        await expect(checking).rejects.toThrow("caller closed");
-      } finally {
-        release.resolve();
-        await outcome;
-      }
+      });
     },
   );
 
   it("starts credential and network operations inside current caller admission", async () => {
-    let admitted = false;
+    const state = { admitted: false };
     let token = "native-before-refresh";
-    const assertAdmitted = () => expect(admitted).toBe(true);
-    mocks.runCommandBuffered.mockImplementation(async () => {
+    const assertAdmitted = () => expect(state.admitted).toBe(true);
+    run.mockImplementation(async () => {
       assertAdmitted();
       return commandResult(token);
     });
@@ -470,17 +465,7 @@ describe("prepared GitHub read authority", () => {
     });
     const identity = await prepareGitHubReadIdentity({
       ...readOptions(),
-      startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
-        await Promise.resolve();
-        admitted = true;
-        let result: T;
-        try {
-          result = start();
-        } finally {
-          admitted = false;
-        }
-        return await result;
-      },
+      startActive: startAdmitted(state),
       refresh: async () => {
         assertAdmitted();
         token = "native-admitted-start";
@@ -491,7 +476,7 @@ describe("prepared GitHub read authority", () => {
       assertAdmitted();
       return "read result";
     });
-    expect(admitted).toBe(false);
+    expect(state.admitted).toBe(false);
   });
 
   it("releases admission during shared transport and authorizes each caller's final delivery", async () => {
@@ -505,20 +490,11 @@ describe("prepared GitHub read authority", () => {
         selection: { source: "system-detected", accountId: 101 },
         assertSelected: () => {},
         readToken: async () => "synthetic-shared-token",
-        startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
-          await Promise.resolve();
+        startActive: startAdmitted(state, () => {
           if (!state.active) {
             throw new Error("grant revoked");
           }
-          state.admitted = true;
-          let result: T;
-          try {
-            result = start();
-          } finally {
-            state.admitted = false;
-          }
-          return await result;
-        },
+        }),
       });
       const started = createDeferredCore();
       const result = identity.start(() => {
@@ -563,7 +539,7 @@ describe("prepared GitHub read authority", () => {
       }),
     ).rejects.toThrow("closed");
     expect(fetch).not.toHaveBeenCalled();
-    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("binds system read authority to its selected profile and verified account", async () => {
@@ -603,11 +579,11 @@ describe("prepared GitHub read authority", () => {
     expect(rotated.cacheScope).not.toBe(identity.cacheScope);
     config = configured(replacementProfileId);
     expect(() => rotated.assertSelected()).toThrow("identity changed");
-    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("admits explicit anonymous source reads only while native credentials remain absent", async () => {
-    mocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
+    run.mockImplementation(async (argv: string[]) =>
       argv[2] === "status" ? commandResult('{"hosts":{}}') : commandResult("", 1),
     );
     const options = readOptions();
@@ -617,13 +593,13 @@ describe("prepared GitHub read authority", () => {
     expect(identity.token).toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
     await expect(identity.revalidate()).resolves.toBeUndefined();
-    mocks.runCommandBuffered.mockResolvedValue(commandResult("native-after-sign-in"));
+    run.mockResolvedValue(commandResult("native-after-sign-in"));
     await expect(identity.revalidate()).rejects.toThrow("identity changed");
   });
 
   it("closes anonymous read authority when native account configuration becomes unreadable", async () => {
     let hosts = {};
-    mocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
+    run.mockImplementation(async (argv: string[]) =>
       argv[2] === "status" ? commandResult(JSON.stringify({ hosts })) : commandResult("", 1),
     );
     const identity = await prepareGitHubReadIdentity({
@@ -647,8 +623,8 @@ describe("prepared GitHub read authority", () => {
         getCurrentConfig: () => configured,
       }),
     ).rejects.toThrow("credential is unavailable");
-    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
-    mocks.runCommandBuffered.mockResolvedValue(commandResult("native-rejected-source-token"));
+    expect(run).not.toHaveBeenCalled();
+    run.mockResolvedValue(commandResult("native-rejected-source-token"));
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 401 }));
     await expect(prepareGitHubReadIdentity(options)).rejects.toThrow("credential is unavailable");
     expect(fetch).toHaveBeenCalledOnce();

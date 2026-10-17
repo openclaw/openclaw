@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
@@ -12,21 +12,18 @@ import {
 } from "./github-oauth-client.js";
 
 const DEVICE_CODE = "a".repeat(40);
+const TOKEN = "synthetic-test-token";
+let probe: MockInstance<typeof fetch>;
 const jsonResponse = (body: unknown, status = 200) => Response.json(body, { status });
-const reply = (body: unknown, status = 200) =>
-  vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(body, status));
+const reply = (body: unknown, status = 200) => probe.mockResolvedValue(jsonResponse(body, status));
+const verify = (options?: Parameters<typeof verifyGitHubCredential>[1]) =>
+  verifyGitHubCredential(TOKEN, options);
+const poll = () => pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE });
 
-function tokenPair(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    access_token: "access-token",
-    token_type: "bearer",
-    scope: "workflow,repo,read:org,gist repo",
-    expires_in: 28_800,
-    refresh_token: "refresh-token-next",
-    refresh_token_expires_in: 15_897_600,
-    ...overrides,
-  };
-}
+beforeEach(() => {
+  clearGitHubCredentialVerificationCache();
+  probe = vi.spyOn(globalThis, "fetch");
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -37,14 +34,13 @@ afterEach(() => {
 describe("GitHub OAuth client", () => {
   it("verifies a managed credential at a fixed origin and registers redaction", async () => {
     const login = "managed-user_org";
-    const token = `synthetic-bound-credential-${login}`;
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    probe.mockResolvedValue(
       Response.json(
         { id: 202, login, avatar_url: null },
         { headers: { "x-oauth-scopes": "read:org, repo, repo" } },
       ),
     );
-    expect(await verifyGitHubCredential(token)).toEqual({
+    expect(await verify()).toEqual({
       status: "available",
       account: { accountId: 202, login, avatarUrl: null },
       scopes: ["read:org", "repo"],
@@ -55,28 +51,23 @@ describe("GitHub OAuth client", () => {
         method: "GET",
         redirect: "error",
         signal: expect.any(AbortSignal),
-        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${TOKEN}` },
       }),
     );
-    expect(redactRegisteredSecretValues(`failed with ${token}`, () => "[REDACTED]")).toBe(
+    expect(redactRegisteredSecretValues(`failed with ${TOKEN}`, () => "[REDACTED]")).toBe(
       "failed with [REDACTED]",
     );
   });
 
   it("re-probes a remotely revoked token after expiry without caching its rejection", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
-    const probe = vi
-      .spyOn(globalThis, "fetch")
+    probe
       .mockResolvedValueOnce(jsonResponse({ id: 202, login: "revoked-user" }))
       .mockImplementation(async () => jsonResponse({}, 401));
-    expect((await verifyGitHubCredential("synthetic-revoked-token")).status).toBe("available");
+    expect((await verify()).status).toBe("available");
     now.mockReturnValue(62_001);
-    expect(await verifyGitHubCredential("synthetic-revoked-token")).toEqual({
-      status: "unavailable",
-    });
-    expect(await verifyGitHubCredential("synthetic-revoked-token")).toEqual({
-      status: "unavailable",
-    });
+    expect(await verify()).toEqual({ status: "unavailable" });
+    expect(await verify()).toEqual({ status: "unavailable" });
     expect(probe).toHaveBeenCalledTimes(3);
   });
 
@@ -85,33 +76,27 @@ describe("GitHub OAuth client", () => {
   }) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const refresh = createDeferredCore<Response>();
-    const probe = vi
-      .spyOn(globalThis, "fetch")
+    probe
       .mockResolvedValueOnce(jsonResponse({ id: 204, login: "display-account" }))
       .mockReturnValueOnce(refresh.promise)
       .mockResolvedValue(jsonResponse({}, 401));
-    const token = "synthetic-stale-display-token";
-    const first = await verifyGitHubCredential(token);
+    const first = await verify();
     now.mockReturnValue(61_001);
     try {
-      expect(await withinTest(verifyGitHubCredential(token, { allowStale: true }), signal)).toEqual(
-        { ...first, stale: true },
-      );
-      expect(await verifyGitHubCredential(token, { allowStale: true })).toEqual({
+      expect(await withinTest(verify({ allowStale: true }), signal)).toEqual({
         ...first,
         stale: true,
       });
+      expect(await verify({ allowStale: true })).toEqual({ ...first, stale: true });
       let settled = false;
-      const strict = verifyGitHubCredential(token).then((result) => {
+      const strict = verify().then((result) => {
         settled = true;
         return result;
       });
       expect(settled).toBe(false);
       refresh.resolve(jsonResponse({}, 401));
       expect(await strict).toEqual({ status: "unavailable" });
-      expect(await verifyGitHubCredential(token, { allowStale: true })).toEqual({
-        status: "unavailable",
-      });
+      expect(await verify({ allowStale: true })).toEqual({ status: "unavailable" });
       expect(probe).toHaveBeenCalledTimes(3);
     } finally {
       refresh.resolve(jsonResponse({}, 401));
@@ -119,11 +104,9 @@ describe("GitHub OAuth client", () => {
   });
 
   it("keeps different tokens separate while sharing concurrent probes for one token", async () => {
-    const probe = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async (_url, init) =>
-        jsonResponse({ id: 202, login: new Headers(init?.headers).get("Authorization") }),
-      );
+    probe.mockImplementation(async (_url, init) =>
+      jsonResponse({ id: 202, login: new Headers(init?.headers).get("Authorization") }),
+    );
     const [first, concurrent, other] = await Promise.all([
       verifyGitHubCredential("synthetic-concurrent-a"),
       verifyGitHubCredential("synthetic-concurrent-a"),
@@ -138,24 +121,21 @@ describe("GitHub OAuth client", () => {
 
   it("does not let an in-flight probe repopulate cleared verification state", async () => {
     const upstream = createDeferredCore<Response>();
-    const probe = vi
-      .spyOn(globalThis, "fetch")
+    probe
       .mockReturnValueOnce(upstream.promise)
       .mockImplementation(async () => jsonResponse({ id: 202, login: "after-clear" }));
-    const first = verifyGitHubCredential("synthetic-inflight-clear");
+    const first = verify();
     clearGitHubCredentialVerificationCache();
-    const second = await verifyGitHubCredential("synthetic-inflight-clear");
+    const second = await verify();
     upstream.resolve(jsonResponse({ id: 202, login: "before-clear" }));
     await first;
-    expect(await verifyGitHubCredential("synthetic-inflight-clear")).toBe(second);
+    expect(await verify()).toBe(second);
     expect(probe).toHaveBeenCalledTimes(2);
   });
 
   it("classifies account HTTP 403 without reflecting diagnostics", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("synthetic-secret-diagnostics", { status: 403 }),
-    );
-    expect(await verifyGitHubCredential("synthetic-http-403")).toEqual({ status: "unverified" });
+    probe.mockResolvedValue(new Response("synthetic-secret-diagnostics", { status: 403 }));
+    expect(await verify()).toEqual({ status: "unverified" });
   });
 
   it.each([
@@ -168,27 +148,25 @@ describe("GitHub OAuth client", () => {
   ])(
     "rejects malformed or unbounded %s account responses without diagnostics",
     async (name, body) => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+      probe.mockResolvedValue(new Response(body));
       expect(await verifyGitHubCredential(`synthetic-${name}`)).toEqual({ status: "unverified" });
     },
   );
 
   it("bounds the account body read and sanitizes network and cancellation errors", async () => {
     const cancel = vi.fn();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new ReadableStream({ cancel })));
-    expect(await verifyGitHubCredential("synthetic-body-timeout", { timeoutMs: 10 })).toEqual({
+    probe.mockResolvedValue(new Response(new ReadableStream({ cancel })));
+    expect(await verify({ timeoutMs: 10 })).toEqual({
       status: "unverified",
     });
     expect(cancel).toHaveBeenCalled();
     const caller = new AbortController();
-    vi.mocked(fetch).mockImplementation(async (_url, init) => {
+    probe.mockImplementation(async (_url, init) => {
       caller.abort(new Error("synthetic-token must stay private"));
       expect(init?.signal?.aborted).toBe(true);
       throw init?.signal?.reason;
     });
-    expect(
-      await verifyGitHubCredential("synthetic-cancellation", { signal: caller.signal }),
-    ).toEqual({ status: "unverified" });
+    expect(await verify({ signal: caller.signal })).toEqual({ status: "unverified" });
   });
 
   it.each([
@@ -231,9 +209,7 @@ describe("GitHub OAuth client", () => {
     },
   ])("returns the typed polling state for $body.error", async ({ body, expected }) => {
     reply(body);
-    await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).resolves.toEqual(
-      expected,
-    );
+    await expect(poll()).resolves.toEqual(expected);
   });
 
   it("returns refresh rejection as a typed outcome", async () => {
@@ -247,22 +223,20 @@ describe("GitHub OAuth client", () => {
   });
 
   it.each([
-    ["wrong token type", tokenPair({ token_type: "mac" })],
-    ["missing publication scopes", tokenPair({ scope: "repo" })],
+    ["wrong token type", { token_type: "mac" }],
+    ["missing publication scopes", { token_type: "bearer", scope: "repo" }],
     ["unknown error", { error: "surprise_error" }],
-    ["mixed success and error", { ...tokenPair(), error: "authorization_pending" }],
+    ["mixed success and error", { access_token: "access-token", error: "authorization_pending" }],
   ])("rejects a strictly invalid %s response", async (_name, body) => {
     reply(body);
-    await expect(pollGitHubOAuthDeviceToken({ deviceCode: DEVICE_CODE })).rejects.toThrow(
-      "GitHub OAuth device token response was invalid",
-    );
+    await expect(poll()).rejects.toThrow("GitHub OAuth device token response was invalid");
   });
 
   it("combines caller cancellation with a bounded request timeout", async () => {
     const caller = new AbortController();
     const timeout = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+    probe.mockImplementation(async (_url, init) => {
       expect(init?.signal?.aborted).toBe(false);
       caller.abort(new Error("cancelled"));
       expect(init?.signal?.aborted).toBe(true);

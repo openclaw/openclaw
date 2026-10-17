@@ -10,6 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { commandResult as result } from "./github-identity.test-support.js";
 import {
   clearGitHubCredentialVerificationCache,
   pollGitHubOAuthDeviceToken,
@@ -35,25 +36,19 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const account = { id: 202, login: "managed-user", avatar_url: null };
 const profileId = "ghp_66666666666666666666666666666666";
-const install = (profileDir: string, token: string) =>
-  installManagedGitHubProfile({ profileDir, token, commitConfig: async () => {} });
-const enterprise = (host = "ghe.example.test") => ({
-  gateway: { github: { host, apiBaseUrl: `https://${host}/api/v3` } },
+const install = (profileDir: string, token: string, commitConfig = async () => {}) =>
+  installManagedGitHubProfile({ profileDir, token, commitConfig });
+const rotate = (profileDir: string, token: string) =>
+  refreshManagedGitHubProfile({ profileDir, token, expectedAccountId: account.id });
+const enterprise = (host = "ghe.example.test", apiBaseUrl = `https://${host}/api/v3`) => ({
+  gateway: { github: { host, apiBaseUrl } },
 });
-const personal = () =>
+const personal = (accountId = account.id) =>
   preparePersonalGitHubPublicationIdentity({
     profileId,
-    accountId: account.id,
+    accountId,
     assertCurrent: () => {},
   });
-const result = (stdout = "") => ({
-  stdout: Buffer.from(stdout),
-  stderr: Buffer.alloc(0),
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-});
 
 describe("managed credential isolation", () => {
   let root: string;
@@ -86,16 +81,14 @@ describe("managed credential isolation", () => {
     const profileDir = profile("personal", "");
     const initialToken = "synthetic-public-oauth-initial";
     const rotatedToken = "synthetic-public-oauth-rotated";
-    const requests: Array<{ url: string; publicCredential: boolean }> = [];
+    const requests: Array<[url: string, publicCredential: boolean]> = [];
     vi.mocked(fetch).mockImplementation(async (url, init) => {
       const requestUrl = url instanceof Request ? url.url : String(url);
       const authorization = new Headers(init?.headers).get("Authorization");
-      requests.push({
-        url: requestUrl,
-        publicCredential: [initialToken, rotatedToken].some(
-          (token) => authorization === `Bearer ${token}`,
-        ),
-      });
+      requests.push([
+        requestUrl,
+        [initialToken, rotatedToken].some((token) => authorization === `Bearer ${token}`),
+      ]);
       if (init?.method === "POST") {
         const refresh =
           init.body instanceof URLSearchParams && init.body.get("grant_type") === "refresh_token";
@@ -111,34 +104,22 @@ describe("managed credential isolation", () => {
       return Response.json(account);
     });
     const authorization = await pollGitHubOAuthDeviceToken({ deviceCode: "a".repeat(40) });
-    if (authorization.status !== "authorized") {
-      throw new Error("The OAuth fixture did not authorize its public token");
-    }
+    assert(authorization.status === "authorized");
     const commitConfig = vi.fn(async () => {});
-    await installManagedGitHubProfile({
-      profileDir,
-      token: authorization.tokens.accessToken,
-      commitConfig,
-    });
+    await install(profileDir, authorization.tokens.accessToken, commitConfig);
     const refreshed = await refreshGitHubOAuthToken({
       refreshToken: authorization.tokens.refreshToken,
     });
-    if (refreshed.status !== "refreshed") {
-      throw new Error("The OAuth fixture did not rotate its public token");
-    }
-    await refreshManagedGitHubProfile({
-      profileDir,
-      token: refreshed.tokens.accessToken,
-      expectedAccountId: account.id,
-    });
+    assert(refreshed.status === "refreshed");
+    await rotate(profileDir, refreshed.tokens.accessToken);
     clearGitHubCredentialVerificationCache();
     const identity = await personal();
     expect(requests).toEqual([
-      { url: "https://github.com/login/oauth/access_token", publicCredential: false },
-      { url: "https://api.github.com/user", publicCredential: true },
-      { url: "https://github.com/login/oauth/access_token", publicCredential: false },
-      { url: "https://api.github.com/user", publicCredential: true },
-      { url: "https://api.github.com/user", publicCredential: true },
+      ["https://github.com/login/oauth/access_token", false],
+      ["https://api.github.com/user", true],
+      ["https://github.com/login/oauth/access_token", false],
+      ["https://api.github.com/user", true],
+      ["https://api.github.com/user", true],
     ]);
     expect(commitConfig).toHaveBeenCalledOnce();
     expect(identity).toMatchObject({ host: "github.com", env: { GH_TOKEN: rotatedToken } });
@@ -169,14 +150,12 @@ describe("managed credential isolation", () => {
       const prepared = personal();
       const outcome = expect(prepared).rejects.toThrow("GitHub identity changed");
       await started.promise;
-      setRuntimeConfigSnapshot({
-        gateway: {
-          github: {
-            host: change === "host" ? "b.ghe.example.test" : config.gateway.github.host,
-            apiBaseUrl: "https://b.ghe.example.test/api/v3",
-          },
-        },
-      });
+      setRuntimeConfigSnapshot(
+        enterprise(
+          change === "host" ? "b.ghe.example.test" : config.gateway.github.host,
+          "https://b.ghe.example.test/api/v3",
+        ),
+      );
       release.resolve(Response.json(account));
       await outcome;
     },
@@ -217,13 +196,7 @@ describe("managed credential isolation", () => {
     await install(profileDir, "synthetic-before");
     const original = await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8");
     vi.mocked(fetch).mockResolvedValue(Response.json({ ...account, id: 303 }));
-    await expect(
-      refreshManagedGitHubProfile({
-        profileDir,
-        token: "synthetic-after",
-        expectedAccountId: 202,
-      }),
-    ).rejects.toThrow("different account");
+    await expect(rotate(profileDir, "synthetic-after")).rejects.toThrow("different account");
     expect(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).toBe(original);
     expect(await fs.readdir(root)).toEqual(["profile"]);
     expect(commands.run).not.toHaveBeenCalled();
@@ -235,9 +208,9 @@ describe("managed credential isolation", () => {
       Response.json(account, { headers: { "x-oauth-scopes": "repo" } }),
     );
     const commitConfig = vi.fn(async () => {});
-    await expect(
-      installManagedGitHubProfile({ profileDir, token: "synthetic-scoped-token", commitConfig }),
-    ).rejects.toThrow("missing required");
+    await expect(install(profileDir, "synthetic-scoped-token", commitConfig)).rejects.toThrow(
+      "missing required",
+    );
     expect(commitConfig).not.toHaveBeenCalled();
     expect(await fs.readdir(root)).toEqual([]);
     expect(commands.run).not.toHaveBeenCalled();
@@ -277,13 +250,7 @@ describe("managed credential isolation", () => {
         result(argv[0] === "gh" ? JSON.stringify({ id: 101, login: "native-user" }) : ""),
       );
       if (scope === "personal") {
-        await expect(
-          preparePersonalGitHubPublicationIdentity({
-            profileId,
-            accountId: 101,
-            assertCurrent: () => {},
-          }),
-        ).rejects.toThrow(/unavailable/);
+        await expect(personal(101)).rejects.toThrow(/unavailable/);
       } else {
         const github = { profileId };
         const config = { agents: { entries: { main: { tools: { github } } } } };
@@ -299,3 +266,4 @@ describe("managed credential isolation", () => {
     },
   );
 });
+import assert from "node:assert/strict";

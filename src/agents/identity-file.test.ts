@@ -59,29 +59,27 @@ describe("parseIdentityMarkdown", () => {
   });
 });
 
-describe("mergeIdentityMarkdownContent", () => {
-  it.each([
-    [
-      "\n# IDENTITY.md - Agent Identity\n\n- **Name:** C-3PO\n- **Creature:** Flustered Protocol Droid\n- **Vibe:** Anxious, detail-obsessed\n- **Emoji:** 🤖\n\n## Role\n\nFluent in over six million error messages.\n",
-      { name: "Patch Agent", emoji: "🦀", avatar: "avatars/patch.png" },
-      "\n# IDENTITY.md - Agent Identity\n\n- Name: Patch Agent\n- **Creature:** Flustered Protocol Droid\n- **Vibe:** Anxious, detail-obsessed\n- Emoji: 🦀\n- Avatar: avatars/patch.png\n\n## Role\n\nFluent in over six million error messages.\n",
-    ],
-    [
-      "\n- Name: Old Name\n- Name: Older Name\n- Emoji: 🙂\n",
-      { name: "New Name", emoji: "🦀" },
-      "\n- Name: New Name\n- Emoji: 🦀\n",
-    ],
-    ["- **`Name`**: Old Name\n", { name: "New Name" }, "- Name: New Name\n"],
-  ] as const)(
-    "normalizes writable fields and preserves rich content: %s",
-    (content, identity, expected) => {
-      expect(mergeIdentityMarkdownContent(content, identity)).toBe(expected);
-    },
-  );
-});
-
+it.each([
+  [
+    "\n# IDENTITY.md - Agent Identity\n\n- **Name:** C-3PO\n- **Creature:** Flustered Protocol Droid\n- **Vibe:** Anxious, detail-obsessed\n- **Emoji:** 🤖\n\n## Role\n\nFluent in over six million error messages.\n",
+    { name: "Patch Agent", emoji: "🦀", avatar: "avatars/patch.png" },
+    "\n# IDENTITY.md - Agent Identity\n\n- Name: Patch Agent\n- **Creature:** Flustered Protocol Droid\n- **Vibe:** Anxious, detail-obsessed\n- Emoji: 🦀\n- Avatar: avatars/patch.png\n\n## Role\n\nFluent in over six million error messages.\n",
+  ],
+  [
+    "\n- Name: Old Name\n- Name: Older Name\n- Emoji: 🙂\n",
+    { name: "New Name", emoji: "🦀" },
+    "\n- Name: New Name\n- Emoji: 🦀\n",
+  ],
+  ["- **`Name`**: Old Name\n", { name: "New Name" }, "- Name: New Name\n"],
+] as const)(
+  "normalizes writable fields and preserves rich content: %s",
+  (content, identity, expected) => {
+    expect(mergeIdentityMarkdownContent(content, identity)).toBe(expected);
+  },
+);
 describe("loadAgentIdentityFromWorkspace", () => {
   let tempDir: string;
+  const load = () => loadAgentIdentityFromWorkspaceAsync(tempDir);
 
   beforeEach(() => {
     tempDir = tempDirs.make("openclaw-identity-");
@@ -121,7 +119,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
       } else {
         fs.writeFileSync(identityPath, "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1));
         expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
-        expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
+        expect(await load()).toBeNull();
         await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
           `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
         );
@@ -135,7 +133,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
       filePath,
       `- Name: Prepared\n- Avatar: data:image/png;base64,${"A".repeat(1024 * 1024)}\n`,
     );
-    const first = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+    const first = await load();
     expect(first?.name).toBe("Prepared");
     const operations = [
       "openSync",
@@ -147,9 +145,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
       "realpathSync",
     ] as const;
     const spies = operations.map((operation) => vi.spyOn(fs, operation));
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () => loadAgentIdentityFromWorkspaceAsync(tempDir)),
-    );
+    const results = await Promise.all(Array.from({ length: 10 }, load));
     for (const result of results) {
       expect(result).toBe(first);
     }
@@ -172,7 +168,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
       if (symlink) {
         fs.symlinkSync(firstPath, filePath);
       }
-      const first = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+      const first = await load();
       expect(first).toEqual({ name: "First" });
       fs.writeFileSync(`${filePath}.next`, "- Name: Other\n");
       fs.utimesSync(`${filePath}.next`, modified, modified);
@@ -182,11 +178,11 @@ describe("loadAgentIdentityFromWorkspace", () => {
       } else {
         fs.renameSync(`${filePath}.next`, filePath);
       }
-      expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "Other" });
+      expect(await load()).toEqual({ name: "Other" });
       fs.unlinkSync(filePath);
-      expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
+      expect(await load()).toBeNull();
       fs.writeFileSync(filePath, "- Name: First\n");
-      const recreated = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+      const recreated = await load();
       expect(recreated).toEqual(first);
       expect(recreated).not.toBe(first);
     },

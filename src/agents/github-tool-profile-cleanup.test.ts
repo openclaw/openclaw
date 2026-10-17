@@ -41,6 +41,8 @@ const expectMissing = (file: string) =>
 const expectPresent = (file: string) => expect(fs.stat(file)).resolves.toBeDefined();
 const expectProfile = (profile: string) =>
   expect(fs.readFile(path.join(profile, "hosts.yml"), "utf8")).resolves.toBe("github.com:\n");
+const linkDirectory = (target: string, link: string) =>
+  fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
 
 async function createProfile(root: string, profileId: string) {
   const profile = path.join(root, profileId);
@@ -53,6 +55,10 @@ describe("managed GitHub profile startup cleanup", () => {
   let stateDir: string;
   let env: NodeJS.ProcessEnv;
   let systemRoot: string;
+  const agentRootFor = (agentId: string) =>
+    resolveManagedGitHubProfileRoot({ agentId, scope: "agent", env });
+  const createSystemProfiles = (ids: string[]) =>
+    Promise.all(ids.map((id) => createProfile(systemRoot, id)));
   const cleanup = (config: OpenClawConfig = {}) =>
     cleanupRetiredManagedGitHubProfiles({ config, env });
   beforeEach(async () => {
@@ -70,17 +76,14 @@ describe("managed GitHub profile startup cleanup", () => {
       const agentIds = ["first", "middle", "last"].toSorted((left, right) =>
         resolveManagedGitHubAgentKey(left).localeCompare(resolveManagedGitHubAgentKey(right)),
       );
-      const agentRoots = agentIds.map((agentId) =>
-        resolveManagedGitHubProfileRoot({ agentId, scope: "agent", env }),
-      );
+      const agentRoots = agentIds.map(agentRootFor);
       const [firstRoot, middleRoot, lastRoot] = agentRoots;
       assert(firstRoot && middleRoot && lastRoot);
       const profileId = "ghp_11111111111111111111111111111111";
-      const [firstProfile, middleProfile, lastProfile] = await Promise.all([
-        createProfile(firstRoot, profileId),
-        createProfile(middleRoot, profileId),
-        createProfile(lastRoot, profileId),
-      ]);
+      const [firstProfile, middleProfile, lastProfile] = await Promise.all(
+        [firstRoot, middleRoot, lastRoot].map((root) => createProfile(root, profileId)),
+      );
+      assert(firstProfile && middleProfile && lastProfile);
       directoryReadState.unreadablePath = middleRoot;
       directoryReadState.errorCode = errorCode;
 
@@ -115,41 +118,24 @@ describe("managed GitHub profile startup cleanup", () => {
 
   it("removes only unreferenced generations inside exact system and agent roots", async () => {
     const agentDir = path.join(stateDir, "mutable-agent-dir");
-    const agentRoot = resolveManagedGitHubProfileRoot({
-      agentId: "reviewer",
-      scope: "agent",
-      env,
-    });
+    const agentRoot = agentRootFor("reviewer");
     const systemCurrent = "ghp_11111111111111111111111111111111";
     const systemRetired = "ghp_22222222222222222222222222222222";
     const agentCurrent = "ghp_33333333333333333333333333333333";
     const agentRetired = "ghp_44444444444444444444444444444444";
     await Promise.all([
-      createProfile(systemRoot, systemCurrent),
-      createProfile(systemRoot, systemRetired),
+      createSystemProfiles([systemCurrent, systemRetired]),
       createProfile(agentRoot, agentCurrent),
       createProfile(agentRoot, agentRetired),
     ]);
-    const stagingProfile = path.join(systemRoot, ".github-profile.staging-leftover", "profile");
-    await fs.mkdir(stagingProfile, { recursive: true, mode: 0o700 });
-    await fs.writeFile(path.join(stagingProfile, "hosts.yml"), "github.com:\n", { mode: 0o600 });
+    await createProfile(path.join(systemRoot, ".github-profile.staging-leftover"), "profile");
     const outside = tempDirs.make("openclaw-github-cleanup-nested-link-");
-    await fs.symlink(
-      outside,
-      path.join(systemRoot, systemRetired, "prior-export"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    await linkDirectory(outside, path.join(systemRoot, systemRetired, "prior-export"));
 
+    const reviewer = { agentDir, tools: { github: { profileId: agentCurrent } } };
     const result = await cleanup({
       tools: { github: { profileId: systemCurrent } },
-      agents: {
-        entries: {
-          reviewer: {
-            agentDir,
-            tools: { github: { profileId: agentCurrent } },
-          },
-        },
-      },
+      agents: { entries: { reviewer } },
     });
 
     expect(result.removed).toBe(3);
@@ -168,13 +154,11 @@ describe("managed GitHub profile startup cleanup", () => {
     const profileRoot = path.join(credentials, "github", "system");
     const profile = await createProfile(profileRoot, makeProfileId("5"));
     await fs.mkdir(path.join(credentials, "github", "agents"));
-    const target = alias === "root" ? profileRoot : credentials;
-    const link =
-      alias === "root"
-        ? path.join(stateDir, "credentials", "github", "system")
-        : path.join(stateDir, "credentials");
+    const relative = alias === "root" ? "credentials/github/system" : "credentials";
+    const target = path.join(outside, relative);
+    const link = path.join(stateDir, relative);
     await fs.mkdir(path.dirname(link), { recursive: true });
-    await fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+    await linkDirectory(target, link);
 
     const result = await cleanup();
 
@@ -186,19 +170,14 @@ describe("managed GitHub profile startup cleanup", () => {
   it.each(["unexpected", "symlink", "safe"])(
     "admits an entire orphan agent root before cleanup: %s",
     async (kind) => {
-      const agentRoot = resolveManagedGitHubProfileRoot({
-        agentId: "removed-agent",
-        scope: "agent",
-        env,
-      });
+      const agentRoot = agentRootFor("removed-agent");
       const profile = await createProfile(agentRoot, makeProfileId("1"));
       if (kind === "unexpected") {
         await fs.writeFile(path.join(agentRoot, "zzz-unexpected"), "preserve\n");
       } else if (kind === "symlink") {
-        await fs.symlink(
+        await linkDirectory(
           tempDirs.make("openclaw-github-cleanup-orphan-link-"),
           path.join(agentRoot, "ghp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
-          process.platform === "win32" ? "junction" : "dir",
         );
       } else {
         await fs.mkdir(path.join(agentRoot, ".github-profile.staging-orphan", "profile"), {
@@ -240,11 +219,7 @@ describe("managed GitHub profile startup cleanup", () => {
     const configured = "ghp_88888888888888888888888888888888";
     const recovery = "ghp_99999999999999999999999999999999";
     const retired = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    await Promise.all([
-      createProfile(systemRoot, configured),
-      createProfile(systemRoot, recovery),
-      createProfile(systemRoot, retired),
-    ]);
+    await createSystemProfiles([configured, recovery, retired]);
     oauthMocks.list.mockReturnValue([
       {
         profileId: recovery,
