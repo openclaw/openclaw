@@ -1,4 +1,3 @@
-// Tests system prompt command output and bundled prompt section selection.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -34,17 +33,13 @@ vi.mock("../../agents/runtime-capabilities.js", () => ({
   })),
 }));
 
-vi.mock("../../agents/shell-utils.js", () => ({
-  detectRuntimeShell: vi.fn(() => "zsh"),
-}));
+vi.mock("../../agents/shell-utils.js", () => ({ detectRuntimeShell: vi.fn(() => "zsh") }));
 
 vi.mock("../../infra/machine-name.js", () => ({
   getMachineDisplayName: vi.fn(async () => "test-host"),
 }));
 
-vi.mock("../../infra/os-summary.js", () => ({
-  resolveRuntimeOsLabel: vi.fn(() => "TestOS 1.0"),
-}));
+vi.mock("../../infra/os-summary.js", () => ({ resolveRuntimeOsLabel: vi.fn(() => "TestOS 1.0") }));
 
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const createLogger = (subsystem: string): SubsystemLogger => ({
@@ -67,10 +62,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 
 vi.mock("../../agents/bootstrap-files.js", () => ({
   makeBootstrapWarn: makeBootstrapWarnMock,
-  resolveBootstrapContextForRun: vi.fn(async () => ({
-    bootstrapFiles: [],
-    contextFiles: [],
-  })),
+  resolveBootstrapContextForRun: vi.fn(async () => ({ bootstrapFiles: [], contextFiles: [] })),
 }));
 
 // mock-isolation: Keep real runtime classification while preventing sandbox workspace startup.
@@ -131,16 +123,9 @@ function makeParams(): HandleCommandsParams {
       SenderE164: "+15551234567",
     },
     cfg: {},
-    command: {
-      channel: "telegram",
-      senderId: "sender-1",
-    },
+    command: { channel: "telegram", senderId: "sender-1" },
     directives: {},
-    elevated: {
-      enabled: true,
-      allowed: true,
-      failures: [],
-    },
+    elevated: { enabled: true, allowed: true, failures: [] },
     agentId: "main",
     sessionEntry: {
       sessionId: "session-1",
@@ -167,10 +152,20 @@ function firstArg(fn: { mock: { calls: unknown[][] } }): Record<string, unknown>
   return arg;
 }
 
+function sessionMetadata(prefix: string, spawnedBy = `agent:${prefix}`) {
+  return {
+    sessionId: `${prefix}-session`,
+    updatedAt: Date.now(),
+    groupId: `${prefix}-group`,
+    groupChannel: `#${prefix}`,
+    space: `${prefix}-space`,
+    spawnedBy,
+  };
+}
+
 describe("resolveCommandsSystemPromptBundle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    createOpenClawCodingToolsAsyncMock.mockClear();
     createOpenClawCodingToolsAsyncMock.mockReturnValue([]);
     vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue(null);
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
@@ -236,23 +231,12 @@ describe("resolveCommandsSystemPromptBundle", () => {
 
   it("prefers the target session entry for bootstrap and tool metadata", async () => {
     const params = makeParams();
-    params.sessionEntry = {
-      sessionId: "wrapper-session",
-      updatedAt: Date.now(),
-      groupId: "wrapper-group",
-      groupChannel: "#wrapper",
-      space: "wrapper-space",
-      spawnedBy: "agent:wrapper",
-    };
+    params.sessionEntry = sessionMetadata("wrapper");
     params.sessionStore = {
-      "agent:target:telegram:direct:target-session": {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        groupId: "target-group",
-        groupChannel: "#target",
-        space: "target-space",
-        spawnedBy: "agent:target-parent",
-      },
+      "agent:target:telegram:direct:target-session": sessionMetadata(
+        "target",
+        "agent:target-parent",
+      ),
     } as HandleCommandsParams["sessionStore"];
     params.sessionKey = "agent:target:telegram:direct:target-session";
     params.agentId = "target";
@@ -285,11 +269,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     params.sessionKey = "agent:target:default";
     params.agentId = "target";
     params.ctx.SessionKey = "agent:source:default";
-    params.elevated = {
-      enabled: true,
-      allowed: false,
-      failures: [],
-    };
+    params.elevated = { enabled: true, allowed: false, failures: [] };
 
     const result = await resolveCommandsSystemPromptBundle(params);
 

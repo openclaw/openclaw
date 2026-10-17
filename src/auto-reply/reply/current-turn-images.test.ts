@@ -95,17 +95,13 @@ describe("resolveCurrentTurnImages", () => {
       const imageBytes = Buffer.from("host-staged-image");
       await fs.mkdir(path.dirname(imagePath), { recursive: true });
       await fs.writeFile(imagePath, imageBytes);
-      const sharedContext = {
-        Body: "caption",
-        media: [{ path: imagePath, contentType: "image/png" }],
-      } satisfies MsgContext;
+      const attachment = { path: imagePath, contentType: "image/png" };
 
       const prepared = await resolve({
-        ...sharedContext,
-        media: [{ path: imagePath, contentType: "image/png", workspaceDir: stagingRoot }],
+        media: [{ ...attachment, workspaceDir: stagingRoot }],
       });
       const runner = await resolve({
-        ...sharedContext,
+        media: [attachment],
         images: prepared.images,
         imageOrder: prepared.imageOrder,
       });
@@ -175,8 +171,7 @@ describe("resolveCurrentTurnImages", () => {
 
   it("orders extracted PDF page images before later current image attachments", async () => {
     await inDir(async (base) => {
-      const imagePath = path.join(base, "photo.png");
-      await fs.writeFile(imagePath, "current-photo");
+      await fs.writeFile(path.join(base, "photo.png"), "current-photo");
       const result = await resolve({
         media: [media(base, "scan.pdf", "application/pdf"), media(base, "photo.png")],
         extractedFileImages: [{ ...image("pdf-page"), attachmentIndex: 0 }],
@@ -192,9 +187,8 @@ describe("resolveCurrentTurnImages", () => {
 
   it("retains undescribed native images when a described sibling and missing sibling coexist", async () => {
     await inDir(async (base) => {
-      const imagePath = path.join(base, "present.png");
       const imageBytes = Buffer.from("present-image");
-      await fs.writeFile(imagePath, imageBytes);
+      await fs.writeFile(path.join(base, "present.png"), imageBytes);
 
       const result = await resolve({
         media: ["described.png", "present.png", "missing.png"].map((name) => media(base, name)),
@@ -218,8 +212,7 @@ describe("resolveCurrentTurnImages", () => {
   it("proceeds without native images when current media resolution throws", async () => {
     vi.mocked(resolveAgentTurnAttachments).mockRejectedValueOnce(new Error("boom"));
     await inDir(async (base) => {
-      const imagePath = path.join(base, "present.png");
-      await fs.writeFile(imagePath, "present-image");
+      await fs.writeFile(path.join(base, "present.png"), "present-image");
 
       const result = await resolve({ media: [media(base, "present.png")] });
 

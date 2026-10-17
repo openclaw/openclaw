@@ -1,7 +1,7 @@
-// Tests text-to-speech command configuration, preference persistence, and summaries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -15,9 +15,9 @@ import {
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { setTtsMaxLength as persistTtsMaxLength } from "../../tts/tts-settings-writes.js";
+import type { TtsProviderAttempt, TtsResult, TtsStatusEntry } from "../../tts/tts-runtime-types.js";
 
 const ttsMocks = vi.hoisted(() => ({
-  getResolvedSpeechProviderConfig: vi.fn(),
   getLastTtsAttempt: vi.fn(),
   getTtsMaxLength: vi.fn(),
   getTtsPersona: vi.fn(),
@@ -42,7 +42,6 @@ vi.mock("../../globals.js", () => ({
 }));
 
 vi.mock("../../tts/provider-registry.js", () => ({
-  canonicalizeSpeechProviderId: vi.fn((provider: string) => provider),
   getSpeechProvider: vi.fn(() => null),
   listSpeechProviders: vi.fn(() => []),
 }));
@@ -53,19 +52,17 @@ const { handleTtsCommands } = await import("./commands-tts.js");
 const PRIMARY_TTS_PROVIDER = "acme-speech";
 const FALLBACK_TTS_PROVIDER = "backup-speech";
 type TtsCommandResult = Awaited<ReturnType<typeof handleTtsCommands>>;
+type TtsCommandParams = Parameters<typeof handleTtsCommands>[0];
 
 afterEach(() => memorySessionActorOwners.reset());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function buildTtsParams(
   commandBodyNormalized: string,
-  cfg: OpenClawConfig = {},
-  agentId?: string,
-  overrides: Partial<Parameters<typeof handleTtsCommands>[0]> = {},
-): Parameters<typeof handleTtsCommands>[0] {
+  overrides: Partial<TtsCommandParams> = {},
+): TtsCommandParams {
   return {
-    cfg,
-    agentId,
+    cfg: {},
     command: {
       commandBodyNormalized,
       isAuthorizedSender: true,
@@ -74,32 +71,20 @@ function buildTtsParams(
     },
     sessionKey: "session-key",
     ...overrides,
-  } as unknown as Parameters<typeof handleTtsCommands>[0];
+  } as unknown as TtsCommandParams;
 }
 
-function expectHandled(result: TtsCommandResult): NonNullable<TtsCommandResult> {
-  if (!result) {
-    throw new Error("Expected TTS command to be handled");
-  }
-  expect(result.shouldContinue).toBe(false);
-  return result;
-}
-
-function expectReply(
-  result: TtsCommandResult,
-): NonNullable<NonNullable<TtsCommandResult>["reply"]> {
-  const handled = expectHandled(result);
-  if (!handled.reply) {
-    throw new Error("Expected TTS command to return a reply");
-  }
-  return handled.reply;
+function expectReply(result: TtsCommandResult) {
+  const handled = expectDefined(result, "Expected TTS command to be handled");
+  expect(handled.shouldContinue).toBe(false);
+  return expectDefined(handled.reply, "Expected TTS command to return a reply");
 }
 
 async function reply(...args: Parameters<typeof buildTtsParams>) {
   return expectReply(await handleTtsCommands(buildTtsParams(...args), true));
 }
 
-function mockAudio(audioPath: string, extra: Record<string, unknown> = {}) {
+function mockAudio(audioPath: string, extra: Partial<TtsResult> = {}) {
   ttsMocks.textToSpeech.mockResolvedValue({
     success: true,
     audioPath,
@@ -107,6 +92,19 @@ function mockAudio(audioPath: string, extra: Record<string, unknown> = {}) {
     voiceCompatible: true,
     ...extra,
   });
+}
+
+function attempt(
+  provider: string,
+  reasonCode: TtsProviderAttempt["reasonCode"],
+  latencyMs: number,
+): TtsProviderAttempt {
+  return {
+    provider,
+    reasonCode,
+    latencyMs,
+    outcome: reasonCode === "success" ? "success" : "failed",
+  };
 }
 
 async function transcriptFixture(agentId = "main", sessionKey = "session-key", sessionId = "s1") {
@@ -120,13 +118,8 @@ async function transcriptFixture(agentId = "main", sessionKey = "session-key", s
     storePath: resolveSessionStorePathForScope({ agentId, sessionKey, storePath }),
   };
   await replaceSessionEntry(scope, sessionEntry);
-  return {
-    scope,
-    sessionEntry,
-    sessionStore: { [sessionKey]: sessionEntry },
-    sessionKey,
-    storePath,
-  };
+  const sessionStore = { [sessionKey]: sessionEntry };
+  return { scope, sessionEntry, sessionStore, sessionKey, storePath };
 }
 
 function transcriptText(text: string, phase: "commentary" | "final_answer") {
@@ -184,14 +177,7 @@ describe("handleTtsCommands status fallback reporting", () => {
       summarized: false,
       error: "TTS conversion failed",
       attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
-      attempts: [
-        {
-          provider: PRIMARY_TTS_PROVIDER,
-          outcome: "failed",
-          reasonCode: "timeout",
-          latencyMs: 999,
-        },
-      ],
+      attempts: [attempt(PRIMARY_TTS_PROVIDER, "timeout", 999)],
       latencyMs: 420,
     });
 
@@ -202,9 +188,9 @@ describe("handleTtsCommands status fallback reporting", () => {
   });
 
   it("persists fallback metadata from /tts audio and renders it in /tts status", async () => {
-    let lastAttempt: Record<string, unknown> | undefined;
+    let lastAttempt: TtsStatusEntry | undefined;
     ttsMocks.getLastTtsAttempt.mockImplementation(() => lastAttempt);
-    ttsMocks.setLastTtsAttempt.mockImplementation((next: Record<string, unknown>) => {
+    ttsMocks.setLastTtsAttempt.mockImplementation((next: TtsStatusEntry) => {
       lastAttempt = next;
     });
     mockAudio("/tmp/fallback.ogg", {
@@ -212,18 +198,8 @@ describe("handleTtsCommands status fallback reporting", () => {
       fallbackFrom: PRIMARY_TTS_PROVIDER,
       attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
       attempts: [
-        {
-          provider: PRIMARY_TTS_PROVIDER,
-          outcome: "failed",
-          reasonCode: "provider_error",
-          latencyMs: 65,
-        },
-        {
-          provider: FALLBACK_TTS_PROVIDER,
-          outcome: "success",
-          reasonCode: "success",
-          latencyMs: 175,
-        },
+        attempt(PRIMARY_TTS_PROVIDER, "provider_error", 65),
+        attempt(FALLBACK_TTS_PROVIDER, "success", 175),
       ],
       latencyMs: 175,
     });
@@ -264,14 +240,7 @@ describe("handleTtsCommands status fallback reporting", () => {
       agents: { entries: { reader: { tts: { provider: PRIMARY_TTS_PROVIDER } } } },
     } as OpenClawConfig;
 
-    const result = await handleTtsCommands(
-      buildTtsParams("/tts audio hello", cfg, "reader", {
-        ctx: { AccountId: "feishu-main" },
-      }),
-      true,
-    );
-
-    expectHandled(result);
+    await reply("/tts audio hello", { cfg, agentId: "reader", ctx: { AccountId: "feishu-main" } });
     const speechCall = ttsMocks.textToSpeech.mock.lastCall?.[0];
     expect(speechCall).toMatchObject({
       text: "hello",
@@ -283,18 +252,11 @@ describe("handleTtsCommands status fallback reporting", () => {
 
   it("lists and sets configured TTS personas", async () => {
     ttsMocks.listTtsPersonas.mockReturnValue([
-      {
-        id: "alfred",
-        label: "Alfred",
-        provider: "google",
-      },
+      { id: "alfred", label: "Alfred", provider: "google" },
     ]);
 
-    const listReply = await reply("/tts persona");
-    expect(listReply.text).toContain("alfred (Alfred) provider=google");
-
-    const setResult = await handleTtsCommands(buildTtsParams("/tts persona alfred"), true);
-    expectHandled(setResult);
+    expect((await reply("/tts persona")).text).toContain("alfred (Alfred) provider=google");
+    await reply("/tts persona alfred");
     expect(ttsMocks.setTtsPersona).toHaveBeenCalledWith("/tmp/tts-prefs.json", "alfred");
   });
 
@@ -322,8 +284,9 @@ describe("handleTtsCommands status fallback reporting", () => {
       mockAudio("/tmp/latest.ogg", { audioAsVoice });
       const beforeTtsRead = Date.now();
       const initialSessionEntry = structuredClone(sessionEntry);
-      const audio = await reply(command, {}, "main", {
+      const audio = await reply(command, {
         ...fixture,
+        agentId: "main",
         initialSessionEntry,
       });
       expect(audio).toMatchObject({
@@ -348,8 +311,9 @@ describe("handleTtsCommands status fallback reporting", () => {
     });
     mockAudio("/tmp/incognito-latest.ogg");
 
-    const audio = await reply("/tts latest", {}, "main", {
+    const audio = await reply("/tts latest", {
       ...fixture,
+      agentId: "main",
       initialSessionEntry: structuredClone(fixture.sessionEntry),
     });
     expect(audio.spokenText).toBe("incognito latest reply");
@@ -364,8 +328,9 @@ describe("handleTtsCommands status fallback reporting", () => {
     Object.assign(sessionEntry, loadSessionEntry(scope));
     const initialSessionEntry = structuredClone(sessionEntry);
     mockAudio("/tmp/latest.ogg");
-    const params = buildTtsParams("/tts latest", {}, "main", {
+    const params = buildTtsParams("/tts latest", {
       ...fixture,
+      agentId: "main",
       initialSessionEntry,
     });
 
@@ -379,8 +344,7 @@ describe("handleTtsCommands status fallback reporting", () => {
   it("stores chat-scoped TTS overrides on the session entry", async () => {
     const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
     const sessionStore = { "session-key": sessionEntry };
-    const chat = (action: string) =>
-      reply(`/tts chat ${action}`, {}, undefined, { sessionEntry, sessionStore });
+    const chat = (action: string) => reply(`/tts chat ${action}`, { sessionEntry, sessionStore });
 
     expect((await chat("on")).text).toContain("enabled for this chat");
     expect(sessionEntry.ttsAuto).toBe("always");

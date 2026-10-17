@@ -1,4 +1,3 @@
-/** Tests generated conversation labels for reply sessions. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { FailoverError } from "../../agents/failover-error.js";
@@ -180,10 +179,7 @@ describe("generateConversationLabel", () => {
   );
 
   it("uses one explicit model and timeout when supplied", async () => {
-    await generate({
-      modelRef: "anthropic/claude-haiku@team",
-      timeoutMs: 900,
-    });
+    await generate({ modelRef: "anthropic/claude-haiku@team", timeoutMs: 900 });
 
     expectCompletion({
       provider: "anthropic",
@@ -233,9 +229,7 @@ describe("generateConversationLabelWithFallback", () => {
   it("does not repeat a regular model already attempted by the utility chain", async () => {
     runIsolatedCompletion.mockRejectedValue(unavailable());
     await expect(
-      fallback({
-        cfg: modelConfig(undefined, "openai/gpt-mini", ["openai/gpt-main"]),
-      }),
+      fallback({ cfg: modelConfig(undefined, "openai/gpt-mini", ["openai/gpt-main"]) }),
     ).rejects.toThrow("conversation label generation failed");
     expect(attemptedModels()).toEqual(["gpt-mini", "gpt-main"]);
   });
@@ -277,51 +271,48 @@ describe("generateConversationLabelWithFallback", () => {
     },
   );
 
-  it.each([false, true])(
-    "skips a denied utility primary: utility fallback=%s",
-    async (hasFallback) => {
-      const cfg = {
-        agents: {
-          entries: { main: {} },
-          defaults: {
-            model: "label-test/regular",
-            utilityModel: {
-              primary: "label-test/utility",
-              fallbacks: hasFallback ? ["label-test/backup"] : [],
-            },
+  it.each([false, true])("skips denied utility primary (fallback=%s)", async (hasFallback) => {
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: {
+          model: "label-test/regular",
+          utilityModel: {
+            primary: "label-test/utility",
+            fallbacks: hasFallback ? ["label-test/backup"] : [],
           },
         },
-      };
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "label-reader",
-        scopes: ["operator.write"],
-        assertCurrent: () => {},
-        modelPolicy: prepareOperatorModelPolicy({
-          cfg,
-          policy: {
-            sourceAgent: "main",
-            allow: ["label-test/*"],
-            deny: ["label-test/utility"],
-          },
-          manifestPlugins: [],
-        }),
-      });
-      await expect(
-        fallback({
-          cfg,
-          agentId: "main",
-          utilityModelRef: "label-test/utility",
-          regularModelRef: "label-test/regular",
-          operatorAuthority,
-        }),
-      ).resolves.toBe("Topic label");
-      expectCompletion({
-        provider: "label-test",
-        model: hasFallback ? "backup" : "regular",
+      },
+    };
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "label-reader",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: {
+          sourceAgent: "main",
+          allow: ["label-test/*"],
+          deny: ["label-test/utility"],
+        },
+        manifestPlugins: [],
+      }),
+    });
+    await expect(
+      fallback({
+        cfg,
+        agentId: "main",
+        utilityModelRef: "label-test/utility",
+        regularModelRef: "label-test/regular",
         operatorAuthority,
-      });
-    },
-  );
+      }),
+    ).resolves.toBe("Topic label");
+    expectCompletion({
+      provider: "label-test",
+      model: hasFallback ? "backup" : "regular",
+      operatorAuthority,
+    });
+  });
 
   it("records an exhausted failure after fallback normalization rejects the result", async () => {
     runIsolatedCompletion
@@ -329,64 +320,39 @@ describe("generateConversationLabelWithFallback", () => {
       .mockResolvedValueOnce({ text: "Title:" });
 
     await expect(
-      fallback({
-        normalizeLabel: (label) => (label === "Title:" ? null : label),
-      }),
+      fallback({ normalizeLabel: (label) => (label === "Title:" ? null : label) }),
     ).rejects.toThrow("conversation label generation failed (utility)");
     expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the runtime owner and inherited profile during reasoning-only fallback", async () => {
-    runIsolatedCompletion
-      .mockResolvedValueOnce({ text: "<think>private" })
-      .mockResolvedValueOnce({ text: "Primary title" });
-
+  it.each([
+    { utilityModelRef: "openai/gpt-mini", provider: "openai", runtime: "codex", profile: "work" },
+    { utilityModelRef: "anthropic/claude-haiku", provider: "anthropic" },
+  ])("preserves compatible runtime and profile for $utilityModelRef fallback", async (row) => {
+    if (row.provider === "openai") {
+      runIsolatedCompletion.mockResolvedValueOnce({ text: "<think>private" });
+    } else {
+      runIsolatedCompletion.mockRejectedValueOnce(new Error("utility unavailable"));
+    }
+    runIsolatedCompletion.mockResolvedValueOnce({ text: "Primary title" });
     await expect(
-      fallback({
-        utilityModelRef: "openai/gpt-mini",
-        agentHarnessRuntimeOverride: "codex",
-      }),
+      fallback({ utilityModelRef: row.utilityModelRef, agentHarnessRuntimeOverride: "codex" }),
     ).resolves.toBe("Primary title");
-
-    expect(
-      runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
-    ).toEqual(["codex", "codex"]);
-    expect(runIsolatedCompletion.mock.calls.map(([request]) => request.authProfileId)).toEqual([
-      "work",
-      "work",
-    ]);
-  });
-
-  it("keeps only the compatible runtime per attempt when providers differ", async () => {
-    runIsolatedCompletion
-      .mockRejectedValueOnce(new Error("utility unavailable"))
-      .mockResolvedValueOnce({ text: "Primary title" });
-
-    await expect(
-      fallback({
-        utilityModelRef: "anthropic/claude-haiku",
-        agentHarnessRuntimeOverride: "codex",
-      }),
-    ).resolves.toBe("Primary title");
-
     expect(
       runIsolatedCompletion.mock.calls.map(([request]) => [
         request.provider,
         request.agentHarnessRuntimeOverride,
+        request.authProfileId,
       ]),
     ).toEqual([
-      ["anthropic", undefined],
-      ["openai", "codex"],
+      [row.provider, row.runtime, row.profile],
+      ["openai", "codex", "work"],
     ]);
-    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
   });
 
   it("utilityOnly returns null without inference when the utility model resolves onto the primary", async () => {
     await expect(
-      fallback({
-        utilityModelRef: params.regularModelRef,
-        utilityOnly: true,
-      }),
+      fallback({ utilityModelRef: params.regularModelRef, utilityOnly: true }),
     ).resolves.toBeNull();
     expect(runIsolatedCompletion).not.toHaveBeenCalled();
   });
