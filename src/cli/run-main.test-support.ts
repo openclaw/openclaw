@@ -374,7 +374,8 @@ vi.mock("../runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/net/proxy-env.js", () => ({
+vi.mock("../infra/net/proxy-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxy-env.js")>()),
   hasEnvHttpProxyAgentConfigured: hasEnvHttpProxyAgentConfiguredMock,
 }));
 

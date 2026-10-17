@@ -470,7 +470,9 @@ describe("sidebar projection memo", () => {
     expect(row()).not.toBeNull();
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     projectRows.mockClear();
-    sidebar.selectedSessionKeys = new Set([sessionKey]);
+    row()!
+      .querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")!
+      .dispatchEvent(new MouseEvent("click", { altKey: true, bubbles: true, cancelable: true }));
     await settleRoster(mounted.sidebar);
     expect(row()?.classList.contains("sidebar-recent-session--selected")).toBe(true);
     row()!.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!.click();

@@ -289,17 +289,18 @@ describe("dated TODO report validation", () => {
     ).toThrow(/Untracked or missing repository path/u);
   });
 
-  it.each([["mention", "- [ ] src/urgent.ts:7 — notify @maintainers (2026-07-01)"]])(
-    "rejects active Markdown in a %s",
-    (_name, item) => {
-      const report = REPORT.replace(
-        "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-        item,
-      );
+  it.each([
+    ["mention", "- [ ] src/urgent.ts:7 — notify @maintainers (2026-07-01)"],
+    ["URL", "- [ ] src/urgent.ts:7 — see https://example.com (2026-07-01)"],
+    ["GH reference", "- [ ] src/urgent.ts:7 — follow up in GH-123 (2026-07-01)"],
+  ])("rejects non-plain-text summaries containing a %s", (_name, item) => {
+    const report = REPORT.replace(
+      "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
+      item,
+    );
 
-      expect(() => validateDatedTodoReport(report)).toThrow(/Non-plain-text summary/u);
-    },
-  );
+    expect(() => validateDatedTodoReport(report)).toThrow(/Non-plain-text summary/u);
+  });
 
   it("allows underscores only inside plain identifiers", () => {
     const safe = REPORT.replace(
@@ -313,18 +314,6 @@ describe("dated TODO report validation", () => {
 
     expect(() => validateDatedTodoReport(safe)).not.toThrow();
     expect(() => validateDatedTodoReport(emphasized)).toThrow(/Non-plain-text summary/u);
-  });
-
-  it.each([
-    ["URL", "- [ ] src/urgent.ts:7 — see https://example.com (2026-07-01)"],
-    ["GH reference", "- [ ] src/urgent.ts:7 — follow up in GH-123 (2026-07-01)"],
-  ])("rejects a GitHub autolink from a %s", (_name, item) => {
-    const report = REPORT.replace(
-      "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-07-01)",
-      item,
-    );
-
-    expect(() => validateDatedTodoReport(report)).toThrow(/Non-plain-text summary/u);
   });
 
   it("rejects unexpected report prologue content", () => {

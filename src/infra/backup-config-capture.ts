@@ -11,6 +11,7 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
 } from "../config/io.types.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { selectDatabaseEngine } from "./database-engine/registry.js";
 import { openLocalFileSafely } from "./fs-safe.js";
 
 type CapturedConfigFile = {
@@ -143,8 +144,10 @@ export async function resolveBackupConfigCapture(
           observe: false,
         }).readConfigFileSnapshotForWrite();
       // Core-only revalidation pins config files without reading database state.
-      const current = await (snapshot.sourceConfig.database?.engine === "postgres" &&
-      options.pluginValidation === "core-only"
+      const current = await (selectDatabaseEngine(
+        { id: "state", postgres: true },
+        snapshot.sourceConfig,
+      ) === "postgres" && options.pluginValidation === "core-only"
         ? read()
         : withOpenClawStateDatabaseReadSnapshot(read, { env: options.env }));
       // A file can be reached repeatedly during discovery. Comparing the resolved

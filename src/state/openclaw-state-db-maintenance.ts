@@ -3,6 +3,7 @@ import { requireNativeDatabaseFile } from "../infra/database-engine/physical-fac
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
@@ -72,6 +73,24 @@ import {
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
+import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
+
+export function assertMigratedStateTableIntegrity(
+  db: DatabaseSync,
+  pathname: string,
+  previousVersion: number,
+): void {
+  const tables = resolveSchemaMigrationBackupTables({
+    kind: "state",
+    foundVersion: previousVersion,
+    supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  for (const table of tables ?? []) {
+    if (tableExists(db, table)) {
+      assertSqliteTableIntegrity(db, pathname, table);
+    }
+  }
+}
 
 /**
  * Make the known malformed index parseable, then let SQLite drop and reclaim it

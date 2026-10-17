@@ -5,7 +5,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { listen } from "../../lib/reactive/listener.ts";
 import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextarea } from "./composer-controller.ts";
+import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 
 registerNewSessionSetupEnglish();
 

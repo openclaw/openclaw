@@ -6,7 +6,6 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
-import { assertEngineStoreExecutionAllowed } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
 import {
   assertPostgresCatalog,
@@ -103,17 +102,8 @@ export function admitPostgresPhysicalFacts(params: {
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
-    if (
-      retained.store !== params.store ||
-      retained.namespace !== params.namespace ||
-      retained.storeId !== params.storeId ||
-      retained.version !== params.version
-    ) {
-      throw new Error(`PostgreSQL admission identity or version mismatch. ${recovery}`);
-    }
     return retained;
   }
-  assertEngineStoreExecutionAllowed();
   const capabilities = admitPostgresCapabilities(params.db);
   let snapshot;
   try {

@@ -2,6 +2,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
+import { formatDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
@@ -158,6 +159,14 @@ export function buildStatusCommandOverviewRows(params: {
     agentsValue,
     suffixRows: [
       ...(params.updateRows ?? []),
+      ...(params.surface.cfg.database
+        ? [
+            {
+              Item: "Database engines (configured)",
+              Value: formatDatabaseEngineSelection(params.surface.cfg),
+            },
+          ]
+        : []),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       {
@@ -241,6 +250,10 @@ export function buildStatusAllOverviewRows(params: {
       agentStatus: params.agentStatus,
     }),
     suffixRows: [
+      {
+        Item: "Database engines (configured)",
+        Value: formatDatabaseEngineSelection(params.surface.cfg),
+      },
       {
         Item: "Secrets",
         Value: buildStatusSecretsValue(params.secretDiagnosticsCount),

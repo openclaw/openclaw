@@ -437,6 +437,79 @@ describe("Codex catalog worker transport", () => {
     expect(harness.client.getCloseError()).toBeUndefined();
   });
 
+  it("keeps an oversized singleton's continuation without retaining rows at capacity", async () => {
+    const harness = createHarness();
+    const request = harness.client.request(
+      "thread/list",
+      { limit: 1 },
+      { catalogPreview: true, catalogRows: 0 },
+    );
+    harness.send({
+      id: requestId(harness),
+      result: {
+        data: [{ id: "huge", preview: "x".repeat(8 * 1024 * 1024) }],
+        nextCursor: "opaque-continuation",
+      },
+    });
+    await expect(request).resolves.toEqual({ data: [], nextCursor: "opaque-continuation" });
+  });
+
+  it.each([64 * 1024 * 1024, 64 * 1024 * 1024 + 1])(
+    "bounds singleton worker parsing at 64 MiB for a %i-byte response",
+    async (bytes) => {
+      const harness = createHarness();
+      const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
+      const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
+      const request = harness.client.request("thread/list", { limit: 1 }, { catalogPreview: true });
+      const expected = {
+        data: [{ id: "bounded", projectId: null, catalogError: "oversized-thread" }],
+        nextCursor: null,
+      };
+      const outcome =
+        bytes > 64 * 1024 * 1024
+          ? expect(request).rejects.toThrow("exceeds 8 MiB")
+          : expect(request).resolves.toEqual(expected);
+      const raw = JSON.stringify({
+        id: requestId(harness),
+        result: { data: [{ id: "bounded" }], nextCursor: null },
+      });
+      harness.process.stdout.write(`${raw}${" ".repeat(bytes - Buffer.byteLength(raw))}\n`);
+      await outcome;
+      expect(submitted).toHaveBeenCalledTimes(bytes > 64 * 1024 * 1024 ? 0 : 1);
+      expect(parse).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["identity", "cursor", "missing cursor", "cardinality", "JSON"])(
+    "rejects oversized singleton recovery with invalid %s",
+    async (invalid) => {
+      const harness = createHarness();
+      const request = harness.client.request("thread/list", { limit: 1 }, { catalogPreview: true });
+      const rejected = expect(request).rejects.toThrow("exceeds 8 MiB");
+      const response = {
+        id: requestId(harness),
+        result: {
+          data: [
+            { id: invalid === "identity" ? "" : "huge", preview: "x".repeat(8 * 1024 * 1024) },
+            ...(invalid === "cardinality" ? [{ id: "extra" }] : []),
+          ],
+          nextCursor:
+            invalid === "missing cursor"
+              ? undefined
+              : invalid === "cursor"
+                ? 42
+                : "opaque-continuation",
+        },
+      };
+      const raw = JSON.stringify(response);
+      harness.process.stdout.write(
+        `${invalid === "JSON" ? raw.replace('"nextCursor":', '"unused":[1,],"nextCursor":') : raw}\n`,
+      );
+      await rejected;
+      expect(harness.client.getCloseError()).toBeUndefined();
+    },
+  );
+
   it("preserves meaningful text after a long ANSI prefix through the worker", async () => {
     const harness = createHarness();
     const request = harness.client.request("thread/list", {}, { catalogPreview: true });

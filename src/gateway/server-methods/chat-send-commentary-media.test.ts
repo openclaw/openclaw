@@ -11,7 +11,6 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { getRuntimeConfig } from "../../config/io.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
@@ -50,7 +49,7 @@ import { cleanupManagedOutgoingMediaRecords } from "../managed-image-attachments
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { projectTranscriptEntryMessage } from "../session-transcript-entry-message.js";
-import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
+import { createReplyDispatch } from "./chat-send-reply-dispatch.test-support.js";
 import * as chatTranscriptPersistence from "./chat-transcript-persistence.js";
 
 const PNG_BYTES = Buffer.from(
@@ -240,11 +239,8 @@ describe("webchat commentary media", () => {
         withTranscriptWrite: <T>(operation: () => Promise<T> | T) =>
           transcriptLifecycle.withTranscriptWrite(operation),
       };
-      const dispatch = createChatSendReplyDispatch({
-        getRuntimeConfig,
-        accountId: undefined,
+      const dispatch = createReplyDispatch(runId, {
         requesterContext: { SenderId: "cli" },
-        isAgentRunStarted: () => true,
         isRunCurrent: () => current,
         abortSignal: AbortSignal.any([abortController.signal, test.signal]),
         logGateway: { warn } as never,
@@ -256,7 +252,6 @@ describe("webchat commentary media", () => {
           clientRunId: runId,
           sessionLoadOptions: { agentId: "main" },
         },
-        userTurnRecorder: { markBlocked: vi.fn(), getAdmissionReceipt: () => undefined },
       });
       const content = [
         {
@@ -378,247 +373,239 @@ describe("webchat commentary media", () => {
               .spyOn(sessionEntryReadFacts, "readRetainedSessionEntryFacts")
               .mockReturnValue(undefined)
           : undefined;
+      const publishCommentary = async () => {
+        try {
+          dispatch.captureAgentTranscriptStart();
+          const message = runAgentHarnessBeforeMessageWriteHook({
+            message: attachSessionTranscriptRunId(
+              {
+                ...buildAssistantMessage({
+                  model: {
+                    api: "openai-responses",
+                    provider: "openai",
+                    id: "gpt-5.6-luna",
+                  },
+                  content,
+                  stopReason: "toolUse",
+                  usage: buildUsageWithNoCost({}),
+                }),
+                ...(scenario === "top-level" ? { phase: "commentary" as const } : {}),
+              },
+              runId,
+            ),
+            prepareAssistantTranscriptMessage: dispatch.prepareAssistantTranscriptMessage,
+          });
+          expect(message).toMatchObject({ openclawDelivery: { mediaUrls: authoredUrls } });
+          if (message?.role !== "assistant") {
+            throw new Error("Expected prepared assistant");
+          }
+          expectedContent = structuredClone(message.content);
+          const appended = appendTranscriptMessageSync(scope, {
+            eventId: "progress-row",
+            message,
+          });
+          expect(appended).toMatchObject({ ok: true });
+          await publishTranscriptUpdate(scope, {
+            message,
+            messageId: "progress-row",
+            runId,
+          });
+          if (scenario === "cache-miss") {
+            return;
+          }
+          if (!localMedia) {
+            await racePromiseWithAbortSignal(
+              Promise.race([requestsStarted.promise, commentarySettled.promise]),
+              test.signal,
+            );
+          }
+          expect(warn).not.toHaveBeenCalled();
+          expect(requestCount).toBe(localMedia ? 0 : mediaUrls.length);
+          if (scenario === "completion") {
+            return;
+          }
+          if (gcDuringPreparation) {
+            // The second download holds the rewrite while the first original is on disk.
+            expect(readMessage()).not.toHaveProperty("openclawDisplayContent");
+            expect(
+              await listManagedImageRecordEntries({ sessionKey: scope.sessionKey }),
+            ).toHaveLength(1);
+            expect(await cleanupManagedOutgoingMediaRecords()).toEqual({
+              deletedRecordCount: 0,
+              deletedFileCount: 0,
+              retainedCount: 1,
+            });
+          }
+          if (scenario === "aborted") {
+            current = false;
+            abortController.abort();
+            return;
+          }
+          if (scenario === "revoked") {
+            current = false;
+          }
+          if (scenario === "unrelated-rewrite" || scenario === "target-rewrite") {
+            const messageId = scenario === "unrelated-rewrite" ? "unrelated-row" : "progress-row";
+            const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
+            if (!anchor) {
+              throw new Error("Expected rewrite target");
+            }
+            const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
+              const targetMessage = asOptionalRecord(value);
+              if (!targetMessage) {
+                throw new Error("Expected rewrite message");
+              }
+              return {
+                ...targetMessage,
+                content: [{ type: "text", text: "Rewritten while loading" }],
+              };
+            });
+            expect(rewritten).not.toBeNull();
+            expect(rewritten?.generation).not.toBe(anchor.generation);
+          }
+          imageResponse.resolve();
+          if (scenario === "revoked" || scenario === "target-rewrite" || rewriteSpy) {
+            return;
+          }
+          await racePromiseWithAbortSignal(commentarySettled.promise, test.signal);
+          expect(readMessage()).toHaveProperty("openclawDisplayContent");
+          const persisted = readMessage();
+          expect(persisted).toMatchObject({
+            content: expectedContent,
+            stopReason: "toolUse",
+          });
+          if (!publicationSpy) {
+            expect(rewriteUpdate).toMatchObject({
+              messageId: "progress-row",
+              target: expect.objectContaining({ sessionId: scope.sessionId }),
+            });
+            expect(rewriteUpdate).not.toHaveProperty("message");
+          }
+          const displayed = readDisplayed();
+          const blocks = displayed
+            .flatMap((row) => (Array.isArray(row.content) ? row.content : []))
+            .map(asOptionalRecord);
+          const displayedMedia = blocks.filter(
+            (block) => block?.type === "image" || block?.type === "attachment",
+          );
+          expect(displayedMedia).toHaveLength(
+            scenario === "sender-denied"
+              ? 0
+              : scenario === "worktree" || gcDuringPreparation
+                ? 2
+                : 1,
+          );
+          if (scenario === "sender-denied") {
+            const failures = blocks.filter((block) => block?.type === "attachment_error");
+            expect(failures).toHaveLength(3);
+            expect(await listManagedImageRecordEntries({ sessionKey: scope.sessionKey })).toEqual(
+              [],
+            );
+          }
+          if (scenario === "worktree") {
+            expect(blocks).toContainEqual({
+              type: "attachment_error",
+              attachment: {
+                code: "delivery-failed",
+                kind: "image",
+                label: "private.png",
+                mimeType: "image/png",
+              },
+            });
+            expect(displayedMedia).toEqual([
+              expect.objectContaining({
+                type: "image",
+                url: expect.stringContaining("/api/chat/media/outgoing/"),
+              }),
+              expect.objectContaining({
+                type: "image",
+                url: expect.stringContaining("/api/chat/media/outgoing/"),
+              }),
+            ]);
+            expect(await fs.readFile(absoluteImage)).toEqual(PNG_BYTES);
+          }
+          if (scenario === "top-level") {
+            expect(displayed).toContainEqual(
+              expect.objectContaining({
+                openclawStreamFallback: expect.objectContaining({ itemId: "progress-row" }),
+              }),
+            );
+            const text = blocks
+              .filter((block) => block?.type === "text")
+              .map((block) => block?.text);
+            expect(text).toEqual(["Before", "After"]);
+            expect(persisted.phase).toBe("commentary");
+          }
+          if (scenario === "image") {
+            expect(displayed).toContainEqual(
+              expect.objectContaining({
+                openclawStreamFallback: expect.objectContaining({
+                  itemId: "progress-image",
+                }),
+                content: [
+                  { type: "text", text: "Before" },
+                  expect.objectContaining({
+                    type: "image",
+                    mimeType: "image/png",
+                    url: expect.stringContaining("/api/chat/media/outgoing/"),
+                  }),
+                  { type: "text", text: "After" },
+                ],
+              }),
+            );
+          }
+          if (scenario === "document") {
+            expect(displayedMedia).toContainEqual(
+              expect.objectContaining({
+                type: "attachment",
+                attachment: expect.objectContaining({
+                  kind: "document",
+                  mimeType: "application/pdf",
+                }),
+              }),
+            );
+          }
+          if (scenario === "hook") {
+            expect(JSON.stringify(displayed)).toContain('"type":"image"');
+            expect(fetchedUrls).toEqual([mediaUrl]);
+          }
+          if (mixed) {
+            const replies = createReplyDispatcher(dispatch.dispatcherOptions);
+            replies.sendFinalReply(
+              setReplyPayloadMetadata(
+                { text: finalText, ...(finalMediaUrl ? { mediaUrls: [finalMediaUrl] } : {}) },
+                {
+                  assistantMessageIndex: 1,
+                  ...(finalMediaUrl ? { assistantTranscriptMediaUrls: [finalMediaUrl] } : {}),
+                },
+              ),
+            );
+            replies.markComplete();
+            await replies.waitForIdle();
+            expect(dispatch.deliveredReplies).toHaveLength(1);
+          } else {
+            expect(dispatch.deliveredReplies).toEqual([]);
+          }
+          expect(
+            loadTranscriptEventsSync(scope).filter(
+              (event) => asOptionalRecord(event)?.type === "message",
+            ),
+          ).toHaveLength(scenario === "unrelated-rewrite" ? 2 : 1);
+        } finally {
+          if (scenario !== "completion") {
+            imageResponse.resolve();
+          }
+          cleanupStarted.resolve();
+          await transcriptLifecycle.beginCleanup();
+          admittedActive = false;
+          await transcriptLifecycle.dispose();
+          cleanupSettled = true;
+        }
+      };
       try {
         run = withStoreRemoteFixture({ url: fixtureUrl }, () =>
-          dispatch.runAgentMediaTranscript({ run: async (operation) => operation() }, async () =>
-            withOwnedSessionTranscriptWrites(transcriptContext, async () => {
-              try {
-                dispatch.captureAgentTranscriptStart();
-                const message = runAgentHarnessBeforeMessageWriteHook({
-                  message: attachSessionTranscriptRunId(
-                    {
-                      ...buildAssistantMessage({
-                        model: {
-                          api: "openai-responses",
-                          provider: "openai",
-                          id: "gpt-5.6-luna",
-                        },
-                        content,
-                        stopReason: "toolUse",
-                        usage: buildUsageWithNoCost({}),
-                      }),
-                      ...(scenario === "top-level" ? { phase: "commentary" as const } : {}),
-                    },
-                    runId,
-                  ),
-                  prepareAssistantTranscriptMessage: dispatch.prepareAssistantTranscriptMessage,
-                });
-                expect(message).toMatchObject({ openclawDelivery: { mediaUrls: authoredUrls } });
-                if (message?.role !== "assistant") {
-                  throw new Error("Expected prepared assistant");
-                }
-                expectedContent = structuredClone(message.content);
-                const appended = appendTranscriptMessageSync(scope, {
-                  eventId: "progress-row",
-                  message,
-                });
-                expect(appended).toMatchObject({ ok: true });
-                await publishTranscriptUpdate(scope, {
-                  message,
-                  messageId: "progress-row",
-                  runId,
-                });
-                if (scenario === "cache-miss") {
-                  return;
-                }
-                if (!localMedia) {
-                  await racePromiseWithAbortSignal(
-                    Promise.race([requestsStarted.promise, commentarySettled.promise]),
-                    test.signal,
-                  );
-                }
-                expect(warn).not.toHaveBeenCalled();
-                expect(requestCount).toBe(localMedia ? 0 : mediaUrls.length);
-                if (scenario === "completion") {
-                  return;
-                }
-                if (gcDuringPreparation) {
-                  // The second download holds the rewrite while the first original is on disk.
-                  expect(readMessage()).not.toHaveProperty("openclawDisplayContent");
-                  expect(
-                    await listManagedImageRecordEntries({ sessionKey: scope.sessionKey }),
-                  ).toHaveLength(1);
-                  expect(await cleanupManagedOutgoingMediaRecords()).toEqual({
-                    deletedRecordCount: 0,
-                    deletedFileCount: 0,
-                    retainedCount: 1,
-                  });
-                }
-                if (scenario === "aborted") {
-                  current = false;
-                  abortController.abort();
-                  return;
-                }
-                if (scenario === "revoked") {
-                  current = false;
-                }
-                if (scenario === "unrelated-rewrite" || scenario === "target-rewrite") {
-                  const messageId =
-                    scenario === "unrelated-rewrite" ? "unrelated-row" : "progress-row";
-                  const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
-                  if (!anchor) {
-                    throw new Error("Expected rewrite target");
-                  }
-                  const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
-                    const targetMessage = asOptionalRecord(value);
-                    if (!targetMessage) {
-                      throw new Error("Expected rewrite message");
-                    }
-                    return {
-                      ...targetMessage,
-                      content: [{ type: "text", text: "Rewritten while loading" }],
-                    };
-                  });
-                  expect(rewritten).not.toBeNull();
-                  expect(rewritten?.generation).not.toBe(anchor.generation);
-                }
-                imageResponse.resolve();
-                if (scenario === "revoked" || scenario === "target-rewrite" || rewriteSpy) {
-                  return;
-                }
-                await racePromiseWithAbortSignal(commentarySettled.promise, test.signal);
-                expect(readMessage()).toHaveProperty("openclawDisplayContent");
-                const persisted = readMessage();
-                expect(persisted).toMatchObject({
-                  content: expectedContent,
-                  stopReason: "toolUse",
-                });
-                if (!publicationSpy) {
-                  expect(rewriteUpdate).toMatchObject({
-                    messageId: "progress-row",
-                    target: expect.objectContaining({ sessionId: scope.sessionId }),
-                  });
-                  expect(rewriteUpdate).not.toHaveProperty("message");
-                }
-                const displayed = readDisplayed();
-                const displayedMedia = displayed
-                  .flatMap((row) => (Array.isArray(row.content) ? row.content : []))
-                  .map(asOptionalRecord)
-                  .filter((block) => block?.type === "image" || block?.type === "attachment");
-                expect(displayedMedia).toHaveLength(
-                  scenario === "sender-denied"
-                    ? 0
-                    : scenario === "worktree" || gcDuringPreparation
-                      ? 2
-                      : 1,
-                );
-                if (scenario === "sender-denied") {
-                  const failures = displayed
-                    .flatMap((row) => row.content ?? [])
-                    .map(asOptionalRecord)
-                    .filter((block) => block?.type === "attachment_error");
-                  expect(failures).toHaveLength(3);
-                  expect(
-                    await listManagedImageRecordEntries({ sessionKey: scope.sessionKey }),
-                  ).toEqual([]);
-                }
-                if (scenario === "worktree") {
-                  const blocks = displayed.flatMap((row) => row.content ?? []);
-                  expect(blocks).toContainEqual({
-                    type: "attachment_error",
-                    attachment: {
-                      code: "delivery-failed",
-                      kind: "image",
-                      label: "private.png",
-                      mimeType: "image/png",
-                    },
-                  });
-                  expect(displayedMedia).toEqual([
-                    expect.objectContaining({
-                      type: "image",
-                      url: expect.stringContaining("/api/chat/media/outgoing/"),
-                    }),
-                    expect.objectContaining({
-                      type: "image",
-                      url: expect.stringContaining("/api/chat/media/outgoing/"),
-                    }),
-                  ]);
-                  expect(await fs.readFile(absoluteImage)).toEqual(PNG_BYTES);
-                }
-                if (scenario === "top-level") {
-                  expect(displayed).toContainEqual(
-                    expect.objectContaining({
-                      openclawStreamFallback: expect.objectContaining({ itemId: "progress-row" }),
-                    }),
-                  );
-                  const text = displayed
-                    .flatMap((row) => (Array.isArray(row.content) ? row.content : []))
-                    .map(asOptionalRecord)
-                    .filter((block) => block?.type === "text")
-                    .map((block) => block?.text);
-                  expect(text).toEqual(["Before", "After"]);
-                  expect(persisted.phase).toBe("commentary");
-                }
-                if (scenario === "image") {
-                  expect(displayed).toContainEqual(
-                    expect.objectContaining({
-                      openclawStreamFallback: expect.objectContaining({
-                        itemId: "progress-image",
-                      }),
-                      content: [
-                        { type: "text", text: "Before" },
-                        expect.objectContaining({
-                          type: "image",
-                          mimeType: "image/png",
-                          url: expect.stringContaining("/api/chat/media/outgoing/"),
-                        }),
-                        { type: "text", text: "After" },
-                      ],
-                    }),
-                  );
-                }
-                if (scenario === "document") {
-                  expect(displayed).toContainEqual(
-                    expect.objectContaining({
-                      content: expect.arrayContaining([
-                        expect.objectContaining({
-                          type: "attachment",
-                          attachment: expect.objectContaining({
-                            kind: "document",
-                            mimeType: "application/pdf",
-                          }),
-                        }),
-                      ]),
-                    }),
-                  );
-                }
-                if (scenario === "hook") {
-                  expect(JSON.stringify(displayed)).toContain('"type":"image"');
-                  expect(fetchedUrls).toEqual([mediaUrl]);
-                }
-                if (mixed) {
-                  const replies = createReplyDispatcher(dispatch.dispatcherOptions);
-                  replies.sendFinalReply(
-                    setReplyPayloadMetadata(
-                      { text: finalText, ...(finalMediaUrl ? { mediaUrls: [finalMediaUrl] } : {}) },
-                      {
-                        assistantMessageIndex: 1,
-                        ...(finalMediaUrl ? { assistantTranscriptMediaUrls: [finalMediaUrl] } : {}),
-                      },
-                    ),
-                  );
-                  replies.markComplete();
-                  await replies.waitForIdle();
-                  expect(dispatch.deliveredReplies).toHaveLength(1);
-                } else {
-                  expect(dispatch.deliveredReplies).toEqual([]);
-                }
-                expect(
-                  loadTranscriptEventsSync(scope).filter(
-                    (event) => asOptionalRecord(event)?.type === "message",
-                  ),
-                ).toHaveLength(scenario === "unrelated-rewrite" ? 2 : 1);
-              } finally {
-                if (scenario !== "completion") {
-                  imageResponse.resolve();
-                }
-                cleanupStarted.resolve();
-                await transcriptLifecycle.beginCleanup();
-                admittedActive = false;
-                await transcriptLifecycle.dispose();
-                cleanupSettled = true;
-              }
-            }),
+          dispatch.runAgentMediaTranscript({ run: async (operation) => operation() }, () =>
+            withOwnedSessionTranscriptWrites(transcriptContext, publishCommentary),
           ),
         );
         void run.catch(() => {});

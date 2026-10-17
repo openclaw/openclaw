@@ -88,7 +88,7 @@ defineSolidBridge<AssistantPanelProps, Methods>(
     onSettled(() => {
       // Restore persisted geometry/open state before applying route suppression.
       const open = panel.dockLayout.open;
-      panel.dockLayout.hostConnected();
+      panel.dockLayout.connect();
       // A retained host keeps its explicit or suppressed visibility through remounts.
       if (retained) {
         panel.dockLayout.setOpen(open, false);
@@ -105,7 +105,7 @@ defineSolidBridge<AssistantPanelProps, Methods>(
       return () => {
         stops.forEach((stop) => stop());
         state.dispose();
-        panel.dockLayout.hostDisconnected();
+        panel.dockLayout.dispose();
         // Context replacement remounts Solid without retiring the element's dock intent.
         if (!element.isConnected) {
           panel.detach();

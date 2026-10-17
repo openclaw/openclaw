@@ -443,6 +443,7 @@ function Run(props: {
       : null,
   );
   let row!: HTMLDivElement;
+  // Register the highlighted DOM row with the cron owner until this selection changes.
   createEffect(highlighted, (selected) =>
     selected ? props.onHighlightedRun?.(row, selected) : undefined,
   );

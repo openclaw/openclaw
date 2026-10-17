@@ -39,8 +39,6 @@ export type BlockReplyFlushContext =
       attemptAccepted: boolean;
     };
 
-type EmbeddedAgentUsage = Omit<NormalizedUsage, "contextUsage">;
-
 export type EmbeddedAgentMeta = {
   sessionId: string;
   sessionFile?: string;
@@ -77,9 +75,10 @@ export type EmbeddedAgentMeta = {
    * and completion tokens that are useful for billing but noisy as live context.
    */
   promptTokens?: number;
-  usage?: EmbeddedAgentUsage;
+  /** Billing totals may span candidates; unavailable context prevents treating them as a snapshot. */
+  usage?: NormalizedUsage;
   /** Terminal cumulative usage for turn-level diagnostics and persisted CLI transcript accounting. */
-  diagnosticUsage?: EmbeddedAgentUsage;
+  diagnosticUsage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display

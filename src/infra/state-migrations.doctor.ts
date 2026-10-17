@@ -52,7 +52,7 @@ import { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-s
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { listLegacyPairingStoreFiles } from "./pairing-files.js";
-import { isPathInside } from "./path-guards.js";
+import { isPathInside, safeStatSync } from "./path-guards.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { legacyAgentQuarantineNotices } from "./state-migrations.agent-dir-receipt.js";
 import {
@@ -87,7 +87,7 @@ import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
 } from "./state-migrations.exec-approvals.js";
-import { migrationFileExists, readSessionStoreJson5 } from "./state-migrations.fs.js";
+import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   classifyLegacyOwnerFindings,
   hasCustomAgentDirOverride,
@@ -290,7 +290,7 @@ export async function detectLegacyStateMigrations(params: {
   };
   const { preserveForeignMainAliases } = sessionStoreOwnership;
   const targetSessionParsed =
-    detectSessionFiles && migrationFileExists(sessionsTargetStorePath)
+    detectSessionFiles && safeStatSync(sessionsTargetStorePath)?.isFile()
       ? readSessionStoreJson5(sessionsTargetStorePath)
       : { store: {}, ok: true };
   const legacySessionSurfaces = detectSessionFiles
@@ -364,7 +364,7 @@ export async function detectLegacyStateMigrations(params: {
   );
   const hasLegacyAgentDir = legacyAgentSources.length > 0;
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
-  const hasPluginInstallIndex = migrationFileExists(pluginInstallIndexPath);
+  const hasPluginInstallIndex = safeStatSync(pluginInstallIndexPath)?.isFile() === true;
   const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
   const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations(
     { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
@@ -381,7 +381,7 @@ export async function detectLegacyStateMigrations(params: {
   const configHealth = {
     sourcePath: resolveLegacyConfigHealthPath(stateDir),
   };
-  const hasConfigHealth = migrationFileExists(configHealth.sourcePath);
+  const hasConfigHealth = safeStatSync(configHealth.sourcePath)?.isFile() === true;
   const detectDoctorOwnedState = <TDetection>(
     detect: (options: { stateDir: string; doctorOnlyStateMigrations?: boolean }) => TDetection,
   ): TDetection =>
@@ -2028,6 +2028,7 @@ function completedPluginMigrationFields(
 /** Admit preflight's shared-state writers through the same schema step as later migrations. */
 export async function prepareLegacyStateDatabaseSchema(
   env: NodeJS.ProcessEnv,
+  integrityCheck?: "quick" | "full",
 ): Promise<LegacyStateMigrationStepReceipt> {
   const { receipts } = await runLegacyStateMigrationSteps([
     createStateSchemaMigrationStep({
@@ -2035,6 +2036,7 @@ export async function prepareLegacyStateDatabaseSchema(
       env,
       mode: "doctor-preparation",
       requiredness: "conditional",
+      integrityCheck,
     }),
   ]);
   return receipts[0]!;

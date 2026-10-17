@@ -197,6 +197,14 @@ Keep `postJsonRequest` for streaming or binary responses, custom response/error
 parsers, and code that needs to retain the response transport. Those callers
 must release it in `finally`.
 
+Use `fetchWithProviderHttpGuard` from `openclaw/plugin-sdk/provider-http` when
+the provider owns its request admission, response parsing, and release lifetime.
+It accepts guarded-fetch options and returns the response and `release` callback.
+Always release in `finally`. Eligible direct requests share the host's bounded
+provider connection pool after fresh DNS and SSRF validation on every request.
+Proxy and custom TLS routes retain their existing transport policy. Plugins do
+not retain or close the shared pool; the Gateway owns its shutdown.
+
 ## Walkthrough
 
 <Steps>

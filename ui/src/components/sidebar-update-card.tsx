@@ -20,6 +20,7 @@ import {
 } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-update-card.css";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
@@ -66,8 +67,6 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     void props.refreshRequired;
     return { inFlight: false, failed: false };
   });
-  const refreshInFlight = () => refreshState().inFlight;
-  const refreshFailed = () => refreshState().failed;
   const [checkingTarget, setCheckingTarget] = createSignal(false);
   const [targetCheckFailed, setTargetCheckFailed] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
@@ -76,10 +75,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
   let refreshPending = false;
   let targetCheckPending = false;
   const updateNativeAvailability = () => setNativeUpdateAvailable(hasNativeUpdateBridge());
-  window.addEventListener(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability);
-  onCleanup(() =>
-    window.removeEventListener(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability),
-  );
+  onCleanup(listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability));
   createEffect(
     () => props.refreshRequired,
     (required) => {
@@ -109,7 +105,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     // metadata it stays true even when this client is stale.
     return statusBanner ? (
       <div
-        class={`sidebar-update-card__status sidebar-update-card__status--${statusBanner.tone}`}
+        class={["sidebar-update-card__status", `sidebar-update-card__status--${statusBanner.tone}`]}
         role="alert"
       >
         {statusBanner.text}
@@ -117,12 +113,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     ) : null;
   }
 
-  const openRun = () => {
-    if (!props.updateRun) {
-      return;
-    }
-    confirmUpdate(props.updateRun);
-  };
+  const openRun = () => props.updateRun && confirmUpdate(props.updateRun);
 
   const expansionChecksTarget = () =>
     Boolean(props.onCheckStatus) &&
@@ -396,7 +387,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     return (
       <div class="sidebar-update-card" role="status" aria-live="polite">
         {renderStatus()}
-        {refreshFailed() ? (
+        {refreshState().failed ? (
           <div class="sidebar-update-card__status sidebar-update-card__status--warn" role="alert">
             {t("connection.actionsUnavailable")}
           </div>
@@ -404,11 +395,11 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
         <button
           class={[
             "sidebar-update-card__action",
-            { "sidebar-update-card__action--busy": refreshInFlight() },
+            { "sidebar-update-card__action--busy": refreshState().inFlight },
           ]}
           type="button"
-          disabled={refreshInFlight()}
-          aria-busy={refreshInFlight() ? "true" : "false"}
+          disabled={refreshState().inFlight}
+          aria-busy={refreshState().inFlight ? "true" : "false"}
           onClick={() => void refreshControlUi()}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">
@@ -417,9 +408,9 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
           <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
             <span class="sidebar-update-card__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
             <span class="sidebar-update-card__subtitle">
-              {refreshInFlight()
+              {refreshState().inFlight
                 ? t("lazyView.reloading")
-                : refreshFailed()
+                : refreshState().failed
                   ? t("connection.retryNow")
                   : t("chat.sidebar.serverUpdatedRefresh")}
             </span>
@@ -460,7 +451,6 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
   function AvailableCard() {
     const campaign = () => props.updateSchedule?.campaign;
     const busy = () => props.updateBusy || campaign()?.state === "applying";
-    const statusBanner = () => props.statusBanner;
     // Expansion queues the target check; its first frame must already be busy.
     const checking = () =>
       checkingTarget() || (props.compact && !expanded() && expansionChecksTarget());
@@ -513,14 +503,14 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
     }
     // An outcome with nothing left to act on is the whole card.
     return (
-      <Show when={Boolean(statusBanner() || actionable())}>
+      <Show when={Boolean(props.statusBanner || actionable())}>
         <div
           class="sidebar-update-card"
           role={campaign() ? undefined : "status"}
           aria-live={campaign() ? undefined : "polite"}
         >
           {renderStatus()}
-          <Show when={!actionable() && statusBanner()?.source === "read"}>
+          <Show when={!actionable() && props.statusBanner?.source === "read"}>
             <button
               type="button"
               class="sidebar-update-card__review"
@@ -545,7 +535,7 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
               <HoldUpdate />
             </div>
           </Show>
-          <Show when={statusBanner()}>
+          <Show when={props.statusBanner}>
             <button
               class="sidebar-update-card__review"
               type="button"

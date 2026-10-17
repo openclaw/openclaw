@@ -80,10 +80,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     config: params.config,
     activationSourceConfig: params.config && projectConfigOntoRuntimeSourceSnapshot(params.config),
     env: params.env,
-    workspaceDir:
-      typeof params.workspaceDir === "string" && params.workspaceDir.trim()
-        ? resolveUserPath(params.workspaceDir)
-        : undefined,
+    workspaceDir: params.workspaceDir?.trim() ? resolveUserPath(params.workspaceDir) : undefined,
     runtimeOptions: params.allowGatewaySubagentBinding
       ? { allowGatewaySubagentBinding: true }
       : undefined,

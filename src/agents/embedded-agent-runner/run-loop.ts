@@ -16,15 +16,13 @@ import { normalizeUsage } from "../usage.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import { log } from "./logger.js";
 import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import {
-  createPostCompactionLoopGuard,
-  PostCompactionLoopPersistedError,
-} from "./post-compaction-loop-guard.js";
+import { createPostCompactionLoopGuard } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { createAttemptCarryover } from "./run/attempt-result.js";
+import { resolveCurrentAttemptAssistant } from "./run/attempt-terminal-evidence.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { admitEmbeddedContextEngine } from "./run/context-engine-admission.js";
@@ -32,7 +30,11 @@ import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-st
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { createEmbeddedRunFailoverRetryController } from "./run/failover-retry-controller.js";
-import { buildErrorAgentMeta, resolveMaxRunRetryIterations } from "./run/helpers.js";
+import {
+  buildErrorAgentMeta,
+  resolveMaxRunRetryIterations,
+  resolveReportedModelRef,
+} from "./run/helpers.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import { createProviderReviewRun } from "./run/provider-review-run.js";
@@ -48,7 +50,11 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch
 import { settleEmbeddedRun } from "./run/run-settlement.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
-import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
+import {
+  prepareTerminalWithSettledTurnFinalization,
+  requestSettledTurnFinalizationContext,
+} from "./run/settled-turn-finalization.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
 import {
   createTerminalToolPresentationTracker,
   resolveEmbeddedRunTerminal,
@@ -159,7 +165,7 @@ export async function runPreparedEmbeddedLoop(
     enabled: resolvedLoopDetectionConfig?.enabled !== false,
   });
   let postCompactionAbortController: AbortController | undefined;
-  let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+  let postCompactionAbortError: Error | undefined;
   // Presentation survives retry attempts, but a newer tool result must clear stale text.
   const terminalToolPresentation = createTerminalToolPresentationTracker();
   const turnTaintState = createAgentTurnTaintState(params.initialTurnTainted === true);
@@ -171,7 +177,12 @@ export async function runPreparedEmbeddedLoop(
     }
     const verdict = postCompactionGuard.observe(observation);
     if (verdict.shouldAbort) {
-      postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+      postCompactionAbortError ??= Object.assign(new Error(verdict.message), {
+        name: "PostCompactionLoopPersistedError",
+        detector: verdict.detector,
+        count: verdict.count,
+        toolName: verdict.toolName,
+      });
       input.laneController.laneTaskAbortController.abort(postCompactionAbortError);
       postCompactionAbortController?.abort(postCompactionAbortError);
     }
@@ -298,33 +309,86 @@ export async function runPreparedEmbeddedLoop(
           onContextAccountingEvent: accounting.onContextAccountingEvent,
         },
       };
+      const terminalBase = (activeErrorContext: { provider: string; model: string }) => ({
+        rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
+        mergeToolMedia: refresh.mergeToolMedia,
+        runParams: params,
+        provider,
+        providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
+        model: model.id,
+        activeErrorContext,
+        authProfileStore: preparedRuntime.attemptAuthProfileStore,
+        authProfileId: lastProfileId,
+        outerContextTokenMeta,
+        usageAccumulator,
+        contextRecoveryState,
+        resolvedToolResultFormat: input.resolvedToolResultFormat,
+      });
       let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
       try {
         dispatch = await sessionPromptState.withSessionWriterContext(() =>
-          prepareAndDispatchEmbeddedRunAttempt({
-            permissionChange: permissionChanges.forAttempt(),
-            runInput: attemptRunInput,
-            preparedRuntime,
-            contextEngine,
-            sessionPromptState,
-            terminalRetryState,
-            replayState: accumulatedReplayState,
-            startupStagesEmitted,
-            bootstrapPromptWarningSignaturesSeen,
-            resolveRuntimeFallbackReason,
-            observeToolOutcome,
-            isTurnTainted: turnTaintState.isTainted,
-            allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
-            getPostCompactionAbortError: () => postCompactionAbortError,
-            setPostCompactionAbortController: (controller) => {
-              postCompactionAbortController = controller;
+          prepareAndDispatchEmbeddedRunAttempt(
+            {
+              permissionChange: permissionChanges.forAttempt(),
+              runInput: attemptRunInput,
+              preparedRuntime,
+              contextEngine,
+              sessionPromptState,
+              terminalRetryState,
+              replayState: accumulatedReplayState,
+              startupStagesEmitted,
+              bootstrapPromptWarningSignaturesSeen,
+              resolveRuntimeFallbackReason,
+              observeToolOutcome,
+              isTurnTainted: turnTaintState.isTainted,
+              allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
+              getPostCompactionAbortError: () => postCompactionAbortError,
+              setPostCompactionAbortController: (controller) => {
+                postCompactionAbortController = controller;
+              },
+              clearPostCompactionAbortController: (controller) => {
+                if (postCompactionAbortController === controller) {
+                  postCompactionAbortController = undefined;
+                }
+              },
             },
-            clearPostCompactionAbortController: (controller) => {
-              if (postCompactionAbortController === controller) {
-                postCompactionAbortController = undefined;
-              }
+            async (attempt, captureContext) => {
+              const assistant = resolveCurrentAttemptAssistant(attempt);
+              refresh.applyDeliveryState(attempt);
+              attempt.sourceReplyDeliveryState = resolveSourceReplyDelivery(
+                attempt,
+                params.replyOperation?.sourceReplyDelivered ? "delivered" : "missing",
+              );
+              await requestSettledTurnFinalizationContext(
+                {
+                  ...terminalBase(
+                    resolveReportedModelRef({
+                      provider,
+                      model: modelId,
+                      assistant,
+                    }),
+                  ),
+                  attempt,
+                  currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
+                  sessionIdUsed: attempt.sessionIdUsed,
+                  sessionFileUsed: attempt.sessionFileUsed,
+                  lastRunPromptUsage,
+                  terminalState: resolveEmbeddedRunAttemptTerminalState({
+                    attempt,
+                    assistant,
+                    abortSignal: input.laneController.abortSignal,
+                  }),
+                },
+                {
+                  harness: agentHarness,
+                  modelApi: effectiveModel.api,
+                  executionContract,
+                  hasTerminalToolPresentation: Boolean(terminalToolPresentation.read()),
+                },
+                captureContext,
+              );
             },
-          }),
+          ),
         );
       } catch (error) {
         accounting.close();
@@ -493,21 +557,7 @@ export async function runPreparedEmbeddedLoop(
             terminalState,
             attemptCompactionCount,
           },
-          terminalBase: {
-            rateLimitRetriesExhausted: failoverRetryController.rateLimitRetriesExhausted,
-            mergeToolMedia: refresh.mergeToolMedia,
-            runParams: params,
-            provider,
-            providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
-            model: model.id,
-            activeErrorContext,
-            authProfileStore: preparedRuntime.attemptAuthProfileStore,
-            authProfileId: lastProfileId,
-            outerContextTokenMeta,
-            usageAccumulator,
-            contextRecoveryState,
-            resolvedToolResultFormat: input.resolvedToolResultFormat,
-          },
+          terminalBase: terminalBase(activeErrorContext),
           lastRunPromptUsage,
           finalization: {
             preparedAttempt: dispatchedAttempt.preparedAttempt,

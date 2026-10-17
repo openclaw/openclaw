@@ -45,7 +45,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
-import { recordOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -754,15 +754,13 @@ describe("openclaw state database", () => {
       const generation = generationBound ? before : undefined;
       const reason = "previously verified damage outside Workshop";
       if (refusal === "persisted") {
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env: options.env,
-            kind: "state",
-            path: databasePath,
-            reason,
-            generation,
-          }),
-        ).toBe(true);
+        seedOpenClawDatabaseQuarantine({
+          env: options.env,
+          kind: "state",
+          path: databasePath,
+          reason,
+          generation,
+        });
       } else {
         const error = new Error(reason);
         error.name = "SqliteIntegrityError";
@@ -2759,33 +2757,40 @@ describe("openclaw state database", () => {
     expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
   });
 
-  it("rejects unrelated current-schema index corruption before exposure", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    createUnsafeIndexDrift(databasePath);
+  it.each([false, true])(
+    "repairs current-schema index corruption (recorded failure: %s)",
+    (recordedFailure) => {
+      const stateDir = createTempStateDir();
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      createUnsafeIndexDrift(databasePath);
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(
-      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-    );
-    const checkpointCallback = vi.fn();
-    expect(() =>
-      withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
-    ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
-    expect(checkpointCallback).not.toHaveBeenCalled();
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [
-        expect.stringContaining("Saved pre-repair SQLite backup:"),
-        expect.stringContaining(
-          "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
-        ),
-      ],
-      warnings: [],
-    });
-    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
-    });
-  });
+      if (recordedFailure) {
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+        );
+        const checkpointCallback = vi.fn();
+        expect(() =>
+          withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+        ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
+        expect(checkpointCallback).not.toHaveBeenCalled();
+      }
+      expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+        changes: [
+          expect.stringContaining("Saved pre-repair SQLite backup:"),
+          expect.stringContaining(
+            "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
+          ),
+        ],
+        warnings: [],
+      });
+      expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA integrity_check").get()).toEqual(
+        {
+          integrity_check: "ok",
+        },
+      );
+    },
+  );
 
   it("configures checkpoint lock waits before schema mutation", () => {
     const stateDir = createTempStateDir();

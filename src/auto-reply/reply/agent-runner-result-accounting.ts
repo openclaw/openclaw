@@ -135,7 +135,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
   const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
-  const { autoCompactionCount, didLogHeartbeatStrip } = execution;
+  const { autoCompactionCount } = execution;
 
   if (
     shouldInjectGroupIntro &&
@@ -429,7 +429,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     expectedSession,
     configuredFallbackModel,
     contextTokensUsed,
-    didLogHeartbeatStrip,
     hasDirectlySentBlockReply,
     directBlockDeliveries,
     fallbackAttempts,

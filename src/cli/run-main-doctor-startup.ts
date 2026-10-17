@@ -18,5 +18,11 @@ export async function prepareDoctorCliStartup(
   // Debug capture can migrate shared state before Commander reaches Doctor.
   // Resolve the update guard after selectors settle, before any bootstrap writer.
   const { preflightUpdateDoctorCli } = await import("../commands/doctor-update-schema-guard.js");
-  return { handled: false, preflight: await preflightUpdateDoctorCli(options) };
+  return {
+    handled: false,
+    preflight: await preflightUpdateDoctorCli({
+      ...options,
+      fullIntegrityCheck: argv.includes("--full-integrity-check"),
+    }),
+  };
 }

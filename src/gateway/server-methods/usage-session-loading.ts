@@ -12,6 +12,7 @@ import {
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { readWithSessionStoreTopology } from "../../sessions/session-row-changes.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
@@ -54,22 +55,24 @@ export async function discoverAllSessionsForUsage(params: {
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
-  const requestedAgentId = normalizeOptionalString(params.agentId);
-  const agents = requestedAgentId
-    ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : (await listGatewayAgentsBasic(params.config)).agents;
-  const discovered = await runUsageAgentTasks(
-    agents.map((agent) => async () => {
-      const agentId = normalizeAgentId(agent.id);
-      const sessions = await discoverAllSessions({
-        agentId,
-        startMs: params.startMs,
-        endMs: params.endMs,
-      });
-      return sessions.map((session) => Object.assign({}, session, { agentId }));
-    }),
-  );
-  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+  return readWithSessionStoreTopology(async () => {
+    const requestedAgentId = normalizeOptionalString(params.agentId);
+    const agents = requestedAgentId
+      ? [{ id: normalizeAgentId(requestedAgentId) }]
+      : (await listGatewayAgentsBasic(params.config)).agents;
+    const discovered = await runUsageAgentTasks(
+      agents.map((agent) => async () => {
+        const agentId = normalizeAgentId(agent.id);
+        const sessions = await discoverAllSessions({
+          agentId,
+          startMs: params.startMs,
+          endMs: params.endMs,
+        });
+        return sessions.map((session) => Object.assign({}, session, { agentId }));
+      }),
+    );
+    return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+  });
 }
 
 export function mergeUsageCacheStatus(

@@ -151,7 +151,13 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.connect();
     current().opts.onHello?.({
       ...HELLO,
-      snapshot: { sessionDefaults: { defaultAgentId: "roboclaw" } },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "roboclaw",
+          mainKey: "main",
+          mainSessionKey: "agent:roboclaw:main",
+        },
+      },
     });
     expect(gateway.snapshot.assistantAgentId).toBe("roboclaw");
     gateway.stop();

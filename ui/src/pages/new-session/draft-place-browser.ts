@@ -18,6 +18,7 @@ import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 type DraftPickerKind = "where" | "project" | "checkout";
+export type ProjectBrowserFocus = Partial<Record<"browse" | "path", HTMLElement>>;
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -32,16 +33,14 @@ type DraftProjectSelection =
 type DraftPlaceBrowserCallbacks = {
   changed: () => void;
   updateComplete: () => Promise<unknown>;
-  pickerIdPrefix?: string;
   onProjectMissing: () => void;
   onSelectProject: (projectId: string) => void;
   onApprovedListing: (listing: FsListDirResult) => void;
-  querySelector: (selector: string) => Element | null;
   activeElement: () => Element | null;
-  body: () => HTMLElement | null;
 };
 
 export class DraftPlaceBrowser {
+  readonly projectFocus: ProjectBrowserFocus = {};
   private projectCatalog: ProjectCatalog | undefined;
   private projectCatalogCleanup: (() => void) | undefined;
   private projectCatalogGateway: ApplicationContext["gateway"] | undefined;
@@ -52,6 +51,8 @@ export class DraftPlaceBrowser {
   private environmentQueryValue = "";
   private debouncedProjectQuery = "";
   private browserOpenValue = false;
+  // Empty lists the Gateway host; otherwise the paired device whose folders are listed.
+  private browserNodeIdValue = "";
   private browserProjectPathValue: string | null = null;
   private browserRegistration: object | null = null;
   private openPopoverValue: DraftPickerKind | null = null;
@@ -77,11 +78,18 @@ export class DraftPlaceBrowser {
         if (snapshot?.phase !== "connected" || !snapshot.client || !this.browserOpenValue) {
           return Promise.reject(new Error("Folder browser is unavailable"));
         }
-        return snapshot.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
+        return snapshot.client.request<FsListDirResult>("fs.listDir", {
+          ...(this.browserNodeIdValue ? { nodeId: this.browserNodeIdValue } : {}),
+          ...(path ? { path } : {}),
+        });
       },
       this.callbacks.changed,
       (listing) => {
         this.browserProjectPathValue = null;
+        if (this.browserNodeIdValue) {
+          // Gateway folder approval and project registration apply only to Gateway paths.
+          return;
+        }
         this.callbacks.onApprovedListing(listing);
         const snapshot = this.read();
         const client = snapshot.context?.gateway.snapshot.client;
@@ -251,6 +259,10 @@ export class DraftPlaceBrowser {
     return this.browserOpenValue;
   }
 
+  get browserNodeId(): string {
+    return this.browserNodeIdValue;
+  }
+
   get browserProjectPath(): string | null {
     // The register affordance and fence follow the draft's directory, not just loading state.
     // A shown error (failed navigate or failed registration) leaves the loaded folder valid,
@@ -273,7 +285,7 @@ export class DraftPlaceBrowser {
       popoverOpen: this.popoverOpen(kind),
       onPopoverShow: () => this.transitionPopover(kind, true),
       onPopoverHide: () => this.transitionPopover(kind, false),
-      onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
+      onPopoverAfterHide: this.callbacks.changed,
     };
   }
 
@@ -414,15 +426,24 @@ export class DraftPlaceBrowser {
     const wasBrowsing = this.browserOpenValue;
     this.resetBrowser(false);
     if (wasBrowsing) {
-      this.focusProjectView('[data-value="browse"]');
+      this.focusProjectView("browse");
     }
   }
 
   selectGatewayBrowser(path?: string) {
+    this.openBrowser("", path);
+  }
+
+  selectDeviceBrowser(nodeId: string, path?: string) {
+    this.openBrowser(nodeId, path);
+  }
+
+  private openBrowser(nodeId: string, path?: string) {
     this.browserOpenValue = true;
+    this.browserNodeIdValue = nodeId;
     this.browserProjectPathValue = null;
     void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
-    this.focusProjectView(".new-session-page__browser-path");
+    this.focusProjectView("path");
   }
 
   async registerBrowserProject(path: string) {
@@ -487,17 +508,6 @@ export class DraftPlaceBrowser {
     }
   }
 
-  onPopoverAfterHide(kind: DraftPickerKind) {
-    const id = `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`;
-    const active = this.callbacks.activeElement();
-    const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`);
-    const body = this.callbacks.body();
-    if (!active || active === body || popover?.contains(active)) {
-      (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
-    }
-    this.callbacks.changed();
-  }
-
   disconnect() {
     this.focusRequestId += 1;
     this.environmentQueryValue = "";
@@ -514,6 +524,7 @@ export class DraftPlaceBrowser {
     this.focusRequestId += 1;
     this.browser.reset();
     this.browserOpenValue = false;
+    this.browserNodeIdValue = "";
     this.browserProjectPathValue = null;
     this.browserRegistration = null;
     if (closePopover) {
@@ -527,7 +538,7 @@ export class DraftPlaceBrowser {
     this.projectSearchTimer = undefined;
   }
 
-  private focusProjectView(selector: string) {
+  private focusProjectView(kind: keyof ProjectBrowserFocus) {
     const requestId = ++this.focusRequestId;
     const origin = this.callbacks.activeElement();
     void this.callbacks.updateComplete().then(() => {
@@ -535,13 +546,11 @@ export class DraftPlaceBrowser {
         return;
       }
       const active = this.callbacks.activeElement();
-      if (active && active !== origin && active !== this.callbacks.body()) {
-        return;
-      }
-      const target = this.callbacks
-        .querySelector(".new-session-page__project-popover")
-        ?.querySelector<HTMLElement>(selector);
-      if (target?.isConnected) {
+      const target = this.projectFocus[kind];
+      if (
+        target?.isConnected &&
+        (!active || active === origin || active === active.ownerDocument.body)
+      ) {
         target.focus({ preventScroll: true });
       }
     });

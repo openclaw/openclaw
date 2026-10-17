@@ -152,22 +152,29 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
-  const inspectionContexts = contexts.map((context) => {
-    try {
-      return {
-        env: context.env,
-        configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
-          context.config,
-          { env: context.env },
-        ),
-      };
-    } catch (error) {
-      throw new UpdatePreMutationError(
-        "database-schema-preflight",
-        `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
-      );
-    }
-  });
+  const { resolveDatabaseEngineSelection } = await import("../../infra/database-engine/config.js");
+  const inspectionContexts = await Promise.all(
+    contexts.map(async (context) => {
+      try {
+        return {
+          env: context.env,
+          databaseEngineSelection: await resolveDatabaseEngineSelection(
+            context.config,
+            context.env,
+          ),
+          configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+            context.config,
+            { env: context.env },
+          ),
+        };
+      } catch (error) {
+        throw new UpdatePreMutationError(
+          "database-schema-preflight",
+          `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+        );
+      }
+    }),
+  );
   return preflightOpenClawDatabaseSchemaContexts({
     contexts: inspectionContexts,
     supportedVersions,

@@ -76,8 +76,9 @@ with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges
 that exact pending integration, including a deliberate choice to keep an unchanged
 binary file. Without acknowledgment, a retry keeps reporting conflicts. Remaining
 text conflict markers block completion. On completion, the calling sandbox imports
-only the selected base commit and source tree through bounded stdin, then stages
-its current source. Guest HEAD, branches, and commit history remain unchanged.
+only the selected base commit and source tree through bounded stdin, reusing
+available objects from host-selected snapshots when possible, then stages its
+current source. Guest HEAD, branches, and commit history remain unchanged.
 The result includes `review: { mode: "local", base: "<commit>" }`. Run tests and
 normal Auto Review with that exact target after refresh or conflict resolution,
 then publish to update the same draft. Reviewing against the old guest HEAD would

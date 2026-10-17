@@ -603,7 +603,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
     if (!params.migrateCodexModelRefs && !params.repairRetiredModelRefs) {
       const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath);
       const { store } = loaded;
-      const repaired = structuredClone(store);
+      const repaired = { ...store, jobs: [...store.jobs] };
       const changes: string[] = [];
       for (const [index, job] of repaired.jobs.entries()) {
         const {

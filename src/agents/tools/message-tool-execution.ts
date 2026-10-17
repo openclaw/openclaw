@@ -598,10 +598,13 @@ function* createMessageToolSteps(
                   sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
                   sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
                   // Only an admitted channel source can arm terminal restart reconciliation.
-                  // Source-less scheduled and ambient sends remain ordinary message actions.
+                  // Preserve explicit progress even without a source turn: recovery must not
+                  // mistake its persisted mirror for a completed assistant reply.
                   sourceReplyFinal: hasExactSourceTurn
                     ? (requestedSourceReplyFinal ?? true)
-                    : undefined,
+                    : action === "send" && requestedSourceReplyFinal === false
+                      ? false
+                      : undefined,
                   sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
                   onActionDenied: (error, channel, receiptDiscriminator) =>
                     decisions.recordTypedDenial(

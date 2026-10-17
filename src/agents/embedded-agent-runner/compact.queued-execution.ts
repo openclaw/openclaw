@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import {
   captureSessionActorStorageOwner,
@@ -278,10 +279,34 @@ export async function executeQueuedContextEngineCompaction(input: {
         return createQueuedCompactionAbortedResult();
       }
       assertCallerActive();
-      // When the context engine owns compaction, its compact() implementation
-      // bypasses compactEmbeddedAgentSessionDirect (which fires the hooks internally).
-      // Fire before_compaction / after_compaction hooks here so plugin subscribers
-      // are notified regardless of which engine is active.
+      let preflightCompactionTrigger = params.preflightCompactionTrigger;
+      const compactionConfig = params.config?.agents?.defaults?.compaction;
+      if (
+        params.trigger === "manual" &&
+        preflightCompactionTrigger === undefined &&
+        compactionConfig?.enabled !== false
+      ) {
+        const maxActiveTranscriptBytes = parseNonNegativeByteSize(
+          compactionConfig?.maxActiveTranscriptBytes,
+        );
+        if (maxActiveTranscriptBytes !== null && maxActiveTranscriptBytes > 0) {
+          const { readSessionTranscriptAccountingAsync } =
+            await import("../../gateway/session-transcript-readers.js");
+          assertCallerActive();
+          const snapshot = await readSessionTranscriptAccountingAsync(
+            runtimeTarget,
+            { includeByteSize: true, includeUsage: false },
+            params.abortSignal,
+          );
+          assertCallerActive();
+          if (snapshot.byteSize !== undefined && snapshot.byteSize >= maxActiveTranscriptBytes) {
+            preflightCompactionTrigger = "transcript_bytes";
+          }
+        }
+      }
+      // Owning engines may delegate to the native compactor. This wrapper owns
+      // their plugin lifecycle; the private invocation bridge prevents the
+      // delegate from repeating it while retaining native internal events.
       const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
       if (engineOwnsCompaction || contextEngine.info.id !== "legacy") {
         // Plugin compaction and hooks can use the released synchronous transcript reader.
@@ -342,6 +367,7 @@ export async function executeQueuedContextEngineCompaction(input: {
           compact: async (backendParams) => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                hostOwnsCompactionLifecycle: engineOwnsCompaction,
                 requestBudget: host.requestBudget,
                 pendingUserEntryId: host.pendingUserEntryId,
                 recordCompaction: (receipt) => {
@@ -398,7 +424,7 @@ export async function executeQueuedContextEngineCompaction(input: {
                   : params.trigger === "manual"
                     ? "manual"
                     : undefined,
-              preflightCompactionTrigger: params.preflightCompactionTrigger,
+              preflightCompactionTrigger,
             },
             runtimeSettings: contextEngineRuntimeSettings,
           },

@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createUniqueId, Show, untrack } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
@@ -558,6 +558,19 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
 }
 
 export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps }) {
+  // Reconnects can replace the capability owner while this menu stays open.
+  createEffect(
+    () => ({
+      open: props.menu.open,
+      view: props.menu.view,
+      load: props.menu.capabilityMenu?.onLoadView,
+    }),
+    ({ open, view, load }) => {
+      if (open) {
+        load?.(view);
+      }
+    },
+  );
   const resolved = createMemo(() => {
     const current = props.menu;
     const capabilityMenu = current.capabilityMenu;

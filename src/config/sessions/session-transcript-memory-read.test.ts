@@ -1,7 +1,9 @@
+import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readRecentSessionConversationTextAsync } from "../../gateway/session-transcript-readers.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { contextBudgetStatusFixture } from "./context-budget.test-support.js";
 import {
   bindSessionTranscriptStoreScope,
   resolveSessionKeyBySessionIdAsync,
@@ -16,16 +18,16 @@ import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
-import { readLatestTranscriptAssistantTextAsync } from "./session-transcript-assistant-read.js";
+import { readLatestTranscriptAssistantTextAsync as latestAssistant } from "./session-transcript-assistant-read.js";
 import { readSessionTranscriptModelContextAsync } from "./session-transcript-context-read.js";
 import { withSessionTranscriptDeltaReader } from "./session-transcript-delta-read.js";
-import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
-import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
+import { loadSessionTranscriptEvents as readEvents } from "./session-transcript-events.js";
+import { prepareSessionTranscriptHydration as prepareHydration } from "./session-transcript-hydration.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
-import { readRecentUserAssistantTextForSession } from "./transcript.js";
+import { readRecentUserAssistantTextForSession as recentText } from "./transcript.js";
 import type { InternalSessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -78,44 +80,31 @@ async function fixture(sessionId = "one", agentId = "main", messages?: Transcrip
       message("answer", "user", "assistant", `Answer ${sessionId}`),
     ]),
   ];
-  committed(
-    await storage.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry: { sessionId, updatedAt: 1, incognito: true }, transcriptEvents: events },
-      },
-      authority,
-    ),
-  );
+  const mutate = async (command: Parameters<typeof storage.mutate>[0]) =>
+    committed(await storage.mutate(command, authority));
+  await mutate({
+    type: "session.entry.create",
+    input: { entry: { sessionId, updatedAt: 1, incognito: true }, transcriptEvents: events },
+  });
   const scope = { agentId, sessionKey, sessionId, storePath, env };
   const binding = { actor, authority, agentId, path: storePath };
   const append = async ({ message: payload, ...event }: ReturnType<typeof message>) =>
-    committed(
-      await storage.mutate(
-        {
-          type: "session.metadata.append",
-          input: {
-            scope,
-            event,
-            message: {
-              messageJson: JSON.stringify(payload),
-              cwd: "/synthetic",
-              validateTurn: false,
-            },
-            options: {},
-          },
+    mutate({
+      type: "session.metadata.append",
+      input: {
+        scope,
+        event,
+        message: {
+          messageJson: JSON.stringify(payload),
+          cwd: "/synthetic",
+          validateTurn: false,
         },
-        authority,
-      ),
-    );
-  const patch = async (value: Partial<InternalSessionEntry>) =>
-    committed(
-      await storage.mutate(
-        { type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } },
-        authority,
-      ),
-    );
-  return { owner, actor, storage, scope, binding, events, append, patch };
+        options: {},
+      },
+    });
+  const patch = (value: Partial<InternalSessionEntry>) =>
+    mutate({ type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } });
+  return { owner, actor, mutate, scope, binding, events, append, patch };
 }
 
 describe("memory transcript read adapters", () => {
@@ -134,14 +123,14 @@ describe("memory transcript read adapters", () => {
     );
     await runWithSessionActorStorage(binding, async () => {
       const [recent] = await Promise.all([
-        readRecentUserAssistantTextForSession({ ...scope, role: "user", limit: 2 }),
+        recentText({ ...scope, role: "user", limit: 2 }),
         append(message("appended", "snapshot-299", "assistant", "Concurrent reply")),
       ]);
       expect(recent).toEqual([
         { id: "snapshot-0", role: "user", text: "Context 0" },
         { id: "snapshot-50", role: "user", text: "Context 50" },
       ]);
-      expect(await readLatestTranscriptAssistantTextAsync(scope)).toMatchObject({
+      expect(await latestAssistant(scope)).toMatchObject({
         text: "Concurrent reply",
       });
     });
@@ -151,10 +140,10 @@ describe("memory transcript read adapters", () => {
     const { scope, events, append } = await fixture();
     expect(bindSessionTranscriptStoreScope(scope).storePath).toBe(scope.storePath);
     expect(resolveSessionTranscriptReadTarget(scope)).toMatchObject(scope);
-    expect(await loadSessionTranscriptEvents(scope)).toEqual(events);
-    expect(
-      await readRecentUserAssistantTextForSession({ ...scope, role: "assistant", limit: 2 }),
-    ).toEqual([{ id: "answer", role: "assistant", text: "Answer one" }]);
+    expect(await readEvents(scope)).toEqual(events);
+    expect(await recentText({ ...scope, role: "assistant", limit: 2 })).toEqual([
+      { id: "answer", role: "assistant", text: "Answer one" },
+    ]);
     expect(await readTranscriptStatsAsync(scope)).toMatchObject({ eventCount: 3, maxSeq: 2 });
     expect(await readSessionTranscriptWatermarkAsync(scope)).toMatchObject({ maxSeq: 2 });
     expect(await hasSessionTranscriptMessage(scope)).toBe(true);
@@ -164,10 +153,8 @@ describe("memory transcript read adapters", () => {
     const context = await readSessionTranscriptModelContextAsync(scope, (value) => value);
     expect(ids(context.events)).toContain("answer");
 
-    await expect(loadSessionTranscriptEvents({ ...scope, maxEventBytes: 1 })).rejects.toThrow(
-      "too large",
-    );
-    expect(await readLatestTranscriptAssistantTextAsync(scope)).toMatchObject({
+    await expect(readEvents({ ...scope, maxEventBytes: 1 })).rejects.toThrow("too large");
+    expect(await latestAssistant(scope)).toMatchObject({
       text: "Answer one",
     });
 
@@ -175,9 +162,7 @@ describe("memory transcript read adapters", () => {
     await withSessionTranscriptDeltaReader(scope, async (reader) => {
       const initial = await reader.raw({ maxEvents: 3 });
       expect(initial).toMatchObject({ kind: "page", hasMore: false });
-      if (initial.kind !== "page") {
-        throw new Error("Expected raw page");
-      }
+      assert(initial.kind === "page");
       const next = message("next", "answer", "assistant", "New answer");
       await append(next);
       expect(await reader.raw({ cursor: initial.cursor, maxEvents: 1 })).toMatchObject({
@@ -187,24 +172,22 @@ describe("memory transcript read adapters", () => {
       });
       const visible = await reader.visible({ maxMessages: 1 });
       expect(visible).toMatchObject({ kind: "page", hasMore: true });
-      if (visible.kind !== "page") {
-        throw new Error("Expected visible page");
-      }
+      assert(visible.kind === "page");
       expect(visible.events).toHaveLength(1);
       readAfterClose = () => reader.raw({});
     });
     await expect(readAfterClose!()).rejects.toThrow("no longer active");
-    expect(await readLatestTranscriptAssistantTextAsync(scope)).toMatchObject({
+    expect(await latestAssistant(scope)).toMatchObject({
       text: "New answer",
     });
 
-    const hydration = prepareSessionTranscriptHydration(scope, { maxBytes: 16384, maxEvents: 1 });
+    const hydration = prepareHydration(scope, { maxBytes: 16384, maxEvents: 1 });
     const bounded = await hydration.read();
     expect(bounded.kind).toBe("bounded");
     expect(ids(bounded.snapshot.events)).toContain("next");
     expect(bounded.snapshot.events.length).toBeLessThanOrEqual(2);
     const cancelled = new AbortController();
-    const stopped = prepareSessionTranscriptHydration(scope, undefined, cancelled.signal);
+    const stopped = prepareHydration(scope, undefined, cancelled.signal);
     cancelled.abort(new Error("caller cancelled"));
     await expect(stopped.read()).rejects.toThrow("caller cancelled");
   });
@@ -230,9 +213,9 @@ describe("memory transcript read adapters", () => {
       },
       message("after", "notice", "user", "After marker"),
     ]);
-    expect(
-      await readRecentUserAssistantTextForSession({ ...scope, role: "user", limit: 2 }),
-    ).toEqual([{ id: "after", role: "user", text: "After marker" }]);
+    expect(await recentText({ ...scope, role: "user", limit: 2 })).toEqual([
+      { id: "after", role: "user", text: "After marker" },
+    ]);
   });
 
   it("selects sibling and retained historical windows without creating missing sessions", async () => {
@@ -240,19 +223,12 @@ describe("memory transcript read adapters", () => {
     const sibling = await fixture("two");
     const otherAgent = await fixture("other", "helper");
     const previous = sibling.actor.snapshot(authority)!.entry!;
-    committed(
-      await sibling.storage.mutate(
-        {
-          type: "session.entry.replace",
-          input: { expected: previous, entry: { ...previous, sessionId: "two-new" } },
-        },
-        authority,
-      ),
-    );
-    expect(await loadSessionTranscriptEvents(sibling.scope)).toEqual(sibling.events);
-    expect(await loadSessionTranscriptEvents({ ...sibling.scope, sessionKey: undefined })).toEqual(
-      sibling.events,
-    );
+    await sibling.mutate({
+      type: "session.entry.replace",
+      input: { expected: previous, entry: { ...previous, sessionId: "two-new" } },
+    });
+    expect(await readEvents(sibling.scope)).toEqual(sibling.events);
+    expect(await readEvents({ ...sibling.scope, sessionKey: undefined })).toEqual(sibling.events);
     expect(await resolveSessionKeyBySessionIdAsync(sibling.scope)).toBe(sibling.scope.sessionKey);
     expect(
       await resolveSessionTranscriptRuntimeTarget(sibling.scope, undefined, {
@@ -263,27 +239,27 @@ describe("memory transcript read adapters", () => {
       sessionId: "two",
       selectedSessionId: "two-new",
     });
-    expect(
-      await loadSessionTranscriptEvents({ ...otherAgent.scope, sessionKey: undefined }),
-    ).toEqual(otherAgent.events);
+    expect(await readEvents({ ...otherAgent.scope, sessionKey: undefined })).toEqual(
+      otherAgent.events,
+    );
     const before = root.owner.listSessions(authority).length;
     const missing = { ...root.scope, sessionKey: undefined, sessionId: "missing" };
-    expect(await loadSessionTranscriptEvents(missing)).toEqual([]);
+    expect(await readEvents(missing)).toEqual([]);
     expect(
       await readRecentSessionConversationTextAsync(missing, { role: "user", limit: 2 }),
     ).toEqual([]);
-    expect(await readLatestTranscriptAssistantTextAsync(missing)).toBeUndefined();
+    expect(await latestAssistant(missing)).toBeUndefined();
     expect(await withSessionTranscriptDeltaReader(missing, (reader) => reader.raw({}))).toEqual({
       kind: "missing",
     });
     expect(
-      await prepareSessionTranscriptHydration({
+      await prepareHydration({
         ...missing,
         sessionKey: root.scope.sessionKey,
       }).read(),
     ).toMatchObject({ kind: "full", snapshot: { events: [] } });
     expect(
-      await prepareSessionTranscriptHydration(
+      await prepareHydration(
         { ...missing, sessionKey: root.scope.sessionKey },
         { maxBytes: 1024, maxEvents: 1 },
       ).read(),
@@ -293,14 +269,14 @@ describe("memory transcript read adapters", () => {
 
   it("retains owner close and absence across an unbound reader's lifetime", async () => {
     const { scope } = await fixture();
-    const captured = prepareSessionTranscriptHydration(scope);
+    const captured = prepareHydration(scope);
     memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
-    const absent = prepareSessionTranscriptHydration(scope);
+    const absent = prepareHydration(scope);
     await fixture();
     await expect(captured.read()).rejects.toThrow();
     expect(() => captured.assertCurrent()).toThrow();
     expect(await absent.read()).toMatchObject({ kind: "full", snapshot: { events: [] } });
-    expect(await loadSessionTranscriptEvents(scope)).toHaveLength(3);
+    expect(await readEvents(scope)).toHaveLength(3);
   });
 
   it("manually compacts current rows and accounting while preserving a newer entry update", async () => {
@@ -315,25 +291,10 @@ describe("memory transcript read adapters", () => {
       totalTokensFresh: true,
       totalTokensVersion: 1,
       compactionCount: 3,
-      contextBudgetStatus: {
-        schemaVersion: 1,
-        source: "pre-prompt-estimate",
-        updatedAt: 1,
-        provider: "synthetic",
-        model: "synthetic-model",
+      contextBudgetStatus: contextBudgetStatusFixture({
         route: "compact_only",
         shouldCompact: true,
-        estimatedPromptTokens: 100,
-        contextTokenBudget: 80,
-        promptBudgetBeforeReserve: 80,
-        reserveTokens: 10,
-        effectiveReserveTokens: 10,
-        remainingPromptBudgetTokens: 0,
-        overflowTokens: 30,
-        toolResultReducibleChars: 0,
-        messageCount: 2,
-        unwindowedMessageCount: 2,
-      },
+      }),
       cliSessionIds: { synthetic: "old" },
       cliSessionBindings: { synthetic: { sessionId: "old" } },
       claudeCliSessionId: "old",
@@ -356,7 +317,7 @@ describe("memory transcript read adapters", () => {
         },
       }),
     ).resolves.toEqual({ compacted: true, kept: 2 });
-    expect(await loadSessionTranscriptEvents(scope)).toMatchObject([
+    expect(await readEvents(scope)).toMatchObject([
       { type: "session", id: "one" },
       { id: "answer", parentId: null },
     ]);
@@ -403,7 +364,7 @@ describe("memory transcript read adapters", () => {
         }),
       ),
     ).rejects.toThrow("manual compaction permission withdrawn");
-    expect(await loadSessionTranscriptEvents(scope)).toEqual(events);
+    expect(await readEvents(scope)).toEqual(events);
     expect(owner.readSession(scope.sessionKey, authority)?.entry).toEqual(before);
   });
 
@@ -414,28 +375,22 @@ describe("memory transcript read adapters", () => {
     const anchor = actor
       .snapshot(authority)!
       .transcript.anchors.find((entry) => entry.entryId === "current-user");
-    if (!anchor) {
-      throw new Error("Missing current input anchor");
-    }
+    assert(anchor);
     const receipt = { ...anchor, role: "user" as const, logicalTurnId: "current-turn" };
     await runWithSessionActorStorage(binding, () =>
       runWithSessionTranscriptReadFence(receipt, async () => {
-        expect(ids(await loadSessionTranscriptEvents(scope))).toEqual(["one", "user", "answer"]);
-        expect(await readLatestTranscriptAssistantTextAsync(scope)).toMatchObject({
+        expect(ids(await readEvents(scope))).toEqual(["one", "user", "answer"]);
+        expect(await latestAssistant(scope)).toMatchObject({
           text: "Answer one",
         });
-        const hydrated = await prepareSessionTranscriptHydration(scope).read();
+        const hydrated = await prepareHydration(scope).read();
         expect(ids(hydrated.snapshot.events)).toEqual(["one", "user", "answer"]);
         await withSessionTranscriptDeltaReader(scope, async (reader) => {
           const raw = await reader.raw({});
-          if (raw.kind !== "page") {
-            throw new Error("Expected raw page");
-          }
+          assert(raw.kind === "page");
           expect(ids(raw.events.map((row) => row.event))).toEqual(["one", "user", "answer"]);
           const visible = await reader.visible({});
-          if (visible.kind !== "page") {
-            throw new Error("Expected visible page");
-          }
+          assert(visible.kind === "page");
           expect(ids(visible.events.map((row) => row.event))).toEqual(["user", "answer"]);
         });
       }),

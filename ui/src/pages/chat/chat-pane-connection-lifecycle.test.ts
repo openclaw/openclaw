@@ -116,7 +116,12 @@ describe("chat pane connection lifecycle", () => {
         ...snapshot,
         hello: {
           ...snapshot.hello!,
-          snapshot: { presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] },
+          snapshot: {
+            presence: [
+              { ts: 0, user: { id: "owner" } },
+              { ts: 0, user: { id: "alice" } },
+            ],
+          },
         },
       };
 

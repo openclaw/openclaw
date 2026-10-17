@@ -177,6 +177,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     onSnapshot: handleGatewaySnapshot,
     ensureInitialData,
   });
+  // Gateway events refresh pairing and presence inventory within the bound request generation.
   createEffect(
     () => context.gateway,
     (gateway) =>

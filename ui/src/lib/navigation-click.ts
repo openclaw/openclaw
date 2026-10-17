@@ -18,6 +18,7 @@ export function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
+/** Delegated clicks may originate in caller-owned light DOM or shadow-root islands. */
 export function anchorFromNavigationEvent(event: Event): HTMLAnchorElement | null {
   return (
     event.composedPath().find((target) => target instanceof HTMLAnchorElement) ??

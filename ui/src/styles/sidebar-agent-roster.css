@@ -401,7 +401,3 @@ openclaw-sidebar-agent-roster {
   position: relative;
   z-index: auto;
 }
-
-.sidebar-agent-roster__menu .sidebar-customize-menu__item::part(checkmark) {
-  display: none;
-}

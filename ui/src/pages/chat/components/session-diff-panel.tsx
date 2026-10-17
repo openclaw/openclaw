@@ -33,11 +33,8 @@ import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import {
-  DiffStatChips,
-  createDiffPresentation,
-  type DiffPresentation,
-} from "./chat-diff-render.solid.tsx";
+import { createDiffPresentation, type DiffPresentation } from "./chat-diff-render.solid.tsx";
+import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import {
   SessionDiffMenu,
   type SessionDiffMenuAction,
@@ -137,7 +134,7 @@ function SessionDiffContent(props: SessionDiffProps) {
 
   async function loadDiff(
     prefetched?: SessionsDiffResult,
-    target = { loader: props.loader, owner: props.owner, scope: untrack(scope) },
+    target = { loader: props.loader, owner: props.owner, scope: scope() },
   ) {
     const { loader, owner, scope: requestedScope } = target;
     const request = ++generation;
@@ -153,7 +150,7 @@ function SessionDiffContent(props: SessionDiffProps) {
       if (request !== generation) {
         return;
       }
-      const previous = untrack(value);
+      const previous = value();
       const reusable =
         previous?.owner === owner &&
         JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
@@ -199,6 +196,7 @@ function SessionDiffContent(props: SessionDiffProps) {
         previous.scope === next.scope,
     },
   );
+  // Load from the external diff owner when the requested scope changes.
   createEffect(requestTarget, (target) => {
     // A nested bridge mount can flush this effect under its outer component owner.
     runWithOwner(null, () => {
@@ -248,7 +246,7 @@ function SessionDiffContent(props: SessionDiffProps) {
         codePresentations.get(action.path)?.expand();
         return;
       case "collapse-all":
-        setCollapsedPaths(new Set(untrack(value)?.views.map((view) => view.file.path) ?? []));
+        setCollapsedPaths(new Set(value()?.views.map((view) => view.file.path) ?? []));
         return;
       case "expand-all":
         setCollapsedPaths(new Set<string>());
@@ -381,7 +379,7 @@ function SessionDiffContent(props: SessionDiffProps) {
     }
     const requestedScope = scope();
     const request = generation;
-    const isCurrent = () => generation === request && Boolean(untrack(value)?.views.includes(view));
+    const isCurrent = () => generation === request && Boolean(value()?.views.includes(view));
     let freshResult: SessionsDiffResult;
     try {
       freshResult = await loader(requestedScope);
@@ -471,6 +469,7 @@ function SessionDiffContent(props: SessionDiffProps) {
         return pairedRows().get(fileProps.view) ?? [];
       },
     });
+    // A retained source has one immutable file path across metadata refreshes.
     const pathKey = untrack(() => fileProps.view.file.path);
     codePresentations.set(pathKey, presentation);
     onCleanup(() => {
@@ -500,7 +499,7 @@ function SessionDiffContent(props: SessionDiffProps) {
               <Icon name="chevronRight" />
             </span>
             <span
-              class={`session-diff__status session-diff__status--${file().status}`}
+              class={["session-diff__status", `session-diff__status--${file().status}`]}
               title={t(statusLabel()[1])}
             >
               {statusLabel()[0]}

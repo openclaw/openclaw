@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { buildDiscordComponentMessage, createDiscordFormModal } from "./components.js";
 import type { DiscordComponentBlock } from "./components.types.js";
 import {
-  BaseComponentInteraction,
   ChannelSelectMenu,
   Container,
   MentionableSelectMenu,
@@ -12,8 +11,8 @@ import {
   Row,
   StringSelectMenu,
   UserSelectMenu,
-  createInteraction,
-} from "./internal/discord.js";
+} from "./internal/components.message.js";
+import { BaseComponentInteraction, createInteraction } from "./internal/interactions.js";
 import {
   createInternalComponentInteractionPayload,
   createInternalTestClient,

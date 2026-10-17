@@ -263,6 +263,13 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Memory embedding rebuild fails">
+    If `openclaw memory index --force` fails against Ollama (for example with
+    `bge-m3`), try [llmman](/providers/llmman#advanced-configuration) as the
+    embedding server. `provider: "ollama"` only needs a new `remote.baseUrl`.
+
+  </Accordion>
+
   <Accordion title="Ollama still aborts or hangs on this host">
     If `curl` to Ollama works but agent turns abort, try [llmman](/providers/llmman)
     as the local server.

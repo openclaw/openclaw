@@ -33,6 +33,8 @@ function indexedDbFactory(): IDBFactory | null {
   }
 }
 
+// IndexedDB requests own their one-shot listeners; database listeners end when callers close it.
+// Persistence stays independent of any Solid view's lifetime.
 function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);

@@ -30,6 +30,42 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createFixture = useBrowserFollowupFixture();
 
+type SessionAction = "compact" | "fork" | "rewind";
+
+function createMutation(fixture: Awaited<ReturnType<typeof createFixture>>, action: SessionAction) {
+  const entryId = loadTranscriptEventsSync(fixture.scope)
+    .map(asOptionalRecord)
+    .find((event) => event?.type === "message")?.id;
+  expect(entryId).toBeTruthy();
+  const method = `sessions.${action}`;
+  return (respond: RespondFn) =>
+    Promise.resolve(
+      (action === "compact" ? sessionCompactHandlers : sessionRewindHandlers)[method]!({
+        req: { type: "req", id: action, method },
+        params:
+          action === "compact"
+            ? { key: fixture.scope.sessionKey, maxLines: 1 }
+            : { sessionKey: fixture.scope.sessionKey, entryId },
+        client: null,
+        isWebchatConnect: () => false,
+        respond,
+        context: fixture.context,
+      }),
+    );
+}
+
+function expectActiveRunRefusal(respond: RespondFn, action: SessionAction) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      message: expect.stringContaining(
+        action === "compact" ? "has an active run" : "while the agent is working",
+      ),
+    }),
+  );
+}
+
 it.for(
   (["compact", "fork", "rewind"] as const).flatMap((action) =>
     (["native", "dispatched"] as const).map((publication) => ({ action, publication })),
@@ -90,27 +126,8 @@ it.for(
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
       return undefined;
     });
-    const entryId = loadTranscriptEventsSync(fixture.scope)
-      .map(asOptionalRecord)
-      .find((event) => event?.type === "message")?.id;
-    expect(entryId).toBeTruthy();
-    const method = `sessions.${action}`;
-    const invoke = (respond: RespondFn) =>
-      clientRequest.runInAsyncScope(() =>
-        Promise.resolve(
-          (action === "compact" ? sessionCompactHandlers : sessionRewindHandlers)[method]!({
-            req: { type: "req", id: action, method },
-            params:
-              action === "compact"
-                ? { key: fixture.scope.sessionKey, maxLines: 1 }
-                : { sessionKey: fixture.scope.sessionKey, entryId },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-            context: fixture.context,
-          }),
-        ),
-      );
+    const mutate = createMutation(fixture, action);
+    const invoke = (respond: RespondFn) => clientRequest.runInAsyncScope(() => mutate(respond));
     const finalResponse = vi.fn<RespondFn>();
     let mutation: Promise<void> | undefined;
     vi.mocked(fixture.context.broadcast).mockImplementation((event, payload) => {
@@ -133,15 +150,7 @@ it.for(
       await withinTest(modelEntered.promise, signal);
       const liveResponse = vi.fn<RespondFn>();
       await invoke(liveResponse);
-      expect(liveResponse).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining(
-            action === "compact" ? "has an active run" : "while the agent is working",
-          ),
-        }),
-      );
+      expectActiveRunRefusal(liveResponse, action);
       modelRelease.resolve();
       await withinTest(finalObserved.promise, signal);
       await withinTest(settlementEntered.promise, signal);
@@ -220,38 +229,13 @@ it.for(
         });
       }
       expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
-      const entryId = loadTranscriptEventsSync(fixture.scope)
-        .map(asOptionalRecord)
-        .find((event) => event?.type === "message")?.id;
-      expect(entryId).toBeTruthy();
-      const method = `sessions.${action}`;
       const respond = vi.fn<RespondFn>();
-      mutation = Promise.resolve(
-        (action === "compact" ? sessionCompactHandlers : sessionRewindHandlers)[method]!({
-          req: { type: "req", id: action, method },
-          params:
-            action === "compact"
-              ? { key: fixture.scope.sessionKey, maxLines: 1 }
-              : { sessionKey: fixture.scope.sessionKey, entryId },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-          context: fixture.context,
-        }),
-      );
+      mutation = createMutation(fixture, action)(respond);
       await withinTest(admissionChecked.promise, signal);
       // A live acquired lease must refuse synchronously, never await its release.
       expect(releaseCheck.mock.results[0]?.value).toBe(false);
       await withinTest(mutation, signal);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining(
-            action === "compact" ? "has an active run" : "while the agent is working",
-          ),
-        }),
-      );
+      expectActiveRunRefusal(respond, action);
     } finally {
       removeListener();
       admission.release();

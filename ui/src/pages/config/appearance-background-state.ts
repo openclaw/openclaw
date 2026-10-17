@@ -26,6 +26,7 @@ import type { SessionBackground } from "../../components/session-background.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { AppearanceBackgroundView as BackgroundViewProps } from "./view-appearance-background.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -91,9 +92,7 @@ export function createAppearanceBackground(
     if (!connected || application === nextContext) {
       return;
     }
-    for (const stop of subscriptions.splice(0)) {
-      stop();
-    }
+    subscriptions.splice(0).forEach((stop) => stop());
     dismissCanvasPreview();
     retireMutation();
     releasePreview();
@@ -106,10 +105,12 @@ export function createAppearanceBackground(
       return;
     }
     subscriptions.push(
+      // Revoke an active preview immediately when its selected background changes.
       nextContext.theme.subscribe(() => {
         retireChangedCanvasPreview();
         publish();
       }),
+      // Connection receipts retire upload and image-preview authority synchronously.
       nextContext.gateway.subscribe(() => {
         if ((mutationScope && !owns(mutationScope)) || (metadata && !owns(metadata))) {
           retireMutation();
@@ -136,28 +137,22 @@ export function createAppearanceBackground(
         publish();
       }),
       subscribeServerUiPrefWrites(publish),
-      nextContext.router.subscribe(dismissCanvasPreview),
+      nextContext.router.subscribe(dismissCanvasPreview), // Retire the canvas before route rendering.
     );
     const ownerWindow = host().ownerDocument.defaultView ?? window;
     const document = host().ownerDocument;
-    const listeners = new AbortController();
-    const options = { signal: listeners.signal };
-    const capture = { ...options, capture: true };
-    ownerWindow.addEventListener("blur", dismissCanvasPreview, options);
-    ownerWindow.addEventListener("resize", dismissCanvasPreview, options);
-    document.addEventListener("keydown", onPreviewEscape, capture);
-    document.addEventListener(
-      "visibilitychange",
-      () => {
+    subscriptions.push(
+      listen(ownerWindow, "blur", dismissCanvasPreview),
+      listen(ownerWindow, "resize", dismissCanvasPreview),
+      listen(document, "keydown", { handleEvent: onPreviewEscape }, true),
+      listen(document, "visibilitychange", () => {
         if (document.visibilityState === "hidden") {
           dismissCanvasPreview();
         }
-      },
-      options,
+      }),
+      listen(document, "pointerup", { handleEvent: endCanvasPreview }, true),
+      listen(document, "pointercancel", dismissCanvasPreview, true),
     );
-    document.addEventListener("pointerup", endCanvasPreview, capture);
-    document.addEventListener("pointercancel", dismissCanvasPreview, capture);
-    subscriptions.push(() => listeners.abort());
     refreshPreview();
     publish();
   }
@@ -625,7 +620,9 @@ export function createAppearanceBackground(
           : undefined,
     };
   }
+  // Replace subscriptions and requests when the application owner changes.
   createEffect(currentContext, (context) => synchronizeContext(context));
+  // Synchronize the shared background renderer and its image request with the view.
   createEffect(revision, () => {
     refreshPreview();
     // The shared renderer is retired synchronously; reapply after same-turn reopen.

@@ -5,7 +5,6 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
 import { finished } from "node:stream/promises";
-import { stripPluginModelCatalogCredentials } from "../agents/plugin-model-catalog-repair.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
@@ -33,11 +32,7 @@ import {
   readStateSchemaContentVersion,
 } from "../state/openclaw-state-db-schema-version.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
-import {
-  AGENT_SECRET_TABLE_NAMES,
-  STATE_SECRET_CONFIG_STATE_KEY_PREFIXES,
-  STATE_SECRET_TABLE_NAMES,
-} from "../state/secret-state-tables.js";
+import { gitBackupRedaction, redactGitBackupRow } from "./git-backup-sanitizer.js";
 import { hashSnapshotArtifact } from "./manifest.js";
 import { buildSnapshotValidator } from "./openclaw-snapshot-copy.js";
 import { assertFreshRestoreTarget, assertNoSqliteSidecarsSync } from "./restore-paths.js";
@@ -166,7 +161,6 @@ async function serializeGitBackupTable(
   table: string,
   outputPath?: string,
   rowFilter?: (row: Record<string, unknown>) => boolean,
-  redactCatalogCredentials = false,
 ): Promise<GitBackupTableDigest> {
   const columns = readTableColumns(database, table);
   if (columns.length === 0) {
@@ -208,17 +202,6 @@ async function serializeGitBackupTable(
       }
       if (rowFilter && !rowFilter(source)) {
         continue;
-      }
-      if (
-        redactCatalogCredentials &&
-        (source.scope === "plugin-model-catalog-v1" ||
-          source.scope === "plugin-model-catalog-migration-v1") &&
-        typeof source.value_json === "string"
-      ) {
-        source.value_json = stripPluginModelCatalogCredentials(source.value_json);
-        if (source.value_json === null) {
-          continue;
-        }
       }
       const encoded: Record<string, unknown> = {};
       for (const column of columns) {
@@ -269,24 +252,16 @@ export async function dumpGitBackupDatabase(params: {
     const virtualTables = entries
       .filter((entry) => /^\s*CREATE\s+VIRTUAL\s+TABLE\b/iu.test(entry.sql))
       .map((entry) => entry.name);
-    const redacted =
-      params.excludeSecrets === true
-        ? identity.role === "global"
-          ? STATE_SECRET_TABLE_NAMES
-          : AGENT_SECRET_TABLE_NAMES
-        : [];
     const existingTables = new Set(
       entries.filter((entry) => entry.type === "table").map((entry) => entry.name),
     );
     // manifest.excludedTables documents redaction only; operational projection
     // tables are always omitted and converge on next gateway startup.
-    const excludedTables = [...redacted].filter((table) => existingTables.has(table)).toSorted();
-    const excludedConfigStateKeyPrefixes =
-      identity.role === "global" &&
-      params.excludeSecrets === true &&
-      existingTables.has("config_machine_state")
-        ? [...STATE_SECRET_CONFIG_STATE_KEY_PREFIXES]
-        : [];
+    const { excludedTables, excludedConfigStateKeyPrefixes } = gitBackupRedaction(
+      identity,
+      existingTables,
+      params.excludeSecrets === true,
+    );
     const excluded = new Set<string>([...excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
     const includedSchema = entries.filter(
       (entry) => !excluded.has(entry.name) && !excluded.has(entry.tableName),
@@ -312,22 +287,15 @@ export async function dumpGitBackupDatabase(params: {
     const tables: Record<string, { rows: number; sha256: string }> = {};
     for (const table of dataTables) {
       const rowFilter =
-        table === "config_machine_state" && excludedConfigStateKeyPrefixes.length > 0
-          ? (row: Record<string, unknown>) => {
-              // Fail closed: a malformed state_key is dropped, never risked into a backup.
-              const stateKey = row.state_key;
-              return (
-                typeof stateKey === "string" &&
-                !excludedConfigStateKeyPrefixes.some((prefix) => stateKey.startsWith(prefix))
-              );
-            }
+        params.excludeSecrets === true
+          ? (row: Record<string, unknown>) =>
+              redactGitBackupRow(table, row, identity, excludedConfigStateKeyPrefixes)
           : undefined;
       tables[table] = await serializeGitBackupTable(
         database,
         table,
         path.join(tablesPath, `${table}.jsonl`),
         rowFilter,
-        identity.role === "agent" && params.excludeSecrets === true && table === "cache_entries",
       );
     }
     const manifest: GitBackupManifest = {
@@ -596,8 +564,8 @@ export async function restoreGitBackupDirectory(params: {
       manifest,
       targetPath,
       tables: [],
-      excludedTables: [],
-      excludedConfigStateKeyPrefixes: [],
+      excludedTables: manifest.excludedTables,
+      excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes,
     };
   }
   const schema = await fs.readFile(path.join(params.sourcePath, GIT_BACKUP_SCHEMA), "utf8");

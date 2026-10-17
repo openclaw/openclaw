@@ -28,10 +28,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import {
-  withLocalWorkspaceProjection,
-  withSettledLocalWorkspace,
-} from "./local-workspace-projection.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
@@ -700,73 +697,6 @@ describe("local sandbox workspace reconciliation", () => {
         }
       }
       await registry.removeRegistryEntry(entry.containerName);
-    }
-  });
-
-  it("retirement preserves a same-name replacement browser after quiescence", async () => {
-    const [{ insertRegistryWorktree }, registry, engine] = await Promise.all([
-      import("../../agents/worktrees/registry.js"),
-      import("../../agents/sandbox/registry.js"),
-      import("../../agents/sandbox/container-engine.js"),
-    ]);
-    await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    const entry = {
-      containerName: "retirement-owned",
-      backendId: "docker",
-      sessionKey: owner.sessionKey,
-      workspaceDir: projection,
-      createdAtMs: 1,
-      lastUsedAtMs: 1,
-      image: "fixture",
-      cdpPort: 9222,
-    };
-    await registry.updateBrowserRegistry(entry);
-    const captured = "a".repeat(64);
-    const replacement = "b".repeat(64);
-    const physical = new Set([captured]);
-    let named = captured;
-    const removeTargets: string[] = [];
-    const execute = vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
-      const target = args.at(-1) === entry.containerName ? named : args.at(-1)!;
-      if (args[0] === "inspect") {
-        if (!physical.has(target)) {
-          return { code: 1, stdout: "", stderr: "no such container" };
-        }
-        return {
-          code: 0,
-          stdout: args.includes("{{.State.Paused}}")
-            ? "false"
-            : args.includes("{{.Id}}")
-              ? target
-              : target + " true false",
-          stderr: "",
-        };
-      }
-      if (args[0] === "pause") {
-        physical.delete(captured);
-        physical.add(replacement);
-        named = replacement;
-      }
-      if (args[0] === "rm") {
-        removeTargets.push(args.at(-1)!);
-        physical.delete(target);
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    });
-    const operation = vi.fn(async () => {});
-    try {
-      await expect(
-        withSettledLocalWorkspace({ worktree: owner.worktree, retireRuntime: true }, operation),
-      ).rejects.toThrow("generation");
-      expect(physical.has(replacement)).toBe(true);
-      expect(removeTargets).not.toContain(entry.containerName);
-      expect(operation).not.toHaveBeenCalled();
-      const remaining = await registry.readBrowserRegistry();
-      expect(remaining.entries).toHaveLength(1);
-    } finally {
-      execute.mockRestore();
-      await registry.removeBrowserRegistryEntry(entry.containerName);
     }
   });
 

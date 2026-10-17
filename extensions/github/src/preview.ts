@@ -424,34 +424,19 @@ export async function loadControlUiGitHubPreview(
       errorTtlMs: (error) => (error instanceof ControlUiGitHubError ? FAILURE_CACHE_MS : 0),
     });
   previewCaches.set(fetchImpl, previewCache);
-  const read = () =>
-    previewCache.read(
-      key,
-      (previous) => {
-        // Refreshes retain credential checks before every dispatch, including
-        // redirects. A retired initiating identity fails this refresh; a current reader retries.
-        const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
-        return identity && !identity.optionalAuth
-          ? fetchPreview(target, fetchImpl, signal, token, identity, previous)
-          : withOptionalGitHubAuth(token, (requestToken) =>
-              fetchPreview(target, fetchImpl, signal, requestToken, identity, previous),
-            );
-      },
-      { refresh },
-    );
-  let result;
-  try {
-    result = await read();
-  } catch (error) {
-    // A coalesced cold load may lose its initiating caller. A current follower
-    // can retry after that failed load has been removed from the shared cache.
-    if (!identity || error instanceof ControlUiGitHubError) {
-      throw error;
-    }
-    await identity.revalidate();
-    identity.assertSelected();
-    result = await read();
-  }
+  const result = await previewCache.read(
+    key,
+    (previous) => {
+      // Refreshes retain credential checks before every dispatch, including redirects.
+      const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
+      return identity && !identity.optionalAuth
+        ? fetchPreview(target, fetchImpl, signal, token, identity, previous)
+        : withOptionalGitHubAuth(token, (requestToken) =>
+            fetchPreview(target, fetchImpl, signal, requestToken, identity, previous),
+          );
+    },
+    { refresh },
+  );
   const loadedAt = performance.now();
   // Transport is credential-scoped, but every reader must still hold its
   // current identity before cached or newly fetched metadata is delivered.

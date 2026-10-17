@@ -1,10 +1,7 @@
 import { expect, it, vi } from "vitest";
-import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
-  idleThread,
-} from "./session-catalog.test-helpers.js";
+import { memoryCatalogState } from "./session-catalog-index.test-support.js";
+import { remoteCatalogFactory } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
 it("keeps paging and searching older native rows beyond the retained window after restart", async () => {
   const total = 20_003;
@@ -20,14 +17,7 @@ it("keeps paging and searching older native rows beyond the retained window afte
       updatedAt: total - index,
     }),
   );
-  const values = new Map<string, StoredCodexCatalogEntry>();
-  const state: CodexCatalogState = {
-    entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
-    register: async (key, value) => {
-      values.set(key, structuredClone(value));
-    },
-    delete: async (key) => values.delete(key),
-  };
+  const { values, state } = memoryCatalogState({ clone: true });
   const calls: Array<{ cursor?: string; useStateDbOnly?: boolean }> = [];
   commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
     expect(method).toBe("thread/list");
@@ -53,17 +43,7 @@ it("keeps paging and searching older native rows beyond the retained window afte
     };
   });
   const make = async () => {
-    const factory = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({
-        appServer: {
-          transport: "websocket",
-          url: "wss://overflow.example.test/codex",
-          authToken: "synthetic-overflow-token",
-        },
-      }),
-      getRuntimeConfig: () => undefined,
-      openResidentState: () => state,
-    });
+    const factory = remoteCatalogFactory("overflow", { openResidentState: () => state });
     const home = (await factory.homesForAgent("main"))[0]!;
     return { factory, control: factory.forRequest("main", home) };
   };

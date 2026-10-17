@@ -1,14 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import {
@@ -120,25 +112,24 @@ function BrowserDashboardWidgetContent(
         props.active,
         revision(),
       ] as const,
-    ([key, client]) =>
-      untrack(() => {
-        if (scope?.key !== key || scope.client !== (client ?? null)) {
-          scope = { key, client: client ?? null };
-          generation += 1;
-          dashboard = undefined;
-          error = undefined;
-          pending = false;
-          refreshNeeded = false;
-          publish();
+    ([key, client, active]) => {
+      if (scope?.key !== key || scope.client !== (client ?? null)) {
+        scope = { key, client: client ?? null };
+        generation += 1;
+        dashboard = undefined;
+        error = undefined;
+        pending = false;
+        refreshNeeded = false;
+        publish();
+      }
+      if (active && available() && !pending && !error) {
+        if (refreshNeeded) {
+          void request("inspect");
+        } else if (!dashboard || (!dashboard.paused && !dashboard.browserTab)) {
+          void request("open");
         }
-        if (props.active && available() && !pending && !error) {
-          if (refreshNeeded) {
-            void request("inspect");
-          } else if (!dashboard || (!dashboard.paused && !dashboard.browserTab)) {
-            void request("open");
-          }
-        }
-      }),
+      }
+    },
   );
   onSettled(() =>
     context?.gateway.subscribeEvents((event) => {

@@ -6,6 +6,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQueryTakeFirstSync,
+  prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import {
@@ -679,4 +680,42 @@ export function pruneTranscriptReactionsInTransaction(
       }
     },
   );
+}
+
+export function touchTranscriptWindowRecency(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  updatedAt: number,
+  cursor: { updateWindow?: (createdAt: number) => unknown },
+): void {
+  withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
+    cursor.updateWindow ??= prepareSqliteQuerySync<number>(database.db, (parameter) =>
+      getSessionKysely(database.db)
+        .updateTable("session_windows")
+        .set({ updated_at: parameter((timestamp) => timestamp) })
+        .where("session_id", "=", sessionId),
+    );
+    const updateWindow = cursor.updateWindow;
+    preserveSessionEntryCacheAcrossWrite(database, () => updateWindow(updatedAt));
+    const actor = readSessionActorTransactionState(database, { sessionId });
+    if (actor?.window) {
+      actor.window.updated_at = updatedAt;
+    }
+  });
+}
+
+export function recordTranscriptReplacementMutation(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  preservedUpdatedAt: number | null | undefined,
+): void {
+  if (preservedUpdatedAt === undefined || preservedUpdatedAt === null) {
+    touchTranscriptMutationInTransaction(database, sessionId);
+    return;
+  }
+  // Maintenance rewrites must invalidate in-flight projections without making an old session
+  // look newly active. A one-tick advance preserves ordering while changing the snapshot key.
+  advanceTranscriptMutationAtInTransaction(database, sessionId, preservedUpdatedAt, {
+    strictly: true,
+  });
 }

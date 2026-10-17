@@ -7,7 +7,7 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import * as ledger from "../infra/update-run-ledger.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -144,14 +144,12 @@ it.each(["cached-writer", "admitted-read-only"] as const)(
     try {
       maintenance.run(() => {
         maintenance.assertAdmission();
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env,
-            kind: "state",
-            path: database,
-            reason: "new maintenance quarantine",
-          }),
-        ).toBe(true);
+        seedOpenClawDatabaseQuarantine({
+          env,
+          kind: "state",
+          path: database,
+          reason: "new maintenance quarantine",
+        });
         expect(() => maintenance.assertAdmission()).toThrow("new maintenance quarantine");
         expect(isOpenClawStateDatabaseOpen(database)).toBe(false);
       });
@@ -320,14 +318,12 @@ it("does not borrow a retained discovery snapshot for current admission", async 
 it("refuses new quarantine with a cold reader and unchanged ledger bytes", () => {
   const { env, database, admission, family, assertIsolation } = fixture();
   const before = family();
-  expect(
-    recordOpenClawDatabaseQuarantine({
-      env,
-      kind: "state",
-      path: database,
-      reason: "fresh quarantine refusal",
-    }),
-  ).toBe(true);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    kind: "state",
+    path: database,
+    reason: "fresh quarantine refusal",
+  });
   try {
     expect(() => admission()).toThrow("fresh quarantine refusal");
     expect(family()).toEqual(before);
