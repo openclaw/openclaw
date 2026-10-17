@@ -3,6 +3,59 @@ import XCTest
 
 @MainActor
 final class AdaptiveLayoutUITests: XCTestCase {
+    func testPhoneDrawerGesturesSettleAndKeepNavigation() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "iPhone drawer gestures")
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--openclaw-initial-destination", "chat",
+            "--openclaw-sidebar-visibility", "hidden",
+            "--openclaw-appearance", "light",
+            "--openclaw-ui-test-readiness",
+            "-onboarding.completed", "YES",
+            "-gateway.preferredStableID", "adaptive-offline",
+            "-onboarding.quickSetupDismissed", "YES",
+        ]
+        app.launch()
+        defer { app.terminate() }
+        let show = app.buttons.matching(identifier: "RootTabs.Sidebar.Show").firstMatch
+        let overview = app.buttons["RootTabs.Sidebar.Destination.overview"]
+        XCTAssertTrue(show.waitForExistence(timeout: 30))
+        let edge = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 10, dy: 400))
+        let opened = edge.withOffset(CGVector(dx: 160, dy: 0))
+        for velocity: XCUIGestureVelocity in [.slow, .fast] {
+            edge.press(forDuration: 0.1, thenDragTo: opened, withVelocity: velocity, thenHoldForDuration: 0)
+            XCTAssertTrue(overview.waitForExistence(timeout: 5), "An edge drag must open the drawer")
+            XCTAssertTrue(overview.isHittable, "The opened sidebar must accept navigation")
+            XCTAssertFalse(show.exists, "The detail reveal control must disappear while the drawer is open")
+            let card = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+            card.press(
+                forDuration: 0.1,
+                thenDragTo: card.withOffset(CGVector(dx: -180, dy: 0)),
+                withVelocity: .fast,
+                thenHoldForDuration: 0)
+            XCTAssertTrue(show.waitForExistence(timeout: 5), "A content-card drag must close the drawer")
+        }
+        edge.press(
+            forDuration: 0.1,
+            thenDragTo: edge.withOffset(CGVector(dx: 40, dy: 0)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0)
+        XCTAssertTrue(show.waitForExistence(timeout: 5), "A short drag must return to the detail")
+        // The sidebar remains in the view tree while covered; test the detail's active control instead.
+        // Native toolbar snapshots can report no hittable point after a drag
+        // even while the visible button accepts taps. Verify its actual action.
+        show.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(overview.waitForExistence(timeout: 5), "The button must still open after a cancelled reveal")
+        XCTAssertFalse(show.exists, "The returned reveal control must open the drawer")
+        overview.tap()
+        let readiness = app.descendants(matching: .any)["RootTabs.Ready"].firstMatch
+        self.expectation(for: NSPredicate(format: "value == %@", "ready:overview"), evaluatedWith: readiness)
+        self.waitForExpectations(timeout: 10)
+        XCTAssertTrue(show.waitForExistence(timeout: 5), "Selecting a drawer row must navigate and close it")
+    }
+
     func testOfflineChatAdaptsAcrossRotationAndRemembersHiddenSidebar() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad adaptive navigation")
         continueAfterFailure = false
