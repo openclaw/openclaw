@@ -215,7 +215,6 @@ it("groups every direct subagent with counts, live activity first, and a bounded
         activeRunIds: ["run-1"],
         startedAt: Date.now() - 65_000,
         observerDigest: {
-          sessionKey: "agent:main:subagent:review",
           runId: "run-1",
           revision: 1,
           updatedAt: 1,

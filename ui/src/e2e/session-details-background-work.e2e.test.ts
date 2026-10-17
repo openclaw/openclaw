@@ -18,12 +18,15 @@ const suite = createControlUiE2eSuite({ name: "Session Details background work" 
 const now = 1_800_000_000_000;
 const parentKey = "agent:main:details-background";
 
+// The mock Gateway's fixture rows always carry a numeric updatedAt.
+type SessionFixture = GatewaySessionRow & { updatedAt: number };
+
 function child(
   slug: string,
   label: string,
   state: Partial<GatewaySessionRow>,
   offsetMs: number,
-): GatewaySessionRow {
+): SessionFixture {
   const key = `agent:main:subagent:${slug}`;
   return {
     key,
@@ -35,11 +38,8 @@ function child(
     parentSessionKey: parentKey,
     createdAt: now - offsetMs,
     startedAt: now - offsetMs,
-    updatedAt: now - 1_000,
     ...state,
-    ...(state.observerDigest
-      ? { observerDigest: { ...state.observerDigest, sessionKey: key } }
-      : {}),
+    updatedAt: now - 1_000,
   };
 }
 
@@ -49,7 +49,6 @@ function running(runId: string, headline: string) {
     hasActiveRun: true,
     activeRunIds: [runId],
     observerDigest: {
-      sessionKey: "pending",
       runId,
       revision: 1,
       updatedAt: now - 2_000,
@@ -69,7 +68,7 @@ function ended(status: GatewaySessionRow["status"], durationMs: number, offsetMs
   };
 }
 
-const children: GatewaySessionRow[] = [
+const children: SessionFixture[] = [
   child("ui-review", "UI review", running("run-ui", "Comparing light and dark Details"), 252_000),
   child("api-audit", "Gateway API audit", running("run-api", "Reading the process owner"), 95_000),
   child("docs-check", "Docs check", ended("done", 61_000, 600_000), 600_000),
@@ -136,7 +135,7 @@ suite.define(() => {
             ([key, themeMode]) => localStorage.setItem(key, JSON.stringify({ themeMode })),
             [controlUiBundledSettingsStorageKey(suite.server.baseUrl), colorScheme] as const,
           );
-          const parent: GatewaySessionRow = {
+          const parent: SessionFixture = {
             key: parentKey,
             sessionId: "details-background",
             kind: "direct",
