@@ -668,7 +668,7 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
     await fs.mkdir(path.join(f.packageRoot, "nested"));
     await fs.writeFile(path.join(f.packageRoot, "nested", "a.txt"), "nested content");
     await fs.symlink("../drift-0.js", path.join(f.packageRoot, "nested", "link"));
-    // These bytes are persisted in version-1 journals; the oracle names the
+    // Private-mode digests keep the version-1 shape; the oracle names the
     // fixture's postorder explicitly instead of replaying the reader's walk.
     const expectedEntries: Array<[string, "file" | "directory" | "symlink"]> = [
       ["dist/index.js", "file"],
@@ -693,7 +693,7 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
       const stat = await fs.lstat(file, { bigint: true });
       const tuple = [
         `${stat.dev}:${stat.ino}`,
-        String(stat.mode),
+        String(kind === "symlink" ? stat.mode : stat.mode & ~0o077n),
         String(stat.uid),
         String(stat.gid),
       ];
