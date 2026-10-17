@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 
-type Metadata = Parameters<typeof resolvePinnedClientMetadata>[0];
 function resolvePlatforms(
   claimedPlatform: string,
   pairedPlatform: string,
   deviceFamily: string,
-  overrides: Metadata = {},
+  overrides: Parameters<typeof resolvePinnedClientMetadata>[0] = {},
 ) {
   return resolvePinnedClientMetadata({
     clientId: "node-host",
@@ -36,28 +35,30 @@ function expectPinned(
 
 describe("resolvePinnedClientMetadata", () => {
   it.each([
-    ["win32", "windows", "Windows"],
-    ["darwin", "macos", "Mac"],
-  ])(
-    "accepts equivalent runtime alias %s as %s regardless of client mode",
-    (pairedPlatform, claimedPlatform, claimedDeviceFamily) => {
-      expectPinned(
-        resolvePlatforms(claimedPlatform, pairedPlatform, claimedDeviceFamily, {
-          clientId: "test",
-          clientMode: "test",
-          pairedDeviceFamily: undefined,
-        }),
-        claimedPlatform,
-        undefined,
-      );
-    },
-  );
+    ["runtime alias", "win32", "windows", "Windows", true],
+    ["runtime alias", "darwin", "macos", "Mac", true],
+    ["legacy node-host", "darwin", "macos", "Mac", false],
+    ["legacy node-host", "win32", "windows", "Windows", false],
+  ] as const)("accepts %s %s as %s", (_kind, legacy, canonical, family, unpinnedFamily) => {
+    expectPinned(
+      resolvePlatforms(
+        unpinnedFamily ? canonical : legacy,
+        legacy,
+        family,
+        unpinnedFamily
+          ? { clientId: "test", clientMode: "test", pairedDeviceFamily: undefined }
+          : {},
+      ),
+      canonical,
+      unpinnedFamily ? undefined : family,
+    );
+  });
 
   it.each([
     { pairedPlatform: "linux", claimedDeviceFamily: "Windows" },
     { pairedPlatform: "win32", claimedDeviceFamily: "Linux" },
     { pairedPlatform: "darwin", claimedDeviceFamily: "Windows" },
-  ])(
+  ] as const)(
     "keeps non-equivalent runtime tuples approval-bound: %j",
     ({ pairedPlatform, claimedDeviceFamily }) => {
       expect(
@@ -88,20 +89,6 @@ describe("resolvePinnedClientMetadata", () => {
   });
 
   it.each([
-    ["darwin", "macos", "Mac"],
-    ["win32", "windows", "Windows"],
-  ])(
-    "normalizes exact legacy node-host platform %s to canonical %s",
-    (legacyPlatform, canonicalPlatform, deviceFamily) => {
-      expectPinned(
-        resolvePlatforms(legacyPlatform, legacyPlatform, deviceFamily),
-        canonicalPlatform,
-        deviceFamily,
-      );
-    },
-  );
-
-  it.each([
     ["openclaw-ios", "iOS 26.5.0", "iOS 26.4.2", "iPhone"],
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
@@ -119,19 +106,15 @@ describe("resolvePinnedClientMetadata", () => {
     },
   );
 
-  it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
-    expectPinned(resolvePlatforms("macos", "macOS 26.5.2", "Mac"), "macOS 26.5.2", "Mac");
-  });
-
-  it("refreshes a shared node-host macOS pin from the native Mac app", () => {
+  it.each([
+    ["node-host", "node", "macos", "macOS 26.5.2", undefined],
+    ["openclaw-macos", "ui", "macOS 26.5.2", "macos", "macOS 26.5.2"],
+  ] as const)("shares the macOS pin with %s", (clientId, clientMode, claimed, paired, refresh) => {
     expectPinned(
-      resolvePlatforms("macOS 26.5.2", "macos", "Mac", {
-        clientId: "openclaw-macos",
-        clientMode: "ui",
-      }),
+      resolvePlatforms(claimed, paired, "Mac", { clientId, clientMode }),
       "macOS 26.5.2",
       "Mac",
-      "macOS 26.5.2",
+      refresh,
     );
   });
 

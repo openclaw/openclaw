@@ -40,10 +40,7 @@ function createFixture() {
       client,
     );
   const invalidate = () =>
-    disconnectStaleSharedGatewayAuthClients({
-      clients: [client],
-      expectedGeneration: null,
-    });
+    disconnectStaleSharedGatewayAuthClients({ clients: [client], expectedGeneration: null });
   return { client, harness, dispatch, socketClose, closed, invalidate };
 }
 
@@ -61,6 +58,20 @@ const device = (id: string, publicKey: string) => ({
   signedAt: 1,
   nonce: "nonce",
 });
+function createGate() {
+  const entered = createDeferredCore();
+  const released = createDeferredCore();
+  return {
+    entered: entered.promise,
+    release: () => released.resolve(),
+    wait: async () => {
+      entered.resolve();
+      await released.promise;
+    },
+  };
+}
+const loadRouter = () =>
+  vi.importActual<typeof import("../../server-methods.js")>("../../server-methods.js");
 
 describe("policy writer response ownership", () => {
   beforeEach(() => {
@@ -94,8 +105,7 @@ describe("policy writer response ownership", () => {
       });
       const harness = createDispatchTestHarness({ buildRequestContext: () => context });
       const checkpoint = createDispatchTestHarness({ buildRequestContext: () => context });
-      const { handleGatewayRequest } =
-        await vi.importActual<typeof import("../../server-methods.js")>("../../server-methods.js");
+      const { handleGatewayRequest } = await loadRouter();
       const credentialExecutions: Promise<void>[] = [];
       runtime.handler.mockImplementation(async (options) => {
         if (options.req.method === "test.credential-checkpoint") {
@@ -109,14 +119,12 @@ describe("policy writer response ownership", () => {
         credentialExecutions.push(execution);
         await execution;
       });
-      const preparationEntered = createDeferredCore();
-      const releasePreparation = createDeferredCore();
+      const preparation = createGate();
       const prepareOriginal = profileAuthority.prepareUserProfileSelectionAuthority;
       const prepare = vi
         .spyOn(profileAuthority, "prepareUserProfileSelectionAuthority")
         .mockImplementationOnce(async (...args) => {
-          preparationEntered.resolve();
-          await releasePreparation.promise;
+          await preparation.wait();
           return prepareOriginal(...args);
         });
       const createBinding = expectedProfile.createExpectedProfileBinding;
@@ -138,7 +146,7 @@ describe("policy writer response ownership", () => {
         );
       try {
         dispatched.push(mutate("rotate-before-revoke", "device.token.rotate", profile.id));
-        await preparationEntered.promise;
+        await preparation.entered;
         await expect(
           mutate("failed-middle-rotation", "device.token.rotate", profile.id),
         ).rejects.toThrow("middle profile preparation failed");
@@ -147,7 +155,7 @@ describe("policy writer response ownership", () => {
           { type: "req", id: "checkpoint", method: "test.credential-checkpoint", params: {} },
           client,
         );
-        releasePreparation.resolve();
+        preparation.release();
         await Promise.all(dispatched);
         expect(await harness.awaitResponseFrame("rotate-before-revoke")).toMatchObject({
           ok: true,
@@ -158,7 +166,7 @@ describe("policy writer response ownership", () => {
         const stored = expectDefined(await getPairedDevice(targetDeviceId), "paired target");
         expect(stored.tokens?.operator?.revokedAtMs).toBeTypeOf("number");
       } finally {
-        releasePreparation.resolve();
+        preparation.release();
         await Promise.allSettled(dispatched);
         prepare.mockRestore();
         binding.mockRestore();
@@ -174,13 +182,9 @@ describe("policy writer response ownership", () => {
         const target = ensureProfileForEmail("policy-target@example.test");
         const fixture = createFixture();
         fixture.client.authenticatedUserProfile = profileBinding(source);
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        const gate = createGate();
         const receipt = { committed: true, accountData: "original-account-result" };
-        const { handleGatewayRequest } =
-          await vi.importActual<typeof import("../../server-methods.js")>(
-            "../../server-methods.js",
-          );
+        const { handleGatewayRequest } = await loadRouter();
         runtime.handler.mockImplementation((options: GatewayRequestOptions) =>
           handleGatewayRequest({
             ...options,
@@ -195,26 +199,22 @@ describe("policy writer response ownership", () => {
             extraHandlers: {
               "config.patch": async ({ respond }) => {
                 holdGatewayPolicyResponse(respond);
-                entered.resolve();
-                await release.promise;
+                await gate.wait();
                 if (outcome === "throw") {
                   throw new Error("original-account-error");
                 }
-                respond(true, receipt, {
-                  code: "UNAVAILABLE",
-                  message: "original-account-error",
-                });
+                respond(true, receipt, { code: "UNAVAILABLE", message: "original-account-error" });
               },
             },
           }),
         );
         const request = fixture.dispatch("bound-writer", "config.patch", source.id);
         try {
-          await Promise.race([entered.promise, request]);
+          await Promise.race([gate.entered, request]);
           linkEmail("policy-source@example.test", target.id);
           // The accepted policy writer may bypass transport invalidation, never profile binding.
           fixture.invalidate();
-          release.resolve();
+          gate.release();
           await request;
           expect(await fixture.harness.awaitResponseFrame("bound-writer")).toEqual({
             type: "res",
@@ -227,7 +227,7 @@ describe("policy writer response ownership", () => {
           });
           expect(fixture.socketClose).toHaveBeenCalledOnce();
         } finally {
-          release.resolve();
+          gate.release();
           await request;
         }
       });
@@ -238,13 +238,11 @@ describe("policy writer response ownership", () => {
     "delivers a secrets activation result before closing (failed=%s)",
     async (failed) => {
       const fixture = createFixture();
-      const published = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = createGate();
       const handlers = createSecretsHandlers({
         reloadSecrets: async () => {
           fixture.invalidate();
-          published.resolve();
-          await release.promise;
+          await gate.wait();
           if (failed) {
             throw new Error("activation failed");
           }
@@ -261,20 +259,17 @@ describe("policy writer response ownership", () => {
         await expectDefined(
           handlers[options.req.method],
           options.req.method,
-        )({
-          ...options,
-          params: {},
-        });
+        )({ ...options, params: {} });
       });
       const dispatch = fixture.dispatch("writer");
       try {
-        await published.promise;
+        await gate.entered;
         expect(fixture.client.invalidated).toBe(true);
         expect(fixture.socketClose).not.toHaveBeenCalled();
         await fixture.dispatch("revoked", "health");
         expect(runtime.handler).toHaveBeenCalledOnce();
         expect(fixture.harness.send).not.toHaveBeenCalled();
-        release.resolve();
+        gate.release();
         expect(await fixture.harness.awaitResponseFrame("writer")).toMatchObject({
           ok: !failed,
           ...(failed ? { error: { message: "secrets.reload failed" } } : {}),
@@ -283,7 +278,7 @@ describe("policy writer response ownership", () => {
         expect(fixture.socketClose).toHaveBeenCalledExactlyOnceWith(4001, "gateway auth changed");
         expect(fixture.harness.send).toHaveBeenCalledBefore(fixture.socketClose);
       } finally {
-        release.resolve();
+        gate.release();
         await dispatch;
       }
     },
@@ -291,49 +286,42 @@ describe("policy writer response ownership", () => {
 
   it("keeps only accepted config.patch results, then closes after the last result", async () => {
     const fixture = createFixture();
-    const writers = ["first", "second"].map((id) => ({
-      id,
-      started: createDeferredCore(),
-      release: createDeferredCore(),
-    }));
-    const readStarted = createDeferredCore();
-    const readRelease = createDeferredCore();
+    const writers = ["first", "second"].map((id) => Object.assign(createGate(), { id }));
+    const read = createGate();
     runtime.handler.mockImplementation(async ({ req, respond }) => {
       const writer = writers.find(({ id }) => id === req.id);
       if (writer) {
         holdGatewayPolicyResponse(respond);
-        writer.started.resolve();
-        await writer.release.promise;
+        await writer.wait();
         respond(true, { committed: req.id });
       } else {
-        readStarted.resolve();
-        await readRelease.promise;
+        await read.wait();
         respond(true, { private: "old-authority-read" });
       }
     });
     const dispatches = [fixture.dispatch("read", "health")];
     try {
-      await readStarted.promise;
+      await read.entered;
       for (const writer of writers) {
         dispatches.push(fixture.dispatch(writer.id, "config.patch"));
-        await writer.started.promise;
+        await writer.entered;
       }
       fixture.invalidate();
-      readRelease.resolve();
+      read.release();
       await dispatches[0];
       expect(fixture.harness.send).not.toHaveBeenCalled();
       for (const [index, writer] of writers.entries()) {
         expect(fixture.socketClose).not.toHaveBeenCalled();
-        writer.release.resolve();
+        writer.release();
         expect(await fixture.harness.awaitResponseFrame(writer.id)).toMatchObject({ ok: true });
         expect(fixture.harness.send).toHaveBeenCalledTimes(index + 1);
       }
       await fixture.closed.promise;
       expect(fixture.socketClose).toHaveBeenCalledOnce();
     } finally {
-      readRelease.resolve();
+      read.release();
       for (const writer of writers) {
-        writer.release.resolve();
+        writer.release();
       }
       await Promise.all(dispatches);
     }
@@ -344,15 +332,13 @@ describe("policy writer response ownership", () => {
     fixture.client.isDeviceTokenAuth = true;
     fixture.client.usesSharedGatewayAuth = false;
     fixture.client.connect.device = device("self", "public");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const gate = createGate();
     const closed = createDeferredCore();
     const invalidateClientsForDevice = vi.fn();
     const disconnectClientsForDevice = vi.fn();
     fixture.harness.close.mockImplementation(() => closed.resolve());
     const rotate = vi.spyOn(deviceTokens, "rotateDeviceToken").mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
+      await gate.wait();
       return {
         ok: true,
         entry: {
@@ -380,12 +366,12 @@ describe("policy writer response ownership", () => {
     });
     const dispatch = fixture.dispatch("writer", "device.token.rotate");
     try {
-      await entered.promise;
+      await gate.entered;
       // Invalidation is the authority fence; defer transport close so the test
       // detects an illicit held response even when the socket could still send.
       fixture.client.invalidated = true;
       fixture.client.invalidatedReason = "device-token-revoked";
-      release.resolve();
+      gate.release();
       await Promise.race([closed.promise, fixture.harness.awaitResponseFrame("writer")]);
       expect(fixture.harness.send.mock.calls.length).toBe(0);
       expect(fixture.harness.close).toHaveBeenCalledWith(
@@ -398,7 +384,7 @@ describe("policy writer response ownership", () => {
       });
       expect(disconnectClientsForDevice).toHaveBeenCalledWith("self", { role: "operator" });
     } finally {
-      release.resolve();
+      gate.release();
       try {
         await dispatch;
       } finally {

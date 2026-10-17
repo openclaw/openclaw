@@ -43,6 +43,10 @@ const TRACEPARENTS = {
   first: "00-11111111111111111111111111111111-1111111111111111-01",
   second: "00-22222222222222222222222222222222-2222222222222222-00",
 } as const;
+const CLIENTS = {
+  ui: { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI },
+  cli: { id: GATEWAY_CLIENT_IDS.CLI, mode: GATEWAY_CLIENT_MODES.CLI },
+};
 type TraceObservation = {
   before: DiagnosticTraceContext | undefined;
   after?: DiagnosticTraceContext;
@@ -86,6 +90,49 @@ function createDispatcher(handler: Handler, context: Record<string, unknown> = {
   });
 }
 
+function createAuthorityScenario(change: string, handler: Handler, queued = false) {
+  let generation = "current";
+  let runtimeActive = true;
+  const client = createClient();
+  if (change === "shared-auth") {
+    client.usesSharedGatewayAuth = true;
+    client.sharedGatewaySessionGeneration = generation;
+  } else if (change === "runtime") {
+    client.internal = { agentRuntimeIdentity: createTestAgentRuntimeIdentity("pending-start") };
+  }
+  return {
+    client,
+    harness: createDispatchTestHarness({
+      extraHandlers: { "test.trace": handler },
+      getRequiredSharedGatewaySessionGeneration: () => generation,
+      buildRequestContext: queued
+        ? () => ({
+            getRuntimeConfig: () => ({}),
+            validateAgentRuntimeApprovalAuthority: () => runtimeActive,
+          })
+        : undefined,
+    }),
+    revoke() {
+      if (change === "shared-auth") {
+        generation = "rotated";
+      } else if (change === "runtime") {
+        runtimeActive = false;
+      } else {
+        Object.assign(client, { invalidated: true, invalidatedReason: "device-token-revoked" });
+      }
+    },
+  };
+}
+
+function expectAuthorityClosed(
+  harness: ReturnType<typeof createDispatchTestHarness>,
+  id: string,
+  reason: string,
+) {
+  expect(harness.close).toHaveBeenCalledWith(4001, reason);
+  expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ id, ok: true }));
+}
+
 async function dispatchInFreshMessageScope(
   dispatcher: ReturnType<typeof createDispatcher>["dispatcher"],
   client: GatewayWsClient,
@@ -105,19 +152,12 @@ async function warmDispatcher(
   await harness.awaitResponseFrame("warmup");
 }
 
-async function openAuthenticatedTraceSocket(params: {
-  port: number;
-  token: string;
-  connectTraceparent: string;
-}): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`);
+async function openAuthenticatedTraceSocket(port: number, token: string, traceparent: string) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   trackConnectChallengeNonce(ws);
   await once(ws, "open");
   try {
-    await connectOk(ws, {
-      token: params.token,
-      traceparent: params.connectTraceparent,
-    });
+    await connectOk(ws, { token, traceparent });
     return ws;
   } catch (error) {
     ws.terminate();
@@ -160,7 +200,7 @@ async function startTraceServer(method: string, handler: Handler) {
   return {
     server,
     connect: (connectTraceparent: string) =>
-      openAuthenticatedTraceSocket({ port: portClaim.port, token, connectTraceparent }),
+      openAuthenticatedTraceSocket(portClaim.port, token, connectTraceparent),
   };
 }
 
@@ -241,91 +281,43 @@ describe("authenticated WebSocket request trace dispatch", () => {
     { change: "invalidated", closeReason: "client invalidated: device-token-revoked" },
     { change: "runtime", closeReason: "agent runtime authority closed" },
   ] as const)("revalidates $change authority after waiting to start", async (testCase) => {
-    let generation = "current";
-    let runtimeActive = true;
     let pendingStarted = false;
-    const client = createClient();
-    if (testCase.change === "shared-auth") {
-      client.usesSharedGatewayAuth = true;
-      client.sharedGatewaySessionGeneration = generation;
-    }
-    if (testCase.change === "runtime") {
-      client.internal = { agentRuntimeIdentity: createTestAgentRuntimeIdentity("pending-start") };
-    }
-    const harness = createDispatchTestHarness({
-      getRequiredSharedGatewaySessionGeneration: () => generation,
-      buildRequestContext: () => ({
-        getRuntimeConfig: () => ({}),
-        validateAgentRuntimeApprovalAuthority: () => runtimeActive,
-      }),
-      extraHandlers: {
-        "test.trace": ({ req, respond }) => {
-          pendingStarted ||= req.id === "pending";
-          respond(true, { completed: req.id });
-        },
+    const { client, harness, revoke } = createAuthorityScenario(
+      testCase.change,
+      ({ req, respond }) => {
+        pendingStarted ||= req.id === "pending";
+        respond(true, { completed: req.id });
       },
-    });
-    await warmDispatcher(harness, client);
-    const dispatch = harness.dispatcher.dispatch(
-      { type: "req", id: "pending", method: "test.trace", params: {} },
-      client,
+      true,
     );
+    await warmDispatcher(harness, client);
+    const dispatch = harness.dispatcher.dispatch(traceRequest("pending"), client);
     expect(pendingStarted).toBe(false);
-    if (testCase.change === "shared-auth") {
-      generation = "rotated";
-    } else if (testCase.change === "invalidated") {
-      client.invalidated = true;
-      client.invalidatedReason = "device-token-revoked";
-    } else {
-      runtimeActive = false;
-    }
+    revoke();
     await dispatch;
     expect(pendingStarted).toBe(false);
-    expect(harness.close).toHaveBeenCalledWith(4001, testCase.closeReason);
-    expect(harness.send).not.toHaveBeenCalledWith(
-      expect.objectContaining({ id: "pending", ok: true }),
-    );
+    expectAuthorityClosed(harness, "pending", testCase.closeReason);
   });
 
   it.each([
     { change: "shared-auth", closeReason: "gateway auth changed" },
     { change: "invalidated", closeReason: "client invalidated: device-token-revoked" },
   ] as const)("exposes live $change authority to an active handler", async (testCase) => {
-    let generation = "current";
     let observedAuthority: boolean | undefined;
     const entered = createDeferredCore();
     const held = createDeferredCore();
     const checked = createDeferredCore();
-    const client = createClient();
-    if (testCase.change === "shared-auth") {
-      client.usesSharedGatewayAuth = true;
-      client.sharedGatewaySessionGeneration = generation;
-    }
-    const handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]> = async ({
-      hasCurrentClientAuthority,
-    }) => {
+    const handler: Handler = async ({ hasCurrentClientAuthority }) => {
       entered.resolve();
       await held.promise;
       observedAuthority = hasCurrentClientAuthority?.();
       checked.resolve();
     };
-    const harness = createDispatchTestHarness({
-      extraHandlers: { "test.trace": handler },
-      getRequiredSharedGatewaySessionGeneration: () => generation,
-    });
-
-    const dispatch = harness.dispatcher.dispatch(
-      { type: "req", id: "active", method: "test.trace", params: {} },
-      client,
-    );
+    const { client, harness, revoke } = createAuthorityScenario(testCase.change, handler);
+    const dispatch = harness.dispatcher.dispatch(traceRequest("active"), client);
     try {
       await entered.promise;
-      if (testCase.change === "shared-auth") {
-        generation = "rotated";
-      } else {
-        client.invalidated = true;
-        client.invalidatedReason = "device-token-revoked";
-      }
+      revoke();
     } finally {
       held.resolve();
       await dispatch;
@@ -333,74 +325,52 @@ describe("authenticated WebSocket request trace dispatch", () => {
     await checked.promise;
 
     expect(observedAuthority).toBe(false);
-    expect(harness.close).toHaveBeenCalledWith(4001, testCase.closeReason);
-    expect(harness.send).not.toHaveBeenCalledWith(
-      expect.objectContaining({ id: "active", ok: true }),
-    );
+    expectAuthorityClosed(harness, "active", testCase.closeReason);
   });
 
   it.each([
-    {
-      label: "ordinary UI node invocation",
-      method: "node.invoke",
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-      cancel: false,
-    },
-    {
-      label: "CLI node invocation",
-      method: "node.invoke",
-      id: GATEWAY_CLIENT_IDS.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      cancel: true,
-    },
-    {
-      label: "session companion ask",
-      method: "sessions.companion.ask",
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-      cancel: true,
-    },
-  ])("preserves pending $label disconnect policy", async (testCase) => {
-    const socket = new EventEmitter();
-    let disconnected = false;
-    let pendingStarted = false;
-    let pendingSignal: AbortSignal | undefined;
-    const handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]> = ({
-      req,
-      respond,
-      signal,
-    }) => {
-      if (req.id === "pending") {
-        pendingStarted = true;
-        pendingSignal = signal;
-      }
-      respond(true, { completed: req.id });
-    };
-    const client = createOperatorWsClient({ socket, clientInfo: testCase });
-    const harness = createDispatchTestHarness({
-      isClosed: () => disconnected,
-      extraHandlers: { "test.trace": handler, [testCase.method]: handler },
-    });
-    await warmDispatcher(harness, client);
-    const dispatch = harness.dispatcher.dispatch(
-      { type: "req", id: "pending", method: testCase.method, params: {} },
-      client,
-    );
-    expect(pendingStarted).toBe(false);
-    disconnected = true;
-    socket.emit("close", 1000, Buffer.alloc(0));
+    ["ordinary UI node invocation", "node.invoke", CLIENTS.ui, false],
+    ["CLI node invocation", "node.invoke", CLIENTS.cli, true],
+    ["session companion ask", "sessions.companion.ask", CLIENTS.ui, true],
+  ] as const)(
+    "preserves pending %s disconnect policy",
+    async (_label, method, clientInfo, cancel) => {
+      const socket = new EventEmitter();
+      let disconnected = false;
+      let pendingStarted = false;
+      let pendingSignal: AbortSignal | undefined;
+      const handler: Handler = ({ req, respond, signal }) => {
+        if (req.id === "pending") {
+          pendingStarted = true;
+          pendingSignal = signal;
+        }
+        respond(true, { completed: req.id });
+      };
+      const client = createOperatorWsClient({ socket, clientInfo });
+      const harness = createDispatchTestHarness({
+        isClosed: () => disconnected,
+        extraHandlers: { "test.trace": handler, [method]: handler },
+      });
+      await warmDispatcher(harness, client);
+      const dispatch = harness.dispatcher.dispatch(
+        traceRequest("pending", undefined, method),
+        client,
+      );
+      expect(pendingStarted).toBe(false);
+      disconnected = true;
+      socket.emit("close", 1000, Buffer.alloc(0));
 
-    await dispatch;
-    expect(pendingStarted).toBe(!testCase.cancel);
-    if (!testCase.cancel) {
-      expect(await harness.awaitResponseFrame("pending")).toMatchObject({ ok: true });
-      expect(pendingSignal).toBeUndefined();
-    } else {
-      expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ id: "pending" }));
-    }
-    expect(socket.listenerCount("close")).toBe(0);
-  });
+      await dispatch;
+      expect(pendingStarted).toBe(!cancel);
+      if (!cancel) {
+        expect(await harness.awaitResponseFrame("pending")).toMatchObject({ ok: true });
+        expect(pendingSignal).toBeUndefined();
+      } else {
+        expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ id: "pending" }));
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+    },
+  );
 
   it("isolates concurrent request contexts on one connection", async () => {
     const requestBarrier = createDeferredCore();

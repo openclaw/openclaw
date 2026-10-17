@@ -3,11 +3,12 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 
+beforeEach(() => vi.resetModules());
 afterEach(() => {
   vi.doUnmock("./authenticated-request-dispatch.server-methods.runtime.js");
   vi.doUnmock("./request-start.js");
@@ -18,12 +19,50 @@ afterEach(() => {
   vi.resetModules();
 });
 
+function createGate(signal: AbortSignal) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const unblock = () => release.resolve();
+  signal.addEventListener("abort", unblock, { once: true });
+  return {
+    entered: entered.promise,
+    unblock,
+    hold: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+    cleanup: () => signal.removeEventListener("abort", unblock),
+  };
+}
+
+function mockDispatchStage(
+  stage: string,
+  hold: () => Promise<void>,
+  handler: (options: GatewayRequestOptions) => Promise<void>,
+) {
+  vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
+    if (stage === "lazy import") {
+      await hold();
+    }
+    const { handleGatewayRequest } =
+      stage === "profile authorization"
+        ? await vi.importActual<typeof import("../../server-methods.js")>("../../server-methods.js")
+        : { handleGatewayRequest: handler };
+    return { handleGatewayRequest };
+  });
+  if (stage === "start scheduler") {
+    vi.doMock("./request-start.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./request-start.js")>()),
+      scheduleGatewayRequestStart: hold,
+    }));
+  }
+}
+
 describe("authenticated request completion", { concurrent: false }, () => {
   it("holds reconnect capacity through handler settlement (throw)", async () => {
     const held = createDeferredCore();
     const full = createDeferredCore();
     const starts: string[] = [];
-    vi.resetModules();
     vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
       handleGatewayRequest: async ({ req, respond }: GatewayRequestOptions) => {
         starts.push(req.id);
@@ -58,29 +97,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
   it.for(["lazy import", "start scheduler"] as const)(
     "rejects access revoked during %s before entering the handler",
     async (stage, { signal }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = createGate(signal);
       const grant = new AbortController();
       const handleGatewayRequest = vi.fn(async () => {});
-      const unblock = () => release.resolve();
-      signal.addEventListener("abort", unblock, { once: true });
-      const hold = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      vi.resetModules();
-      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
-        if (stage === "lazy import") {
-          await hold();
-        }
-        return { handleGatewayRequest };
-      });
-      if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", async (importOriginal) => ({
-          ...(await importOriginal<typeof import("./request-start.js")>()),
-          scheduleGatewayRequestStart: hold,
-        }));
-      }
+      mockDispatchStage(stage, gate.hold, handleGatewayRequest);
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness();
@@ -96,12 +116,12 @@ describe("authenticated request completion", { concurrent: false }, () => {
         client,
       );
       try {
-        await entered.promise;
+        await gate.entered;
         grant.abort(new Error("Access ended"));
       } finally {
-        unblock();
+        gate.unblock();
         await dispatch;
-        signal.removeEventListener("abort", unblock);
+        gate.cleanup();
       }
       expect(handleGatewayRequest).not.toHaveBeenCalled();
       expect([...harness.clients.authorityClients]).toEqual([]);
@@ -116,8 +136,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
   ] as const)(
     "joins %s before its caller can restore state selection",
     async (stage, { signal }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = createGate(signal);
       const finished = createDeferredCore();
       const initialRoot = path.join(os.tmpdir(), "dispatch-lifetime", "fixture");
       const restoredRoot = path.join(os.tmpdir(), "dispatch-lifetime", "restored");
@@ -125,40 +144,18 @@ describe("authenticated request completion", { concurrent: false }, () => {
       const selection = { OPENCLAW_STATE_DIR: initialRoot };
       let selectedRoot: string | undefined;
       let dispatched = false;
-      const unblock = () => release.resolve();
-      signal.addEventListener("abort", unblock, { once: true });
-      const hold = async () => {
-        entered.resolve();
-        await release.promise;
-      };
       const handleGatewayRequest = async (options: GatewayRequestOptions) => {
         try {
           options.respond(true, { accepted: true });
           if (stage === "handler after response") {
-            await hold();
+            await gate.hold();
           }
           selectedRoot = resolveStateDir(selection);
         } finally {
           finished.resolve();
         }
       };
-      vi.resetModules();
-      // A fresh factory prevents shared workers from reusing the prior case's handler.
-      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
-        if (stage === "lazy import") {
-          await hold();
-        }
-        return {
-          handleGatewayRequest:
-            stage === "profile authorization"
-              ? (
-                  await vi.importActual<typeof import("../../server-methods.js")>(
-                    "../../server-methods.js",
-                  )
-                ).handleGatewayRequest
-              : handleGatewayRequest,
-        };
-      });
+      mockDispatchStage(stage, gate.hold, handleGatewayRequest);
       if (stage === "profile authorization") {
         // This admin auxiliary request has no session target or personal-caller policy.
         // Keep the real router/profile fence without loading those unrelated runtimes.
@@ -182,12 +179,6 @@ describe("authenticated request completion", { concurrent: false }, () => {
           isSyntheticGatewayCaller: () => false,
         }));
       }
-      if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", async (importOriginal) => ({
-          ...(await importOriginal<typeof import("./request-start.js")>()),
-          scheduleGatewayRequestStart: hold,
-        }));
-      }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness({
@@ -197,7 +188,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
       const client = createOperatorWsClient({ socket: new EventEmitter() });
       if (stage === "profile authorization") {
         client.authenticatedGitHubIdentitySync = async () => {
-          await hold();
+          await gate.hold();
           client.authenticatedUserProfile = {
             profileId: "lifetime-profile",
             displayName: "Lifetime fixture",
@@ -215,16 +206,16 @@ describe("authenticated request completion", { concurrent: false }, () => {
           selection.OPENCLAW_STATE_DIR = restoredRoot;
         });
       try {
-        await entered.promise;
+        await gate.entered;
         await nextTurn();
         expect.soft(dispatched, `${stage} is still executing`).toBe(false);
         expect([...harness.clients.authorityClients]).toEqual([client]);
       } finally {
         // Join the handler independently: the broken dispatcher returns before it finishes.
-        unblock();
+        gate.unblock();
         await finished.promise;
         await dispatch;
-        signal.removeEventListener("abort", unblock);
+        gate.cleanup();
       }
       expect(selectedRoot).toBe(initialRoot);
       expect(dispatched).toBe(true);
