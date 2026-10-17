@@ -1,5 +1,6 @@
 // Exercises restart-notice retries against the real SQLite outbound queue.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
@@ -84,6 +85,39 @@ type DeliveryRequest = {
   ) => void;
 };
 
+const noticeRequest = (channel = "whatsapp", to = "+15550002") => ({
+  cfg: {},
+  channel,
+  to,
+  message: "restart complete",
+  sessionKey: "agent:main:main",
+  revision: 123,
+});
+function useMatrixPlugin(sendText: ChannelOutboundAdapter["sendText"]) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: createOutboundTestPlugin({
+          id: "matrix",
+          outbound: { deliveryMode: "direct", sendText },
+        }),
+      },
+    ]),
+  );
+}
+async function useRealDelivery() {
+  const { sendDurableMessageBatchCore } = await import("../channels/message/send.js");
+  mocks.sendDurableMessageBatch.mockImplementation(sendDurableMessageBatchCore);
+  mocks.recoveryDeliver.mockImplementation(runOutboundDeliveryInternal);
+}
+function capturedCustody(stateDir: string, owner: string) {
+  setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
+  claimOpenClawStateOwnership(owner, { env: process.env });
+  return captureDeliveryQueueStateContext(stateDir);
+}
+
 describe("restart sentinel notice recovery", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let stateDir = "";
@@ -117,25 +151,14 @@ describe("restart sentinel notice recovery", () => {
   });
 
   async function enqueueNotice(): Promise<string> {
-    const queued = await enqueueRestartSentinelNotice({
-      cfg: {},
-      channel: "whatsapp",
-      to: "+15550002",
-      message: "restart complete",
-      sessionKey: "agent:main:main",
-      revision: 123,
-    });
+    const queued = await enqueueRestartSentinelNotice(noticeRequest());
     return queued.id;
   }
 
   async function deliverNotice(queueId: string): Promise<void> {
     await deliverRestartSentinelNotice({
-      deps: {} as never,
-      cfg: {},
-      channel: "whatsapp",
-      to: "+15550002",
-      message: "restart complete",
-      sessionKey: "agent:main:main",
+      ...noticeRequest(),
+      deps: {},
       summary: "restart summary",
       queueId,
     });
@@ -153,14 +176,14 @@ describe("restart sentinel notice recovery", () => {
     return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir);
   }
 
-  function sendLifecycleNotice(deliveryIntentId: string) {
+  function sendLifecycleNotice(deliveryIntentId: string, matrix = false) {
     return sendGatewayLifecycleNotice({
       cfg: {},
       deps: {},
-      channel: "whatsapp",
-      to: "+15550002",
+      channel: matrix ? "matrix" : "whatsapp",
+      to: matrix ? "!operator:example" : "+15550002",
       message: "update starting",
-      sessionKey: "agent:main:main",
+      ...(matrix ? {} : { sessionKey: "agent:main:main" }),
       deliveryIntentId,
     });
   }
@@ -169,21 +192,7 @@ describe("restart sentinel notice recovery", () => {
     "sends the four update milestones only to a configured owner (%s)",
     async (destination) => {
       const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "matrix",
-              outbound: {
-                deliveryMode: "direct",
-                sendText: async () => ({ channel: "matrix", messageId: "notice" }),
-              },
-            }),
-          },
-        ]),
-      );
+      useMatrixPlugin(async () => ({ channel: "matrix", messageId: "notice" }));
       mocks.sendDurableMessageBatch.mockImplementation(async (request) => {
         await markAttempt(request);
         return { status: "sent", results: [{ channel: "matrix", messageId: "notice" }] };
@@ -354,9 +363,7 @@ describe("restart sentinel notice recovery", () => {
   );
 
   it("finishes a real durable send under the admitted RPC root after restart admission closes", async () => {
-    const { sendDurableMessageBatchCore } = await import("../channels/message/send.js");
-    mocks.sendDurableMessageBatch.mockImplementation(sendDurableMessageBatchCore);
-    mocks.recoveryDeliver.mockImplementation(runOutboundDeliveryInternal);
+    await useRealDelivery();
     const started = createDeferredCore();
     const finish = createDeferredCore();
     const sendText = vi.fn(async () => {
@@ -364,18 +371,7 @@ describe("restart sentinel notice recovery", () => {
       await finish.promise;
       return { channel: "matrix" as const, messageId: "ack-during-drain" };
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "matrix",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
-    );
+    useMatrixPlugin(sendText);
     const root = tryBeginGatewayRootWorkAdmission("ws:update.run");
     if (!root) {
       throw new Error("expected update RPC root admission");
@@ -384,14 +380,7 @@ describe("restart sentinel notice recovery", () => {
     const send = root
       .run(async () => {
         markGatewayRestartDraining();
-        return await sendGatewayLifecycleNotice({
-          cfg: {},
-          deps: {},
-          channel: "matrix",
-          to: "!operator:example",
-          message: "update starting",
-          deliveryIntentId: queueId,
-        });
+        return await sendLifecycleNotice(queueId, true);
       })
       .finally(root.release);
     try {
@@ -421,9 +410,7 @@ describe("restart sentinel notice recovery", () => {
   ] as const)(
     "retains notice custody through %s when ambient %s changes",
     async (phase, changed) => {
-      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
-      claimOpenClawStateOwnership("notice-custody-fixture", { env: process.env });
-      const context = captureDeliveryQueueStateContext(stateDir);
+      const context = capturedCustody(stateDir, "notice-custody-fixture");
       const replacement = tempDirs.make();
       const entered = createDeferredCore();
       const resume = createDeferredCore();
@@ -445,34 +432,11 @@ describe("restart sentinel notice recovery", () => {
         return { channel: "matrix" as const, messageId: "retained-notice" };
       });
       if (phase !== "enqueue") {
-        const { sendDurableMessageBatchCore } = await import("../channels/message/send.js");
-        mocks.sendDurableMessageBatch.mockImplementation(sendDurableMessageBatchCore);
-        mocks.recoveryDeliver.mockImplementation(runOutboundDeliveryInternal);
-        setActivePluginRegistry(
-          createTestRegistry([
-            {
-              pluginId: "matrix",
-              source: "test",
-              plugin: createOutboundTestPlugin({
-                id: "matrix",
-                outbound: { deliveryMode: "direct", sendText },
-              }),
-            },
-          ]),
-        );
+        await useRealDelivery();
+        useMatrixPlugin(sendText);
       }
       const queueId = "lifecycle-retained-context";
-      const pending =
-        phase === "enqueue"
-          ? enqueueNotice()
-          : sendGatewayLifecycleNotice({
-              cfg: {},
-              deps: {},
-              channel: "matrix",
-              to: "!operator:example",
-              message: "update starting",
-              deliveryIntentId: queueId,
-            });
+      const pending = phase === "enqueue" ? enqueueNotice() : sendLifecycleNotice(queueId, true);
       await entered.promise;
       setTestEnvValue(
         changed === "state directory" ? "OPENCLAW_STATE_DIR" : "OPENCLAW_SUPERVISOR_MODE",
@@ -505,12 +469,8 @@ describe("restart sentinel notice recovery", () => {
   it.each(["retry recovery", "permanent rejection"] as const)(
     "retains explicitly captured restart custody through %s",
     async (outcome) => {
-      const { sendDurableMessageBatchCore } = await import("../channels/message/send.js");
-      mocks.sendDurableMessageBatch.mockImplementation(sendDurableMessageBatchCore);
-      mocks.recoveryDeliver.mockImplementation(runOutboundDeliveryInternal);
-      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
-      claimOpenClawStateOwnership("restart-recovery-fixture", { env: process.env });
-      const context = captureDeliveryQueueStateContext(stateDir);
+      await useRealDelivery();
+      const context = capturedCustody(stateDir, "restart-recovery-fixture");
       const sendText = vi
         .fn()
         .mockRejectedValueOnce(
@@ -520,26 +480,8 @@ describe("restart sentinel notice recovery", () => {
           }),
         )
         .mockResolvedValue({ channel: "matrix", messageId: "recovered-context" });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "matrix",
-              outbound: { deliveryMode: "direct", sendText },
-            }),
-          },
-        ]),
-      );
-      const request = {
-        cfg: {},
-        channel: "matrix",
-        to: "!operator:example",
-        message: "restart complete",
-        sessionKey: "agent:main:main",
-        revision: 123,
-      };
+      useMatrixPlugin(sendText);
+      const request = noticeRequest("matrix", "!operator:example");
       const queued = await enqueueRestartSentinelNotice(request, context);
       const replacement = tempDirs.make();
       setTestEnvValue("OPENCLAW_STATE_DIR", replacement);
@@ -567,14 +509,7 @@ describe("restart sentinel notice recovery", () => {
       await releaseModifier.promise;
       return undefined;
     });
-    const request = {
-      cfg: {},
-      channel: "whatsapp",
-      to: "+15550002",
-      message: "restart complete",
-      sessionKey: "agent:main:main",
-      revision: 123,
-    };
+    const request = noticeRequest();
 
     const first = enqueueRestartSentinelNotice(request);
     const pending = [first];

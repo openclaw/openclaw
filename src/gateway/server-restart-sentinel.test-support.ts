@@ -1,12 +1,15 @@
 import { expect, type Mock } from "vitest";
+import type * as SessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
+import type { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
+import type { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
+import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
-type LoadedSessionEntryBase = Awaited<
-  ReturnType<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>
->;
+type LoadedSessionEntryBase = Awaited<ReturnType<typeof loadSessionEntryAsync>>;
+type MockCalls = { mock: { calls: unknown[][] } };
 export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
   Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 
@@ -28,12 +31,8 @@ export function createRestartSentinelSessionFixture(
 }
 
 export async function appendRestartSentinelTranscriptReceipt(
-  params: Parameters<
-    typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
-  >[0],
-): ReturnType<
-  typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
-> {
+  params: Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
+): ReturnType<typeof appendAssistantMessageToSessionTranscript> {
   const { completeSessionTranscriptCommit } =
     await import("../config/sessions/session-transcript-commit-completion.js");
   await completeSessionTranscriptCommit(
@@ -114,10 +113,7 @@ export function expectRecordFields(
   return actual;
 }
 
-export function mockCallArg(
-  mock: { mock: { calls: Array<Array<unknown>> } },
-  callIndex = 0,
-): unknown {
+export function mockCallArg(mock: MockCalls, callIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
@@ -125,17 +121,12 @@ export function mockCallArg(
   return call[0];
 }
 
-export function lastMockCallArg(mock: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const calls = mock.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("Expected last mock call");
-  }
-  return call[0];
+export function lastMockCallArg(mock: MockCalls): unknown {
+  return mockCallArg(mock, mock.mock.calls.length - 1);
 }
 
 export function expectMockCallFields(
-  mock: { mock: { calls: Array<Array<unknown>> } },
+  mock: MockCalls,
   expected: Record<string, unknown>,
   callIndex = 0,
 ): Record<string, unknown> {
@@ -143,7 +134,7 @@ export function expectMockCallFields(
 }
 
 export function expectContinuationDispatchFields(
-  mock: { mock: { calls: Array<Array<unknown>> } },
+  mock: MockCalls,
   expected: Record<string, unknown>,
   expectedCtx?: Record<string, unknown>,
   callIndex = 0,
@@ -176,21 +167,15 @@ export function expectRestartSentinelTranscriptBroadcast(
   );
 }
 
-type SessionEventHandoff = typeof import("../auto-reply/reply/session-event-handoff.js");
-type ResolveSessionTarget =
-  typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
-
 export function configureRestartSessionEventMocks(
   mocks: {
     loadSessionEntryAsync: (
       key: string,
-      options?: Parameters<
-        typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync
-      >[1],
+      options?: Parameters<typeof loadSessionEntryAsync>[1],
     ) => Promise<RestartSentinelSessionFixture>;
-    resolveSessionTarget: Mock<ResolveSessionTarget>;
-    captureSessionEventTarget: Mock<SessionEventHandoff["captureSessionEventTargetForHost"]>;
-    enqueueSessionEvent: Mock<SessionEventHandoff["enqueueSessionEventForHost"]>;
+    resolveSessionTarget: Mock<typeof resolveGatewaySessionStoreTargetInWorker>;
+    captureSessionEventTarget: Mock<typeof SessionEventHandoff.captureSessionEventTargetForHost>;
+    enqueueSessionEvent: Mock<typeof SessionEventHandoff.enqueueSessionEventForHost>;
   },
   sessionId?: string,
 ) {

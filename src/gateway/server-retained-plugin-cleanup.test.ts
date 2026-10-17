@@ -33,6 +33,43 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupGatewayRetiredPluginArtifacts } from "./server-retained-plugin-cleanup.js";
 
+const makeLog = () => ({ info: vi.fn(), warn: vi.fn() });
+const cleanup = (
+  log: ReturnType<typeof makeLog>,
+  startupInstallPaths: string[] = [],
+  assertCurrent = () => {},
+) =>
+  cleanupGatewayRetiredPluginArtifacts({
+    log,
+    startupInstallPaths,
+    assertCurrent,
+    signal: new AbortController().signal,
+  });
+const writePlugin = (
+  stateDir: string,
+  pluginId: string,
+  layout: "project" | "legacy" = "project",
+) =>
+  writeManagedNpmPlugin({
+    stateDir,
+    packageName: `@openclaw/${pluginId}`,
+    pluginId,
+    version: "1.0.0",
+    layout,
+  });
+const markRetained = (packageDir: string, reason = "replaced-plugin-generation") =>
+  markRetainedManagedNpmInstall({ packageDir, pluginId: path.basename(packageDir), reason });
+function nativeCapture(
+  stateDir: string,
+  name: string,
+  contents = `synthetic ${name} native artifact`,
+) {
+  const capture = createPluginNativeCaptureRoot(stateDir);
+  const file = path.join(capture.directory, `${name}.node`);
+  fs.writeFileSync(file, contents);
+  return { capture, file };
+}
+
 it("leaves shared state and hot metadata untouched with only state captures", async () => {
   await withOpenClawTestState({ label: "gateway-retained-plugin-empty" }, async (state) => {
     const database = openOpenClawStateDatabase({ env: state.env });
@@ -44,16 +81,11 @@ it("leaves shared state and hot metadata untouched with only state captures", as
     const witness = new DatabaseSync(database.path, { readOnly: true });
     const version = () => witness.prepare("PRAGMA data_version").get()?.data_version;
     const before = version();
-    const log = { info: vi.fn(), warn: vi.fn() };
+    const log = makeLog();
     const observer = observeParentSqlite();
     try {
       try {
-        await cleanupGatewayRetiredPluginArtifacts({
-          log,
-          startupInstallPaths: [],
-          signal: new AbortController().signal,
-          assertCurrent: () => {},
-        });
+        await cleanup(log);
         expect(observer.counts).toEqual(emptySqliteCounts());
       } finally {
         observer.restore();
@@ -78,29 +110,13 @@ it.each([
   "preserves uninstalled %s package files when its marker is malformed: %s",
   async (layout, malformed) => {
     await withOpenClawTestState({ label: "gateway-retained-plugin-cleanup" }, async (state) => {
-      const packageDir = writeManagedNpmPlugin({
-        stateDir: state.stateDir,
-        packageName: "@openclaw/kept-plugin",
-        pluginId: "kept-plugin",
-        version: "1.0.0",
-        layout,
-      });
-      await markRetainedManagedNpmInstall({
-        packageDir,
-        pluginId: "kept-plugin",
-        reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
-      });
+      const packageDir = writePlugin(state.stateDir, "kept-plugin", layout);
+      await markRetained(packageDir, RETAINED_MANAGED_NPM_KEEP_FILES_REASON);
       if (malformed) {
         fs.writeFileSync(resolveRetainedManagedNpmInstallMarkerPath(packageDir), '{"reason":');
       }
-      const log = { info: vi.fn(), warn: vi.fn() };
-
-      await cleanupGatewayRetiredPluginArtifacts({
-        log,
-        startupInstallPaths: [],
-        signal: new AbortController().signal,
-        assertCurrent: () => {},
-      });
+      const log = makeLog();
+      await cleanup(log);
 
       expect(fs.existsSync(packageDir)).toBe(true);
       expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
@@ -120,17 +136,9 @@ it.each(["project", "legacy"] as const)(
   "refreshes %s cleanup records without caller-thread SQLite and protects live packages",
   async (layout) => {
     await withOpenClawTestState({ label: "gateway-retained-plugin-update" }, async (state) => {
-      const writePlugin = (pluginId: string) =>
-        writeManagedNpmPlugin({
-          stateDir: state.stateDir,
-          packageName: `@openclaw/${pluginId}`,
-          pluginId,
-          version: "1.0.0",
-          layout,
-        });
-      const startupPackage = writePlugin("startup-plugin");
-      const desiredPackage = writePlugin("desired-plugin");
-      const obsoletePackage = writePlugin("obsolete-plugin");
+      const startupPackage = writePlugin(state.stateDir, "startup-plugin", layout);
+      const desiredPackage = writePlugin(state.stateDir, "desired-plugin", layout);
+      const obsoletePackage = writePlugin(state.stateDir, "obsolete-plugin", layout);
       const startupInstallPaths = [path.join(startupPackage, "dist", "index.js")];
       await seedInstalledPluginIndex(
         {
@@ -143,11 +151,7 @@ it.each(["project", "legacy"] as const)(
         { env: state.env, candidates: [] },
       );
       for (const packageDir of [startupPackage, desiredPackage, obsoletePackage]) {
-        await markRetainedManagedNpmInstall({
-          packageDir,
-          pluginId: path.basename(packageDir),
-          reason: "replaced-plugin-generation",
-        });
+        await markRetained(packageDir);
       }
       expect(loadInstalledPluginIndexInstallRecordsSync()["obsolete-plugin"]?.installPath).toBe(
         obsoletePackage,
@@ -166,16 +170,11 @@ it.each(["project", "legacy"] as const)(
           }),
         );
       });
-      const log = { info: vi.fn(), warn: vi.fn() };
+      const log = makeLog();
       const observer = observeParentSqlite();
       const reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
       try {
-        await cleanupGatewayRetiredPluginArtifacts({
-          log,
-          startupInstallPaths,
-          signal: new AbortController().signal,
-          assertCurrent: () => {},
-        });
+        await cleanup(log, startupInstallPaths);
         expect(observer.counts).toEqual(emptySqliteCounts());
         expect(reads).toHaveBeenCalledTimes(1);
       } finally {
@@ -199,20 +198,14 @@ it.each([false, true])(
   "checks partially retained native roots without losing malformed receipt protection (%s)",
   async (malformed) => {
     await withOpenClawTestState({ label: "gateway-retained-native-mixed" }, async (state) => {
-      const retained = createPluginNativeCaptureRoot(state.stateDir);
-      const orphan = createPluginNativeCaptureRoot(state.stateDir);
-      const retainedFile = path.join(retained.directory, "retained.node");
-      const orphanFile = path.join(orphan.directory, "orphan.node");
-      fs.writeFileSync(retainedFile, "synthetic retained native artifact");
-      fs.writeFileSync(orphanFile, "synthetic orphan native artifact");
+      const { capture: retained, file: retainedFile } = nativeCapture(state.stateDir, "retained");
+      const { capture: orphan, file: orphanFile } = nativeCapture(state.stateDir, "orphan");
       retained.commit();
       orphan.commit();
       const release = retainPluginNativeCapturePath(retainedFile);
       await retained.disposeAsync();
       await orphan.disposeAsync();
-      const live = createPluginNativeCaptureRoot(state.stateDir);
-      const liveFile = path.join(live.directory, "live.node");
-      fs.writeFileSync(liveFile, "synthetic live native artifact");
+      const { capture: live, file: liveFile } = nativeCapture(state.stateDir, "live");
       await seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
       if (malformed) {
         const plugin = createInstalledPluginIndex().plugins[0];
@@ -222,15 +215,10 @@ it.each([false, true])(
           ).run(JSON.stringify([{ ...plugin, sourceAdmissions: { malformed: true } }]));
         });
       }
-      const log = { info: vi.fn(), warn: vi.fn() };
+      const log = makeLog();
       const reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
       try {
-        await cleanupGatewayRetiredPluginArtifacts({
-          log,
-          startupInstallPaths: [],
-          signal: new AbortController().signal,
-          assertCurrent: () => {},
-        });
+        await cleanup(log);
         expect(reads).toHaveBeenCalledTimes(1);
         expect(fs.readFileSync(retainedFile, "utf8")).toBe("synthetic retained native artifact");
         expect(fs.readFileSync(liveFile, "utf8")).toBe("synthetic live native artifact");
@@ -256,13 +244,8 @@ it("reports an unreadable candidate root instead of declaring cleanup empty", as
     const root = resolvePluginSourceCapturesDirectory(state.stateDir);
     fs.mkdirSync(path.dirname(root), { recursive: true });
     fs.writeFileSync(root, "synthetic non-directory capture root");
-    const log = { info: vi.fn(), warn: vi.fn() };
-    await cleanupGatewayRetiredPluginArtifacts({
-      log,
-      startupInstallPaths: [],
-      signal: new AbortController().signal,
-      assertCurrent: () => {},
-    });
+    const log = makeLog();
+    await cleanup(log);
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("retired plugin cleanup unavailable"),
     );
@@ -274,20 +257,13 @@ it.each(["lease", "caller"] as const)(
   "preserves native and npm artifacts when %s authority is revoked during inventory read",
   async (revocation) => {
     await withOpenClawTestState({ label: "gateway-retired-plugin-authority" }, async (state) => {
-      const packageDir = writeManagedNpmPlugin({
-        stateDir: state.stateDir,
-        packageName: "@openclaw/retired",
-        pluginId: "retired",
-        version: "1.0.0",
-      });
-      await markRetainedManagedNpmInstall({
-        packageDir,
-        pluginId: "retired",
-        reason: "replaced-plugin-generation",
-      });
-      const capture = createPluginNativeCaptureRoot(state.stateDir);
-      const capturedFile = path.join(capture.directory, "retired.node");
-      fs.writeFileSync(capturedFile, "synthetic retained native artifact");
+      const packageDir = writePlugin(state.stateDir, "retired");
+      await markRetained(packageDir);
+      const { capture, file: capturedFile } = nativeCapture(
+        state.stateDir,
+        "retired",
+        "synthetic retained native artifact",
+      );
       capture.commit();
       await capture.disposeAsync();
       const read = metadataState.readPluginMetadataStateRow;
@@ -312,22 +288,17 @@ it.each(["lease", "caller"] as const)(
           }
           return result;
         });
-      const log = { info: vi.fn(), warn: vi.fn() };
+      const log = makeLog();
       try {
-        const cleanup = cleanupGatewayRetiredPluginArtifacts({
-          log,
-          startupInstallPaths: [],
-          signal: new AbortController().signal,
-          assertCurrent: () => {
-            if (!current) {
-              throw refused;
-            }
-          },
+        const pending = cleanup(log, [], () => {
+          if (!current) {
+            throw refused;
+          }
         });
         if (revocation === "caller") {
-          await expect(cleanup).rejects.toBe(refused);
+          await expect(pending).rejects.toBe(refused);
         } else {
-          await expect(cleanup).resolves.toBeUndefined();
+          await expect(pending).resolves.toBeUndefined();
           expect(log.warn).toHaveBeenCalled();
         }
         expect(revoked).toBe(true);
