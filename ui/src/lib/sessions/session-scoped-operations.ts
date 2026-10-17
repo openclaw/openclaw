@@ -1,3 +1,8 @@
+import {
+  getGatewaySessionMessageSubscriptionCoordinator,
+  releaseGatewaySessionMessageSubscription,
+  resetGatewaySessionMessageSubscriptionCoordinator,
+} from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -33,18 +38,7 @@ function buildTranscriptMutationParams(sessionKey: string, agentId?: string | nu
 
 export function createSessionScopedOperations(host: SessionScopedOperationsHost) {
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
-  type SubscriptionRuntime = typeof import("./session-message-subscriptions.runtime.ts");
-  let subscriptionRuntime: SubscriptionRuntime | undefined;
-  let subscriptionRuntimeLoading: Promise<SubscriptionRuntime> | undefined;
   let disposed = false;
-  const loadSubscriptionRuntime = () =>
-    (subscriptionRuntimeLoading ??= import("./session-message-subscriptions.runtime.ts").then(
-      (runtime) => (subscriptionRuntime = runtime),
-      (error: unknown) => {
-        subscriptionRuntimeLoading = undefined;
-        throw error;
-      },
-    ));
 
   const recover: SessionCapability["recover"] = async (params) => {
     const scope = host.connection.capture();
@@ -121,8 +115,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     });
 
   const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
-    const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
-    await runtime.releaseGatewaySessionMessageSubscription(subscription);
+    await releaseGatewaySessionMessageSubscription(subscription);
     ownedSubscriptions.delete(subscription);
   };
 
@@ -137,19 +130,13 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     const normalizedKey = key.trim();
     const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
     const { mode, includeApprovals } = options;
-    const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
-    if (disposed || !host.connection.isCurrent(scope)) {
-      throw new Error("Session message subscription completed on a replaced Gateway connection");
-    }
-    const subscription = await runtime
-      .getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
-        keysEquivalent: areUiSessionKeysEquivalent,
-      })
-      .acquire(normalizedKey, {
-        agentId,
-        ...(includeApprovals ? { includeApprovals: true } : {}),
-        ...(mode ? { mode } : {}),
-      });
+    const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
+      keysEquivalent: areUiSessionKeysEquivalent,
+    }).acquire(normalizedKey, {
+      agentId,
+      ...(includeApprovals ? { includeApprovals: true } : {}),
+      ...(mode ? { mode } : {}),
+    });
     ownedSubscriptions.add(subscription);
     if (disposed || !host.connection.isCurrent(scope)) {
       await unsubscribeMessages(subscription).catch(() => undefined);
@@ -223,9 +210,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     unsubscribeMessages,
     retireConnection: (previousClient: GatewayBrowserClient | null) => {
       if (previousClient) {
-        // No observer can be acquired before the runtime is installed and its
-        // captured connection revalidated, so a pending import needs no reset.
-        subscriptionRuntime?.resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
+        resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
       }
       ownedSubscriptions.clear();
     },

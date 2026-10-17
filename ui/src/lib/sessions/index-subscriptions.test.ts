@@ -36,6 +36,7 @@ describe("createSessionCapability message subscriptions", () => {
       includeApprovals: true,
     };
     const pending = sessions.subscribeMessages("global", options);
+    expect(request).toHaveBeenCalledOnce();
     options.agentId = "work";
     options.mode = undefined;
     options.includeApprovals = false;
@@ -57,7 +58,7 @@ describe("createSessionCapability message subscriptions", () => {
   });
 
   it.each(["reconnect", "dispose"])(
-    "does not create a wire observer when %s retires an acquisition before admission",
+    "retires a pending wire observer when %s interrupts admission",
     async (retirement) => {
       const request = vi.fn(async (_method: string, params?: Record<string, unknown>) => ({
         key: params?.key,
@@ -74,6 +75,11 @@ describe("createSessionCapability message subscriptions", () => {
         reconcileMutation: async () => ({ status: "stale" }),
       });
       const acquisition = operations.subscribeMessages("agent:main:old");
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.messages.subscribe",
+        { key: "agent:main:old", subscriptionId: expect.any(String) },
+        subscriptionRequestOptions,
+      );
       if (retirement === "dispose") {
         operations.dispose();
       } else {
@@ -81,7 +87,14 @@ describe("createSessionCapability message subscriptions", () => {
         operations.retireConnection(client);
       }
       await expect(acquisition).rejects.toThrow("replaced Gateway connection");
-      expect(request).not.toHaveBeenCalled();
+      if (retirement === "dispose") {
+        expect(request).toHaveBeenLastCalledWith(
+          "sessions.messages.unsubscribe",
+          { key: "agent:main:old", subscriptionId: expect.any(String) },
+          subscriptionRequestOptions,
+        );
+      }
+      request.mockClear();
       if (retirement === "reconnect") {
         const current = await operations.subscribeMessages("agent:main:current");
         expect(request).toHaveBeenCalledExactlyOnceWith(
