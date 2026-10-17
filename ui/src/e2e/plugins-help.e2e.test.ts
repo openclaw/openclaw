@@ -26,6 +26,8 @@ const featureMethods = [
   "openclaw.chat.history",
 ];
 const sessionId = "plugin-help-existing-session";
+const refreshLabel = "Refresh interval (minutes)";
+const refreshDraft = `Explain ${refreshLabel}\n\nCurrent value: 15`;
 const chatResponses = {
   "openclaw.chat": { sessionId, reply: "Ready to help.", action: "none" },
   "openclaw.chat.history": {
@@ -70,10 +72,19 @@ function extraSettings(values: Record<string, unknown>, properties: Record<strin
   };
 }
 
-function expectPluginRequest(params: unknown, plugin: Record<string, unknown>, message?: string) {
+function expectSettingRequest(
+  params: unknown,
+  setting: string | { label: string },
+  message?: string,
+  identity: Record<string, unknown> = {},
+) {
+  const details =
+    typeof setting === "string"
+      ? { path: ["plugins", "entries", "workboard", "config"].concat(setting.split(".")) }
+      : setting;
   expect(params).toMatchObject({
     sessionId,
-    context: { plugin },
+    context: { plugin: { id: "workboard", ...identity, setting: details } },
     ...(message === undefined ? {} : { message }),
   });
 }
@@ -91,9 +102,9 @@ async function expectDockedEditor(page: Page) {
 suite.define(() => {
   it.each([390, 1440])(
     "keeps setting help editable after startup failure and sends only after retry at %s pixels",
-    async (width) => {
-      await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
-        const { gateway, panel, composer } = await installHelpGateway(page);
+    (width) =>
+      suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
+        const { gateway, panel, composer, userRequests } = await installHelpGateway(page);
         await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
         const row = page.locator('[data-setting="refreshMinutes"]');
         await named(row, "button", "Actions for Refresh interval (minutes)").click();
@@ -109,9 +120,7 @@ suite.define(() => {
           .filter({ hasText: "Fixture inference unavailable" })
           .waitFor();
 
-        expect(await composer.inputValue()).toBe(
-          "Explain Refresh interval (minutes)\n\nCurrent value: 15",
-        );
+        expect(await composer.inputValue()).toBe(refreshDraft);
         expect(await composer.getAttribute("placeholder")).toBe("Ask OpenClaw about Workboard");
         expect(await composer.isEnabled()).toBe(true);
         expect(await panel.locator(".custodian__plugin-reference").count()).toBe(0);
@@ -123,29 +132,20 @@ suite.define(() => {
         await named(panel, "button", "Retry").click();
         await expect.poll(() => panel.locator(".chat-send-btn").isEnabled()).toBe(true);
         expect(await composer.inputValue()).toBe(draft);
-        expect(
-          (await gateway.getRequests("openclaw.chat")).every(
-            (request) => !asRecord(request.params).message,
-          ),
-        ).toBe(true);
+        expect(await userRequests()).toHaveLength(0);
 
         await named(panel, "button", "Send").click();
         await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(3);
         const sent = (await gateway.getRequests("openclaw.chat"))[2];
         assert.ok(sent);
-        expectPluginRequest(
-          sent.params,
-          { id: "workboard", setting: { label: "Refresh interval (minutes)" } },
-          draft,
-        );
-      });
-    },
+        expectSettingRequest(sent.params, { label: refreshLabel }, draft);
+      }),
   );
 
   it.each([390, 1440])(
     "keeps credentials in a rejected URL edit out of Ask and Send at %s pixels",
-    async (width) => {
-      await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
+    (width) =>
+      suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
         const { gateway, panel, composer, userRequests } = await installHelpGateway(
           page,
           extraSettings(
@@ -183,25 +183,17 @@ suite.define(() => {
         expect(draft).toContain("Current value: <redacted>");
         expect(JSON.stringify(sent.params)).not.toContain("fixture-password");
         expect(JSON.stringify(sent.params)).not.toContain("fixture-token");
-        expectPluginRequest(
-          sent.params,
-          {
-            id: "workboard",
-            setting: { path: ["plugins", "entries", "workboard", "config", "baseUrl"] },
-          },
-          draft,
-        );
+        expectSettingRequest(sent.params, "baseUrl", draft);
         if (width === 390) {
           await named(panel, "button", "Close assistant sidebar").click();
         }
         expect(await input.inputValue()).toBe(editedUrl);
         expect(await gateway.getRequests("config.set")).toHaveLength(1);
-      });
-    },
+      }),
   );
 
-  it("keeps the transcript flexible through protected setup answers and change history", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+  it("keeps the transcript flexible through protected setup answers and change history", () =>
+    suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const { gateway, panel, composer } = await installHelpGateway(
         page,
         {
@@ -225,20 +217,14 @@ suite.define(() => {
         }
         const bounds = await surface.evaluate((element) => {
           const rect = element.getBoundingClientRect();
-          const messages = element.querySelector(".custodian__messages")!.getBoundingClientRect();
-          const composerBounds = element
-            .querySelector(".agent-chat__composer-shell")!
-            .getBoundingClientRect();
+          const box = (selector: string) =>
+            element.querySelector(selector)!.getBoundingClientRect();
           return {
-            height: rect.height,
-            messages: messages.height,
-            composerBottom: composerBounds.bottom,
-            bottom: rect.bottom,
+            roomy: box(".custodian__messages").height > rect.height * 0.4,
+            docked: box(".agent-chat__composer-shell").bottom <= rect.bottom + 1,
           };
         });
-
-        expect(bounds.messages, phase).toBeGreaterThan(bounds.height * 0.4);
-        expect(bounds.composerBottom, phase).toBeLessThanOrEqual(bounds.bottom + 1);
+        expect(bounds, phase).toEqual({ roomy: true, docked: true });
         expect(await surface.locator(".custodian__plugin-reference").count()).toBe(0);
       };
       await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
@@ -267,9 +253,7 @@ suite.define(() => {
       await password.fill("fixture-answer");
       await password.press("Enter");
       await expect.poll(() => composer.isEnabled()).toBe(true);
-      await expect
-        .poll(() => composer.inputValue())
-        .toBe("Explain Refresh interval (minutes)\n\nCurrent value: 15");
+      await expect.poll(() => composer.inputValue()).toBe(refreshDraft);
       await expectTranscriptSpace(surface, "ready");
 
       await page.goto(`${suite.server.baseUrl}custodian`);
@@ -279,11 +263,10 @@ suite.define(() => {
       await page.locator(".custodian__history-toggle").click();
       await pageSurface.getByText("Updated plugin settings", { exact: true }).waitFor();
       await expectTranscriptSpace(pageSurface, "history");
-    });
-  });
+    }));
 
-  it("opens installed help once, preserves the draft, redacts setting values, and clears departed context", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+  it("opens installed help once, preserves the draft, redacts setting values, and clears departed context", () =>
+    suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const { gateway, panel, composer, userRequests } = await installHelpGateway(page);
       await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
       const expectReadyEditor = async () => {
@@ -306,7 +289,7 @@ suite.define(() => {
       await named(setting, "menuitem", "Ask OpenClaw").click();
       await expect
         .poll(() => composer.inputValue())
-        .toBe("Keep my existing draft.\n\nExplain Refresh interval (minutes)\n\nCurrent value: 15");
+        .toBe(`Keep my existing draft.\n\n${refreshDraft}`);
       expect(await userRequests()).toHaveLength(0);
       await expect
         .poll(() => composer.evaluate((element) => element.clientHeight))
@@ -317,11 +300,9 @@ suite.define(() => {
       await expect.poll(async () => (await userRequests()).length).toBe(1);
       const [settingRequest] = await userRequests();
       assert.ok(settingRequest);
-      expectPluginRequest(settingRequest.params, {
-        id: "workboard",
+      expectSettingRequest(settingRequest.params, "refreshMinutes", undefined, {
         name: "Workboard",
         installed: true,
-        setting: { path: ["plugins", "entries", "workboard", "config", "refreshMinutes"] },
       });
 
       const secretResponses = extraSettings(
@@ -351,11 +332,7 @@ suite.define(() => {
       );
       const [secretRequest] = await userRequests();
       assert.ok(secretRequest);
-      expect(
-        asRecord(asRecord(asRecord(secretRequest.params).context).plugin).setting,
-      ).toMatchObject({
-        path: ["plugins", "entries", "workboard", "config", "connection", "apiKey"],
-      });
+      expectSettingRequest(secretRequest.params, "connection.apiKey");
 
       await page.locator(".plugin-editor .plugins-settings-breadcrumb__parent").click();
       await page.locator(".plugin-catalog-detail .plugins-settings-breadcrumb__parent").click();
@@ -367,51 +344,39 @@ suite.define(() => {
       const departedRequest = (await userRequests())[1];
       assert.ok(departedRequest);
       expect(asRecord(asRecord(departedRequest.params).context).plugin).toBeUndefined();
-    });
-  });
+    }));
 
   it.each([
     { width: 900, catalog: false },
     { width: 1440, catalog: true },
-  ])(
-    "opens help only explicitly for $width pixels and catalog=$catalog",
-    async ({ width, catalog }) => {
-      await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
-        const catalogResult = structuredClone(inspection.catalog);
-        catalogResult.plugin.id = "ch_uninstalled";
-        Object.assign(catalogResult.plugin.local, {
-          present: false,
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-          action: "install",
-        });
-        const { gateway, panel } = await installHelpGateway(page, {
-          "plugins.catalog.get": catalogResult,
-          "plugins.list": catalog ? { ...inventory, plugins: [] } : inventory,
-        });
-        await page.goto(
-          `${suite.server.baseUrl}${catalog ? "plugins/ch_uninstalled" : "settings/plugins/workboard"}`,
-        );
-        const ask = named(
-          page.locator(".plugin-catalog-detail__actions"),
-          "button",
-          "Ask OpenClaw",
-        );
-        await ask.waitFor();
-        expect(await panel.isVisible()).toBe(false);
-        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-        await ask.click();
-        await panel.getByText("Existing conversation.", { exact: true }).waitFor();
-        expect(
-          (await gateway.getRequests("openclaw.chat")).every(
-            (request) => !asRecord(request.params).message,
-          ),
-        ).toBe(true);
-        await named(panel, "button", "Close assistant sidebar").click();
-        await page.setViewportSize({ width: 1440, height: 1000 });
-        expect(await panel.isVisible()).toBe(false);
+  ])("opens help only explicitly for $width pixels and catalog=$catalog", ({ width, catalog }) =>
+    suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
+      const catalogResult = structuredClone(inspection.catalog);
+      catalogResult.plugin.id = "ch_uninstalled";
+      Object.assign(catalogResult.plugin.local, {
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
       });
-    },
+      const { gateway, panel, userRequests } = await installHelpGateway(page, {
+        "plugins.catalog.get": catalogResult,
+        "plugins.list": catalog ? { ...inventory, plugins: [] } : inventory,
+      });
+      await page.goto(
+        `${suite.server.baseUrl}${catalog ? "plugins/ch_uninstalled" : "settings/plugins/workboard"}`,
+      );
+      const ask = named(page.locator(".plugin-catalog-detail__actions"), "button", "Ask OpenClaw");
+      await ask.waitFor();
+      expect(await panel.isVisible()).toBe(false);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+      await ask.click();
+      await panel.getByText("Existing conversation.", { exact: true }).waitFor();
+      expect(await userRequests()).toHaveLength(0);
+      await named(panel, "button", "Close assistant sidebar").click();
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      expect(await panel.isVisible()).toBe(false);
+    }),
   );
 });

@@ -49,26 +49,24 @@ async function assertControlledInputs(page: Page) {
   await rejectedQuality.locator(".settings-segmented__btn").filter({ hasText: "Fast" }).click();
   expect(await named(rejectedQuality, "radio", "Balanced").isChecked()).toBe(true);
   expect(await named(rejectedQuality, "radio", "Fast").isChecked()).toBe(false);
-  const disabledQuality = segmented("Disabled quality");
-  expect(await named(disabledQuality, "radio", "Fast").isDisabled()).toBe(true);
-}
-
-async function assertSecretInput(page: Page) {
+  expect(await named(segmented("Disabled quality"), "radio", "Fast").isDisabled()).toBe(true);
   const secret = named(page, "textbox", "Secret");
   await named(page, "button", "Toggle secret").click();
   await expect.poll(() => secret.getAttribute("type")).toBe("text");
   await secret.fill("changed-synthetic-token");
   await named(page, "button", "Toggle secret").click();
-  expect(await page.locator('input[aria-label="Secret"]').inputValue()).toBe(
-    "changed-synthetic-token",
-  );
-  expect(await page.locator('input[aria-label="Secret"]').getAttribute("type")).toBe("password");
+  const hidden = page.locator('input[aria-label="Secret"]');
+  expect({ value: await hidden.inputValue(), type: await hidden.getAttribute("type") }).toEqual({
+    value: "changed-synthetic-token",
+    type: "password",
+  });
 }
 
 async function assertFeedback(page: Page) {
+  const example = (name: string, child = "") => page.locator(`[data-example="${name}"] ${child}`);
   await named(page, "button", "Add file").click();
   expect(await page.locator("#fixture-outcome").textContent()).toBe("add-file");
-  const error = page.locator('[data-example="Lazy error"]');
+  const error = example("Lazy error");
   await error.getByRole("button", { name: /retry/i }).click();
   expect(await page.locator("#fixture-outcome").textContent()).toBe("retry");
   await named(error, "button", "Close").click();
@@ -76,21 +74,19 @@ async function assertFeedback(page: Page) {
   await error.locator("summary").click();
   expect(await error.locator("details").getAttribute("open")).not.toBeNull();
   expect(await error.locator("code").textContent()).toContain("Synthetic module failure");
-  expect(
-    await page.locator('[data-example="Refresh stale"] [role="status"]').textContent(),
-  ).toContain("stale");
-  expect(
-    await page.locator('[data-example="Refresh failed"] [role="alert"]').textContent(),
-  ).toContain("Synthetic refresh failure");
+  expect(await example("Refresh stale", '[role="status"]').textContent()).toContain("stale");
+  expect(await example("Refresh failed", '[role="alert"]').textContent()).toContain(
+    "Synthetic refresh failure",
+  );
   expect(await named(page, "button", "Busy panel").isDisabled()).toBe(true);
   expect(await named(page, "button", "Busy panel").getAttribute("aria-busy")).toBe("true");
   expect(await page.locator("kbd").last().textContent()).toBe("Ctrl+K");
-  const copy = page.locator('[data-example="Actions and shortcuts"] .chat-copy-btn').nth(0);
-  await copy.click();
-  await expect.poll(() => copy.getAttribute("data-copy-state")).toBe("copied");
-  const failedCopy = page.locator('[data-example="Actions and shortcuts"] .chat-copy-btn').nth(1);
-  await failedCopy.click();
-  await expect.poll(() => failedCopy.getAttribute("data-copy-state")).toBe("error");
+  const copies = example("Actions and shortcuts", ".chat-copy-btn");
+  for (const [index, state] of ["copied", "error"].entries()) {
+    await copies.nth(index).click();
+    await expect.poll(() => copies.nth(index).getAttribute("data-copy-state")).toBe(state);
+  }
+  await assertShadowParentStyles(page, "openclaw-panel-empty-state", ".empty-state__title");
 }
 
 async function assertShadowParentStyles(page: Page, tag: string, selector: string) {
@@ -134,8 +130,8 @@ suite.define(() => {
       { width: 1280, height: 900, name: "desktop" },
       { width: 390, height: 844, name: "mobile" },
     ]) {
-      it(`Solid preserves presentation contracts in ${theme} ${viewport.name}`, async () => {
-        await suite.withPage(
+      it(`Solid preserves presentation contracts in ${theme} ${viewport.name}`, () =>
+        suite.withPage(
           {
             colorScheme: theme,
             viewport,
@@ -187,14 +183,8 @@ suite.define(() => {
                 expect(await surface.locator('[data-provider-icon="gcp"]').count()).toBe(1);
               } else if (group === "controls") {
                 await assertControlledInputs(page);
-                await assertSecretInput(page);
               } else if (group === "feedback") {
                 await assertFeedback(page);
-                await assertShadowParentStyles(
-                  page,
-                  "openclaw-panel-empty-state",
-                  ".empty-state__title",
-                );
               } else if (group.startsWith("skeleton-")) {
                 const skeletons = surface.locator("openclaw-panel-loading-skeleton");
                 expect(await skeletons.count()).toBe(
@@ -211,8 +201,7 @@ suite.define(() => {
               }
             }
           },
-        );
-      });
+        ));
     }
   }
 });

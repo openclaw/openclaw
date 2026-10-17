@@ -58,7 +58,7 @@ async function headerGeometry(page: Page) {
   await header.waitFor({ state: "visible" });
   return header.evaluate((element) => {
     const { left, top, width } = element.getBoundingClientRect();
-    return { left, top, width, title: element.querySelector("h1")?.textContent?.trim() ?? "" };
+    return { left, top, width };
   });
 }
 
@@ -250,7 +250,7 @@ suite.define(() => {
         const chips = page.locator(".plugin-catalog-chips");
         await named(chips, "button", "Media").waitFor();
         const cards = page.locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)");
-        const expectFilteredCards = async (category: string, names: string[]) => {
+        const expectFilteredCards = async (category: string, names: readonly string[]) => {
           await expect
             .poll(async () => ({
               selected: await named(chips, "button", category).getAttribute("aria-pressed"),
@@ -270,27 +270,17 @@ suite.define(() => {
           .poll(() => page.locator('[data-catalog-section="media"] .plugin-catalog-card').count())
           .toBe(3);
 
-        const priorModels = (
-          await gateway.getRequests("plugins.catalog.browse", { category: "models" })
-        ).length;
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(local, "models"));
-        await named(chips, "button", "Models").click();
-        await gateway.waitForRequest("plugins.catalog.browse", {
-          after: priorModels,
-          match: { category: "models" },
-        });
-        await expectFilteredCards("Models", ["Novita", "Z.AI"]);
-
-        const priorMedia = (
-          await gateway.getRequests("plugins.catalog.browse", { category: "media" })
-        ).length;
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(local, "media"));
-        await named(chips, "button", "Media").click();
-        await gateway.waitForRequest("plugins.catalog.browse", {
-          after: priorMedia,
-          match: { category: "media" },
-        });
-        await expectFilteredCards("Media", ["fal", "Novita", "Z.AI"]);
+        for (const [label, names] of [
+          ["Models", ["Novita", "Z.AI"]],
+          ["Media", ["fal", "Novita", "Z.AI"]],
+        ] as const) {
+          const category = label.toLowerCase();
+          const after = (await gateway.getRequests("plugins.catalog.browse", { category })).length;
+          await gateway.setMethodResponse("plugins.catalog.browse", browse(local, category));
+          await named(chips, "button", label).click();
+          await gateway.waitForRequest("plugins.catalog.browse", { after, match: { category } });
+          await expectFilteredCards(label, names);
+        }
         for (const name of ["Novita", "Z.AI"]) {
           expect(await cards.filter({ hasText: name }).count()).toBe(1);
         }
@@ -310,8 +300,8 @@ suite.define(() => {
     );
   });
 
-  it("loads category filters independently of cards and recovers a failed category read", async () => {
-    await withWorkspace(
+  it("loads category filters independently of cards and recovers a failed category read", () =>
+    withWorkspace(
       { width: 1200, height: 928 },
       {
         deferredMethods: ["plugins.catalog.browse", "plugins.catalog.categories"],
@@ -346,11 +336,10 @@ suite.define(() => {
         await gateway.waitForRequest("plugins.catalog.browse", { match: { intent: "featured" } });
         expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
       },
-    );
-  });
+    ));
 
-  it("redirects the retired discovery URL to the Plugins workspace", async () => {
-    await withWorkspace(
+  it("redirects the retired discovery URL to the Plugins workspace", () =>
+    withWorkspace(
       { height: 768, width: 1366 },
       { featureMethods: ["config.get", ...catalogMethods] },
       async (page) => {
@@ -362,92 +351,88 @@ suite.define(() => {
         );
         await named(page, "searchbox", "Search plugins").waitFor();
       },
-    );
-  });
+    ));
 
   it.each([
     { label: "desktop", viewport: { height: 1053, width: 2048 } },
     { label: "laptop", viewport: { height: 928, width: 1200 } },
     { label: "tablet", viewport: { height: 1024, width: 768 } },
     { label: "narrow", viewport: { height: 852, width: 393 } },
-  ])(
-    "keeps the Plugins/Skills shell coherent through every $label transition",
-    async ({ viewport }) => {
-      await withWorkspace(
-        viewport,
-        {
-          featureMethods: [
-            "agents.list",
-            "config.get",
-            ...catalogMethods,
-            "skills.workshop.changes",
-            "skills.workshop.list",
-            "skills.status",
-            "skills.search",
-            "skills.library.list",
-          ],
-        },
-        async (page) => {
-          await page.goto(`${suite.server.baseUrl}plugins`);
-          await page.addStyleTag({
-            content:
-              "*, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }",
-          });
-          await page.evaluate(() => document.fonts.ready.then(() => undefined));
-          await named(page, "searchbox", "Search plugins").waitFor();
-          const pluginsHeader = await expectWorkspace(page, "plugins");
-          expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
-          expect(await named(page, "tab", "Plugins").getAttribute("active")).not.toBeNull();
-          expect(await page.getByRole("tab", { name: /Installed|Discover/u }).count()).toBe(0);
-          expect(await page.locator(".plugins-tabs").count()).toBe(1);
-          expect(await page.locator(".plugins-tabs.oc-segmented").count()).toBe(0);
-          const tabBox = await page.locator(".plugins-tabs").boundingBox();
-          const pluginTabBox = await named(page, "tab", "Plugins").boundingBox();
-          expect(tabBox).not.toBeNull();
-          expect(pluginTabBox).not.toBeNull();
-          expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
-          const pluginInstallPresentation = await installButtonPresentation(page);
+  ])("keeps the Plugins/Skills shell coherent through every $label transition", ({ viewport }) =>
+    withWorkspace(
+      viewport,
+      {
+        featureMethods: [
+          "agents.list",
+          "config.get",
+          ...catalogMethods,
+          "skills.workshop.changes",
+          "skills.workshop.list",
+          "skills.status",
+          "skills.search",
+          "skills.library.list",
+        ],
+      },
+      async (page) => {
+        await page.goto(`${suite.server.baseUrl}plugins`);
+        await page.addStyleTag({
+          content:
+            "*, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }",
+        });
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        await named(page, "searchbox", "Search plugins").waitFor();
+        const pluginsHeader = await expectWorkspace(page, "plugins");
+        expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
+        expect(await named(page, "tab", "Plugins").getAttribute("active")).not.toBeNull();
+        expect(await page.getByRole("tab", { name: /Installed|Discover/u }).count()).toBe(0);
+        expect(await page.locator(".plugins-tabs").count()).toBe(1);
+        expect(await page.locator(".plugins-tabs.oc-segmented").count()).toBe(0);
+        const tabBox = await page.locator(".plugins-tabs").boundingBox();
+        const pluginTabBox = await named(page, "tab", "Plugins").boundingBox();
+        expect(tabBox).not.toBeNull();
+        expect(pluginTabBox).not.toBeNull();
+        expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
+        const pluginInstallPresentation = await installButtonPresentation(page);
 
-          const skillsTab = named(page.locator(".plugins-hub-tabs"), "tab", "Skills");
-          await skillsTab.focus();
-          await page.keyboard.press("Enter");
-          await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
-          await expect
-            .poll(() =>
-              named(page, "searchbox", "Search skills").evaluate(
-                (input) => input === document.activeElement,
-              ),
-            )
-            .toBe(true);
-          await expectWorkspace(page, "skills", pluginsHeader);
-          expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
+        const skillsTab = named(page.locator(".plugins-hub-tabs"), "tab", "Skills");
+        await skillsTab.focus();
+        await page.keyboard.press("Enter");
+        await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        await expect
+          .poll(() =>
+            named(page, "searchbox", "Search skills").evaluate(
+              (input) => input === document.activeElement,
+            ),
+          )
+          .toBe(true);
+        await expectWorkspace(page, "skills", pluginsHeader);
+        expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
 
-          const workshopTab = named(page, "tab", "Skill workshop");
-          await workshopTab.focus();
-          await page.keyboard.press("Enter");
-          await waitForControlUiRoute(page, {
-            pathname: "/skills/workshop",
-            routeId: "skill-workshop",
-          });
-          await expect
-            .poll(() =>
-              page.evaluate(
-                () =>
-                  document.activeElement?.id ||
-                  document.activeElement?.getAttribute("aria-label") ||
-                  document.activeElement?.tagName,
-              ),
-            )
-            .toBe("plugins-tab-skill-workshop");
-          await expectWorkspace(page, "skill-workshop", pluginsHeader);
-          expect(await named(page, "tab", "Skill workshop").getAttribute("active")).not.toBeNull();
+        const workshopTab = named(page, "tab", "Skill workshop");
+        await workshopTab.focus();
+        await page.keyboard.press("Enter");
+        await waitForControlUiRoute(page, {
+          pathname: "/skills/workshop",
+          routeId: "skill-workshop",
+        });
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.activeElement?.id ||
+                document.activeElement?.getAttribute("aria-label") ||
+                document.activeElement?.tagName,
+            ),
+          )
+          .toBe("plugins-tab-skill-workshop");
+        await expectWorkspace(page, "skill-workshop", pluginsHeader);
+        expect(await named(page, "tab", "Skill workshop").getAttribute("active")).not.toBeNull();
 
-          await named(page.locator(".plugins-hub-tabs"), "tab", "Skills").click();
-          await expectWorkspace(page, "skills", pluginsHeader);
-          await named(page, "tab", "Plugins").click();
-          await expectWorkspace(page, "plugins", pluginsHeader);
-        },
-      );
-    },
+        await named(page.locator(".plugins-hub-tabs"), "tab", "Skills").click();
+        await expectWorkspace(page, "skills", pluginsHeader);
+        await named(page, "tab", "Plugins").click();
+        await expectWorkspace(page, "plugins", pluginsHeader);
+      },
+    ),
   );
 });

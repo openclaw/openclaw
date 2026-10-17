@@ -35,16 +35,20 @@ export const adminPageOptions = {
   viewport: { height: 1000, width: 1440 },
 } satisfies BrowserContextOptions;
 
-export const workboard = {
+const workboardIdentity = {
   id: "workboard",
   name: "Workboard",
-  packageName: "@openclaw/workboard",
-  description: "Plan and track agent-owned work.",
   version: "1.2.3",
-  kind: ["productivity"],
   origin: "global",
   installed: true,
   enabled: true,
+} satisfies Plugins.PluginsInspectResult["plugin"];
+
+export const workboard = {
+  ...workboardIdentity,
+  packageName: "@openclaw/workboard",
+  description: "Plan and track agent-owned work.",
+  kind: ["productivity"],
   state: "enabled",
   removable: true,
 } satisfies Plugins.PluginCatalogItem;
@@ -79,14 +83,7 @@ export const inventory = {
 export const inspection = {
   ok: true,
   reviewToken: "a".repeat(64),
-  plugin: {
-    id: workboard.id,
-    name: workboard.name,
-    version: workboard.version,
-    origin: workboard.origin,
-    installed: true,
-    enabled: true,
-  },
+  plugin: workboardIdentity,
   source: { kind: "npm", packageName: workboard.packageName },
   declared: {
     channels: [],

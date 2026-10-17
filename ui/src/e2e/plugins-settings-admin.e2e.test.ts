@@ -265,8 +265,8 @@ suite.define(() => {
     },
   );
 
-  it("drills from searchable inventory into overview and same-URL Settings", async () => {
-    await suite.withPage(adminPageOptions, async ({ page }) => {
+  it("drills from searchable inventory into overview and same-URL Settings", () =>
+    suite.withPage(adminPageOptions, async ({ page }) => {
       const gateway = await installAdminGateway(page);
 
       await openWorkboard(page, suite.server.baseUrl);
@@ -305,11 +305,10 @@ suite.define(() => {
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       await page.locator(".plugins-settings-breadcrumb__parent").click();
       await waitForSettingsRoute(page);
-    });
-  });
+    }));
 
-  it("shows the diagnostic and next step for an errored installed plugin", async () => {
-    await suite.withPage(
+  it("shows the diagnostic and next step for an errored installed plugin", () =>
+    suite.withPage(
       {
         colorScheme: "dark",
         locale: "en-US",
@@ -349,11 +348,10 @@ suite.define(() => {
         expect(await page.getByText("This plugin has no configurable settings.").count()).toBe(0);
         expect(await named(page, "button", "Reload Broken plugin").count()).toBe(0);
       },
-    );
-  });
+    ));
 
-  it("commits grouped plugin settings on blur and actions through the route", async () => {
-    await suite.withPage(adminPageOptions, async ({ page }) => {
+  it("commits grouped plugin settings on blur and actions through the route", () =>
+    suite.withPage(adminPageOptions, async ({ page }) => {
       const gateway = await installAdminGateway(page);
       await openWorkboard(page, suite.server.baseUrl);
 
@@ -517,13 +515,12 @@ suite.define(() => {
       expect(await page.locator(".plugins-row-message").count()).toBe(0);
       expect(await gateway.getRequests("connect")).toHaveLength(connections);
       expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
-    });
-  });
+    }));
 
   it.each(["click", "Enter"] as const)(
     "retains Settings opened with %j while refreshed inspection finishes",
-    async (activation) => {
-      await suite.withPage(adminPageOptions, async ({ page }) => {
+    (activation) =>
+      suite.withPage(adminPageOptions, async ({ page }) => {
         const gateway = await installAdminGateway(page);
         await openWorkboard(page, suite.server.baseUrl);
         await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
@@ -545,12 +542,11 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
         expect(await page.getByRole("tab").count()).toBe(0);
         await page.getByLabel("Workspace label", { exact: true }).waitFor();
-      });
-    },
+      }),
   );
 
-  it("keeps global plugin policy in Advanced and exposes read-only details without mutations", async () => {
-    await suite.withPage(adminPageOptions, async ({ page }) => {
+  it("keeps global plugin policy in Advanced and exposes read-only details without mutations", () =>
+    suite.withPage(adminPageOptions, async ({ page }) => {
       const gateway = await installAdminGateway(page, { operatorScopes: ["operator.read"] });
 
       await page.goto(`${suite.server.baseUrl}settings/plugins`);
@@ -586,11 +582,10 @@ suite.define(() => {
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
       expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(0);
-    });
-  });
+    }));
 
-  it("recovers catalog, configuration, and inspection failures in place", async () => {
-    await suite.withPage(adminPageOptions, async ({ page }) => {
+  it("recovers catalog, configuration, and inspection failures in place", () =>
+    suite.withPage(adminPageOptions, async ({ page }) => {
       const failure = (message: string) => ({ __mockError: { code: "UNAVAILABLE", message } });
       const gateway = await installAdminGateway(page, {
         methodResponses: {
@@ -636,6 +631,5 @@ suite.define(() => {
       await page.getByLabel("Workspace label", { exact: true }).waitFor();
       await named(page, "checkbox", "Add context to prompts").waitFor();
       expect(await gateway.getRequests("config.get")).toHaveLength(configRequests + 1);
-    });
-  });
+    }));
 });

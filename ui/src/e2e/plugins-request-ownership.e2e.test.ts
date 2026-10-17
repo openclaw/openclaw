@@ -104,8 +104,8 @@ async function settleRender(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps the current rendered inspection after an old optional catalog response", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it("keeps the current rendered inspection after an old optional catalog response", () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods,
         deferredMethods: ["plugins.catalog.get"],
@@ -152,11 +152,10 @@ suite.define(() => {
       await settleRender(page);
       expect(await rows.allTextContents()).toEqual(["Current skill"]);
       expect(await gateway.getRequests("plugins.inspect")).toHaveLength(2);
-    });
-  });
+    }));
 
-  it("starts only the latest install after an older catalog detail response", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it("starts only the latest install after an older catalog detail response", () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const alpha = detail("ch_YWxwaGE", "Alpha");
       const beta = detail("ch_YmV0YQ", "Beta");
       const gateway = await installMockGateway(page, {
@@ -183,6 +182,5 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Synthetic install complete",
       });
-    });
-  });
+    }));
 });

@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page, type Request } from "playwright";
@@ -53,11 +54,7 @@ describe("public-session post-deploy app handoff", () => {
   let fixture: string | undefined;
   let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
   let projection: SessionRowProjection | undefined;
-  let listener:
-    | Awaited<
-        ReturnType<typeof reserveTestPortListener<ReturnType<typeof createGatewayHttpServer>>>
-      >
-    | undefined;
+  let listener: Awaited<ReturnType<typeof reserveTestPortListener<Server>>> | undefined;
   let baseUrl: string;
   let root: { kind: "resolved"; path: string };
   const requests: HttpSample[] = [];
@@ -65,8 +62,9 @@ describe("public-session post-deploy app handoff", () => {
 
   beforeAll(async () => {
     fixture = await mkdtemp(path.join(os.tmpdir(), "openclaw-post-deploy-entry-"));
-    await buildProductionControlUiE2e(path.join(fixture, buildA), buildA);
-    await buildProductionControlUiE2e(path.join(fixture, buildB), buildB);
+    for (const build of [buildA, buildB]) {
+      await buildProductionControlUiE2e(path.join(fixture, build), build);
+    }
     state = await createOpenClawTestState({
       scenario: "minimal",
       label: "post-deploy-session-entry",
@@ -298,72 +296,61 @@ describe("public-session post-deploy app handoff", () => {
     }
   }
 
+  async function installAppGateway(page: Page, serverBuildId: string) {
+    await prepareOnlineLoopback(page);
+    return installMockGateway(page, {
+      serverBuildId,
+      sessionKey: publicScope.sessionKey,
+      terminalEnabled: false,
+    });
+  }
+
   for (const scenarioKind of ["no worker", "controlled reload", "fresh controlled tab"] as const) {
     it(`connects after an unrelated publication and build switch: ${scenarioKind}`, async ({
       signal,
     }) => {
+      const controlled = scenarioKind !== "no worker";
       root.path = path.join(fixture!, buildA);
-      const context = await browser!.newContext({
-        serviceWorkers: scenarioKind === "no worker" ? "block" : "allow",
+      await using context = await browser!.newContext({
+        serviceWorkers: controlled ? "allow" : "block",
         locale: "en-US",
       });
       await context.addCookies([{ name: "operator", value: "1", url: baseUrl }]);
-      const page = await context.newPage();
-      await prepareOnlineLoopback(page);
-      const scenario = {
-        serverBuildId: buildA,
-        sessionKey: publicScope.sessionKey,
-        terminalEnabled: false,
-      };
-      const gateway = await installMockGateway(page, scenario);
-      try {
-        await openAcrossPublication(page, signal, buildA, 2, gateway);
-        if (scenarioKind !== "no worker") {
-          await page.evaluate(async () => {
-            const registration = await navigator.serviceWorker.ready;
-            await registration.update();
-          });
-          await page.waitForFunction(
-            () => navigator.serviceWorker.controller?.state === "activated",
-          );
-          expect(
-            await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL),
-          ).toContain(`v=${buildA}`);
-        }
-        if (scenarioKind === "fresh controlled tab") {
-          // The worker outlives the original tab; a new tab has no handoff or
-          // mount-recovery history when it meets the replacement deployment.
-          await page.close();
-          root.path = path.join(fixture!, buildB);
-          const fresh = await context.newPage();
-          await prepareOnlineLoopback(fresh);
-          const freshGateway = await installMockGateway(fresh, {
-            ...scenario,
-            serverBuildId: buildB,
-          });
-          await openAcrossPublication(fresh, signal, buildB, 1, freshGateway);
-          await fresh.close();
-        } else {
-          root.path = path.join(fixture!, buildB);
-          await gateway.setServerBuildId(buildB);
-          await openAcrossPublication(
-            page,
-            signal,
-            buildB,
-            scenarioKind === "no worker" ? 2 : 1,
-            gateway,
-            true,
-          );
-        }
-      } finally {
-        await context.close();
+      let page = await context.newPage();
+      let gateway = await installAppGateway(page, buildA);
+      await openAcrossPublication(page, signal, buildA, 2, gateway);
+      if (controlled) {
+        await page.evaluate(async () => {
+          const registration = await navigator.serviceWorker.ready;
+          await registration.update();
+        });
+        await page.waitForFunction(() => navigator.serviceWorker.controller?.state === "activated");
+        expect(await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL)).toContain(
+          `v=${buildA}`,
+        );
+      }
+      const fresh = scenarioKind === "fresh controlled tab";
+      if (fresh) {
+        // The worker outlives the original tab; a new tab has no handoff or
+        // mount-recovery history when it meets the replacement deployment.
+        await page.close();
+        root.path = path.join(fixture!, buildB);
+        page = await context.newPage();
+        gateway = await installAppGateway(page, buildB);
+      } else {
+        root.path = path.join(fixture!, buildB);
+        await gateway.setServerBuildId(buildB);
+      }
+      await openAcrossPublication(page, signal, buildB, controlled ? 1 : 2, gateway, !fresh);
+      if (fresh) {
+        await page.close();
       }
     }, 60_000);
   }
 
   it("keeps an unauthenticated public-session reload in the reader", async () => {
     root.path = path.join(fixture!, buildB);
-    const context = await browser!.newContext({ serviceWorkers: "block" });
+    await using context = await browser!.newContext({ serviceWorkers: "block" });
     const page = await context.newPage();
     let documents = 0;
     page.on("request", (request) => {
@@ -371,18 +358,13 @@ describe("public-session post-deploy app handoff", () => {
         documents += 1;
       }
     });
-    try {
-      const probe = page.waitForResponse(
-        (response) =>
-          response.url().includes("session-entry?") && response.url().includes("probe=1"),
-      );
-      expect((await page.goto(baseUrl + publicPath))?.status()).toBe(200);
-      expect((await probe).status()).toBe(401);
-      await page.getByText(publishedMessage, { exact: true }).waitFor();
-      expect(await page.locator("openclaw-app").count()).toBe(0);
-      expect(documents).toBe(1);
-    } finally {
-      await context.close();
-    }
+    const probe = page.waitForResponse(
+      (response) => response.url().includes("session-entry?") && response.url().includes("probe=1"),
+    );
+    expect((await page.goto(baseUrl + publicPath))?.status()).toBe(200);
+    expect((await probe).status()).toBe(401);
+    await page.getByText(publishedMessage, { exact: true }).waitFor();
+    expect(await page.locator("openclaw-app").count()).toBe(0);
+    expect(documents).toBe(1);
   });
 });
