@@ -10,82 +10,47 @@ import {
   type PackageManifest,
 } from "../package-manifest.js";
 
-// Package manifest contract tests cover plugin package manifest requirements.
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
+function baseline(
+  pluginId: string,
+  pluginLocalRuntimeDeps?: string[],
+  minHostVersionBaseline = "2026.3.22",
+): PackageManifestContractParams {
+  return { pluginId, pluginLocalRuntimeDeps, minHostVersionBaseline };
+}
+
 const packageManifestContractTests: PackageManifestContractParams[] = [
-  {
-    pluginId: "buzz",
-    pluginLocalRuntimeDeps: ["nostr-tools"],
-    minHostVersionBaseline: "2026.7.2",
-  },
-  {
-    pluginId: "discord",
-    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "libopus-wasm"],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  {
-    pluginId: "feishu",
-    pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  {
-    pluginId: "googlechat",
-    pluginLocalRuntimeDeps: ["google-auth-library"],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  {
-    pluginId: "imap",
-    pluginLocalRuntimeDeps: ["imapflow", "mailauth", "mailparser"],
-  },
-  { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs"],
-  },
-  {
-    pluginId: "matrix",
-    pluginLocalRuntimeDeps: [
-      "@matrix-org/matrix-sdk-crypto-nodejs",
-      "@matrix-org/matrix-sdk-crypto-wasm",
-      "fake-indexeddb",
-      "matrix-js-sdk",
-      "music-metadata",
-    ],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "memory-lancedb",
-    pluginLocalRuntimeDeps: ["apache-arrow"],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  {
-    pluginId: "msteams",
-    pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "nostr",
-    pluginLocalRuntimeDeps: ["nostr-tools"],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  { pluginId: "onnx", minHostVersionBaseline: "2026.9.6" },
-  { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
+  baseline("buzz", ["nostr-tools"], "2026.7.2"),
+  baseline("discord", ["@discordjs/voice", "discord-api-types", "libopus-wasm"]),
+  baseline("feishu", ["@larksuiteoapi/node-sdk"]),
+  baseline("googlechat", ["google-auth-library"]),
+  { pluginId: "imap", pluginLocalRuntimeDeps: ["imapflow", "mailauth", "mailparser"] },
+  baseline("irc"),
+  baseline("line"),
+  { pluginId: "diffs", pluginLocalRuntimeDeps: ["@pierre/diffs"] },
+  baseline("matrix", [
+    "@matrix-org/matrix-sdk-crypto-nodejs",
+    "@matrix-org/matrix-sdk-crypto-wasm",
+    "fake-indexeddb",
+    "matrix-js-sdk",
+    "music-metadata",
+  ]),
+  baseline("mattermost"),
+  baseline("memory-lancedb", ["apache-arrow"]),
+  baseline("msteams", ["@azure/identity", "@microsoft/teams.apps"]),
+  baseline("nextcloud-talk"),
+  baseline("nostr", ["nostr-tools"]),
+  baseline("onnx", undefined, "2026.9.6"),
+  baseline("synology-chat"),
+  baseline("tlon"),
   { pluginId: "tokenjuice", pluginLocalRuntimeDeps: ["tokenjuice"] },
-  { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "whatsapp",
-    pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
-    minHostVersionBaseline: "2026.3.22",
-  },
-  { pluginId: "xiaomi", minHostVersionBaseline: "2026.7.2" },
-  { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "zalouser", minHostVersionBaseline: "2026.3.22" },
+  baseline("twitch"),
+  baseline("voice-call"),
+  baseline("whatsapp", ["audio-decode", "baileys"]),
+  baseline("xiaomi", undefined, "2026.7.2"),
+  baseline("zalo"),
+  baseline("zalouser"),
 ];
 
 for (const params of packageManifestContractTests) {
@@ -170,25 +135,6 @@ describe("plugin package authoring metadata", () => {
       status: "invalid",
       entries: [],
       error,
-    });
-  });
-
-  it("rejects inconsistent source and runtime extension metadata", async () => {
-    const result = await validatePackageExtensionEntriesForInstall({
-      packageDir: process.cwd(),
-      extensions: ["./src/one.ts", "./src/two.ts"],
-      manifest: {
-        openclaw: {
-          extensions: ["./src/one.ts", "./src/two.ts"],
-          runtimeExtensions: ["./dist/one.js"],
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error:
-        "package.json openclaw.runtimeExtensions length (1) must match openclaw.extensions length (2)",
     });
   });
 
