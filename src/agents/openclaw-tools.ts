@@ -294,7 +294,7 @@ function* createOpenClawToolsSteps(
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
+    requesterOrigin: widgetPresentation.deliveryContext,
     workspaceDir,
     sandbox,
   };

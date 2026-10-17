@@ -10,6 +10,7 @@ import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
   isPreviousResponseRejection,
   type OpenAIResponsesRequestParams,
+  type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
@@ -81,11 +82,7 @@ function isOrphanedFunctionCallOutputError(error: unknown): boolean {
 
 type ResponsesEncryptedContentRequest = { input?: ResponseInput };
 
-type ResponsesEncryptedContentAttemptKind =
-  | "initial"
-  | "reasoning-stripped"
-  | "compaction-stripped"
-  | "continuation-rejected";
+type ResponsesEncryptedContentAttemptKind = ResponsesPromptObservation["payloadVariant"];
 
 export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
   kind: ResponsesEncryptedContentAttemptKind;
