@@ -166,6 +166,34 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
 
+  it("reads persisted model catalogs through the worker without local application tables", async () => {
+    const { loadPersistedPluginModelCatalogs } =
+      await import("../agents/plugin-model-catalog-execution.js");
+    const agentId = "model-catalog";
+    const contents = JSON.stringify({ providers: { fixture: { models: [{ id: "synthetic" }] } } });
+    const databasePath = withEngineStoreAdmission(() => {
+      const database = owners.openOpenClawAgentDatabase({ agentId });
+      owners.runOpenClawAgentWriteTransaction(
+        ({ db }) =>
+          db
+            .prepare(
+              "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+            )
+            .run("plugin-model-catalog-v1", "fixture", contents, 1),
+        { agentId },
+      );
+      owners.closeOpenClawAgentDatabaseByPath(database.path);
+      return database.path;
+    });
+    expect(await loadPersistedPluginModelCatalogs(path.dirname(databasePath), ["fixture"])).toEqual(
+      [{ pluginId: "fixture", contents }],
+    );
+    using anchor = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expect(anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+      { name: "openclaw_engine_anchor" },
+    ]);
+  });
+
   it("inspects clean PostgreSQL transcripts and preserves history requiring a file repair backup", async () => {
     const target = {
       agentId: "doctor-transcripts",
