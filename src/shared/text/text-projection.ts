@@ -5,7 +5,7 @@ import {
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeOwnership, findCodeRegions } from "./code-regions.js";
+import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -56,6 +56,7 @@ export function createConditionalTextProjector(
 function findTextCheckpoint(
   text: string,
   referenceLength: number,
+  resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
 ): {
   offset: number;
   context: string;
@@ -75,7 +76,7 @@ function findTextCheckpoint(
       state.structuralUnknown ||
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
-      const ownership = findCodeOwnership(text);
+      const ownership = resolveOwnership(text);
       // Normalization can expand a label beyond CommonMark's 999-character source limit.
       // Such definitions stay in source instead of being serialized as carried context.
       const retain = ownership.definitions.reduce(
@@ -122,6 +123,17 @@ function createCheckpointTransform(
   let references = "";
   const definitions = new Set<string>();
   let previousVisible: string | undefined;
+  let ownershipSource = "";
+  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+  const resolveOwnership = (text: string) => {
+    if (ownership && canReuseMarkdownOwnership(ownershipSource, text, ownership)) {
+      ownershipSource = text;
+      return ownership;
+    }
+    ownership = findCodeOwnership(text);
+    ownershipSource = text;
+    return ownership;
+  };
   return (source, inputDelta, previousOutput) => {
     // A validated append delta already names the appended suffix; slicing the cumulative
     // source would flatten the growing reply on every delta once checkpoints are active.
@@ -132,7 +144,7 @@ function createCheckpointTransform(
     sourceLength = source.length;
     const contextLength = references.length + context.length;
     const text = references + context + pending;
-    const boundary = findTextCheckpoint(text, references.length);
+    const boundary = findTextCheckpoint(text, references.length, resolveOwnership);
     const result = project(text, boundary.offset);
     const window = result.text.slice(contextLength);
     const visible = settled + window;

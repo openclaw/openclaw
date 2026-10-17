@@ -80,15 +80,77 @@ export function findCodeOwnership(
   text: string,
   options?: Parameters<typeof parseMarkdownOwnership>[1],
 ) {
-  const { regions, retainStart, completedParagraphs, paragraphs, definitions } =
-    parseMarkdownOwnership(text, options);
-  return {
+  const {
     regions,
     retainStart,
     completedParagraphs,
+    paragraphs,
     definitions,
+    unsettledDefinitionStarts,
+    unresolvedImageCodeStart,
+  } = parseMarkdownOwnership(text, options);
+  return {
+    regions,
+    retainStart,
+    ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
+    completedParagraphs,
+    definitions,
+    unsettledDefinitionStarts,
     ...(paragraphs ? { paragraphs } : {}),
   };
+}
+
+/** Reuse a parsed prefix only when an append cannot change Markdown ownership. */
+export function canReuseMarkdownOwnership(
+  previousText: string,
+  nextText: string,
+  ownership?: ReturnType<typeof findCodeOwnership>,
+): boolean {
+  if (!nextText.startsWith(previousText)) {
+    return false;
+  }
+  const appended = nextText.slice(previousText.length);
+  if (!appended) {
+    return true;
+  }
+  const boundaryContext = previousText.slice(-3) + appended;
+  if (/[`~\t]| {4}/u.test(boundaryContext)) {
+    return false;
+  }
+  if (!ownership) {
+    return true;
+  }
+  if (ownership.unsettledDefinitionStarts.length > 0) {
+    return false;
+  }
+
+  // Image alt text can stop treating inline delimiters as code when its link closes.
+  if (ownership.unresolvedImageCodeStart !== undefined && /[\x5b\x5d():]/u.test(appended)) {
+    return false;
+  }
+
+  // Unresolved image code can become alt text when a later reference definition arrives.
+  // The parser's retainStart marks the earliest source block whose ownership can still move.
+  // Keep enough context for a definition prefix on the previous line whose
+  // destination arrives on the next line.
+  const suffixStart = Math.max(0, previousText.length - 2005);
+  const suffix = previousText.slice(suffixStart) + appended;
+  const referenceDefinitionCandidate =
+    /(?:^|\r\n|\n|\r(?!\n)) {0,3}\x5b((?:\\[\s\S]|(?!\x5d)[\s\S]){1,1999})\x5d:[^\r\n]*(?=$|\r\n|\n|\r(?!\n))/gu;
+  for (const match of suffix.matchAll(referenceDefinitionCandidate)) {
+    const definitionStart = suffixStart + (match.index ?? 0) + match[0].indexOf("[");
+    if (definitionStart < ownership.retainStart) {
+      continue;
+    }
+    const alreadyParsed = ownership.definitions.some(
+      (definition) =>
+        definition.start >= definitionStart && definition.start <= definitionStart + 3,
+    );
+    if (!alreadyParsed) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function isInsideCode(pos: number, regions: CodeRegion[]): boolean {

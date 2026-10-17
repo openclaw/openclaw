@@ -1,3 +1,4 @@
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import {
   projectPlainTextToolCallBlocks,
@@ -5,6 +6,8 @@ import {
 } from "../../../packages/tool-call-repair/src/index.js";
 import { escapeRegExp } from "../regexp.js";
 import {
+  canReuseMarkdownOwnership,
+  findCodeOwnership,
   findCodeRegions,
   isInsideCode,
   projectLinesOutsideCode,
@@ -394,12 +397,99 @@ function createAssistantTraceProjector() {
   );
 }
 
+const plainToolCallActivationTokens = ["{", "<parameter=", "<function=", "to="] as const;
+const plainToolCallTransform = (text: string) =>
+  stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
+
+function createAppendCodeRegionResolver() {
+  const isIndentedCodeLine = (line: string) => /^(?: {4}|\t)/u.test(line);
+  const hasOpenIndentedCodeLine = (
+    text: string,
+    regions: ReturnType<typeof findCodeRegions> | undefined,
+  ) => {
+    const last = regions?.at(-1);
+    if (!last?.block || last.end !== text.length) {
+      return false;
+    }
+    const blockLineStart =
+      Math.max(text.lastIndexOf("\n", last.start - 1), text.lastIndexOf("\r", last.start - 1)) + 1;
+    const nextLineFeed = text.indexOf("\n", blockLineStart);
+    const nextCarriageReturn = text.indexOf("\r", blockLineStart);
+    const blockLineEnd = Math.min(
+      ...[nextLineFeed, nextCarriageReturn].filter((offset) => offset >= 0),
+      text.length,
+    );
+    const currentLineStart = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
+    return (
+      isIndentedCodeLine(text.slice(blockLineStart, blockLineEnd)) &&
+      isIndentedCodeLine(text.slice(currentLineStart))
+    );
+  };
+  let source = "";
+  let regions: ReturnType<typeof findCodeRegions> | undefined;
+  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+  let openFence = false;
+  let openIndentedCodeLine = false;
+  return (text: string) => {
+    if (regions && canReuseMarkdownOwnership(source, text, ownership)) {
+      if (openFence && regions.length > 0) {
+        const last = regions[regions.length - 1];
+        if (last?.block && last.end === source.length) {
+          regions = [...regions.slice(0, -1), { ...last, end: text.length }];
+        }
+        source = text;
+        return regions;
+      } else if (openIndentedCodeLine) {
+        const lineBreaks = [...text.slice(source.length).matchAll(/\r\n|\r|\n/gu)];
+        const hasContentAfterLineBreak = lineBreaks.some(
+          (match) => (match.index ?? 0) + match[0].length < text.length - source.length,
+        );
+        const last = regions[regions.length - 1];
+        if (!hasContentAfterLineBreak && last?.block && last.end === source.length) {
+          regions = [...regions.slice(0, -1), { ...last, end: text.length }];
+          source = text;
+          openIndentedCodeLine = !/(?:\r\n|\r|\n)$/u.test(text);
+          return regions;
+        }
+      } else {
+        source = text;
+        return regions;
+      }
+    }
+    source = text;
+    ownership = /[`~\t]| {4}/u.test(text) ? findCodeOwnership(text) : undefined;
+    regions = ownership?.regions ?? [];
+    openFence = Boolean(scanFenceSpans(text).state.open);
+    openIndentedCodeLine = hasOpenIndentedCodeLine(text, regions);
+    return regions;
+  };
+}
+
+function createPlainToolCallTextProjector() {
+  const resolveProtectedRanges = createAppendCodeRegionResolver();
+  const checkpoint = (text: string, settleBefore: number) =>
+    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges, settleBefore });
+  const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
+  const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
+  let active = false;
+  let tail = "";
+  return createConditionalTextProjector(
+    plainToolCallTransform,
+    (input) => {
+      if (!active) {
+        const appended = tail + (input.delta ?? input.text);
+        active = activation.test(appended);
+        tail = !active && overlap ? appended.slice(-overlap) : "";
+      }
+      return active;
+    },
+    checkpoint,
+  );
+}
+
 export const plainToolCallTextFilter: TextFilter = {
-  transform: (text) =>
-    stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
-  checkpoint: (text, settleBefore) =>
-    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions, settleBefore }),
-  activationTokens: ["{", "<parameter=", "<function=", "to="],
+  transform: plainToolCallTransform,
+  create: createPlainToolCallTextProjector,
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(
