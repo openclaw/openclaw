@@ -28,7 +28,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { seedCanonicalAcpSessionMeta } from "./session-meta-f.test-support.js";
+import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
 import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
 import {
   listAcpSessionEntries,
@@ -90,13 +90,19 @@ async function seedRetainedSource(
   const assertOriginalsRetained = preserveFiles([storePath, transcriptPath]);
   const scope = { agentId: "main", storePath, env: state.env, sessionKey: SESSION_KEY };
   const acpScope = { cfg, env: state.env, agentId: "main", sessionKey: SESSION_KEY };
-  const migrateAcp = () =>
-    migrateLegacyAcpSessionMetadata({
+  const migrateAcp = async (reopen = false) => {
+    if (reopen) {
+      await reopenDatabases();
+    }
+    const result = await migrateLegacyAcpSessionMetadata({
       cfg,
       env: state.env,
       pluginSessionStoreAgentIds: [],
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
+    expect(result.warnings).toEqual([]);
+    return result;
+  };
   const readMeta = () => readAcpSessionEntry(acpScope)?.acp;
   const write = (meta: SessionAcpMeta | null, assertCommitAllowed?: () => void) =>
     upsertAcpSessionMeta({ ...acpScope, mutate: () => meta, assertCommitAllowed });
@@ -107,13 +113,8 @@ async function seedRetainedSource(
       runs: db.prepare("SELECT * FROM migration_runs ORDER BY id").all(),
     };
   };
-  const migrateCleanly = async () => expect((await migrateAcp()).warnings).toEqual([]);
-  const reopenAndMigrate = async () => {
-    await reopenDatabases();
-    await migrateCleanly();
-  };
   const reopenAndExpect = async (meta?: SessionAcpMeta) => {
-    await reopenAndMigrate();
+    await migrateAcp(true);
     expect(readMeta()).toEqual(meta);
   };
   const importCore = () =>
@@ -143,8 +144,6 @@ async function seedRetainedSource(
     scope,
     acpScope,
     migrateAcp,
-    migrateCleanly,
-    reopenAndMigrate,
     reopenAndExpect,
     readMeta,
     write,
@@ -252,7 +251,7 @@ it.each(["initialize", "close"] as const)(
 it("does not revive closed ACP metadata after reopening and settling the plugin migration", async () => {
   await withOpenClawTestState({ label: "retained-acp-close-resolved" }, async (state) => {
     const f = await seedRetainedSource(state);
-    await f.migrateCleanly();
+    await f.migrateAcp();
     expect((await f.importCore()).totals.importedEntries).toBe(1);
     expect(f.readMeta()).toEqual(LEGACY_META);
 
@@ -265,7 +264,7 @@ it("does not revive closed ACP metadata after reopening and settling the plugin 
       pending: [],
       resolvedPluginIds: [PLUGIN_ID],
     });
-    await f.reopenAndMigrate();
+    await f.migrateAcp(true);
     expect(loadExactSessionEntry(f.scope)?.entry.sessionId).toBe(SESSION_ID);
     expect(f.readMeta()).toBeUndefined();
     expect(await listAcpSessionEntries(f.acpScope)).toEqual([]);
@@ -281,7 +280,7 @@ it("does not revive closed ACP metadata after reopening and settling the plugin 
 it("keeps import completion bound to the ACP lifecycle when the legacy session id changes", async () => {
   await withOpenClawTestState({ label: "retained-acp-lifecycle" }, async (state) => {
     const f = await seedRetainedSource(state, SOURCE_REVISION);
-    await f.migrateCleanly();
+    await f.migrateAcp();
     expect((await f.importCore()).totals.importedEntries).toBe(1);
     expect(loadExactSessionEntry(f.scope)?.entry.lifecycleRevision).toBe(SOURCE_REVISION);
     await f.write(null);
@@ -348,7 +347,7 @@ it.each(
         [binding]:
           binding === "sessionId" ? "replacement-session" : "00000000-0000-4000-8000-000000000008",
       });
-      await f.reopenAndMigrate();
+      await f.migrateAcp(true);
       expect(
         openOpenClawStateDatabase({ env: state.env })
           .db.prepare("SELECT count(*) AS count FROM acp_sessions")
@@ -398,7 +397,7 @@ it("rolls back ACP metadata if its import receipt cannot be committed", async ()
       db.exec("DROP TRIGGER reject_acp_receipt");
     }
 
-    await f.migrateCleanly();
+    await f.migrateAcp();
     expect(f.readMeta()).toEqual(LEGACY_META);
     f.assertOriginalsRetained();
   });

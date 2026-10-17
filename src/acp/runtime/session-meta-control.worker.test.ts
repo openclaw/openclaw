@@ -41,9 +41,7 @@ const controlEntry = {
   updatedAt: 100,
   spawnedBy: "agent:main:parent",
 };
-const controlConfig: OpenClawConfig = {
-  agents: { ownership: "explicit", entries: { main: {} } },
-};
+const controlConfig: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
 
 async function seedControl(sessionId = controlEntry.sessionId, skipMaintenance = false) {
   const cfg = controlConfig;
@@ -193,9 +191,23 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
   });
 });
 
-it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
+const originalLifecycle = "original-lifecycle";
+it.each([
+  ["clear", undefined],
+  ["rebind", { session_id: "replacement-lifecycle", state: "running" }],
+  ["same-binding", { session_id: originalLifecycle, state: "idle", last_activity_at: 300 }],
+  [
+    "runtime-rebind",
+    {
+      session_id: originalLifecycle,
+      runtime_session_name: "replacement-runtime",
+      state: "running",
+      last_activity_at: 200,
+    },
+  ],
+] as const)(
   "rechecks global metadata at controlled commit after an independent %s write",
-  async (change) => {
+  async (change, expected) => {
     await withOpenClawTestState({ label: `acp-control-commit-${change}` }, async (state) => {
       const storePath = state.statePath("shared-agent.sqlite");
       const cfg: OpenClawConfig = {
@@ -211,12 +223,12 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
       const scope = { cfg, agentId: "main", sessionKey: "global", skipMaintenance: true };
       await replaceSessionEntry(
         { ...scope, storePath },
-        { ...controlEntry, sessionId: "original-id", lifecycleRevision: "original-lifecycle" },
+        { ...controlEntry, sessionId: "original-id", lifecycleRevision: originalLifecycle },
       );
       const aliasKey = buildAcpDatabaseSessionKey("global", "main");
       seedCanonicalAcpSessionMeta({
         sessionKey: aliasKey,
-        lifecycleRevision: "original-lifecycle",
+        lifecycleRevision: originalLifecycle,
         meta,
       });
       const prepared = await prepareAcpSessionControlRead(scope);
@@ -253,8 +265,7 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
           "Controlled update settled before its commit gate",
         );
         const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.acpMetadataWriter);
-        const lifecycleRevision =
-          change === "rebind" ? "replacement-lifecycle" : "original-lifecycle";
+        const lifecycleRevision = change === "rebind" ? "replacement-lifecycle" : originalLifecycle;
         const runtimeSessionName =
           change === "runtime-rebind" ? "replacement-runtime" : meta.runtimeSessionName;
         const replacementMeta: SessionAcpMeta = {
@@ -263,15 +274,9 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
           state: "running",
           lastActivityAt: 200,
         };
-        const rows = [
-          {
-            sessionKey: aliasKey,
-            lifecycleRevision,
-            meta: replacementMeta,
-          },
-        ];
+        const rows = [{ sessionKey: aliasKey, lifecycleRevision, meta: replacementMeta }];
         if (change === "rebind") {
-          rows.push({ sessionKey: "global", lifecycleRevision: "original-lifecycle", meta });
+          rows.push({ sessionKey: "global", lifecycleRevision: originalLifecycle, meta });
         }
         const input = {
           mutation:
@@ -322,21 +327,8 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
       }
       const { db } = openOpenClawStateDatabase();
       const canonical = selectAcpSessionRow(db, buildAcpDatabaseSessionKey("global", "main"));
-      if (change === "same-binding") {
-        expect(canonical).toMatchObject({
-          session_id: "original-lifecycle",
-          state: "idle",
-          last_activity_at: 300,
-        });
-      } else if (change === "runtime-rebind") {
-        expect(canonical).toMatchObject({
-          session_id: "original-lifecycle",
-          runtime_session_name: "replacement-runtime",
-          state: "running",
-          last_activity_at: 200,
-        });
-      } else if (change === "rebind") {
-        expect(canonical).toMatchObject({ session_id: "replacement-lifecycle", state: "running" });
+      if (expected) {
+        expect(canonical).toMatchObject(expected);
       } else {
         expect(canonical).toBeUndefined();
       }

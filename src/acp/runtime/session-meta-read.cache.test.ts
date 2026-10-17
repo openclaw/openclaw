@@ -30,13 +30,13 @@ import {
 import { applyAcpSessionMutation, bindAcpSessionMeta } from "./session-meta-write.kernel.js";
 
 const databases: DatabaseSync[] = [];
+const restorers: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
+    restorers.splice(0).forEach((restore) => restore());
     closeRetainedOpenClawStateReadConnections();
-    for (const db of databases.splice(0)) {
-      if (db.isOpen) {
-        db.close();
-      }
+    for (const db of databases.splice(0).filter((database) => database.isOpen)) {
+      db.close();
     }
     cleanup();
   }),
@@ -88,33 +88,31 @@ it("reuses admitted ACP rows and committed postimages without rereading metadata
   const { writer, pathname, read } = fixture();
   expect(read().rows).toEqual([null]);
   const observation = observeSqliteReadSql(StatementSync.prototype);
-  const metadataReads = () =>
-    observation.queries.filter((sql) => /^select\b.*(?:from|join) "acp_sessions"/isu.test(sql));
-  try {
-    expect(read().rows).toEqual([null]);
-    insert(writer, "first");
-    expectName(readPublishedAcpSessionRows(pathname, command.entries)?.[0], "first");
-    const rows = read().rows;
-    expectName(rows[0], "first");
-    if (rows[0] && "runtime_session_name" in rows[0]) {
-      rows[0].runtime_session_name = "caller-mutated";
-    }
-    expectName(read().rows[0], "first");
-    expect(
-      read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
-    ).toEqual([null]);
-    writer.prepare("INSERT INTO config_machine_state VALUES ('unrelated', '{}', 1)").run();
-    expectName(read().rows[0], "first");
-    insert(writer, "second");
-    expectName(read().rows[0], "second");
-    deleteAcpSessionMetaRows(writer, [key]);
-    expect(read().rows).toEqual([null]);
-    expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
-    expect(metadataReads()).toHaveLength(0);
-    expect(observation.queries.filter((sql) => /data_version/iu.test(sql))).toEqual([]);
-  } finally {
-    observation.restore();
+  restorers.push(observation.restore);
+  expect(read().rows).toEqual([null]);
+  insert(writer, "first");
+  expectName(readPublishedAcpSessionRows(pathname, command.entries)?.[0], "first");
+  const rows = read().rows;
+  expectName(rows[0], "first");
+  if (rows[0] && "runtime_session_name" in rows[0]) {
+    rows[0].runtime_session_name = "caller-mutated";
   }
+  expectName(read().rows[0], "first");
+  expect(
+    read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
+  ).toEqual([null]);
+  writer.prepare("INSERT INTO config_machine_state VALUES ('unrelated', '{}', 1)").run();
+  expectName(read().rows[0], "first");
+  insert(writer, "second");
+  expectName(read().rows[0], "second");
+  deleteAcpSessionMetaRows(writer, [key]);
+  expect(read().rows).toEqual([null]);
+  expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
+  expect(
+    observation.queries.filter((sql) =>
+      /^select\b.*(?:from|join) "acp_sessions"|data_version/isu.test(sql),
+    ),
+  ).toEqual([]);
 });
 
 it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
@@ -163,14 +161,9 @@ it("publishes decoded set and clear postimages without rereading metadata after 
     agentId: "main",
     storageSessionKey: "agent:main:acp:cache",
     sessionKey: "agent:main:acp:cache",
-    entry: { sessionId: "session", lifecycleRevision: "generation", updatedAt: 200 },
+    entry: { ...command.entries[0].entry, updatedAt: 200 },
   };
-  const result = {
-    kind: "acp",
-    sessionId: "session",
-    lifecycleRevision: "generation",
-    sessionStartedAt: undefined,
-  };
+  const result = { kind: "acp", ...command.entries[0].entry, sessionStartedAt: undefined };
   const meta = createAcpMeta({
     runtimeSessionName: "returned-row",
     state: "error",
@@ -191,19 +184,16 @@ it("publishes decoded set and clear postimages without rereading metadata after 
     }
     return /^select\b/iu.test(sql) ? "read" : "write";
   });
-  try {
-    const mutate = (decision: Parameters<typeof applyAcpSessionMutation>[1]["decision"]) =>
-      applyAcpSessionMutation(writer, { ...input, decision });
-    expect(mutate({ kind: "set", meta })).toEqual({ ...result, acp: meta });
-    expect(read().rows[0]).toMatchObject({
-      runtime_session_name: "returned-row",
-      runtime_options_json: JSON.stringify(meta.runtimeOptions),
-      last_error: meta.lastError,
-    });
-    expect(mutate({ kind: "clear" })).toEqual({ ...result, acp: null });
-    expect(counter.counts).toEqual({ read: 0, write: 2 });
-    expect(read().rows).toEqual([null]);
-  } finally {
-    counter.restore();
-  }
+  restorers.push(counter.restore);
+  const mutate = (decision: Parameters<typeof applyAcpSessionMutation>[1]["decision"]) =>
+    applyAcpSessionMutation(writer, { ...input, decision });
+  expect(mutate({ kind: "set", meta })).toEqual({ ...result, acp: meta });
+  expect(read().rows[0]).toMatchObject({
+    runtime_session_name: "returned-row",
+    runtime_options_json: JSON.stringify(meta.runtimeOptions),
+    last_error: meta.lastError,
+  });
+  expect(mutate({ kind: "clear" })).toEqual({ ...result, acp: null });
+  expect(counter.counts).toEqual({ read: 0, write: 2 });
+  expect(read().rows).toEqual([null]);
 });

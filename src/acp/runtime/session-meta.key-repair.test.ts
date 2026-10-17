@@ -45,14 +45,10 @@ const retained = (warning: string) => ({
   repaired: 0,
   warnings: [expect.stringContaining(warning)],
 });
-
-function rows(db: EngineConnection, table = "acp_sessions") {
-  return db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all();
-}
-
-function sourceRow(db: EngineConnection, sessionKey: string) {
-  return db.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey);
-}
+const rows = (db: EngineConnection, table = "acp_sessions") =>
+  db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all();
+const sourceRow = (db: EngineConnection, sessionKey: string) =>
+  db.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey);
 
 function expectBackup(file: string, check: (db: DatabaseSync) => void) {
   const backup = new DatabaseSync(file, { readOnly: true });
@@ -63,28 +59,21 @@ function expectBackup(file: string, check: (db: DatabaseSync) => void) {
   }
 }
 
-function bind(env: NodeJS.ProcessEnv, sessionKey = key, agentId = "harness") {
+const bind = (env: NodeJS.ProcessEnv, sessionKey = key, agentId = "harness") =>
   replaceSessionEntrySync({ agentId, sessionKey, env }, entry);
-}
 
-function repair(
-  env: NodeJS.ProcessEnv,
-  options: Partial<Parameters<typeof repairAcpSessionMetaKeysForDoctor>[0]> = {},
-) {
-  return repairAcpSessionMetaKeysForDoctor({
+type RepairOptions = Partial<Parameters<typeof repairAcpSessionMetaKeysForDoctor>[0]>;
+const repair = (env: NodeJS.ProcessEnv, options: RepairOptions = {}) =>
+  repairAcpSessionMetaKeysForDoctor({
     cfg,
     env,
     apply: true,
     authority: { assertCurrent() {} },
     ...options,
   });
-}
 
-function seed(
-  env: NodeJS.ProcessEnv,
-  sessionKey: string,
-  options: Partial<Parameters<typeof writeAcpSessionMetaForMigration>[0]> = {},
-) {
+type MigrationOptions = Partial<Parameters<typeof writeAcpSessionMetaForMigration>[0]>;
+const seed = (env: NodeJS.ProcessEnv, sessionKey: string, options: MigrationOptions = {}) =>
   writeAcpSessionMetaForMigration({
     env,
     sessionKey,
@@ -93,34 +82,31 @@ function seed(
     now: () => 100,
     ...options,
   });
-}
 
-it.each([undefined, "full"] as const)(
-  "Doctor ACP inspection honors integrity mode %s",
-  (integrityCheck) =>
-    withState(async ({ env }) => {
-      stateDatabase.openOpenClawStateDatabase({ env });
-      const reads = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        const report = await repair(env, { apply: false, authority: undefined, integrityCheck });
-        expect(report.warnings).toEqual([]);
-        expect(reads.queries).toContain(
-          integrityCheck === "full" ? "PRAGMA integrity_check;" : "PRAGMA quick_check;",
-        );
-        expect(reads.queries).not.toContain(
-          integrityCheck === "full" ? "PRAGMA quick_check;" : "PRAGMA integrity_check;",
-        );
-      } finally {
-        reads.restore();
-      }
-    }),
+it.each([undefined, "full"] as const)("inspects ACP integrity mode %s", (integrityCheck) =>
+  withState(async ({ env }) => {
+    stateDatabase.openOpenClawStateDatabase({ env });
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      const report = await repair(env, { apply: false, authority: undefined, integrityCheck });
+      expect(report.warnings).toEqual([]);
+      expect(reads.queries).toContain(
+        integrityCheck === "full" ? "PRAGMA integrity_check;" : "PRAGMA quick_check;",
+      );
+      expect(reads.queries).not.toContain(
+        integrityCheck === "full" ? "PRAGMA quick_check;" : "PRAGMA integrity_check;",
+      );
+    } finally {
+      reads.restore();
+    }
+  }),
 );
 
 it.each([
   { source: key, binding: entry.lifecycleRevision, conflicting: true },
   { source: alias, binding: undefined, conflicting: false },
 ])(
-  "Doctor preserves $source with binding=$binding and conflicting=$conflicting aliases",
+  "repairs $source (binding=$binding, conflicting=$conflicting)",
   ({ source, binding, conflicting }) =>
     withState(async ({ env, stateDir }) => {
       expect(await repair(env, { apply: false, authority: undefined })).toEqual({
@@ -137,16 +123,15 @@ it.each([
         });
       }
       const { db } = stateDatabase.openOpenClawStateDatabase({ env });
-      const readRows = () => rows(db);
-      const before = readRows();
+      const before = rows(db);
       const report = {
+        ...noRepairs,
         found: 1,
-        repaired: 0,
         scannedRows: conflicting ? 2 : 1,
         warnings: conflicting ? [expect.stringContaining("conflicting payloads retained")] : [],
       };
       expect(await repair(env, { apply: false, authority: undefined })).toEqual(report);
-      expect(readRows()).toEqual(before);
+      expect(rows(db)).toEqual(before);
       await expect(repair(env, { authority: undefined })).rejects.toThrow("maintenance authority");
       const changes: unknown[] = [];
       const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
@@ -168,7 +153,7 @@ it.each([
       } finally {
         unsubscribe();
       }
-      expect(readRows()).toEqual([
+      expect(rows(db)).toEqual([
         {
           ...before.find((row) => row.session_key === source),
           session_key: buildAcpDatabaseSessionKey(key, "harness"),
@@ -180,7 +165,7 @@ it.each([
 );
 
 it.each(["stale-session-id", "conflicting-canonical"])(
-  "Doctor retains the complete ACP source when repair sees %s",
+  "retains the complete source after %s",
   (condition) =>
     withState(async ({ env }) => {
       bind(env);
@@ -205,7 +190,7 @@ it.each(["stale-session-id", "conflicting-canonical"])(
 );
 
 it.each(["revoked-authority", "changed-source", "changed-binding"])(
-  "Doctor rereads exact ownership before committing after %s",
+  "revalidates %s before committing",
   (condition) =>
     withState(async ({ env }) => {
       bind(env);
@@ -264,7 +249,7 @@ it.each(["revoked-authority", "changed-source", "changed-binding"])(
 it.each([
   ["global", "global"],
   ["project", buildAcpDatabaseSessionKey("project")],
-])("Doctor backs up and canonicalizes %s from %s before runtime access", (sessionKey, sourceKey) =>
+])("canonicalizes %s from %s with a backup", (sessionKey, sourceKey) =>
   withState(async ({ env }) => {
     bind(env, sessionKey, "main");
     seed(env, sourceKey);
@@ -289,7 +274,7 @@ it.each([
   }),
 );
 
-it("Doctor preserves embedded SQLite ACP metadata and prevents replay after closure", () =>
+it("preserves embedded metadata and prevents replay after closure", () =>
   withState(async ({ env }) => {
     const sessionKey = "agent:main:embedded-acp";
     const scope = { agentId: "main", sessionKey, env };
@@ -299,8 +284,7 @@ it("Doctor preserves embedded SQLite ACP metadata and prevents replay after clos
     };
     replaceSessionEntrySync(scope, original);
     seed(env, buildAcpDatabaseSessionKey(normalizeStoreSessionKey(sessionKey), "main"));
-    const agent = openOpenClawAgentDatabase(scope);
-    const source = sourceRow(agent.db, sessionKey);
+    const source = sourceRow(openOpenClawAgentDatabase(scope).db, sessionKey);
     const result = await repair(env);
     expect(result).toMatchObject(repaired);
     expectBackup(result.backups![0]!, (backup) =>
@@ -322,7 +306,7 @@ it("Doctor preserves embedded SQLite ACP metadata and prevents replay after clos
     expect(rows(shared.db, "migration_sources")).toEqual(receipts);
   }));
 
-it("Doctor retains embedded conflicts and post-import source changes", () =>
+it("retains embedded conflicts and post-import source changes", () =>
   withState(async ({ env }) => {
     const sessionKey = "agent:main:embedded-source-conflict";
     const canonicalKey = buildAcpDatabaseSessionKey(sessionKey, "main");
@@ -357,7 +341,7 @@ it("Doctor retains embedded conflicts and post-import source changes", () =>
   }));
 
 it.each(["keys", "embedded"])(
-  "Doctor rejects mismatched %s backups despite restored source bytes",
+  "rejects %s backup mismatches despite restored source bytes",
   (shape) =>
     withState(async ({ env }) => {
       const sessionKey = "agent:main:acp:backup-source";
@@ -420,7 +404,7 @@ it.each(["keys", "embedded"])(
     }),
 );
 
-it("Doctor binds embedded shared-store metadata to its logical session owner", () =>
+it("binds embedded shared-store metadata to its logical owner", () =>
   withState(async (state) => {
     const storePath = state.statePath("shared.sqlite");
     const config = {
@@ -448,7 +432,7 @@ it("Doctor binds embedded shared-store metadata to its logical session owner", (
     ]);
   }));
 
-it.each(["ambiguous", "unreadable"])("Doctor retains an alias with %s ownership", (condition) =>
+it.each(["ambiguous", "unreadable"])("retains an alias with %s ownership", (condition) =>
   withState(async ({ env }) => {
     const config = {
       agents: {

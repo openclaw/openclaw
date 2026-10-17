@@ -55,13 +55,6 @@ function storeFixture(dir: string) {
     list: () => listAcpSessionEntries(scope),
     write: (sessionKey: string, meta: SessionAcpMeta) =>
       upsertAcpSessionMeta({ ...scope, sessionKey, now: () => 200, mutate: () => meta }),
-    migrate: (sessionKey: string, lifecycleRevision: string, meta: SessionAcpMeta) =>
-      writeAcpSessionMetaForMigration({
-        databasePath: scope.databasePath,
-        sessionKey: buildAcpDatabaseSessionKey(sessionKey, ACP_AGENT_ID),
-        lifecycleRevision,
-        meta,
-      }),
   };
 }
 
@@ -182,26 +175,6 @@ it("binds ACP metadata to the final accessor-selected entry for alias writes", a
     expect(storedEntry?.sessionId).toBe("sess-legacy");
     expect(storedEntry?.acp).toBeUndefined();
     expect(read(canonicalSessionKey)?.acp?.runtimeSessionName).toBe("codex-alias");
-    expect(await list()).toHaveLength(1);
-  });
-});
-
-it("ignores SQLite ACP metadata rows from an older lifecycle revision", async () => {
-  await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-    const { seed, read, list, migrate } = storeFixture(dir);
-    const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
-    await seed(sessionKey, "sess-new", {
-      lifecycleRevision: "revision-new",
-    });
-
-    migrate(sessionKey, "revision-old", createMeta("codex-stale"));
-
-    expect(read(sessionKey)?.acp).toBeUndefined();
-    expect(await list()).toHaveLength(0);
-
-    migrate(sessionKey, "revision-new", createMeta("codex-current", { lastActivityAt: 124 }));
-
-    expect(read(sessionKey)?.acp?.runtimeSessionName).toBe("codex-current");
     expect(await list()).toHaveLength(1);
   });
 });

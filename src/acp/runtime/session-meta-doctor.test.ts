@@ -22,15 +22,15 @@ const baseConfig = {
   session: { scope: "global" as const },
 };
 const freeKey = "agent:free-harness:acp:unrelated";
+const fixtureMeta = createAcpMeta({ backend: "acpx", agent: "fixture", lastActivityAt: 1 });
 function acpxMeta(
   runtimeSessionName: string,
   record: string | undefined,
   session: string | undefined,
   time: number,
-) {
-  return createAcpMeta({
-    backend: "acpx",
-    agent: "fixture",
+): ReturnType<typeof createAcpMeta> {
+  return {
+    ...fixtureMeta,
     runtimeSessionName,
     lastActivityAt: time,
     identity: {
@@ -40,11 +40,18 @@ function acpxMeta(
       acpxRecordId: record,
       acpxSessionId: session,
     },
-  });
+  };
 }
 
-it("inspects without creating state and conditionally updates only the proven current owner", async () => {
-  await withOpenClawTestState({ label: "acp-doctor-owner" }, async ({ env, stateDir }) => {
+function seed(
+  scope: Omit<Parameters<typeof upsertAcpSessionMeta>[0], "mutate">,
+  meta: ReturnType<typeof createAcpMeta>,
+) {
+  return upsertAcpSessionMeta({ ...scope, mutate: () => meta });
+}
+
+it("inspects lazily and updates only the current owner", () =>
+  withOpenClawTestState({ label: "acp-doctor-owner" }, async ({ env, stateDir }) => {
     const cfg = baseConfig;
     const work = { cfg, env, agentId: "work", sessionKey: "global" };
     const scope = { pluginId: "acpx", config: cfg, env };
@@ -53,31 +60,26 @@ it("inspects without creating state and conditionally updates only the proven cu
     expect(await readOnly.inspectAcpSessionClaims!()).toEqual({ claims: [], incomplete: [] });
     await expect(fs.access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toThrow();
     for (const agentId of ["main", "work", "free-harness"]) {
-      await upsertAcpSessionMeta({
-        cfg,
-        env,
-        agentId,
-        sessionKey: agentId === "free-harness" ? freeKey : "global",
-        mutate: () => acpxMeta(`old-${agentId}`, `record-${agentId}`, `upstream-${agentId}`, 10),
-      });
+      await seed(
+        { cfg, env, agentId, sessionKey: agentId === "free-harness" ? freeKey : "global" },
+        acpxMeta(`old-${agentId}`, `record-${agentId}`, `upstream-${agentId}`, 10),
+      );
     }
     // Legacy JSON retains the first duplicate in its promoted column until rewritten.
     runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare("UPDATE acp_sessions SET identity_json = ? WHERE session_key = ?").run(
-          '{"state":"resolved","source":"ensure","lastUpdatedAt":10,"acpxRecordId":"record-work","acpxSessionId":"upstream-work","acpxSessionId":"normalized-work"}',
-          buildAcpDatabaseSessionKey("global", "work"),
-        );
-      },
+      ({ db }) =>
+        db
+          .prepare("UPDATE acp_sessions SET identity_json = ? WHERE session_key = ?")
+          .run(
+            '{"state":"resolved","source":"ensure","lastUpdatedAt":10,"acpxRecordId":"record-work","acpxSessionId":"upstream-work","acpxSessionId":"normalized-work"}',
+            buildAcpDatabaseSessionKey("global", "work"),
+          ),
       { env },
     );
     const evidence = await readOnly.inspectAcpSessionClaims!();
     expect(evidence.incomplete).toEqual([]);
-    expect(evidence.claims.map((claim) => claim.agentId).toSorted()).toEqual([
-      "free-harness",
-      "main",
-      "work",
-    ]);
+    const owners = evidence.claims.map((claim) => claim.agentId).toSorted();
+    expect(owners).toEqual(["free-harness", "main", "work"]);
     const claim = evidence.claims.find((item) => item.agentId === "work")!;
     let current = true;
     const assertCurrent = () => {
@@ -85,15 +87,16 @@ it("inspects without creating state and conditionally updates only the proven cu
         throw new Error("maintenance owner expired");
       }
     };
-    const repair = createPluginDoctorStateMigrationContext({
-      ...scope,
-      repairAuthority: { assertCurrent, assertOwnedInTransaction: assertCurrent },
-    });
-    const update = { claim, runtimeSessionName: "owned-work", acpxRecordId: "owned-record-work" };
+    const { updateAcpSessionIdentity: update, inspectAcpSessionClaims: inspect } =
+      createPluginDoctorStateMigrationContext({
+        ...scope,
+        repairAuthority: { assertCurrent, assertOwnedInTransaction: assertCurrent },
+      });
+    const mutation = { claim, runtimeSessionName: "owned-work", acpxRecordId: "owned-record-work" };
     const changes: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
     try {
-      repair.updateAcpSessionIdentity!(update);
+      update!(mutation);
     } finally {
       unsubscribe();
     }
@@ -103,45 +106,35 @@ it("inspects without creating state and conditionally updates only the proven cu
       runtimeSessionName: "owned-work",
       identity: { ...claim.meta.identity, acpxRecordId: "owned-record-work" },
     });
-    expect(
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          db
-            .prepare("SELECT resume_acpx_session_id FROM acp_sessions WHERE session_key = ?")
-            .get(buildAcpDatabaseSessionKey("global", "work")),
-        { env },
-      ),
-    ).toEqual({
-      resume_acpx_session_id: "normalized-work",
-    });
+    const normalized = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare("SELECT resume_acpx_session_id FROM acp_sessions WHERE session_key = ?")
+          .get(buildAcpDatabaseSessionKey("global", "work")),
+      { env },
+    );
+    expect(normalized).toEqual({ resume_acpx_session_id: "normalized-work" });
     expect(readAcpSessionEntry({ ...work, agentId: "main" })?.acp?.runtimeSessionName).toBe(
       "old-main",
     );
-    expect(() => repair.updateAcpSessionIdentity!(update)).toThrow("metadata changed");
-    const latest = (await repair.inspectAcpSessionClaims!()).claims.find(
-      (item) => item.agentId === "work",
-    )!;
+    expect(() => update!(mutation)).toThrow("metadata changed");
+    const latest = (await inspect!()).claims.find((item) => item.agentId === "work")!;
     await updateSessionEntry(work, () => ({
       sessionId: "replacement-session",
       lifecycleRevision: "replacement",
     }));
-    expect((await repair.inspectAcpSessionClaims!()).incomplete).toEqual([
+    expect((await inspect!()).incomplete).toEqual([
       expect.stringContaining("binding is absent or stale"),
     ]);
-    expect(() => repair.updateAcpSessionIdentity!({ ...update, claim: latest })).toThrow(
-      "metadata changed",
-    );
+    expect(() => update!({ ...mutation, claim: latest })).toThrow("metadata changed");
     current = false;
-    expect(() => repair.updateAcpSessionIdentity!({ ...update, claim: latest })).toThrow(
-      "maintenance owner expired",
-    );
-  });
-});
+    expect(() => update!({ ...mutation, claim: latest })).toThrow("maintenance owner expired");
+  }));
 
 it.each(["global", "shared-project"])(
   "migrates %s from legacy ACPX state beside an unrelated free ACP session",
-  async (sessionKey) => {
-    await withOpenClawTestState({ label: "acp-doctor-composition" }, async (state) => {
+  (sessionKey) =>
+    withOpenClawTestState({ label: "acp-doctor-composition" }, async (state) => {
       const { env, stateDir, workspaceDir } = state;
       const acpxStateDir = path.join(workspaceDir, "state");
       const explicit = sessionKey === "shared-project";
@@ -152,16 +145,15 @@ it.each(["global", "shared-project"])(
       await state.writeConfig(cfg);
       const peer = state.path("peer");
       await fs.mkdir(peer);
+      const ownerAgent = fileURLToPath(
+        new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
+      );
       const runtime = new AcpxRuntime({
         cwd: workspaceDir,
         sessionStore: createFileSessionStore({ stateDir: acpxStateDir }),
         agentRegistry: createAgentRegistry({
           overrides: {
-            fixture: [
-              process.execPath,
-              fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url)),
-              peer,
-            ].join(" "),
+            fixture: `${process.execPath} ${ownerAgent} ${peer}`,
           },
         }),
         permissionMode: "deny-all",
@@ -174,21 +166,17 @@ it.each(["global", "shared-project"])(
           mode: "persistent",
         });
         await runtime.close({ handle, reason: "offline-doctor" });
-        await upsertAcpSessionMeta({
-          cfg,
-          env,
-          agentId,
-          sessionKey: key,
-          mutate: () =>
-            acpxMeta(handle.runtimeSessionName, handle.acpxRecordId, handle.backendSessionId, 1),
-        });
+        await seed(
+          { cfg, env, agentId, sessionKey: key },
+          acpxMeta(handle.runtimeSessionName, handle.acpxRecordId, handle.backendSessionId, 1),
+        );
         return handle;
       };
       const handle = await seedRuntime("work", sessionKey);
       await seedRuntime("free-harness", freeKey);
       const scope = { pluginId: "acpx", config: cfg, env };
-      const readOnly = createPluginDoctorStateMigrationContext(scope);
-      const before = await readOnly.inspectAcpSessionClaims!();
+      const { inspectAcpSessionClaims: inspect } = createPluginDoctorStateMigrationContext(scope);
+      const before = await inspect!();
       expect(before.incomplete).toEqual([]);
       expect(before.claims).toHaveLength(2);
       const modulePath = resolvePluginDoctorContractArtifact({
@@ -216,23 +204,16 @@ it.each(["global", "shared-project"])(
       expect(result.warnings).toEqual([]);
       expect(result.changes.length).toBeGreaterThan(0);
       const migrated = readAcpSessionEntry({ cfg, env, agentId: "work", sessionKey })?.acp;
-      if (explicit) {
-        expect(migrated?.identity?.acpxRecordId).toBe("agent:work:shared-project");
-      } else {
-        expect(migrated?.identity?.acpxRecordId).toMatch(/^openclaw-owner-v1-/);
-      }
-      expect(
-        (await readOnly.inspectAcpSessionClaims!()).claims.find(
-          (claim) => claim.agentId === "free-harness",
-        ),
-      ).toEqual(before.claims.find((claim) => claim.agentId === "free-harness"));
+      expect(migrated?.identity?.acpxRecordId).toEqual(
+        explicit ? "agent:work:shared-project" : expect.stringMatching(/^openclaw-owner-v1-/),
+      );
+      expect((await inspect!()).claims.find((claim) => claim.agentId === "free-harness")).toEqual(
+        before.claims.find((claim) => claim.agentId === "free-harness"),
+      );
       const adoptedStateDir = explicit ? acpxStateDir : path.join(stateDir, "acpx");
       await fs.access(path.join(adoptedStateDir, "sessions", `${sessionKey}.json.migrated`));
-      expect(
-        await createFileSessionStore({ stateDir: adoptedStateDir }).load(
-          migrated!.identity!.acpxRecordId!,
-        ),
-      ).toMatchObject({
+      const store = createFileSessionStore({ stateDir: adoptedStateDir });
+      expect(await store.load(migrated!.identity!.acpxRecordId!)).toMatchObject({
         acpSessionId: handle.backendSessionId,
       });
       if (!explicit) {
@@ -241,14 +222,13 @@ it.each(["global", "shared-project"])(
           expect.stringContaining("Migrated ACPX session state"),
         );
       }
-    });
-  },
+    }),
 );
 
 it.each(["agent:retired:main", "agent:retired:acp:binding:configured", "global", "acp:bare"])(
   "rejects a retired configured or fixed-store claim %s",
-  async (sessionKey) => {
-    await withOpenClawTestState({ label: "acp-doctor-retired" }, async ({ env, stateDir }) => {
+  (sessionKey) =>
+    withOpenClawTestState({ label: "acp-doctor-retired" }, async ({ env, stateDir }) => {
       const cfg = {
         agents: {
           ownership: "explicit" as const,
@@ -257,19 +237,10 @@ it.each(["agent:retired:main", "agent:retired:acp:binding:configured", "global",
         },
         session: { store: path.join(stateDir, "sessions.json") },
       };
-      await upsertAcpSessionMeta({
-        cfg,
-        env,
-        agentId: "retired",
-        sessionKey,
-        mutate: () =>
-          createAcpMeta({
-            backend: "acpx",
-            agent: "fixture",
-            runtimeSessionName: "old",
-            lastActivityAt: 1,
-          }),
-      });
+      await seed(
+        { cfg, env, agentId: "retired", sessionKey },
+        { ...fixtureMeta, runtimeSessionName: "old" },
+      );
       const retired = { ...cfg, agents: { ...cfg.agents, entries: { main: {} } } };
       const evidence = await createPluginDoctorStateMigrationContext({
         pluginId: "acpx",
@@ -277,6 +248,5 @@ it.each(["agent:retired:main", "agent:retired:acp:binding:configured", "global",
         env,
       }).inspectAcpSessionClaims!();
       expect(evidence).toEqual({ claims: [], incomplete: [expect.stringContaining("retired")] });
-    });
-  },
+    }),
 );
