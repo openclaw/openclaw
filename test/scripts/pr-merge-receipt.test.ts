@@ -2,9 +2,12 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import {
+  expectRetained,
+  retainIntent,
   configuredFixture,
   expectExit,
   configureMerge,
+  observeMerged,
 } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
@@ -17,85 +20,83 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     { method: "merge", queue: false, comment: "Merged via merge commit." },
     { method: "rebase", queue: false, comment: "Merged via rebase." },
     { method: "squash", queue: true, comment: "Merged via merge queue (requested squash)." },
-  ])(
-    "completes $method/queue=$queue with forward main during final receipt observation",
-    ({ method, queue, comment }) => {
-      const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
-      const main = f.advance("before\n");
-      configureMerge(f, {
-        landing: queue ? "rebase" : "requested",
-        pr: { isMergeQueueEnabled: queue },
-        observations: [
-          {},
-          {},
-          ...(method === "squash" && !queue ? [] : [{}]),
-          {},
-          { advanceMain: true, advanceAfterRead: true },
-        ],
-      });
-      expectExit(f.run(false, f.repo, method), 0);
-      const state = f.state();
-      const submissions = state.calls.filter((call) => call[1] === "pr" && call[2] === "merge");
-      if (method === "squash" && !queue) {
-        expect(submissions).toHaveLength(0);
-        expect(state.graphqlMergePayloads).toEqual([
-          {
-            pullRequestId: "fixture-pr",
-            expectedHeadOid: f.head,
-            mergeMethod: "SQUASH",
-            commitBody: "Fixture body\n",
-          },
-        ]);
-      } else {
-        expect(submissions).toHaveLength(1);
-        expect(
-          submissions[0]?.filter((arg) => ["--squash", "--merge", "--rebase"].includes(arg)),
-        ).toEqual([`--${method}`]);
-      }
-      const landed = state.pr.mergeCommit!.oid;
-      expect(state.observationReads).toBe(method === "squash" && !queue ? 4 : 5);
-      expect(state.mainAdvances).toHaveLength(2);
-      expect(f.record()).toMatchObject({ phase: "complete", landed, head: f.head });
-      expect(state.mutations).toBe(1);
-      expect(state.posts).toBe(1);
-      expect(state.comments[0]!.body).toContain(comment);
-      expect(state.comments[0]!.body).toContain(`/commit/${landed}`);
-      expect(existsSync(f.worktree)).toBe(false);
-      expect(() =>
-        f.git(["--git-dir=" + f.remote, "rev-parse", "--verify", "refs/heads/topic"]),
-      ).toThrow();
-      f.git(["merge-base", "--is-ancestor", landed, outcomeRef]);
-      f.git(["merge-base", "--is-ancestor", f.head, outcomeRef]);
-      expect(f.git(["show", `${landed}:owner.txt`])).toBe("after");
-      if (method === "rebase" || queue) {
-        const rewritten = f.git(["rev-list", "--reverse", `${main}..${landed}`]).split("\n");
-        expect(rewritten).toHaveLength(2);
-        expect(rewritten.every((oid) => !f.sourceCommits.includes(oid))).toBe(true);
-        expect(f.git(["show", `${landed}:sibling.txt`])).toBe("advanced");
-        // The final parent is only the rewritten prefix, not the base of the series.
-        expect(() => f.git(["merge-tree", "--write-tree", `${landed}^`, f.head])).toThrow();
-        // The final observation advanced the remote again after its returned snapshot.
-        f.git([
-          "fetch",
-          "--no-tags",
-          "origin",
-          f.git(["--git-dir=" + f.remote, "rev-parse", "main"]),
-        ]);
-        f.advance("before\n");
-        expect(f.run().status).toBe(0);
-        expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
-      }
-    },
-  );
+  ])("completes $method/queue=$queue across final main advance", ({ method, queue, comment }) => {
+    const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
+    const main = f.advance("before\n");
+    configureMerge(f, {
+      landing: queue ? "rebase" : "requested",
+      pr: { isMergeQueueEnabled: queue },
+      observations: [
+        {},
+        {},
+        ...(method === "squash" && !queue ? [] : [{}]),
+        {},
+        { advanceMain: true, advanceAfterRead: true },
+      ],
+    });
+    expectExit(f.run(false, f.repo, method), 0);
+    const state = f.state();
+    const submissions = state.calls.filter((call) => call[1] === "pr" && call[2] === "merge");
+    if (method === "squash" && !queue) {
+      expect(submissions).toHaveLength(0);
+      expect(state.graphqlMergePayloads).toEqual([
+        {
+          pullRequestId: "fixture-pr",
+          expectedHeadOid: f.head,
+          mergeMethod: "SQUASH",
+          commitBody: "Fixture body\n",
+        },
+      ]);
+    } else {
+      expect(submissions).toHaveLength(1);
+      expect(
+        submissions[0]?.filter((arg) => ["--squash", "--merge", "--rebase"].includes(arg)),
+      ).toEqual([`--${method}`]);
+    }
+    const landed = state.pr.mergeCommit!.oid;
+    expect(state).toMatchObject({
+      observationReads: method === "squash" && !queue ? 4 : 5,
+      mutations: 1,
+      posts: 1,
+    });
+    expect(state.mainAdvances).toHaveLength(2);
+    expect(f.record()).toMatchObject({ phase: "complete", landed, head: f.head });
+
+    expect(state.comments[0]!.body).toContain(comment);
+    expect(state.comments[0]!.body).toContain(`/commit/${landed}`);
+    expect(existsSync(f.worktree)).toBe(false);
+    expect(() =>
+      f.git(["--git-dir=" + f.remote, "rev-parse", "--verify", "refs/heads/topic"]),
+    ).toThrow();
+    f.git(["merge-base", "--is-ancestor", landed, outcomeRef]);
+    f.git(["merge-base", "--is-ancestor", f.head, outcomeRef]);
+    expect(f.git(["show", `${landed}:owner.txt`])).toBe("after");
+    if (method === "rebase" || queue) {
+      const rewritten = f.git(["rev-list", "--reverse", `${main}..${landed}`]).split("\n");
+      expect(rewritten).toHaveLength(2);
+      expect(rewritten.every((oid) => !f.sourceCommits.includes(oid))).toBe(true);
+      expect(f.git(["show", `${landed}:sibling.txt`])).toBe("advanced");
+      // The final parent is only the rewritten prefix, not the base of the series.
+      expect(() => f.git(["merge-tree", "--write-tree", `${landed}^`, f.head])).toThrow();
+      // The final observation advanced the remote again after its returned snapshot.
+      f.git([
+        "fetch",
+        "--no-tags",
+        "origin",
+        f.git(["--git-dir=" + f.remote, "rev-parse", "main"]),
+      ]);
+      f.advance("before\n");
+      expect(f.run().status).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
+    }
+  });
 
   it.skipIf(!supportsNoLazyFetch)(
-    "recovers accepted intent with forward main during final receipt observation without replaying completion",
+    "retains accepted intent across final main advance without replay",
     () => {
       const f = fixture(undefined, undefined, true);
       configureMerge(f, { mode: "pending", pr: { isMergeQueueEnabled: true } });
-      expectExit(f.run(), 0);
-      const previous = f.git(["rev-parse", outcomeRef]);
-      const capture = f.captures();
+      const { previous, captures: capture } = retainIntent(f, 0);
       const landed = f.git(
         [
           "--git-dir=" + f.remote,
@@ -108,16 +109,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       );
       f.git(["--git-dir=" + f.remote, "update-ref", "refs/heads/main", landed]);
       expect(() => f.git(["--no-lazy-fetch", "cat-file", "-e", `${landed}^{commit}`])).toThrow();
-      configureMerge(f, {
+      observeMerged(f, landed, {
         observationReads: 0,
-        pr: {
-          ...f.state().pr,
-          state: "MERGED",
-          mergeCommit: { oid: landed },
-          autoMergeRequest: null,
-          isInMergeQueue: false,
-        },
         observations: [{}, { advanceMain: true, advanceAfterRead: true }],
+        pr: { autoMergeRequest: null, isInMergeQueue: false },
       });
       const run = expectExit(f.run(), 0);
       expect(run.output).toContain("completion pending");
@@ -161,11 +156,9 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "invalid",
     "unavailable",
     "missing-main",
-  ])("rejects %s drift during final receipt observation without overwriting intent", (fault) => {
+  ])("preserves intent on final receipt %s drift", (fault) => {
     const f = configuredFixture(fixture, { mode: "pending", pr: { isMergeQueueEnabled: true } });
-    expect(f.run().status).toBe(0);
-    const before = f.git(["rev-parse", outcomeRef]);
-    const capture = f.captures();
+    const { previous: before, captures: capture } = retainIntent(f, 0);
     const landed = f.advance("after\n", "stable\n");
     const changes: Record<string, Record<string, unknown>> = {
       id: { id: "different-pr" },
@@ -209,33 +202,24 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     if (fault === "unavailable") {
       step.unavailable = true;
     }
-    configureMerge(f, {
+    observeMerged(f, landed, {
       observationReads: 0,
-      pr: {
-        ...f.state().pr,
-        state: "MERGED",
-        mergeCommit: { oid: landed },
-        autoMergeRequest: null,
-        isInMergeQueue: false,
-      },
       observations: [{}, step],
+      pr: { autoMergeRequest: null, isInMergeQueue: false },
     });
     expectExit(f.run(), 1);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(before);
-    expect(f.captures()).toEqual(capture);
+    expectRetained(f, before, capture);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
     expect(existsSync(f.worktree)).toBe(true);
   });
 
   it.each(["OPEN", "CLOSED", "pending"])(
-    "keeps full snapshot stability for retained %s during final observation",
+    "requires final snapshot stability for retained %s",
     (state) => {
       const f = configuredFixture(fixture, { mode: "pending", pr: { isMergeQueueEnabled: true } });
-      expect(f.run().status).toBe(0);
-      const before = f.git(["rev-parse", outcomeRef]);
+      const { previous: before } = retainIntent(f, 0);
       configureMerge(f, {
         pr: {
-          ...f.state().pr,
           state: state === "pending" ? "OPEN" : state,
           autoMergeRequest: state === "pending" ? { mergeMethod: "SQUASH" } : null,
           isInMergeQueue: state === "pending",
@@ -330,8 +314,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expectNoProbeFetch(f.trace());
     expect(run.status, run.output).toBe(1);
     expect(f.state().observationReads).toBe(reads);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(before);
-    expect(f.captures()).toEqual(capture);
+    expectRetained(f, before, capture);
     expect(existsSync(f.worktree)).toBe(true);
     expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
@@ -349,35 +332,31 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     f.git(["--no-lazy-fetch", "cat-file", "-e", missing]);
   });
 
-  it("reconciles a merged receipt without waiting for terminal mergeability", () => {
+  it("reconciles merged receipts before mergeability settles", () => {
     const f = fixture();
     const unknown = { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } };
     configureMerge(f, { observations: [{}, {}, unknown, unknown] });
     expectExit(f.run(), 0);
     expect(f.record().phase).toBe("complete");
-    expect(f.state().observationReads).toBe(4);
-    expect(f.state().settlementSleeps).toEqual([]);
+    expect(f.state()).toMatchObject({ observationReads: 4, settlementSleeps: [] });
     expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
   });
 
-  it.each(["rebase", "merge"])(
-    "rejects a mismatched %s receipt before comment or cleanup",
-    (method) => {
-      const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
-      f.advance("before\n");
-      configureMerge(f, { landing: "mismatch" });
-      expectExit(f.run(false, f.repo, method), 1);
-      expect(f.record()).toMatchObject({ phase: "intent", landed: null });
-      expect(f.state().posts).toBe(0);
-      expect(existsSync(f.worktree)).toBe(true);
-      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
-      f.recover();
-      expect(f.run().status).toBe(1);
-      expect(f.state().mutations).toBe(1);
-    },
-  );
+  it.each(["rebase", "merge"])("rejects mismatched %s receipts before completion", (method) => {
+    const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
+    f.advance("before\n");
+    configureMerge(f, { landing: "mismatch" });
+    expectExit(f.run(false, f.repo, method), 1);
+    expect(f.record()).toMatchObject({ phase: "intent", landed: null });
+    expect(f.state().posts).toBe(0);
+    expect(existsSync(f.worktree)).toBe(true);
+    expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    f.recover();
+    expect(f.run().status).toBe(1);
+    expect(f.state().mutations).toBe(1);
+  });
 
-  it("checks the source fork base even when recorded main contains a cherry-picked prefix", () => {
+  it("rejects a cherry-picked prefix as the source fork base", () => {
     const f = fixture(undefined, [["after\n"], ["after\n", "reviewed\n"]]);
     const main = f.advance("after\n", "stable\n");
     expect(main).not.toBe(f.sourceCommits[0]);
@@ -389,9 +368,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.git(["merge-tree", "--write-tree", `--merge-base=${main}`, landed, f.head])).toBe(
       f.git(["rev-parse", `${landed}^{tree}`]),
     );
-    configureMerge(f, {
-      pr: { state: "MERGED", mergeCommit: { oid: landed } },
-    });
+    observeMerged(f, landed);
     expectExit(f.run(), 1);
     expect(f.record()).toMatchObject({ phase: "intent", landed: null });
     expect(f.state()).toMatchObject({ posts: 0, mutations: 1 });
@@ -416,9 +393,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     f.git(["update-ref", outcomeRef, f.commit(tree, [head, main, previous])]);
     const landed = f.commit(f.git(["rev-parse", `${head}^{tree}`]), [main]);
     f.git(["push", "-q", "--force", "origin", `${landed}:refs/heads/main`]);
-    configureMerge(f, {
-      pr: { headRefOid: head, state: "MERGED", mergeCommit: { oid: landed } },
-    });
+    observeMerged(f, landed, { pr: { headRefOid: head } });
     const run = expectExit(f.run(), 1);
     expect(run.output).toContain("require one source fork base");
     expect(f.record()).toEqual(record);
@@ -437,25 +412,21 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.git(["merge-tree", "--write-tree", landed, f.head])).toBe(
       f.git(["rev-parse", `${landed}^{tree}`]),
     );
-    configureMerge(f, {
-      pr: { state: "MERGED", mergeCommit: { oid: landed } },
-    });
+    observeMerged(f, landed);
     expectExit(f.run(), 1);
     expect(f.record()).toMatchObject({ phase: "intent", landed: null });
     expect(f.state()).toMatchObject({ posts: 0, mutations: 1 });
     expect(existsSync(f.worktree)).toBe(true);
   });
 
-  it("warns on a recorded empty squash and preserves its receipt after a later revert", () => {
+  it("retains an empty-squash receipt after a later revert", () => {
     const f = configuredFixture(fixture, { mode: "unapplied" });
     expect(f.run().status).toBe(1);
     f.recover();
     const patch = f.advance("after\n", "stable\n");
     const landed = f.commit(f.git(["rev-parse", patch + "^{tree}"]), [patch], "Empty squash\n");
     f.git(["push", "-q", "origin", landed + ":refs/heads/main"]);
-    configureMerge(f, {
-      pr: { state: "MERGED", mergeCommit: { oid: landed } },
-    });
+    observeMerged(f, landed);
     const confirmed = expectExit(f.run(), 0);
     expect(confirmed.output).toContain(
       "Warning: recorded squash has no net change at its landed parent",
@@ -473,7 +444,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 
   it.each(["unapplied", "applied-open"])(
-    "keeps %s uncertainty through missing prep/worktree and eventual receipt",
+    "retains %s uncertainty through missing worktree and receipt",
     (mode) => {
       const f = configuredFixture(fixture, { mode });
       expect(f.run().status).toBe(1);
@@ -485,9 +456,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         mode === "unapplied"
           ? f.advance("after\n", "stable\n")
           : f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
-      configureMerge(f, {
-        pr: { state: "MERGED", mergeCommit: { oid: landed } },
-      });
+      observeMerged(f, landed);
       const confirmed = expectExit(f.run(), 0);
       expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
       expect(confirmed.output).toContain("completion pending");

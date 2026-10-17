@@ -12,6 +12,9 @@ const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const producerName = "Run built artifact checks";
 const uploadName = "Upload Discord component attachment proof";
 const action = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const output = "discord-component-attachments";
+const outputPath = `/home/runner/_work/_temp/${output}`;
+const monitorName = "Classify PR failures and cancel eligible same-repository work";
 const historicalProducer = readFileSync(
   new URL("../fixtures/pr-prior-ci-discord-producer.txt", import.meta.url),
   "utf8",
@@ -31,8 +34,8 @@ function secondaryCandidate(fault = "") {
     if: "always() && needs.preflight.outputs.run_discord_component_proof == 'true'",
     uses: fault === "changed action" ? "actions/upload-artifact@main" : action,
     with: {
-      name: "discord-component-attachments",
-      path: "${{ runner.temp }}/discord-component-attachments.json\n${{ runner.temp }}/discord-component-attachments.log\n",
+      name: output,
+      path: `\${{ runner.temp }}/${output}.json\n\${{ runner.temp }}/${output}.log\n`,
       "if-no-files-found": "error",
       "retention-days": 7,
     },
@@ -58,15 +61,7 @@ function secondaryCandidate(fault = "") {
     started_at: `2026-09-28T07:${start}Z`,
     completed_at: `2026-09-28T07:${end}Z`,
   });
-  state.priorCi.jobs![2]!.steps = [
-    step(
-      4,
-      "Classify PR failures and cancel eligible same-repository work",
-      "success",
-      "18:46",
-      "20:36",
-    ),
-  ];
+  state.priorCi.jobs![2]!.steps = [step(4, monitorName, "success", "18:46", "20:36")];
   const job = state.priorCi.jobs![3]!;
   job.name = "build-artifacts";
   job.steps = [
@@ -85,18 +80,14 @@ function secondaryCandidate(fault = "") {
     line("Build dist", "20:48.833", "##[error]The operation was canceled."),
     line(uploadName, "20:48.846", `##[group]Run ${action}`),
     line(uploadName, "20:48.847", "with:"),
-    line(
-      uploadName,
-      "20:48.848",
-      "  path: /home/runner/_work/_temp/discord-component-attachments.json",
-    ),
-    `build-artifacts\t${uploadName}\t/home/runner/_work/_temp/discord-component-attachments.log`,
+    line(uploadName, "20:48.848", `  path: ${outputPath}.json`),
+    `build-artifacts\t${uploadName}\t${outputPath}.log`,
     line(
       uploadName,
       "20:49.092",
-      "##[error]No files were found with the provided path: /home/runner/_work/_temp/discord-component-attachments.json",
+      `##[error]No files were found with the provided path: ${outputPath}.json`,
     ),
-    `build-artifacts\t${uploadName}\t/home/runner/_work/_temp/discord-component-attachments.log. No artifacts will be uploaded.`,
+    `build-artifacts\t${uploadName}\t${outputPath}.log. No artifacts will be uploaded.`,
     line("Complete job", "20:49.420", "Cleaning up orphan processes"),
   ];
   applyFault(fault, {
@@ -135,6 +126,7 @@ function secondaryCandidate(fault = "") {
       ],
     },
   };
+  const secondary = evidence.cancellation.secondaryFailures[0]!;
   if (fault === "cleanup failure") {
     job.steps[4]!.conclusion = "failure";
   }
@@ -155,16 +147,14 @@ function secondaryCandidate(fault = "") {
     "earlier upload": () => (job.steps[3]!.started_at = "2026-09-28T07:20:35Z"),
     "missing time": () => delete state.priorCi.jobs![2]!.steps![0]!.completed_at,
     "failed monitor": () => (state.priorCi.jobs![2]!.steps![0]!.conclusion = "failure"),
-    "wrong step": () => (evidence.cancellation.secondaryFailures[0]!.step = 12),
+    "wrong step": () => (secondary.step = 12),
   });
   if (fault === "duplicate secondary") {
-    evidence.cancellation.secondaryFailures.push({
-      ...evidence.cancellation.secondaryFailures[0]!,
-    });
+    evidence.cancellation.secondaryFailures.push({ ...secondary });
   }
   applyFault(fault, {
     "relabel root": () => evidence.cancellation.causedBy.push(job.id),
-    "unbound log": () => (evidence.cancellation.secondaryFailures[0]!.evidence = ["qualification"]),
+    "unbound log": () => (secondary.evidence = ["qualification"]),
     "changed log": () => writeFileSync(log, "changed\n"),
   });
   f.save(state);
@@ -179,18 +169,22 @@ describePosix("prior-CI skipped-producer secondary failure", () => {
     expect(f.state().mutations).toBe(1);
     const proof = f.record().priorCiAdmin;
     expect(proof.failures.map((failure: { jobId: number }) => failure.jobId)).toEqual([601]);
-    expect(proof.cancelledJobIds).toEqual([604]);
-    expect(proof.aggregate.causedBy).toEqual([601]);
-    expect(proof.cancellation.causedBy).toEqual([601]);
-    expect(proof.cancellation.secondaryFailures).toEqual([
-      expect.objectContaining({
-        jobId: 604,
-        step: 13,
-        producerStep: 12,
-        workflowBlob: f.git(["rev-parse", `${f.base}:.github/workflows/ci.yml`]),
-        logSha256: f.evidence.artifacts[1]!.sha256,
-      }),
-    ]);
+    expect(proof).toMatchObject({
+      cancelledJobIds: [604],
+      aggregate: { causedBy: [601] },
+      cancellation: {
+        causedBy: [601],
+        secondaryFailures: [
+          {
+            jobId: 604,
+            step: 13,
+            producerStep: 12,
+            workflowBlob: f.git(["rev-parse", `${f.base}:.github/workflows/ci.yml`]),
+            logSha256: f.evidence.artifacts[1]!.sha256,
+          },
+        ],
+      },
+    });
     expect(f.state().comments[0]?.body).toContain("Cancelled jobs remain unrun coverage");
   });
 

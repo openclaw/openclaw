@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { expectExit, applyFault, completedStep } from "./pr-merge-assertions.test-support.js";
+import { expectExit, completedStep } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -32,7 +32,8 @@ function cancelledRootCandidate(source = workflow) {
   const check = state.priorCi.deadline.check;
   check.head_sha = f.head;
   check.completed_at = "2026-09-20T00:05:30Z";
-  Object.assign(state.priorCi.jobs![0]!, {
+  const job = state.priorCi.jobs![0]!;
+  Object.assign(job, {
     conclusion: "cancelled",
     check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/601",
     started_at: check.started_at,
@@ -58,7 +59,7 @@ function cancelledRootCandidate(source = workflow) {
     })),
   };
   writeFileSync(f.path, JSON.stringify(evidence));
-  return { ...f, evidence };
+  return { ...f, evidence, live: state, job, check, entry: evidence.failures[0]! };
 }
 
 const workflowVariants: Record<string, string> = {
@@ -76,14 +77,18 @@ describePosix("attributed test failure in a cancelled job", () => {
     const f = cancelledRootCandidate();
     expectExit(f.adminPriorCi(f.path), 0);
     expect(f.state().mutations).toBe(1);
-    expect(f.record().priorCiAdmin.failures).toMatchObject([
-      {
-        jobId: 601,
-        failedStep: { checkRunId: 601, conclusion: "cancelled", number: 18, workflowJob },
+    expect(f.record()).toMatchObject({
+      priorCiAdmin: {
+        failures: [
+          {
+            jobId: 601,
+            failedStep: { checkRunId: 601, conclusion: "cancelled", number: 18, workflowJob },
+          },
+        ],
+        cancelledJobIds: [604],
       },
-    ]);
+    });
     expect(f.record().priorCiAdmin.failures[0].deadline).toBeUndefined();
-    expect(f.record().priorCiAdmin.cancelledJobIds).toEqual([604]);
   });
 
   it("rechecks the live cancelled root after a main advance", () => {
@@ -118,69 +123,35 @@ describePosix("attributed test failure in a cancelled job", () => {
     expect(() => f.record()).toThrow();
   });
 
-  it.each([
-    ...Object.keys(workflowVariants),
-    "missing binding",
-    "wrong workflow owner",
-    "wrong step number",
-    "missing steps",
-    "duplicate step number",
-    "duplicate test step",
-    "incomplete step",
-    "cleanup failure",
-    "cancelled test without deadline",
-    "missing cleanup",
-    "missing step timestamp",
-    "step outside job",
-    "foreign check",
-    "foreign publisher",
-    "foreign suite",
-    "stale check head",
-    "changed conclusion",
-    "changed timestamp",
-    "missing independent proof",
-    "changed source input",
-  ])("refuses %s before dispatch", (fault) => {
+  const faults: Record<string, (f: ReturnType<typeof cancelledRootCandidate>) => unknown> = {
+    ...Object.fromEntries(Object.keys(workflowVariants).map((name) => [name, () => {}])),
+    "missing binding": ({ entry }) => Reflect.deleteProperty(entry, "failedStep"),
+    "wrong workflow owner": ({ entry }) => (entry.failedStep.workflowJob = "security-fast"),
+    "wrong step number": ({ entry }) => (entry.failedStep.number = 1),
+    "missing independent proof": ({ entry }) => (entry.evidence = []),
+    "changed source input": ({ entry }) => (entry.sourcePaths = ["owner.txt"]),
+    "missing steps": ({ job }) => (job.steps = undefined),
+    "duplicate step number": ({ job }) => (job.steps![2]!.number = 18),
+    "duplicate test step": ({ job }) => (job.steps![0]!.name = "Run Node test shard"),
+    "incomplete step": ({ job }) => (job.steps![0]!.status = "in_progress"),
+    "cleanup failure": ({ job }) =>
+      job.steps!.splice(2, 0, completedStep(20, "cleanup failure", "failure")),
+    "cancelled test without deadline": ({ job }) => (job.steps![1]!.conclusion = "cancelled"),
+    "missing cleanup": ({ job }) => job.steps!.pop(),
+    "missing step timestamp": ({ job }) => delete job.steps![1]!.started_at,
+    "step outside job": ({ job }) => (job.steps![1]!.completed_at = "2026-09-20T02:00:00Z"),
+    "foreign check": ({ check }) => (check.id = 999),
+    "foreign publisher": ({ check }) => (check.app.id = 999),
+    "foreign suite": ({ check }) => (check.check_suite.id = 999),
+    "stale check head": (f) => (f.check.head_sha = f.base),
+    "changed conclusion": ({ check }) => (check.conclusion = "success"),
+    "changed timestamp": ({ check }) => (check.completed_at = "2026-09-20T02:00:00Z"),
+  };
+  it.each(Object.entries(faults))("refuses %s before dispatch", (fault, mutate) => {
     const f = cancelledRootCandidate(workflowVariants[fault]);
-    const state = f.state();
-    const job = state.priorCi.jobs![0]!;
-    const check = state.priorCi.deadline.check;
-    const evidence = f.evidence;
-    const entry = evidence.failures[0]!;
-    if (fault === "missing binding") {
-      const { failedStep: _failedStep, ...unbound } = entry;
-      writeFileSync(f.path, JSON.stringify({ ...evidence, failures: [unbound] }));
-    } else {
-      applyFault(fault, {
-        "wrong workflow owner": () => (entry.failedStep.workflowJob = "security-fast"),
-        "wrong step number": () => (entry.failedStep.number = 1),
-        "missing independent proof": () => (entry.evidence = []),
-        "changed source input": () => (entry.sourcePaths = ["owner.txt"]),
-      });
-      writeFileSync(f.path, JSON.stringify(evidence));
-    }
-    applyFault(fault, {
-      "missing steps": () => (job.steps = undefined),
-      "duplicate step number": () => (job.steps![2]!.number = 18),
-      "duplicate test step": () => (job.steps![0]!.name = "Run Node test shard"),
-      "incomplete step": () => (job.steps![0]!.status = "in_progress"),
-    });
-    if (fault === "cleanup failure") {
-      job.steps!.splice(2, 0, completedStep(20, fault, "failure"));
-    }
-    applyFault(fault, {
-      "cancelled test without deadline": () => (job.steps![1]!.conclusion = "cancelled"),
-      "missing cleanup": () => job.steps!.pop(),
-      "missing step timestamp": () => delete job.steps![1]!.started_at,
-      "step outside job": () => (job.steps![1]!.completed_at = "2026-09-20T02:00:00Z"),
-      "foreign check": () => (check.id = 999),
-      "foreign publisher": () => (check.app.id = 999),
-      "foreign suite": () => (check.check_suite.id = 999),
-      "stale check head": () => (check.head_sha = f.base),
-      "changed conclusion": () => (check.conclusion = "success"),
-      "changed timestamp": () => (check.completed_at = "2026-09-20T02:00:00Z"),
-    });
-    f.save(state);
+    mutate(f);
+    writeFileSync(f.path, JSON.stringify(f.evidence));
+    f.save(f.live);
     const result = f.verifyPriorCi(f.path);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain(
