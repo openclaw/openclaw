@@ -29,6 +29,7 @@ import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
+import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
@@ -281,6 +282,12 @@ export async function handleChatHistoryRequest({
     } catch (error) {
       respondReadError(error);
       return;
+    }
+    if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
+      registerDeflatedSegment(
+        historyPage.encodedResponse.messages,
+        historyPage.encodedMessagesDeflate,
+      );
     }
     const responsePage = historyPage.encodedResponse
       ? {

@@ -1,8 +1,47 @@
+import assert from "node:assert/strict";
+import { constants as zlibConstants, inflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
+  encodeChatHistoryResponsePage,
   enrichChatHistoryCompactionMarkers,
   prepareChatHistoryResponsePage,
 } from "./chat-history-response-page.js";
+
+it("deflates encoded history bytes without adding compression fields to the response", () => {
+  const messages = [{ role: "assistant", content: 'Escaped "history" 漢字🦞\n'.repeat(512) }];
+  const page = encodeChatHistoryResponsePage(
+    { messages },
+    {
+      encodeResponse: true,
+      entry: undefined,
+      provider: undefined,
+      sessionId: "encoded-history",
+      storePath: undefined,
+      sessionAgentId: "main",
+      canonicalKey: "agent:main:encoded-history",
+      max: 200,
+      maxHistoryBytes: 64 * 1024,
+      effectiveMaxChars: 64 * 1024,
+      offset: undefined,
+      messageId: undefined,
+    },
+  );
+  assert(page.encodedResponse && page.encodedMessagesDeflate);
+  expect(Object.keys(page.encodedResponse).toSorted()).toEqual([
+    "messages",
+    "messagesBytes",
+    "responseHistoryBytes",
+  ]);
+  expect(Buffer.from(page.encodedMessagesDeflate.subarray(-4))).toEqual(
+    Buffer.from([0, 0, 255, 255]),
+  );
+  expect(
+    inflateRawSync(page.encodedMessagesDeflate, { finishFlush: zlibConstants.Z_SYNC_FLUSH }),
+  ).toEqual(Buffer.from(page.encodedResponse.messages));
+  expect(page.encodedMessagesDeflate.buffer.byteLength).toBe(
+    page.encodedMessagesDeflate.byteLength,
+  );
+});
 
 describe("enrichChatHistoryCompactionMarkers", () => {
   it("joins retained legacy token metrics to the matching transcript marker", () => {
