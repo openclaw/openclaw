@@ -1314,6 +1314,82 @@ describe("buildCachedChatItems", () => {
     expect(groups.flatMap(normalizedBlocks)).toContainEqual(textBlock("\n\nReady."));
     expect(shortcodeReply).toEqual(original);
   });
+  it.each([
+    { persisted: "none", parent: "exec-widget", viewId: "cv_nested", count: 1 },
+    { persisted: "wrapper", parent: "exec-widget", viewId: "cv_nested", count: 1 },
+    { persisted: "both", parent: "exec-widget", viewId: "cv_nested", count: 1 },
+    { persisted: "none", parent: "exec-widget", viewId: "cv_distinct", count: 2 },
+    { persisted: "wrapper", parent: "another-exec", viewId: "cv_nested", count: 2 },
+  ])(
+    "reconciles nested previews (saved=$persisted): $parent / $viewId",
+    ({ persisted, parent, viewId, count }) => {
+      const wrapper = resultMessage(
+        "exec-widget",
+        "exec",
+        canvasToolOutput("cv_nested", "Counter", 100),
+        1_001,
+      );
+      const nested = assistant(
+        [
+          {
+            type: "toolresult",
+            name: "show_widget",
+            parentToolCallId: parent,
+            text: canvasToolOutput(viewId, "Counter", 100),
+          },
+        ],
+        1_004,
+        { toolCallId: "nested-widget" },
+      );
+      const saved = [
+        user("Show a counter", 999),
+        assistant("Preparing it.", 1_000),
+        wrapper,
+        assistant("Ready.", 1_005),
+      ];
+      const messages =
+        persisted === "both"
+          ? [...saved.slice(0, 2), nested, ...saved.slice(2)]
+          : persisted === "wrapper"
+            ? saved
+            : saved.filter((message) => message !== wrapper);
+      const original = structuredClone(messages);
+      const groups = messageGroups({
+        messages,
+        toolMessages:
+          persisted === "both" ? [] : persisted === "wrapper" ? [nested] : [wrapper, nested],
+        showToolCalls: false,
+      });
+
+      expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(count);
+      expect(
+        messageGroups({ messages: saved, toolMessages: [], showToolCalls: false }).flatMap(
+          canvasBlocksAcross,
+        ),
+      ).toHaveLength(1);
+      expect(messages).toEqual(original);
+    },
+  );
+
+  it("keeps live previews when separate runs reuse a call and view ID", () => {
+    const groups = messageGroups({
+      messages: [
+        nativeUser("first", "First App", 1_000, { runId: "first" }),
+        assistant("First reply", 1_002),
+        nativeUser("second", "Show it again", 2_000, { runId: "second" }),
+        assistant("Second reply", 2_002),
+      ],
+      toolMessages: [
+        { ...mcpAppLiveResult("shared-view", "shared-call", 1_001), runId: "first" },
+        { ...mcpAppLiveResult("shared-view", "shared-call", 2_001), runId: "second" },
+      ],
+      showToolCalls: false,
+    });
+    expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(2);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toHaveLength(1);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
+  });
+
   it("deduplicates untimestamped echoes without merging reused call IDs across turns", () => {
     const persisted = { ...mcpAppResult("first", "shared", 1_001), timestamp: undefined };
     const groups = messageGroups({

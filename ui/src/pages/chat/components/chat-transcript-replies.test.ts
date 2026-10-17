@@ -289,7 +289,8 @@ describe("chat transcript replies", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     if (searchQuery) {
-      Object.assign(getTranscriptState(props.paneId), { searchOpen: true, searchQuery });
+      getTranscriptState(props.paneId).search.toggle();
+      getTranscriptState(props.paneId).search.setQuery(searchQuery);
     }
     render(renderChatThread(props, transcript), container);
     transcript.start();
@@ -498,7 +499,7 @@ describe("chat transcript replies", () => {
     }
     const requestUpdate = () => queueMicrotask(rerender);
     const rerender = () => {
-      render(renderTranscriptSearch(paneId, requestUpdate), searchContainer);
+      render(renderTranscriptSearch(paneId), searchContainer);
       render(
         renderChatThread({ ...props, onRequestUpdate: requestUpdate }, transcript),
         threadContainer,
@@ -506,7 +507,7 @@ describe("chat transcript replies", () => {
       transcript.update();
     };
     try {
-      toggleTranscriptSearch(paneId, requestUpdate);
+      toggleTranscriptSearch(paneId);
       rerender();
       transcript.start();
       const input = requireElement(searchContainer, "input") as HTMLInputElement;

@@ -43,7 +43,7 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
       const entries = kysely.with(
         "entries(position, message_id, text, role, timestamp)",
         () =>
-          /* kysely-allow-raw: A bounded VALUES relation carries entry order and natural keys with the content. */
+          /* kysely-allow-raw: A bounded VALUES relation carries entry order with the content. */
           sql<{
             position: number;
             message_id: string | null;
@@ -54,35 +54,84 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
       );
       if (postgres) {
         return entries
+          .with(
+            (cte) => cte("ids").materialized(),
+            (query) =>
+              query
+                .selectFrom("entries")
+                // Allocate exactly once per entry, independent of evaluation order.
+                .select((eb) =>
+                  eb
+                    .fn<number>("nextval", [
+                      eb.fn<string>("pg_get_serial_sequence", [
+                        sql.lit("session_transcript_fts_rows"),
+                        sql.lit("id"),
+                      ]),
+                    ])
+                    .as("id"),
+                ),
+          )
+          .with(
+            (cte) => cte("allocated").materialized(),
+            (query) =>
+              query
+                .selectFrom(
+                  query
+                    .selectFrom("entries")
+                    .selectAll()
+                    .select((eb) =>
+                      eb.fn
+                        .agg<number>("row_number", [])
+                        .over((window) => window.orderBy("position"))
+                        .as("rn"),
+                    )
+                    .as("ordered_entries"),
+                )
+                .innerJoin(
+                  query
+                    .selectFrom("ids")
+                    .select("id")
+                    .select((eb) =>
+                      eb.fn
+                        .agg<number>("row_number", [])
+                        .over((window) => window.orderBy("id"))
+                        .as("rn"),
+                    )
+                    .as("ordered_ids"),
+                  "ordered_ids.rn",
+                  "ordered_entries.rn",
+                )
+                // Recent-search ties and cold export use IDs as chronology.
+                .selectAll("ordered_entries")
+                .select("ordered_ids.id"),
+          )
           .with("inserted", (query) =>
             query
               .insertInto("session_transcript_fts_rows")
-              .columns(["session_id", "message_id"])
+              .columns(["id", "session_id", "message_id"])
               .expression((source) =>
                 source
-                  .selectFrom("entries")
-                  .select((eb) => [eb.val(sessionId).as("session_id"), "message_id"])
+                  .selectFrom("allocated")
+                  .select((eb) => ["id", eb.val(sessionId).as("session_id"), "message_id"])
                   .orderBy("position"),
               )
-              .returning(["id", "message_id"]),
+              .returning("id"),
           )
           .insertInto("session_transcript_fts")
           .columns(["rowid", "text", "session_id", "message_id", "role", "timestamp"])
           .expression((query) =>
             query
               .selectFrom("inserted")
-              .innerJoin("entries", (join) =>
-                join.onRef("entries.message_id", "is not distinct from", "inserted.message_id"),
-              )
+              .innerJoin("allocated", "allocated.id", "inserted.id")
               .select((eb) => [
-                "id",
-                "entries.text",
+                "allocated.id",
+                "allocated.text",
                 eb.val(sessionId).as("session_id"),
-                "entries.message_id",
-                "entries.role",
-                eb.cast<number>("entries.timestamp", "double precision").as("timestamp"),
+                "allocated.message_id",
+                "allocated.role",
+                eb.cast<number>("allocated.timestamp", "double precision").as("timestamp"),
               ])
-              .orderBy("entries.position"),
+              .orderBy("allocated.position"),
           );
       }
       return entries
@@ -137,19 +186,9 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
   const inserts = new Map<number, ReturnType<typeof prepare>>();
   return (entries: readonly TranscriptFtsEntry[]): void => {
     withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
-      for (let offset = 0; offset < entries.length;) {
-        const keys = new Set<string | null>();
-        const start = offset;
-        // At most 4 * 64 + 2 binds, below both engines' limits. Split repeated keys
-        // (including null) so the PG RETURNING join has exactly one content row.
-        while (
-          offset < entries.length &&
-          offset - start < TRANSCRIPT_INSERT_BATCH_SIZE &&
-          !keys.has(entries[offset]!.messageId)
-        ) {
-          keys.add(entries[offset++]!.messageId);
-        }
-        const chunk = entries.slice(start, offset);
+      // At most 4 * 64 + 2 binds, below both engines' limits.
+      for (let offset = 0; offset < entries.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+        const chunk = entries.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
         const write = inserts.get(chunk.length) ?? prepare(chunk.length);
         inserts.set(chunk.length, write);
         write(chunk);

@@ -8,6 +8,7 @@ import { showToast } from "../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
@@ -79,7 +80,16 @@ export function createChatState<TState extends ChatPageHost>(
   };
   let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
   let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
-  const composerPersistence = new ChatComposerPersistence(() => stateValue);
+  const composerPersistence = new ChatComposerPersistence(
+    () => stateValue,
+    () => {
+      if (disposed || !stateValue) {
+        return;
+      }
+      publishComposerDraft();
+      onStateChange?.();
+    },
+  );
   let privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   let previousChatLoading = false;
   let previousTranscriptSources: readonly unknown[] = [];
@@ -195,6 +205,14 @@ export function createChatState<TState extends ChatPageHost>(
         stopChatRealtimeTalk(stateValue);
       }
       stateValue = state;
+      state.composerDraftChanged = () => {
+        if (stateValue !== state || disposed) {
+          return;
+        }
+        composerPersistence.persistChangedState();
+        publishComposerDraft();
+        onStateChange?.();
+      };
       publishComposerDraft();
       previousTranscriptSources = transcriptSources(state);
       state.canRestoreComposer = () => stateValue === state && composerPersistence.active;
@@ -202,6 +220,9 @@ export function createChatState<TState extends ChatPageHost>(
       previousChatStream = state.chatStream;
       const renderLifecycle = state.renderLifecycle;
       state.requestUpdate = () => renderLifecycle.invalidate();
+      // Queue transitions synchronously update pane retention and shell activity,
+      // independently of whether the pane's projected frame is currently observed.
+      cleanups.push(subscribeChatOutboxQueue(state, () => onStateChange?.()));
       // Each discarded item has its own completion callback, not a latest-value presentation.
       cleanups.push(
         chatOutboxOwner(state).subscribe(state, (item) => {
@@ -310,6 +331,8 @@ export function createChatState<TState extends ChatPageHost>(
         composerPersistence.persistChangedState();
         onStateChange?.();
       }
+      // Field projections can schedule a frame without a page-wide invalidation.
+      captureRenderLifecycleChanges();
     },
   };
   return api;

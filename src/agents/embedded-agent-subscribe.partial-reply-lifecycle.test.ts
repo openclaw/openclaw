@@ -24,7 +24,7 @@ import {
   NATIVE_REASONING_BENCH_PREFIX,
 } from "./embedded-agent-subscribe.native-reasoning.test-support.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 
 type Subscription = ReturnType<typeof createSubscribedSessionHarness>["subscription"];
@@ -50,7 +50,7 @@ function createDelivery(params: Params) {
   const options = { ...params, session: createStubSessionHarness().session };
   const delivery = createReplyDelivery({
     params: options,
-    state: createEmbeddedAgentSubscribeState(options),
+    state: new EmbeddedAgentSubscribeState(options),
     log: logger,
   });
   deliveries.push(delivery);

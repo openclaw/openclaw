@@ -2,8 +2,10 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  getOwner,
   onCleanup,
   onSettled,
+  runWithOwner,
   Show,
   untrack,
 } from "solid-js";
@@ -20,6 +22,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
+import { chatGoalOperations } from "./chat-goals.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
@@ -35,27 +38,15 @@ import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
+  const viewOwner = getOwner();
   const [ready, setReady] = createSignal(false);
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let disposed = false;
-  let publicationQueued = false;
   let complete: (() => void) | undefined;
   let previousInputs:
     | Pick<ChatPaneRuntime, "sessionKey" | "inputRegion" | "draft" | "focusComposer">
     | undefined;
   let focusPending = false;
-
-  function publish() {
-    if (disposed || !publicationQueued) {
-      return;
-    }
-    runtime.refreshBoardSubscriptions();
-    publicationQueued = false;
-    setRevision((value) => value + 1);
-    if (runtime.presented && document.visibilityState !== "hidden") {
-      notifyRenderLifecycleForTest(runtime.element, "invalidate");
-    }
-  }
 
   runtime.invalidate = () => {
     if (disposed || !runtime.isConnected) {
@@ -66,20 +57,20 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         complete = () => resolve(true);
       });
     }
-    if (!publicationQueued) {
-      publicationQueued = true;
-      // Domain mutations stay synchronous; rendering retains its microtask boundary.
-      queueMicrotask(publish);
+    runtime.refreshBoardSubscriptions();
+    // Solid batches this with field publications; a second microtask would render twice.
+    setRevision((value) => value + 1);
+    if (runtime.presented && document.visibilityState !== "hidden") {
+      notifyRenderLifecycleForTest(runtime.element, "invalidate");
     }
   };
 
   onSettled(() => {
     if (!runtime.isConnected) {
-      runtime.start();
+      // Startup creates projections that belong to this retained view, outside the settled callback.
+      runWithOwner(viewOwner, () => runtime.start());
     }
     runtime.invalidate();
-    // Drain startup before mounting children, as the previous pane lifecycle did.
-    publish();
     setReady(true);
   });
   onCleanup(() => {
@@ -101,7 +92,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     };
     previousInputs = next;
     focusPending ||= changes.focusComposer;
-    runtime.chatState.prepareRender();
+    // Persistence/scroll bookkeeping samples state; it is not a render dependency.
+    untrack(() => runtime.chatState.prepareRender());
     runtime.synchronizeInputs(changes);
   }
   function commitRender() {
@@ -118,6 +110,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.readState();
     const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
     const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
@@ -130,8 +123,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       return owner && projectOwner(owner, (source) => source.snapshot);
     });
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
+    const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
     const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
+    const companion = projectOwner(runtime.sessionCompanionThreads, (owner) => owner);
     const boardProvider = createMemo(() => {
       revision();
       return runtime.subscribedBoardProvider;
@@ -200,8 +195,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         realtime()?.read();
         projects.read();
         workspace?.read();
+        goals?.read();
         resources.read();
         discussion.read();
+        companion.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());

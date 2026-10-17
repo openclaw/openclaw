@@ -134,8 +134,31 @@ it.skipIf(process.platform === "win32").each(["loader", "permission"])(
       );
       await expect(host.ready()).rejects.toThrow("Restart the Gateway.");
     } finally {
-      await host?.close();
       process.execPath = executable;
+      await host?.close().catch((error: unknown) => {
+        // Early bootstrap EPIPE can make the intentional loader exit arrive during close.
+        expect(kind).toBe("loader");
+        expect(error).toMatchObject({
+          name: "AggregateError",
+          message: "Spawn broker cleanup did not complete",
+          errors: [
+            {
+              code: "ERR_SPAWN_BROKER_UNAVAILABLE",
+              message: "Spawn broker shutdown failed",
+              cause: {
+                code: "NODE_RUNTIME_UNAVAILABLE",
+                message: `The Node.js runtime this Gateway started with (${brokenRuntime}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
+              },
+            },
+          ],
+        });
+      });
+    }
+    const healthyHost = createSpawnBrokerHost();
+    try {
+      await healthyHost.ready();
+    } finally {
+      await healthyHost.close();
     }
   },
 );
