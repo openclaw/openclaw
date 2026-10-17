@@ -660,6 +660,17 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           latestSessionState.sessionId;
         return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
       },
+      waitForRunEnd: async () => {
+        try {
+          const latestSessionState = resolvePreparedSessionState();
+          const latestActiveSessionId =
+            resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
+            latestSessionState.sessionId;
+          await embeddedAgentRuntime?.waitForEmbeddedAgentRunEnd(latestActiveSessionId, null);
+        } catch {
+          // The queued drain still runs; a failed wait only loses the early hold.
+        }
+      },
       opts:
         authorityRunId || cronCreatorAuthorityCapability
           ? {

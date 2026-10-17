@@ -85,6 +85,20 @@ export function scheduleFollowupDrainAfterReplyOperationClear(params: {
   });
 }
 
+// Runs without a reply operation (inter-session turns) still hold the session lane. Draining
+// now would adopt queued input while it waits behind that run, so it could not be removed.
+export async function scheduleFollowupDrainAfterRunEnd(
+  params: Pick<RunReplyAgentParams, "isRunActive" | "waitForRunEnd">,
+  queueKey: string,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<void> {
+  if (params.waitForRunEnd && (await params.isRunActive?.()) === true) {
+    void params.waitForRunEnd().then(() => scheduleFollowupDrain(queueKey, runFollowup));
+    return;
+  }
+  scheduleFollowupDrain(queueKey, runFollowup);
+}
+
 export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
@@ -494,6 +508,8 @@ export type RunReplyAgentParams = ReplyAgentTurnContext & {
   hasQueuedFollowups?: boolean;
   isActive: boolean;
   isRunActive?: () => boolean | Promise<boolean>;
+  /** Resolves once the session's active embedded run has ended; never rejects. */
+  waitForRunEnd?: () => Promise<void>;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
