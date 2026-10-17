@@ -437,6 +437,7 @@ export async function importMemoryWikiOkfBundle(params: {
     const conceptTimestamp = normalizeOptionalString(concept.frontmatter.timestamp);
 
     const frontmatter = {
+      type: concept.type,
       pageType: "concept",
       id: concept.pageId,
       title: concept.title,
