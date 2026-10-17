@@ -19,6 +19,7 @@ import { listPluginThemes, resolvePluginThemeArtwork } from "./theme-catalog.js"
 
 vi.unmock("../version.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const noExecution = 'throw new Error("theme discovery must not execute plugin code")';
 
 function writeJson(root: string, file: string, value: unknown) {
   fs.writeFileSync(path.join(root, file), JSON.stringify(value));
@@ -41,7 +42,7 @@ function artwork(
   );
 }
 
-function fixture(themes?: unknown, id = "space") {
+function fixture(themes?: unknown, id = "space", source = "theme.json") {
   const rootDir = tempDirs.make("openclaw-theme-catalog-");
   fs.chmodSync(rootDir, 0o755);
   const definition = createThemeDefinitionFixture();
@@ -49,7 +50,7 @@ function fixture(themes?: unknown, id = "space") {
     id: "neon",
     name: definition.name,
     description: definition.description,
-    source: "theme.json",
+    source,
   };
   const writeThemes = (value: unknown = [declaration]) =>
     writeJson(rootDir, "openclaw.plugin.json", {
@@ -59,10 +60,7 @@ function fixture(themes?: unknown, id = "space") {
     });
   writeThemes(themes ?? [declaration]);
   writeJson(rootDir, "theme.json", definition);
-  fs.writeFileSync(
-    path.join(rootDir, "index.js"),
-    'throw new Error("theme discovery must not execute plugin code")',
-  );
+  fs.writeFileSync(path.join(rootDir, "index.js"), noExecution);
   const readRegistry = () =>
     withPluginCache(createPluginCache(), () =>
       loadPluginManifestRegistryCore({
@@ -82,10 +80,7 @@ function discoverThemePack(plugin: ReturnType<typeof fixture>, entries = ["one",
     openclaw: { extensions: entries.map((entry) => `./${entry}.cjs`) },
   });
   for (const entry of entries) {
-    fs.writeFileSync(
-      path.join(plugin.rootDir, `${entry}.cjs`),
-      'throw new Error("theme discovery must not execute plugin code")',
-    );
+    fs.writeFileSync(path.join(plugin.rootDir, `${entry}.cjs`), noExecution);
   }
   const env = { OPENCLAW_STATE_DIR: plugin.rootDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
   return withPluginCache(createPluginCache(), () => {
@@ -130,10 +125,8 @@ describe("manifest theme catalog", () => {
   it("retains captured palettes until publication and picks up edited JSON in the next metadata generation", () => {
     const plugin = fixture();
     const before = plugin.readSnapshot();
-    const readTheme = (snapshot: Snapshot) =>
-      catalog(snapshot).find((theme) => theme.id === "space/neon");
-    const entry = readTheme(before);
-    expect(entry).toMatchObject({
+    const readTheme = (snapshot: Snapshot) => catalog(snapshot)[0];
+    expect(readTheme(before)).toMatchObject({
       id: "space/neon",
       source: "plugin",
       pluginId: "space",
@@ -268,10 +261,7 @@ describe("manifest theme catalog", () => {
     "themes\\theme.json",
     "https://example.invalid/theme.json",
   ])("rejects source declarations outside the portable plugin path contract: %s", (source) => {
-    const definition = createThemeDefinitionFixture();
-    const plugin = fixture([
-      { id: "neon", name: definition.name, description: definition.description, source },
-    ]);
+    const plugin = fixture(undefined, "space", source);
     expect(
       withPluginCache(createPluginCache(), () => loadPluginManifest(plugin.rootDir)),
     ).toMatchObject({ ok: false, error: expect.stringContaining("themes") });

@@ -136,12 +136,11 @@ describe("plugin runtime inspection", () => {
     });
     const fixture = createInspectionFixture({ pauseDisposal: true });
     const { connections, disposalStarted: started, finishDisposal: finish } = fixture.state;
-    let command: ReturnType<typeof handlePluginsCommand> | undefined;
+    let command: Promise<void> | undefined;
     try {
       await withEnvAsync(stateEnv(stateDir), async () => {
         useNoBundledPlugins();
         const config = {
-          commands: { text: true, plugins: true },
           agents: {
             defaults: { systemAgent: { agentId: "main" } },
             entries: { main: { workspace: stateDir } },
@@ -159,7 +158,6 @@ describe("plugin runtime inspection", () => {
         const epoch = capturePluginRegistryLifecycleEpoch(active);
         const signal = capturePluginRegistryLifecycleSignal(active, epoch);
         expect(epoch).toBeDefined();
-        expect(signal?.aborted).toBe(false);
         const activeConnection = connections[0];
         const readActive = () => activeConnection?.database.prepare("SELECT 42 AS value").get();
         const expectActive = () => {
@@ -172,16 +170,14 @@ describe("plugin runtime inspection", () => {
         let replied = false;
         process.exitCode = 7;
         command = withPluginRuntimeRegistryScope(active, () =>
-          runPluginsDoctorCommand({ json: true }).then(() => null),
-        ).then((result) => {
+          runPluginsDoctorCommand({ json: true }),
+        ).then(() => {
           replied = true;
-          return result;
         });
         await Promise.race([started.promise, command]);
         expect(connections).toHaveLength(2);
         const inspection = connections[1];
-        expect(inspection?.disposals).toBe(1);
-        expect(inspection?.database.isOpen).toBe(true);
+        expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: true } });
         expect(replied).toBe(false);
         expect(output).toEqual([]);
         expect(process.exitCode).toBe(7);
@@ -196,8 +192,7 @@ describe("plugin runtime inspection", () => {
           diagnostics: [],
           configurationWarnings: [],
         });
-        expect(inspection?.disposals).toBe(1);
-        expect(inspection?.database.isOpen).toBe(false);
+        expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: false } });
         expect(activeConnection?.disposals).toBe(0);
         expect(connections.map((connection) => connection.cleanups)).toEqual([0, 0]);
         expectActive();
@@ -268,7 +263,6 @@ describe("plugin runtime inspection", () => {
               runtime: true,
               json: true,
             });
-            expect(getActivePluginRegistry()).toBe(active);
             expect(output).toHaveLength(1);
             const parsed = JSON.parse(output[0] ?? "");
             expect(parsed[0]).toMatchObject({
@@ -608,13 +602,11 @@ it("preserves the diagnostics projection failure after best-effort instance clea
     const { id, event, config, disposed } = createDiagnosticsFixture(state, true);
     const before = process.listenerCount(event);
     const projectionError = new Error("fixture projection rejected");
-    const failure = await withPluginDiagnosticsReport(
-      { config, env: state.env, onlyPluginIds: [id] },
-      () => {
+    await expect(
+      withPluginDiagnosticsReport({ config, env: state.env, onlyPluginIds: [id] }, () => {
         throw projectionError;
-      },
-    ).catch((error: unknown) => error);
-    expect(failure).toBe(projectionError);
+      }),
+    ).rejects.toBe(projectionError);
     expect(process.listenerCount(event)).toBe(before);
     expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\n");
   });

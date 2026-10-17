@@ -11,11 +11,11 @@ import { listManagedPlugins } from "./management-service.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
-import type { PluginDependencyHealthRegistry } from "./status-dependencies-core.js";
 import {
   buildPluginRegistrySnapshotReport,
   projectPluginInstallHealth,
 } from "./status-snapshot.js";
+import { createPluginLoadResult, createPluginRecord } from "./status.test-fixtures.js";
 import {
   createColdPluginFixture,
   createColdPluginHermeticEnv,
@@ -53,24 +53,12 @@ function writePackage(root: string, name: string, version = "1.0.0") {
   writeJson(path.join(root, "package.json"), { name, version });
 }
 
-function runtimeRegistry(
-  id: string,
-  rootDir: string,
-  origin = "global",
-): PluginDependencyHealthRegistry {
-  return {
+function runtimeRegistry(id: string, rootDir: string, origin = "global") {
+  return createPluginLoadResult({
     plugins: [
-      {
-        id,
-        source: path.join(rootDir, "dist/index.js"),
-        rootDir,
-        enabled: true,
-        status: "loaded",
-        origin,
-      },
+      createPluginRecord({ id, source: path.join(rootDir, "dist/index.js"), rootDir, origin }),
     ],
-    diagnostics: [],
-  };
+  });
 }
 
 function projectEmptyIndex(params: Parameters<typeof loadInstalledPluginIndex>[0]) {
@@ -315,38 +303,26 @@ describe("plugin inventory install health", () => {
     });
     for (const report of [status, management]) {
       for (const targetId of pluginIds) {
+        const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === targetId);
+        const verification = diagnostics.filter((entry) => entry.code === "plugin-verification");
+        const consent = diagnostics.filter((entry) =>
+          entry.message.includes("requires capability consent"),
+        );
         if (healthy) {
           expect.soft(report.plugins).toContainEqual(expect.objectContaining({ id: targetId }));
+          expect.soft(verification).toEqual([]);
           if (!bundle) {
-            expect.soft(report.diagnostics).toContainEqual(
-              expect.objectContaining({
-                pluginId: targetId,
-                level: "warn",
-                message: expect.stringContaining("requires capability consent"),
-              }),
-            );
+            expect.soft(consent).toContainEqual(expect.objectContaining({ level: "warn" }));
           }
-          expect
-            .soft(report.diagnostics)
-            .not.toContainEqual(
-              expect.objectContaining({ pluginId: targetId, code: "plugin-verification" }),
-            );
         } else {
-          expect.soft(report.diagnostics).toContainEqual(
+          expect.soft(verification).toContainEqual(
             expect.objectContaining({
-              pluginId: targetId,
               level: "error",
-              code: "plugin-verification",
               message: expect.stringContaining("install incomplete"),
               fixHint: `Run \`openclaw plugins install ${expectedInstallTarget} --force\` to reinstall the plugin.`,
             }),
           );
-          expect.soft(report.diagnostics).not.toContainEqual(
-            expect.objectContaining({
-              pluginId: targetId,
-              message: expect.stringContaining("requires capability consent"),
-            }),
-          );
+          expect.soft(consent).toEqual([]);
         }
       }
     }
@@ -407,94 +383,90 @@ function makeTempDir() {
 
 const setupBundleInstallFixture = createBundleInstallFixtureFactory(makeTempDir);
 
-describe("buildPluginRegistrySnapshotReport", () => {
-  it.each([
-    ["agent", true, "derived", ["skills"]],
-    ["claude", false, "persisted", ["skills"]],
-    ["cursor", true, "persisted", ["skills", "commands"]],
-  ] as const)(
-    "preserves %s bundle capabilities (enabled=%s, inventory=%s)",
-    async (bundleFormat, enabled, registrySource, capabilities) => {
-      const name = `${bundleFormat}-capability-fixture`;
-      const { pluginDir, extensionsDir } = setupBundleInstallFixture({ bundleFormat, name });
-      const stateDir = path.dirname(extensionsDir);
-      const workspaceDir = path.dirname(stateDir);
-      const params = {
-        config: {
-          plugins: {
-            load: { paths: [pluginDir] },
-            entries: { [name]: { enabled } },
-          },
+it.each([
+  ["agent", true, "derived", ["skills"]],
+  ["claude", false, "persisted", ["skills"]],
+  ["cursor", true, "persisted", ["skills", "commands"]],
+] as const)(
+  "preserves %s bundle capabilities (enabled=%s, inventory=%s)",
+  async (bundleFormat, enabled, registrySource, capabilities) => {
+    const name = `${bundleFormat}-capability-fixture`;
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({ bundleFormat, name });
+    const stateDir = path.dirname(extensionsDir);
+    const workspaceDir = path.dirname(stateDir);
+    const params = {
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          entries: { [name]: { enabled } },
         },
-        workspaceDir,
-        env: {
-          ...createColdPluginHermeticEnv(workspaceDir, { bundledPluginsDir: makeTempDir() }),
-          OPENCLAW_STATE_DIR: stateDir,
-        },
-      };
-      if (registrySource === "persisted") {
-        await refreshPluginRegistry({ ...params, stateDir, reason: "manual" });
-      }
+      },
+      workspaceDir,
+      env: {
+        ...createColdPluginHermeticEnv(workspaceDir, { bundledPluginsDir: makeTempDir() }),
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+    };
+    if (registrySource === "persisted") {
+      await refreshPluginRegistry({ ...params, stateDir, reason: "manual" });
+    }
 
-      const report = buildPluginRegistrySnapshotReport(params);
+    const report = buildPluginRegistrySnapshotReport(params);
 
-      expect(report.plugins.find((plugin) => plugin.id === name)).toMatchObject({
-        format: "bundle",
-        bundleFormat,
-        bundleCapabilities: capabilities,
-        enabled,
-      });
-      expect(report.registrySource).toBe(registrySource);
-    },
-  );
-});
+    expect(report.plugins.find((plugin) => plugin.id === name)).toMatchObject({
+      format: "bundle",
+      bundleFormat,
+      bundleCapabilities: capabilities,
+      enabled,
+    });
+    expect(report.registrySource).toBe(registrySource);
+  },
+);
 
-describe("bundled dependency health", () => {
-  it.each([
-    ["bundled-demo", undefined, undefined, false],
-    ["source-external-demo", false, undefined, true],
-    ["discord", undefined, "@openclaw/discord", true],
-  ] as const)(
-    "projects package-local dependencies for %s",
-    (pluginId, bundledDist, packageName, missing) => {
-      const tempRoot = makeTempDir();
-      const bundledRoot = path.join(tempRoot, "bundled");
-      const pluginRoot = path.join(bundledRoot, pluginId);
-      fs.mkdirSync(pluginRoot, { recursive: true });
-      createColdPluginFixture({
-        rootDir: pluginRoot,
-        pluginId,
-        packageName: packageName ?? "@example/bundled",
-        packageJson: { dependencies: { "missing-plugin-local-dependency": "1.0.0" } },
+it.each([
+  ["bundled-demo", undefined, undefined, false],
+  ["source-external-demo", false, undefined, true],
+  ["discord", undefined, "@openclaw/discord", true],
+] as const)(
+  "projects package-local dependencies for %s",
+  (pluginId, bundledDist, packageName, missing) => {
+    const tempRoot = makeTempDir();
+    const bundledRoot = path.join(tempRoot, "bundled");
+    const pluginRoot = path.join(bundledRoot, pluginId);
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    createColdPluginFixture({
+      rootDir: pluginRoot,
+      pluginId,
+      packageName: packageName ?? "@example/bundled",
+      packageJson: { dependencies: { "missing-plugin-local-dependency": "1.0.0" } },
+    });
+    patchPackage(pluginRoot, {
+      openclaw: { extensions: ["./index.cjs"], build: { bundledDist } },
+    });
+    const report = buildPluginRegistrySnapshotReport({
+      config: enabledConfig(pluginId),
+      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
+    });
+    const plugin = report.plugins.find((entry) => entry.id === pluginId);
+    expect(plugin).toMatchObject({
+      origin: "bundled",
+      status: missing ? "error" : "loaded",
+    });
+    if (missing) {
+      expect(plugin?.dependencyStatus).toMatchObject({
+        requiredInstalled: false,
+        missing: ["missing-plugin-local-dependency"],
       });
-      patchPackage(pluginRoot, {
-        openclaw: { extensions: ["./index.cjs"], build: { bundledDist } },
-      });
-      const report = buildPluginRegistrySnapshotReport({
-        config: enabledConfig(pluginId),
-        env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
-      });
-      const plugin = report.plugins.find((entry) => entry.id === pluginId);
-      expect(plugin).toMatchObject({
-        origin: "bundled",
-        status: missing ? "error" : "loaded",
-      });
-      if (missing) {
-        expect(plugin?.dependencyStatus).toMatchObject({
-          requiredInstalled: false,
-          missing: ["missing-plugin-local-dependency"],
-        });
-        expect(report.diagnostics).toContainEqual(
-          expect.objectContaining({
-            level: "error",
-            pluginId,
-            message: expect.stringContaining("required dependencies are missing"),
-          }),
-        );
-      } else {
-        expect(plugin?.dependencyStatus).toBeUndefined();
-        expect(report.diagnostics).toEqual([]);
-      }
-    },
-  );
-});
+      expect(report.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          pluginId,
+          message: expect.stringContaining("required dependencies are missing"),
+        }),
+      );
+    } else {
+      expect(plugin?.dependencyStatus).toBeUndefined();
+      expect(report.diagnostics).toEqual([]);
+    }
+  },
+);
