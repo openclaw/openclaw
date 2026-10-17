@@ -96,7 +96,7 @@ it("loads plugin and wire-provided catalog icons through same-origin proxy route
     },
   );
   const fetchMock = vi.fn().mockImplementation(async () => imageResponse());
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  vi.stubGlobal("fetch", fetchMock);
   const common = iconParams({ resourceBasePath: "/openclaw" });
 
   await expect(fetchPluginIconBlobUrl({ ...common, pluginId: "firecrawl" })).resolves.toBe(
@@ -147,7 +147,7 @@ it("retries theme artwork misses while deduplicating concurrent callers and refu
 
 it("refuses proxy loading when the configured gateway is cross-origin", async () => {
   const fetchMock = vi.fn();
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  vi.stubGlobal("fetch", fetchMock);
 
   await expect(
     fetchCatalogIconBlobUrl({
@@ -177,7 +177,7 @@ it("does not wait for a stalled response cancellation before auth fallback", asy
     .fn()
     .mockResolvedValueOnce(rejectedResponse(401, cancel))
     .mockResolvedValueOnce(rejectedResponse(404, cancel));
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  vi.stubGlobal("fetch", fetchMock);
 
   await expect(fetchPluginIconBlobUrl(iconParams({ auth: fallbackAuth }))).resolves.toBeNull();
 

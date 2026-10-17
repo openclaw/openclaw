@@ -21,9 +21,14 @@ describeControlUiE2e("plugin install button progress", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
-  it.each(["success", "failure", "runtime-failure", "finalization-failure"] as const)(
+  it.each([
+    ["success", "", "", 0],
+    ["failure", "Download failed", "Dependency installation failed", 4],
+    ["runtime-failure", "Startup failed", "Plugin could not be applied to Gateway", 5],
+    ["finalization-failure", "Refresh failed", "Installation failed", 6],
+  ] as const)(
     "keeps truthful progress through the final %s response",
-    async (outcome) => {
+    async (outcome, message, label, completed) => {
       const evidence = createControlUiE2eArtifactDir(`plugin-install-progress-${outcome}`);
       const context = await newContext(undefined, {
         hasTouch: true,
@@ -45,23 +50,6 @@ describeControlUiE2e("plugin install button progress", () => {
           plugin: installed,
         });
       };
-      const failure = {
-        failure: {
-          message: "Registry refused the dependency download.",
-          label: "Dependency installation failed",
-          completed: 4,
-        },
-        "runtime-failure": {
-          message: "Plugin service failed to start.",
-          label: "Plugin could not be applied to Gateway",
-          completed: 5,
-        },
-        "finalization-failure": {
-          message: "Installed catalog refresh failed.",
-          label: "Installation failed",
-          completed: 6,
-        },
-      };
       try {
         await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
         const button = page.locator(".plugin-catalog-detail__install");
@@ -73,11 +61,12 @@ describeControlUiE2e("plugin install button progress", () => {
           page.getByRole("button", { name: `${action} Calendar Plus`, exact: true });
         const disable = pluginButton("Disable");
         const applying = card.getByText("Applying plugin to Gateway", { exact: true });
-        const expectFocused = async (control: Locator) => {
-          expect(await control.evaluate((element) => element === document.activeElement)).toBe(
-            true,
-          );
-        };
+        const expectFocused = async (control: Locator) =>
+          expect(await control.evaluate((el) => el === document.activeElement)).toBe(true);
+        const expectText = async (control: Locator, text: string) =>
+          expect(await control.textContent()).toContain(text);
+        const expectInstallRequests = async (count: number) =>
+          expect(await gateway.getRequests("plugins.install")).toHaveLength(count);
         const expectTick = async () => {
           const before = await timer.textContent();
           await page.clock.runFor(1100);
@@ -117,16 +106,15 @@ describeControlUiE2e("plugin install button progress", () => {
         await gateway.deferNext("plugins.install");
         await button.click();
         const request = await gateway.waitForRequest("plugins.install");
-        expect(await button.textContent()).toContain("Installing");
+        await expectText(button, "Installing");
         expect(await button.isEnabled()).toBe(true);
-        const activity = async (stage: string, status: string, requestId = request.id) => {
-          await gateway.emitGatewayEvent("plugins.install.progress", {
+        const activity = (stage: string, status: string, requestId = request.id) =>
+          gateway.emitGatewayEvent("plugins.install.progress", {
             requestId,
             activityId: stage,
             stage,
             status,
           });
-        };
         await activity("resolve", "completed", "another-install");
         expect(await countActivities()).toBe(0);
         for (const stage of ["resolve", "download", "extract", "files"]) {
@@ -139,7 +127,7 @@ describeControlUiE2e("plugin install button progress", () => {
         await card.waitFor({ state: "visible" });
         expect(await countActivities("completed")).toBe(4);
         await expectTick();
-        expect(await card.textContent()).toContain("Installing plugin dependencies");
+        await expectText(card, "Installing plugin dependencies");
         const buttonBounds = (await button.boundingBox())!;
         const cardBounds = (await card.boundingBox())!;
         const gapY =
@@ -169,7 +157,7 @@ describeControlUiE2e("plugin install button progress", () => {
         await page.keyboard.press("Escape");
         await button.tap();
         await card.waitFor({ state: "visible" });
-        expect((await gateway.getRequests("plugins.install")).length).toBe(1);
+        await expectInstallRequests(1);
         await activity("dependencies", outcome === "failure" ? "failed" : "completed");
         if (outcome !== "failure") {
           expect(await countActivities("started")).toBe(0);
@@ -178,7 +166,7 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await countActivities("completed")).toBe(5);
           await expectTick();
           expect(await countActivities("started")).toBe(1);
-          expect(await button.textContent()).toContain("Installing");
+          await expectText(button, "Installing");
           if (outcome === "success") {
             const inspections = (await gateway.getRequests("plugins.inspect")).length;
             await publishInstalled();
@@ -189,7 +177,7 @@ describeControlUiE2e("plugin install button progress", () => {
             });
             await gateway.emitGatewayEvent("plugins.changed", { generation: 1 });
             await gateway.waitForRequest("plugins.inspect", { after: inspections });
-            expect(await button.textContent()).toContain("Installing");
+            await expectText(button, "Installing");
             expect(await card.isVisible()).toBe(true);
             expect(await applying.count()).toBe(1);
             expect(await disable.count()).toBe(0);
@@ -201,13 +189,13 @@ describeControlUiE2e("plugin install button progress", () => {
         if (outcome !== "success") {
           await gateway.rejectDeferred("plugins.install", {
             code: "UNAVAILABLE",
-            message: failure[outcome].message,
+            message,
             ...(outcome === "failure"
               ? { details: { pluginInstallRejected: true } }
               : { details: { persistence: { operation: "install", pluginId: installed.id } } }),
           });
-          await page.getByText(failure[outcome].label, { exact: true }).waitFor();
-          expect(await countActivities("completed")).toBe(failure[outcome].completed);
+          await page.getByText(label, { exact: true }).waitFor();
+          expect(await countActivities("completed")).toBe(completed);
           await page.screenshot({ path: `${evidence}/failure-state.png` });
           expect((await button.textContent())?.trim()).toBe(
             outcome === "failure" ? "Retry install" : "View status",
@@ -220,15 +208,16 @@ describeControlUiE2e("plugin install button progress", () => {
           await page.screenshot({ path: `${evidence}/after.png` });
           await capture("failure", [1440, 1366, 768, 390], "both");
           if (outcome === "failure") {
-            expect(await card.textContent()).toContain("Plugin not installed");
+            await expectText(card, "Plugin not installed");
             expect(await card.textContent()).not.toContain(
               "Resolve the reported issue, then select Retry install.",
             );
-            expect(
-              await page.locator('.plugins-row-message[role="alert"]').textContent(),
-            ).toContain("This attempt did not install the plugin.");
+            await expectText(
+              page.locator('.plugins-row-message[role="alert"]'),
+              "This attempt did not install the plugin.",
+            );
             await card.getByText("Failure details", { exact: true }).click();
-            await card.getByText(failure[outcome].message, { exact: true }).waitFor();
+            await card.getByText(message, { exact: true }).waitFor();
             await capture("failure-expanded", [1440, 1366, 768, 390], "both");
             const failureSummary = card.locator(".plugin-install-progress__failure > summary");
             await failureSummary.focus();
@@ -242,27 +231,25 @@ describeControlUiE2e("plugin install button progress", () => {
             await gateway.deferNext("plugins.install");
             await button.click();
             await gateway.waitForRequest("plugins.install", { after: 1 });
-            expect(await button.textContent()).toContain("Installing");
+            await expectText(button, "Installing");
             expect(await countActivities()).toBe(0);
             await publishInstalled();
             await resolveInstall();
-            expect((await gateway.getRequests("plugins.install")).length).toBe(2);
+            await expectInstallRequests(2);
             await page.screenshot({ path: `${evidence}/retry-success.png` });
           } else {
             await button.click();
-            expect((await gateway.getRequests("plugins.install")).length).toBe(1);
+            await expectInstallRequests(1);
           }
         } else {
           expect(await countActivities("started")).toBe(0);
-          expect(await button.textContent()).toContain("Installing");
+          await expectText(button, "Installing");
           await expectTick();
           await publishInstalled();
           await gateway.deferNext("config.get");
           // Final success changes actions before the unrelated config refresh can finish.
           await resolveInstall();
-          expect(await page.locator(".plugin-catalog-detail__actions").textContent()).toContain(
-            "Ask OpenClaw",
-          );
+          await expectText(page.locator(".plugin-catalog-detail__actions"), "Ask OpenClaw");
           expect(await page.locator(".plugin-install-action__button").count()).toBe(0);
           await page.screenshot({ path: `${evidence}/after.png` });
           await gateway.resolveDeferred("config.get");

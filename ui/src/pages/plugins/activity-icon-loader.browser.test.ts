@@ -22,8 +22,8 @@ const nativeFetch = globalThis.fetch.bind(globalThis);
 const svg = (body: string, attributes = 'viewBox="0 0 24 24"') =>
   `<svg xmlns="http://www.w3.org/2000/svg" ${attributes}>${body}</svg>`;
 const square = '<path d="M4 4h16v16H4Z"/>';
-const svgResponse = (body = square) =>
-  new Response(svg(body), { headers: { "content-type": "image/svg+xml" } });
+const svgResponse = () =>
+  new Response(svg(square), { headers: { "content-type": "image/svg+xml" } });
 const common = {
   auth: { settings: { token: "synthetic-activity-token" } },
   resourceBasePath: "/openclaw",

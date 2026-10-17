@@ -111,10 +111,8 @@ describeControlUiE2e("Plugin overview", () => {
       await captureScreenshot(page, `direct-settings-${entry}.png`, "viewport");
       const timeZone = role(page, "textbox", "Time zone");
       await timeZone.waitFor();
-      expect([await timeZone.inputValue(), await timeZone.isEnabled()]).toEqual([
-        "Europe/Paris",
-        true,
-      ]);
+      expect(await timeZone.inputValue()).toBe("Europe/Paris");
+      expect(await timeZone.isEnabled()).toBe(true);
       const permission = role(page, "checkbox", "Add context to prompts");
       expect(await permission.isEnabled()).toBe(true);
       expect(await gateway.getRequests("config.set")).toEqual([]);
@@ -128,7 +126,6 @@ describeControlUiE2e("Plugin overview", () => {
       await captureScreenshot(page, `direct-settings-${entry}-refresh.png`, "viewport");
       await gateway.resolveDeferred("plugins.inspect");
       expect(await permission.isChecked()).toBe(true);
-      // The inspection above starts only after the config owner acknowledges the save.
       await page.reload();
       await role(page, "textbox", "Time zone").waitFor();
       await expect.poll(() => permission.isChecked()).toBe(true);
@@ -160,10 +157,7 @@ describeControlUiE2e("Plugin overview", () => {
   );
 
   it("keeps catalog identity while presenting installed controls, complete content, and a contained metadata rail", async () => {
-    const description =
-      "Search previous calendar entries. This complete description explains every supported query and return value.\n\n".repeat(
-        35,
-      ) + "TOOL_DESCRIPTION_TAIL";
+    const description = `${"Search previous calendar entries.\n\n".repeat(120)}TOOL_DESCRIPTION_TAIL`;
     const catalog: PluginDiscoveryDetailResult = {
       plugin: {
         id: "ch_Y2FsZW5kYXI",
@@ -249,16 +243,13 @@ describeControlUiE2e("Plugin overview", () => {
     );
     await page.goto(`${server.baseUrl}plugins/ch_Y2FsZW5kYXI`);
     await role(page, "button", "Disable Calendar Plus").waitFor();
+    const content = (selector: string) => page.locator(selector).textContent();
     expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
     expect(await page.locator(".plugin-catalog-detail [role=tablist]").count()).toBe(0);
     expect(await role(page, "link", "@acme").getAttribute("href")).toBe("https://clawhub.ai/acme");
     expect(await page.locator(".plugin-catalog-detail__security .is-filled").count()).toBe(2);
-    expect(await page.locator(".plugin-metadata__repository").textContent()).toContain(
-      "Acme/calendar",
-    );
-    expect(await page.locator(".plugin-catalog-detail__readme").textContent()).toContain(
-      "README_TAIL",
-    );
+    expect(await content(".plugin-metadata__repository")).toContain("Acme/calendar");
+    expect(await content(".plugin-catalog-detail__readme")).toContain("README_TAIL");
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
       "Skills1",
       "Tools2",
@@ -266,29 +257,27 @@ describeControlUiE2e("Plugin overview", () => {
     ]);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
-    expect(await page.locator(".plugin-tool-preview p").textContent()).toBe(description);
+    const preview = page.locator(".plugin-tool-preview");
     const inputs = page.locator(".plugin-tool-preview__parameters");
-    expect(await inputs.locator("dt code").allTextContents()).toEqual(["query", "limit"]);
-    expect(await inputs.locator("dt span").allTextContents()).toEqual([
-      "Required",
-      "string",
-      "Optional",
-      "integer",
-    ]);
-    expect(await inputs.locator("dd").allTextContents()).toEqual([
-      "Calendar search text.",
-      "Maximum number of results.",
-    ]);
+    expect(await preview.locator("p").textContent()).toBe(description);
+    for (const [selector, expected] of [
+      ["dt code", ["query", "limit"]],
+      ["dt span", ["Required", "string", "Optional", "integer"]],
+      ["dd", ["Calendar search text.", "Maximum number of results."]],
+    ] as const) {
+      expect(await inputs.locator(selector).allTextContents()).toEqual(expected);
+    }
     await captureScreenshot(page, "overview-tool.png", "viewport");
     await page.setViewportSize({ width: 393, height: 852 });
-    const modalBounds = await page.locator(".plugin-tool-preview").boundingBox();
+    const modalBounds = await preview.boundingBox();
     expect(modalBounds!.height).toBeLessThanOrEqual(804);
     await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
-    await page.locator(".plugin-tool-preview__body").evaluate((element) => {
+    const body = page.locator(".plugin-tool-preview__body");
+    await body.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
     expect(
-      await page.locator(".plugin-tool-preview__body").evaluate((element) => {
+      await body.evaluate((element) => {
         const paragraph = element.querySelector("p");
         if (!paragraph) {
           return false;
