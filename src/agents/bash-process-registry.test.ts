@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
@@ -57,7 +57,7 @@ describe("bash process registry", () => {
   function createRegistrySession(
     params: Partial<Parameters<typeof createProcessSessionFixture>[0]> = {},
   ): ProcessSession {
-    return createProcessSessionFixture({
+    const session = createProcessSessionFixture({
       id: "sess",
       command: "echo test",
       maxOutputChars: 100,
@@ -65,6 +65,8 @@ describe("bash process registry", () => {
       backgrounded: true,
       ...params,
     });
+    addSession(session);
+    return session;
   }
 
   function finishOutput(id: string, size: number, output: string) {
@@ -73,11 +75,15 @@ describe("bash process registry", () => {
       maxOutputChars: size,
       pendingMaxOutputChars: size,
     });
-    addSession(session);
     appendOutput(session, "stdout", output);
     markExited(session, 0, null, "completed");
     return session;
   }
+
+  afterEach(() => {
+    resetProcessRegistryForTests();
+    vi.useRealTimers();
+  });
 
   beforeEach(() => {
     randomMocks.generateSecureInt.mockReset();
@@ -91,7 +97,6 @@ describe("bash process registry", () => {
       maxOutputChars: 10_000,
       pendingMaxOutputChars: 30_000,
     });
-    addSession(session);
     markExited(session, 0, null, "completed");
     acknowledgeNotifyOnExit(session);
 
@@ -110,15 +115,12 @@ describe("bash process registry", () => {
       pendingMaxOutputChars: 20_000,
     });
 
-    addSession(session);
     const payload = `${"a".repeat(70_000)}${"b".repeat(20_000)}`;
     appendOutput(session, "stdout", payload);
 
     const drained = drainSession(session);
-    expect(drained.output).toBe("b".repeat(20_000));
-    expect(drained.outputDropped).toBe(true);
-    expect(session.pendingOutput).toHaveLength(0);
-    expect(session.pendingStdoutChars).toBe(0);
+    expect(drained).toMatchObject({ output: "b".repeat(20_000), outputDropped: true });
+    expect(session).toMatchObject({ pendingOutput: [], pendingStdoutChars: 0 });
     expect(drainSession(session).outputDropped).toBe(false);
     expect(session.truncated).toBe(true);
   });
@@ -129,7 +131,6 @@ describe("bash process registry", () => {
       pendingMaxOutputChars: 30_000,
     });
 
-    addSession(session);
     appendOutput(session, "stdout", "x".repeat(10_000));
 
     const drained = drainSession(session);
@@ -137,100 +138,82 @@ describe("bash process registry", () => {
     expect(session.truncated).toBe(true);
   });
 
+  const out = (text: string) => ["stdout", text] as const;
+  const err = (text: string) => ["stderr", text] as const;
   it.each(
-    (
-      [
-        {
-          name: "partial eviction",
-          cap: 10,
-          chunks: [
-            ["stdout", "aaaaaa"],
-            ["stderr", "ERR-safe\n"],
-            ["stdout", "bbbbbb"],
-          ],
-          pendingChars: 10,
-          otherChars: 9,
-          expected: "aaaaERR-safe\nbbbbbb",
-        },
-        {
-          name: "multiple whole evictions",
-          cap: 6,
-          chunks: [
-            ["stderr", "<"],
-            ["stdout", "aa"],
-            ["stderr", "|"],
-            ["stdout", "bb"],
-            ["stderr", ">"],
-            ["stdout", "cc"],
-            ["stderr", "!"],
-            ["stdout", "dddd"],
-          ],
-          pendingChars: 6,
-          otherChars: 4,
-          expected: "<|>cc!dddd",
-        },
-        {
-          name: "whole eviction followed by a UTF-16 boundary cut",
-          cap: 7,
-          chunks: [
-            ["stderr", "<"],
-            ["stdout", "aa"],
-            ["stderr", "|"],
-            ["stdout", "a🎉bc"],
-            ["stderr", ">"],
-            ["stdout", "dddd"],
-          ],
-          pendingChars: 6,
-          otherChars: 3,
-          expected: "<|bc>dddd",
-        },
-      ] as const
-    ).flatMap((testCase) =>
-      (["stdout", "stderr"] as const).map((stream) => ({ name: testCase.name, testCase, stream })),
+    [
+      {
+        name: "partial eviction",
+        cap: 10,
+        chunks: [out("aaaaaa"), err("ERR-safe\n"), out("bbbbbb")],
+        pendingChars: 10,
+        otherChars: 9,
+        expected: "aaaaERR-safe\nbbbbbb",
+      },
+      {
+        name: "multiple whole evictions",
+        cap: 6,
+        chunks: [
+          err("<"),
+          out("aa"),
+          err("|"),
+          out("bb"),
+          err(">"),
+          out("cc"),
+          err("!"),
+          out("dddd"),
+        ],
+        pendingChars: 6,
+        otherChars: 4,
+        expected: "<|>cc!dddd",
+      },
+      {
+        name: "whole eviction followed by a UTF-16 boundary cut",
+        cap: 7,
+        chunks: [err("<"), out("aa"), err("|"), out("a🎉bc"), err(">"), out("dddd")],
+        pendingChars: 6,
+        otherChars: 3,
+        expected: "<|bc>dddd",
+      },
+    ].flatMap((testCase) =>
+      (["stdout", "stderr"] as const).map((stream) => ({
+        name: testCase.name,
+        cap: testCase.cap,
+        chunks: testCase.chunks,
+        pendingChars: testCase.pendingChars,
+        otherChars: testCase.otherChars,
+        expected: testCase.expected,
+        stream,
+      })),
     ),
-  )("keeps callback order after $name from $stream", ({ testCase, stream }) => {
-    const { cap, chunks, pendingChars, otherChars, expected } = testCase;
-    const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: cap,
-    });
-
-    addSession(session);
+  )("keeps callback order after $name from $stream", (row) => {
+    const { cap, chunks, pendingChars, otherChars, expected, stream } = row;
+    const session = createRegistrySession({ pendingMaxOutputChars: cap });
     const otherStream = stream === "stdout" ? "stderr" : "stdout";
     for (const [source, text] of chunks) {
       appendOutput(session, source === "stdout" ? stream : otherStream, text);
     }
-
-    expect(session.pendingStdoutChars).toBe(stream === "stdout" ? pendingChars : otherChars);
-    expect(session.pendingStderrChars).toBe(stream === "stderr" ? pendingChars : otherChars);
-    const drained = drainSession(session);
-    expect(drained.output).toBe(expected);
-    expect(drained.outputDropped).toBe(true);
-    expect(session.pendingStdoutChars).toBe(0);
-    expect(session.pendingStderrChars).toBe(0);
+    expect(session).toMatchObject({
+      pendingStdoutChars: stream === "stdout" ? pendingChars : otherChars,
+      pendingStderrChars: stream === "stderr" ? pendingChars : otherChars,
+    });
+    expect(drainSession(session)).toMatchObject({ output: expected, outputDropped: true });
+    expect(session).toMatchObject({ pendingStdoutChars: 0, pendingStderrChars: 0 });
   });
 
   it("keeps aggregate, pending, and tail suffix cuts on UTF-16 boundaries", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 3,
-      pendingMaxOutputChars: 3,
-    });
+    const session = createRegistrySession({ maxOutputChars: 3, pendingMaxOutputChars: 3 });
 
-    addSession(session);
     appendOutput(session, "stdout", "a🎉bc");
 
-    expect(session.aggregated).toBe("bc");
-    expect(session.pendingStdoutChars).toBe(2);
+    expect(session).toMatchObject({ aggregated: "bc", pendingStdoutChars: 2 });
     expect(drainSession(session).output).toBe("bc");
     expect(tail("a🎉bc", 3)).toBe("bc");
   });
 
   it("only persists finished sessions when backgrounded", () => {
-    const session = createRegistrySession({
-      backgrounded: false,
-    });
+    const session = createRegistrySession({ backgrounded: false });
 
-    addSession(session);
     markExited(session, 0, null, "completed");
     expect(listFinishedSessions()).toHaveLength(0);
     expect(session.endedAt).toBeUndefined();
@@ -253,7 +236,6 @@ describe("bash process registry", () => {
       maxOutputChars: 100,
       pendingMaxOutputChars: 100,
     });
-    addSession(session);
     appendOutput(session, "stdout", "terminal output\n");
     markExited(session, 0, null, "completed");
 
@@ -309,11 +291,8 @@ describe("bash process registry", () => {
   });
 
   it("tracks only live backgrounded sessions", () => {
-    const session = createRegistrySession({
-      backgrounded: false,
-    });
+    const session = createRegistrySession({ backgrounded: false });
 
-    addSession(session);
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
 
     markBackgrounded(session);
@@ -328,12 +307,8 @@ describe("bash process registry", () => {
   });
 
   it("keeps a hidden background session active until its process exits", () => {
-    const session = createRegistrySession({
-      id: "hidden-until-exit",
-      backgrounded: false,
-    });
+    const session = createRegistrySession({ id: "hidden-until-exit", backgrounded: false });
 
-    addSession(session);
     markBackgrounded(session);
     session.backgrounded = false;
     deleteSession(session.id);
@@ -348,12 +323,8 @@ describe("bash process registry", () => {
   it.each([false, true])(
     "keeps a hidden active session id reserved until exit (backgrounded=%s)",
     (backgrounded) => {
-      const session = createRegistrySession({
-        id: "amber-atlas",
-        backgrounded: false,
-      });
+      const session = createRegistrySession({ id: "amber-atlas", backgrounded: false });
 
-      addSession(session);
       if (backgrounded) {
         markBackgrounded(session);
       }
@@ -370,10 +341,7 @@ describe("bash process registry", () => {
     const testApiKey = Symbol.for("openclaw.bashProcessRegistryTestApi");
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     const originalTestApi = globalStore[testApiKey];
-    const session = createRegistrySession({
-      id: "original-registry-session",
-    });
-    addSession(session);
+    createRegistrySession({ id: "original-registry-session" });
 
     try {
       const registrySpecifier = "./bash-process-registry.js?reset-owner-regression";
@@ -393,92 +361,84 @@ describe("bash process registry", () => {
 
   it("expires by completion-relative deadlines without retiring captured poll or notification receipts", () => {
     vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
-      const long = createProcessSessionFixture({
-        id: "long",
-        cleanupMs: 4 * 60 * 60 * 1000,
-        backgrounded: true,
-      });
-      const short = createProcessSessionFixture({ id: "short", cleanupMs: 0, backgrounded: true });
-      addSession(long);
-      addSession(short);
-      expect(vi.getTimerCount()).toBe(0);
-      vi.advanceTimersByTime(120_000);
-      expect(getFinishedSession(short.id)).toBeUndefined();
-      // Completion order does not imply expiry order when agent durations differ.
-      markExited(long, 0, null, "completed");
-      vi.advanceTimersByTime(10_000);
-      appendOutput(short, "stdout", "retained poll output");
-      markExited(short, 0, null, "completed");
-      const endedAt = short.endedAt;
-      const expiresAt = short.expiresAt;
-      const remove = vi.fn(() => true);
-      recordNotifyOnExitRemoval(short, remove);
-      const delivery = prepareSessionPoll(short, {});
-      expect(delivery.output).toBe("retained poll output");
-      expect(long.expiresAt! - long.endedAt!).toBe(3 * 60 * 60 * 1000);
-      expect(short.expiresAt! - short.endedAt!).toBe(60_000);
-      expect(getFinishedSession(short.id)).toBe(short);
-      expect(vi.getTimerCount()).toBe(1);
+    vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
+    const long = createProcessSessionFixture({
+      id: "long",
+      cleanupMs: 4 * 60 * 60 * 1000,
+      backgrounded: true,
+    });
+    const short = createProcessSessionFixture({ id: "short", cleanupMs: 0, backgrounded: true });
+    addSession(long);
+    addSession(short);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(120_000);
+    expect(getFinishedSession(short.id)).toBeUndefined();
+    // Completion order does not imply expiry order when agent durations differ.
+    markExited(long, 0, null, "completed");
+    vi.advanceTimersByTime(10_000);
+    appendOutput(short, "stdout", "retained poll output");
+    markExited(short, 0, null, "completed");
+    const endedAt = short.endedAt;
+    const expiresAt = short.expiresAt;
+    const remove = vi.fn(() => true);
+    recordNotifyOnExitRemoval(short, remove);
+    const delivery = prepareSessionPoll(short, {});
+    expect(delivery.output).toBe("retained poll output");
+    expect(long.expiresAt! - long.endedAt!).toBe(3 * 60 * 60 * 1000);
+    expect(short.expiresAt! - short.endedAt!).toBe(60_000);
+    expect(getFinishedSession(short.id)).toBe(short);
+    expect(vi.getTimerCount()).toBe(1);
 
-      vi.advanceTimersByTime(60_000);
-      expect(getFinishedSession(short.id)).toBeUndefined();
-      expect(getFinishedSession(long.id)).toBe(long);
-      expect(short.endedAt).toBe(endedAt);
-      expect(short.expiresAt).toBe(expiresAt);
-      expect(short.pendingPollDelivery?.output).toBe("retained poll output");
-      expect(remove).not.toHaveBeenCalled();
-      delivery.acknowledge();
-      acknowledgeNotifyOnExit(short);
-      expect(remove).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(60_000);
+    expect(getFinishedSession(short.id)).toBeUndefined();
+    expect(getFinishedSession(long.id)).toBe(long);
+    expect(short).toMatchObject({
+      endedAt,
+      expiresAt,
+      pendingPollDelivery: { output: "retained poll output" },
+    });
+    expect(remove).not.toHaveBeenCalled();
+    delivery.acknowledge();
+    acknowledgeNotifyOnExit(short);
+    expect(remove).toHaveBeenCalledOnce();
 
-      vi.advanceTimersByTime(3 * 60 * 60 * 1000 - 70_000);
-      expect(listFinishedSessions()).toHaveLength(0);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      resetProcessRegistryForTests();
-      vi.useRealTimers();
-    }
+    vi.advanceTimersByTime(3 * 60 * 60 * 1000 - 70_000);
+    expect(listFinishedSessions()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["delete", "scope", "reset"] as const)(
     "retires its timer after %s removes retained results",
     (removal) => {
       vi.useFakeTimers();
-      try {
-        const first = createProcessSessionFixture({
-          id: "first",
-          cleanupMs: 60_000,
-          backgrounded: true,
-        });
-        const last = createProcessSessionFixture({
-          id: "last",
-          cleanupMs: 180_000,
-          backgrounded: true,
-        });
-        last.scopeKey = "retired";
-        addSession(first);
-        addSession(last);
-        markExited(first, 0, null, "completed");
-        markExited(last, 0, null, "completed");
-        deleteSession(first.id);
-        expect(vi.getTimerCount()).toBe(1);
-        vi.advanceTimersByTime(60_000);
-        expect(getFinishedSession(last.id)).toBe(last);
-        if (removal === "delete") {
-          deleteSession(last.id);
-        } else if (removal === "scope") {
-          clearFinishedSessionsForScopes(["retired"]);
-        } else {
-          resetProcessRegistryForTests();
-        }
-        expect(listFinishedSessions()).toHaveLength(0);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
+      const first = createProcessSessionFixture({
+        id: "first",
+        cleanupMs: 60_000,
+        backgrounded: true,
+      });
+      const last = createProcessSessionFixture({
+        id: "last",
+        cleanupMs: 180_000,
+        backgrounded: true,
+      });
+      last.scopeKey = "retired";
+      addSession(first);
+      addSession(last);
+      markExited(first, 0, null, "completed");
+      markExited(last, 0, null, "completed");
+      deleteSession(first.id);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(60_000);
+      expect(getFinishedSession(last.id)).toBe(last);
+      if (removal === "delete") {
+        deleteSession(last.id);
+      } else if (removal === "scope") {
+        clearFinishedSessionsForScopes(["retired"]);
+      } else {
         resetProcessRegistryForTests();
-        vi.useRealTimers();
       }
+      expect(listFinishedSessions()).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
     },
   );
 });

@@ -86,8 +86,8 @@ function withReaders(
     try {
       run(agentDir, open);
     } finally {
+      vi.restoreAllMocks();
       closeAuthProfileReadPool();
-      open.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -265,33 +265,29 @@ describe("auth profile sqlite reader lifecycle", () => {
       const sibling = `${agentDir}-sibling`;
       vi.useFakeTimers();
       const schedule = vi.spyOn(globalThis, "setTimeout");
-      try {
-        expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-        expect(loadStore(sibling)).toMatchObject(apiKeyStore("qa-sibling"));
-        const first = expectDefined(open.mock.results[0]?.value, "first pooled auth reader");
-        const staleCallback = expectDefined(
-          schedule.mock.calls[0],
-          "first auth reader idle timer",
-        )[0];
-        const second = expectDefined(open.mock.results[1]?.value, "sibling pooled auth reader");
-        vi.advanceTimersByTime(20 * 60_000);
-        expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-        vi.advanceTimersByTime(10 * 60_000);
-        expect(second.isOpen).toBe(false);
-        expect(first.isOpen).toBe(true);
-        vi.advanceTimersByTime(20 * 60_000);
-        expect(first.isOpen).toBe(false);
-        expect(vi.getTimerCount()).toBe(0);
-        expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-        // A previously queued expiry must not close the replacement at the same path.
-        staleCallback();
-        expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-        expect(open).toHaveBeenCalledTimes(3);
-        closeAuthProfileReadPool();
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        schedule.mockRestore();
-      }
+      expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
+      expect(loadStore(sibling)).toMatchObject(apiKeyStore("qa-sibling"));
+      const first = expectDefined(open.mock.results[0]?.value, "first pooled auth reader");
+      const staleCallback = expectDefined(
+        schedule.mock.calls[0],
+        "first auth reader idle timer",
+      )[0];
+      const second = expectDefined(open.mock.results[1]?.value, "sibling pooled auth reader");
+      vi.advanceTimersByTime(20 * 60_000);
+      expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(second.isOpen).toBe(false);
+      expect(first.isOpen).toBe(true);
+      vi.advanceTimersByTime(20 * 60_000);
+      expect(first.isOpen).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
+      // A previously queued expiry must not close the replacement at the same path.
+      staleCallback();
+      expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
+      expect(open).toHaveBeenCalledTimes(3);
+      closeAuthProfileReadPool();
+      expect(vi.getTimerCount()).toBe(0);
     }, true);
   });
 
@@ -300,31 +296,22 @@ describe("auth profile sqlite reader lifecycle", () => {
       const exitListeners = process.listenerCount("exit");
       vi.useFakeTimers();
       const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-      let close: MockInstance<DatabaseSync["close"]> | undefined;
-      try {
-        expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-        const reader = expectDefined(
-          open.mock.results[0]?.value,
-          "auth reader awaiting idle close",
-        );
-        close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-          throw new Error("native idle close failed");
-        });
-        vi.advanceTimersByTime(30 * 60_000);
-        expect(reader.isOpen).toBe(true);
-        expect(close).toHaveBeenCalledTimes(1);
-        expect(warning).toHaveBeenCalledTimes(1);
-        expect(process.listenerCount("exit")).toBe(exitListeners + 1);
-        vi.advanceTimersByTime(30 * 60_000 - 1);
-        expect(close).toHaveBeenCalledTimes(1);
-        vi.advanceTimersByTime(1);
-        expect(reader.isOpen).toBe(false);
-        expect(process.listenerCount("exit")).toBe(exitListeners);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        close?.mockRestore();
-        warning.mockRestore();
-      }
+      expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
+      const reader = expectDefined(open.mock.results[0]?.value, "auth reader awaiting idle close");
+      const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
+        throw new Error("native idle close failed");
+      });
+      vi.advanceTimersByTime(30 * 60_000);
+      expect(reader.isOpen).toBe(true);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(process.listenerCount("exit")).toBe(exitListeners + 1);
+      vi.advanceTimersByTime(30 * 60_000 - 1);
+      expect(close).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(reader.isOpen).toBe(false);
+      expect(process.listenerCount("exit")).toBe(exitListeners);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -370,29 +357,25 @@ describe("auth profile sqlite reader lifecycle", () => {
       }
       const closeScope =
         scope === "root" ? { kind: "root" as const, rootPath: agentDir } : undefined;
-      const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
+      vi.spyOn(reader, "close").mockImplementationOnce(() => {
         throw new Error("native close failed");
       });
-      try {
-        expect(() => closeAuthProfileReadPool(closeScope)).toThrow("native close failed");
-        expect(reader.isOpen).toBe(true);
-        if (scope === "root") {
-          closeAuthProfileReadPool(closeScope);
-          const siblingReader = expectDefined(open.mock.results[1]?.value, "sibling auth reader");
-          expect(siblingReader.isOpen).toBe(true);
-          expect(loadStore(siblingAgentDir)).toMatchObject(apiKeyStore("qa-sibling"));
-        } else {
-          const exitClosers = process
-            .listeners("exit")
-            .filter((listener) => !listeners.includes(listener));
-          expect(exitClosers).toHaveLength(1);
-          expectDefined(exitClosers[0], "auth reader exit cleanup listener")(0);
-          expect(process.listeners("exit")).toEqual(listeners);
-        }
-        expect(reader.isOpen).toBe(false);
-      } finally {
-        close.mockRestore();
+      expect(() => closeAuthProfileReadPool(closeScope)).toThrow("native close failed");
+      expect(reader.isOpen).toBe(true);
+      if (scope === "root") {
+        closeAuthProfileReadPool(closeScope);
+        const siblingReader = expectDefined(open.mock.results[1]?.value, "sibling auth reader");
+        expect(siblingReader.isOpen).toBe(true);
+        expect(loadStore(siblingAgentDir)).toMatchObject(apiKeyStore("qa-sibling"));
+      } else {
+        const exitClosers = process
+          .listeners("exit")
+          .filter((listener) => !listeners.includes(listener));
+        expect(exitClosers).toHaveLength(1);
+        expectDefined(exitClosers[0], "auth reader exit cleanup listener")(0);
+        expect(process.listeners("exit")).toEqual(listeners);
       }
+      expect(reader.isOpen).toBe(false);
     }, scope === "root");
   });
 
@@ -427,26 +410,21 @@ describe("auth profile sqlite reader lifecycle", () => {
           });
           return candidate;
         });
-        try {
-          expect(() => loadStore(candidateAgentDir)).toThrow(AggregateError);
-          expect(oldest.isOpen).toBe(true);
-          expect(candidate?.isOpen).toBe(true);
-          expect(() => loadStore(agentDirs[65])).toThrow("candidate close failed");
-          expect(() => loadStore(candidateAgentDir)).toThrow("candidate close failed");
-          expect(openSpy).toHaveBeenCalledTimes(65);
-          expect(loadStore(agentDirs[0])).toMatchObject(apiKeyStore("qa-synthetic"));
-          candidateClose?.mockRestore();
-          closeAuthProfileReadPool({ kind: "database", databasePath: candidatePath });
-          expect(candidate?.isOpen).toBe(false);
-          evictionClose.mockRestore();
-          expect(loadStore(agentDirs[65])).toMatchObject(apiKeyStore("qa-synthetic"));
-          expect(openSpy).toHaveBeenCalledTimes(66);
-        } finally {
-          candidateClose?.mockRestore();
-          evictionClose.mockRestore();
-        }
+        expect(() => loadStore(candidateAgentDir)).toThrow(AggregateError);
+        expect(oldest.isOpen).toBe(true);
+        expect(candidate?.isOpen).toBe(true);
+        expect(() => loadStore(agentDirs[65])).toThrow("candidate close failed");
+        expect(() => loadStore(candidateAgentDir)).toThrow("candidate close failed");
+        expect(openSpy).toHaveBeenCalledTimes(65);
+        expect(loadStore(agentDirs[0])).toMatchObject(apiKeyStore("qa-synthetic"));
+        candidateClose?.mockRestore();
+        closeAuthProfileReadPool({ kind: "database", databasePath: candidatePath });
+        expect(candidate?.isOpen).toBe(false);
+        evictionClose.mockRestore();
+        expect(loadStore(agentDirs[65])).toMatchObject(apiKeyStore("qa-synthetic"));
+        expect(openSpy).toHaveBeenCalledTimes(66);
       } finally {
-        openSpy.mockRestore();
+        vi.restoreAllMocks();
         closeAuthProfileReadPool();
       }
     });

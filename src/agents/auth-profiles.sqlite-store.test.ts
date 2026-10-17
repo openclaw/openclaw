@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it as baseIt, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -28,7 +28,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
 import {
-  inspectPersistedAuthProfileStoreRaw,
+  inspectPersistedAuthProfileStoreRaw as inspectStore,
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
 } from "./auth-profiles/sqlite.js";
@@ -40,12 +40,12 @@ import {
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
-  ensureAuthProfileStoreForLocalUpdateAsync,
-  ensureAuthProfileStoreWithoutExternalProfiles,
-  ensureAuthProfileStoreWithoutExternalProfilesAsync,
-  findPersistedAuthProfileCredentialAsync,
-  loadAuthProfileStoreWithoutExternalProfilesAsync,
-  loadAuthProfileStoreForRuntime,
+  ensureAuthProfileStoreForLocalUpdateAsync as ensureUpdateAsync,
+  ensureAuthProfileStoreWithoutExternalProfiles as ensureLocal,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync as ensureLocalAsync,
+  findPersistedAuthProfileCredentialAsync as findCredentialAsync,
+  loadAuthProfileStoreWithoutExternalProfilesAsync as loadLocalAsync,
+  loadAuthProfileStoreForRuntime as loadRuntime,
   saveAuthProfileStore,
 } from "./auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
@@ -73,6 +73,12 @@ function sharedValue(database: DatabaseSync, key: string) {
     .get(key)?.value_json;
 }
 
+function updateShared(database: DatabaseSync, key: string, value: unknown) {
+  database
+    .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
+    .run(JSON.stringify(value), key);
+}
+
 const noExternal = { syncExternalCli: false };
 
 function upsert(agentDir: string, key: string, profileId = "openai:default") {
@@ -91,381 +97,345 @@ function seedAsync(agentDir: string, profileId: string, key: string) {
   });
 }
 
+const it = baseIt.extend<{ auth: { agentDir: string; stateDir: string } }>({
+  auth: async ({ task }, use) =>
+    withAgentDirEnv(`openclaw-auth-${task.id}-`, (agentDir, stateDir) =>
+      use({ agentDir, stateDir }),
+    ),
+});
+
 describe("auth profile sqlite store", () => {
-  beforeEach(() => {
-    clearRuntimeAuthProfileStoreSnapshots();
-  });
+  beforeEach(clearRuntimeAuthProfileStoreSnapshots);
+  afterEach(clearRuntimeAuthProfileStoreSnapshots);
 
-  afterEach(() => {
-    clearRuntimeAuthProfileStoreSnapshots();
-  });
-
-  it("refreshes async auth reads after concurrent profile writes without losing neighbors", async () => {
-    await withAgentDirEnv("openclaw-auth-async-upsert-", async (agentDir) => {
-      await seedAsync(agentDir, "test:original", "original-key");
-      const options = { allowKeychainPrompt: false, externalCli: { mode: "none" as const } };
-      expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toHaveProperty(
-        "test:original",
-      );
-      expect(
-        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
-      ).toHaveProperty("test:original");
-      await Promise.all([
-        seedAsync(agentDir, "test:original", "replacement-key"),
-        seedAsync(agentDir, "test:neighbor", "neighbor-key"),
-      ]);
-      const expected = {
-        "test:original": { type: "api_key", provider: "test", key: "replacement-key" },
-        "test:neighbor": { type: "api_key", provider: "test", key: "neighbor-key" },
-      };
-      expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toEqual(expected);
-      expect(
-        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
-      ).toEqual(expected);
-      expect(
-        (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
-      ).toEqual(expected);
-      expect((await ensureAuthProfileStoreForLocalUpdateAsync(agentDir)).profiles).toEqual(
-        expected,
-      );
-      replaceRuntimeAuthProfileStoreSnapshots([
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              "test:original": { type: "api_key", provider: "shadow", key: "shadow-key" },
-            },
+  it("refreshes async auth reads after concurrent profile writes without losing neighbors", async ({
+    auth: { agentDir },
+  }) => {
+    await seedAsync(agentDir, "test:original", "original-key");
+    const options = { allowKeychainPrompt: false, externalCli: { mode: "none" as const } };
+    expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toHaveProperty(
+      "test:original",
+    );
+    expect((await loadLocalAsync(agentDir, options)).profiles).toHaveProperty("test:original");
+    await Promise.all([
+      seedAsync(agentDir, "test:original", "replacement-key"),
+      seedAsync(agentDir, "test:neighbor", "neighbor-key"),
+    ]);
+    const expected = {
+      "test:original": { type: "api_key", provider: "test", key: "replacement-key" },
+      "test:neighbor": { type: "api_key", provider: "test", key: "neighbor-key" },
+    };
+    expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toEqual(expected);
+    expect((await loadLocalAsync(agentDir, options)).profiles).toEqual(expected);
+    expect((await ensureLocalAsync(agentDir, options)).profiles).toEqual(expected);
+    expect((await ensureUpdateAsync(agentDir)).profiles).toEqual(expected);
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            "test:original": { type: "api_key", provider: "shadow", key: "shadow-key" },
           },
         },
-      ]);
-      expect(
-        (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, options)).profiles,
-      ).toEqual(expected);
-      await expect(
-        findPersistedAuthProfileCredentialAsync({ agentDir, profileId: "test:original" }),
-      ).resolves.toEqual(expected["test:original"]);
-    });
+      },
+    ]);
+    expect((await loadLocalAsync(agentDir, options)).profiles).toEqual(expected);
+    await expect(findCredentialAsync({ agentDir, profileId: "test:original" })).resolves.toEqual(
+      expected["test:original"],
+    );
   });
 
-  it.each([true, false])(
+  it.for([true, false])(
     "selects shared OAuth according to replacement state %s",
-    async (replacement) => {
+    async (replacement, { auth: { agentDir: mainAgentDir, stateDir } }) => {
       const expectedProfileId = replacement ? "openai:default" : "openai:setup-replacement";
       const expectedAccess = replacement ? "working-access" : "newer-access";
-      await withAgentDirEnv("openclaw-auth-setup-drift-", async (mainAgentDir, stateDir) => {
-        const localAgentDir = path.join(stateDir, "agents", "worker", "agent");
-        const working: OAuthCredential = {
-          type: "oauth",
-          provider: "openai",
-          access: "working-access",
-          refresh: "working-refresh",
-          expires: Date.now() + 3_600_000,
-          accountId: "same-account",
-          email: "same@example.test",
-        };
-        await persistAuthProfileBatch({
-          agentDir: mainAgentDir,
-          profiles: [
-            {
-              profileId: "openai:setup-replacement",
-              credential: {
-                ...working,
-                access: "newer-access",
-                refresh: "newer-refresh",
-                expires: working.expires + 3_600_000,
-                setup: {
-                  replacement,
-                  modelRef: "openai/test-model",
-                  configJson: "{}",
-                },
-              },
-            },
-          ],
-        });
-        saveAuthProfileStore(
+      const localAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const working: OAuthCredential = {
+        type: "oauth",
+        provider: "openai",
+        access: "working-access",
+        refresh: "working-refresh",
+        expires: Date.now() + 3_600_000,
+        accountId: "same-account",
+        email: "same@example.test",
+      };
+      await persistAuthProfileBatch({
+        agentDir: mainAgentDir,
+        profiles: [
           {
-            version: 1,
-            profiles: { "openai:default": working },
-            order: { openai: ["openai:default"] },
-            lastGood: { openai: "openai:default" },
+            profileId: "openai:setup-replacement",
+            credential: {
+              ...working,
+              access: "newer-access",
+              refresh: "newer-refresh",
+              expires: working.expires + 3_600_000,
+              setup: { replacement, modelRef: "openai/test-model", configJson: "{}" },
+            },
           },
-          localAgentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-        );
-        clearRuntimeAuthProfileStoreSnapshots();
-
-        const runtimeStore = loadAuthProfileStoreForRuntime(localAgentDir, {
-          readOnly: true,
-          syncExternalCli: false,
-        });
-        expect(resolveAuthProfileOrder({ store: runtimeStore, provider: "openai" })).toEqual([
-          expectedProfileId,
-        ]);
-        expect(runtimeStore.profiles[expectedProfileId]).toMatchObject({
-          access: expectedAccess,
-        });
-        expect(runtimeStore.lastGood?.openai).toBe(expectedProfileId);
-        expect(loadPersistedAuthProfileStore(localAgentDir)?.profiles["openai:default"]).toEqual(
-          working,
-        );
+        ],
       });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: { "openai:default": working },
+          order: { openai: ["openai:default"] },
+          lastGood: { openai: "openai:default" },
+        },
+        localAgentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const runtimeStore = loadRuntime(localAgentDir, {
+        readOnly: true,
+        syncExternalCli: false,
+      });
+      expect(resolveAuthProfileOrder({ store: runtimeStore, provider: "openai" })).toEqual([
+        expectedProfileId,
+      ]);
+      expect(runtimeStore.profiles[expectedProfileId]).toMatchObject({
+        access: expectedAccess,
+      });
+      expect(runtimeStore.lastGood?.openai).toBe(expectedProfileId);
+      expect(loadPersistedAuthProfileStore(localAgentDir)?.profiles["openai:default"]).toEqual(
+        working,
+      );
     },
   );
 
-  it("persists fresh shared auth through the shared-state adapter", async () => {
-    await withAgentDirEnv("openclaw-auth-shared-state-", async (agentDir) => {
-      await persistAuthProfileBatch({
-        agentDir,
-        profiles: [
-          {
-            profileId: "openai:default",
-            credential: apiKeyCredential("sk-shared"),
-          },
-        ],
-        order: { openai: ["openai:default"] },
-      });
+  it("persists fresh shared auth through the shared-state adapter", async ({
+    auth: { agentDir },
+  }) => {
+    await persistAuthProfileBatch({
+      agentDir,
+      profiles: [{ profileId: "openai:default", credential: apiKeyCredential("sk-shared") }],
+      order: { openai: ["openai:default"] },
+    });
 
+    expect(ensureAuthProfileStore(undefined, noExternal)).toMatchObject({
+      profiles: { "openai:default": { key: "sk-shared" } },
+      order: { openai: ["openai:default"] },
+    });
+    using database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    expect(sharedValue(database, "authProfiles.store")).toEqual(expect.any(String));
+    expect(sharedValue(database, "authProfiles.state")).toEqual(expect.any(String));
+    expect(sharedValue(database, "auth.sharedStore")).toBe(
+      JSON.stringify({ location: "state-db" }),
+    );
+    for (const [key, lastUsed] of [
+      ["synthetic-shared-first", 789],
+      ["synthetic-shared-second", 790],
+    ] as const) {
+      updateShared(database, "authProfiles.store", apiKeyStore(key));
+      updateShared(database, "authProfiles.state", {
+        version: 1,
+        usageStats: { "openai:default": { lastUsed } },
+      });
+      const loaded = loadRuntime(undefined, { readOnly: true });
+      expect(loaded).toMatchObject({
+        ...apiKeyStore(key),
+        usageStats: { "openai:default": { lastUsed } },
+      });
+      expect(loaded.order).toBeUndefined();
+    }
+    expect(fs.existsSync(resolveAuthProfileDatabasePath(agentDir))).toBe(false);
+  });
+
+  it("memoizes legacy inspection and follows Doctor's ownership flip", async ({
+    auth: { agentDir, stateDir },
+  }) => {
+    writePersistedAuthProfileStoreRaw(apiKeyStore("sk-legacy"), agentDir);
+    let sourceInspections = 0;
+    const inspection = probe.command(stateWorker, (command, executeOptions, scope) => {
+      if (command.type === "authProfiles.bootstrap") {
+        sourceInspections += 1;
+      }
+      return scope.execute(command, executeOptions);
+    });
+
+    try {
+      for (const key of ["sk-first", "sk-second"]) {
+        await upsert(agentDir, key);
+      }
+      expect(sourceInspections).toBe(1);
+
+      const detected = detectSharedAuthStoreMigration({
+        stateDir,
+        doctorOnlyStateMigrations: true,
+      });
+      await migrateSharedAuthStore({ detected, stateDir });
+      const inspectionsAfterDoctor = sourceInspections;
+
+      await upsert(agentDir, "sk-after-doctor");
+
+      expect(sourceInspections).toBe(inspectionsAfterDoctor);
       expect(ensureAuthProfileStore(undefined, noExternal)).toMatchObject({
-        profiles: { "openai:default": { key: "sk-shared" } },
-        order: { openai: ["openai:default"] },
+        profiles: { "openai:default": { key: "sk-after-doctor" } },
       });
-      const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
-      expect(sharedValue(database, "authProfiles.store")).toEqual(expect.any(String));
-      expect(sharedValue(database, "authProfiles.state")).toEqual(expect.any(String));
-      expect(sharedValue(database, "auth.sharedStore")).toBe(
-        JSON.stringify({ location: "state-db" }),
-      );
-      try {
-        for (const [key, lastUsed] of [
-          ["synthetic-shared-first", 789],
-          ["synthetic-shared-second", 790],
-        ] as const) {
-          database
-            .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
-            .run(JSON.stringify(apiKeyStore(key)), "authProfiles.store");
-          database
-            .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
-            .run(
-              JSON.stringify({ version: 1, usageStats: { "openai:default": { lastUsed } } }),
-              "authProfiles.state",
-            );
-          const loaded = loadAuthProfileStoreForRuntime(undefined, { readOnly: true });
-          expect(loaded).toMatchObject({
-            ...apiKeyStore(key),
-            usageStats: { "openai:default": { lastUsed } },
-          });
-          expect(loaded.order).toBeUndefined();
-        }
-      } finally {
-        database.close();
-      }
-      expect(fs.existsSync(resolveAuthProfileDatabasePath(agentDir))).toBe(false);
-    });
+      expect(inspectStore(agentDir).status).toBe("missing");
+    } finally {
+      inspection.mockRestore();
+    }
   });
 
-  it("memoizes legacy inspection and follows Doctor's ownership flip", async () => {
-    await withAgentDirEnv("openclaw-auth-shared-memo-", async (agentDir, stateDir) => {
-      writePersistedAuthProfileStoreRaw(apiKeyStore("sk-legacy"), agentDir);
-      let sourceInspections = 0;
-      const inspection = probe.command(stateWorker, (command, executeOptions, scope) => {
-        if (command.type === "authProfiles.bootstrap") {
-          sourceInspections += 1;
+  it("keeps legacy ownership while shared-auth cleanup is pending", async ({
+    auth: { agentDir },
+  }) => {
+    const sourcePath = resolveAuthProfileDatabasePath(agentDir);
+    writeConfigMachineState("test.seed", true);
+    const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    sharedDatabase
+      .prepare(
+        `INSERT INTO migration_runs (id, started_at, finished_at, status, report_json)
+         VALUES ('shared-auth-pending', 1, NULL, 'copied', '{}')`,
+      )
+      .run();
+    sharedDatabase
+      .prepare(
+        `INSERT INTO migration_sources
+           (source_key, migration_kind, source_path, target_table, source_sha256,
+            source_size_bytes, source_record_count, last_run_id, status, imported_at,
+            removed_source, report_json)
+         VALUES ('shared-auth-pending:store', 'shared-auth-store-state-db', ?,
+                 'auth_profile_stores', NULL, NULL, NULL, 'shared-auth-pending',
+                 'copied', 1, 0, '{}')`,
+      )
+      .run(sourcePath);
+    sharedDatabase.close();
+
+    await upsert(agentDir, "sk-after-crash");
+
+    const after = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    expect(sharedValue(after, "auth.sharedStore")).toBeUndefined();
+    expect(sharedValue(after, "authProfiles.store")).toBeUndefined();
+    after.close();
+    expect(inspectStore(agentDir).status).toBe("readable");
+  });
+
+  it("keeps legacy ownership when bootstrap source inspection fails", async ({
+    auth: { agentDir },
+  }) => {
+    const sourcePath = resolveAuthProfileDatabasePath(agentDir);
+    const inspectIdentity = databaseIdentity.inspectDatabasePathIdentitySync;
+    let sourceInspectionFailed = false;
+    const inspection = vi
+      .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
+      .mockImplementation((pathname) => {
+        if (!sourceInspectionFailed && path.resolve(pathname) === path.resolve(sourcePath)) {
+          sourceInspectionFailed = true;
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
         }
-        return scope.execute(command, executeOptions);
+        return inspectIdentity(pathname);
       });
 
-      try {
-        for (const key of ["sk-first", "sk-second"]) {
-          await upsert(agentDir, key);
-        }
-        expect(sourceInspections).toBe(1);
+    try {
+      await upsert(agentDir, "sk-unreadable");
+    } finally {
+      inspection.mockRestore();
+    }
 
-        const detected = detectSharedAuthStoreMigration({
-          stateDir,
-          doctorOnlyStateMigrations: true,
-        });
-        await migrateSharedAuthStore({ detected, stateDir });
-        const inspectionsAfterDoctor = sourceInspections;
-
-        await upsert(agentDir, "sk-after-doctor");
-
-        expect(sourceInspections).toBe(inspectionsAfterDoctor);
-        expect(ensureAuthProfileStore(undefined, noExternal)).toMatchObject({
-          profiles: { "openai:default": { key: "sk-after-doctor" } },
-        });
-        expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
-      } finally {
-        inspection.mockRestore();
-      }
-    });
+    expect(sourceInspectionFailed).toBe(true);
+    const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    expect(sharedValue(sharedDatabase, "auth.sharedStore")).toBeUndefined();
+    sharedDatabase.close();
+    expect(inspectStore(agentDir).status).toBe("readable");
   });
 
-  it("keeps legacy ownership while shared-auth cleanup is pending", async () => {
-    await withAgentDirEnv("openclaw-auth-shared-pending-", async (agentDir) => {
-      const sourcePath = resolveAuthProfileDatabasePath(agentDir);
-      writeConfigMachineState("test.seed", true);
-      const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
-      sharedDatabase
-        .prepare(
-          `INSERT INTO migration_runs (id, started_at, finished_at, status, report_json)
-           VALUES ('shared-auth-pending', 1, NULL, 'copied', '{}')`,
-        )
-        .run();
-      sharedDatabase
-        .prepare(
-          `INSERT INTO migration_sources
-             (source_key, migration_kind, source_path, target_table, source_sha256,
-              source_size_bytes, source_record_count, last_run_id, status, imported_at,
-              removed_source, report_json)
-           VALUES ('shared-auth-pending:store', 'shared-auth-store-state-db', ?,
-                   'auth_profile_stores', NULL, NULL, NULL, 'shared-auth-pending',
-                   'copied', 1, 0, '{}')`,
-        )
-        .run(sourcePath);
-      sharedDatabase.close();
+  it("does not read legacy auth-profiles.json at runtime", async ({ auth: { agentDir } }) => {
+    fs.writeFileSync(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify(apiKeyStore("sk-json"))}\n`,
+      "utf8",
+    );
 
-      await upsert(agentDir, "sk-after-crash");
-
-      const after = new DatabaseSync(resolveOpenClawStateSqlitePath());
-      expect(sharedValue(after, "auth.sharedStore")).toBeUndefined();
-      expect(sharedValue(after, "authProfiles.store")).toBeUndefined();
-      after.close();
-      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
-    });
+    expect(() => ensureAuthProfileStore(agentDir, noExternal)).toThrow(
+      "requires legacy credential migration",
+    );
   });
 
-  it("keeps legacy ownership when bootstrap source inspection fails", async () => {
-    await withAgentDirEnv("openclaw-auth-shared-unreadable-", async (agentDir) => {
-      const sourcePath = resolveAuthProfileDatabasePath(agentDir);
-      const inspectIdentity = databaseIdentity.inspectDatabasePathIdentitySync;
-      let sourceInspectionFailed = false;
-      const inspection = vi
-        .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
-        .mockImplementation((pathname) => {
-          if (!sourceInspectionFailed && path.resolve(pathname) === path.resolve(sourcePath)) {
-            sourceInspectionFailed = true;
-            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-          }
-          return inspectIdentity(pathname);
-        });
-
-      try {
-        await upsert(agentDir, "sk-unreadable");
-      } finally {
-        inspection.mockRestore();
-      }
-
-      expect(sourceInspectionFailed).toBe(true);
-      const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
-      expect(sharedValue(sharedDatabase, "auth.sharedStore")).toBeUndefined();
-      sharedDatabase.close();
-      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
+  it("keeps serving SQLite credentials after observing a retired credential source", async ({
+    auth: { agentDir },
+  }) => {
+    saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
+    const legacyPath = path.join(agentDir, "auth.json");
+    ensureAuthProfileStore(agentDir, noExternal);
+    fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
+    await refreshAuthProfileFileState();
+    expect(ensureAuthProfileStore(agentDir, noExternal).profiles["openai:default"]).toMatchObject({
+      type: "api_key",
+      provider: "openai",
+      key: "not-a-real",
     });
+    expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
-  it("does not read legacy auth-profiles.json at runtime", async () => {
-    await withAgentDirEnv("openclaw-auth-no-json-fallback-", (agentDir) => {
-      fs.writeFileSync(
-        path.join(agentDir, "auth-profiles.json"),
-        `${JSON.stringify(apiKeyStore("sk-json"))}\n`,
-        "utf8",
+  it("rejects a newer agent database that has no current auth table", async ({
+    auth: { agentDir },
+  }) => {
+    const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+    database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+    database.close();
+
+    expect(inspectStore(agentDir)).toEqual({ status: "unreadable" });
+  });
+
+  it("keeps auth schema classifications fresh after owner schema changes", async ({
+    auth: { agentDir },
+  }) => {
+    using database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(agentDir));
+    const createView = () =>
+      database.exec(
+        "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
       );
-
-      expect(() => ensureAuthProfileStore(agentDir, noExternal)).toThrow(
-        "requires legacy credential migration",
+    const expectUnreadable = () => {
+      expect(inspectStore(agentDir)).toEqual({ status: "unreadable" });
+      expect(() => loadRuntime(agentDir, { readOnly: true })).toThrow("is unreadable");
+    };
+    const createTable = `
+      CREATE TABLE auth_profile_store (
+        store_key TEXT NOT NULL PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
       );
-    });
+    `;
+    createView();
+    expectUnreadable();
+
+    for (const key of ["synthetic-first", "synthetic-recreated"]) {
+      database.exec(`DROP VIEW auth_profile_store; ${createTable}`);
+      database
+        .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+        .run(JSON.stringify(apiKeyStore(key)));
+      expect(loadRuntime(agentDir, { readOnly: true })).toMatchObject(apiKeyStore(key));
+      database.exec("DROP TABLE auth_profile_store;");
+      expect(inspectStore(agentDir)).toEqual({
+        status: "missing",
+        reason: "table",
+      });
+      expect(loadRuntime(agentDir, { readOnly: true }).profiles).toEqual({});
+      createView();
+      expectUnreadable();
+    }
   });
 
-  it("keeps serving SQLite credentials after observing a retired credential source", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", async (agentDir) => {
-      saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
-      const legacyPath = path.join(agentDir, "auth.json");
-      ensureAuthProfileStore(agentDir, noExternal);
-      fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
-      await refreshAuthProfileFileState();
-      // A migrated store still owns its credentials after a retired file reappears.
-      expect(ensureAuthProfileStore(agentDir, noExternal).profiles["openai:default"]).toMatchObject(
-        { type: "api_key", provider: "openai", key: "not-a-real" },
-      );
-      // Runtime never reads or removes it; Doctor still owns the archive step.
-      expect(fs.existsSync(legacyPath)).toBe(true);
-    });
-  });
+  it("waits for brief rollback-journal contention before reading persisted auth", async ({
+    auth: { agentDir },
+  }) => {
+    saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
+    closeOpenClawAgentDatabasesForTest();
 
-  it("rejects a newer agent database that has no current auth table", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-newer-schema-", (agentDir) => {
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
-      database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
-      database.close();
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    const setup = new DatabaseSync(databasePath);
+    setup.exec("PRAGMA journal_mode = DELETE;");
+    setup.close();
 
-      expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({ status: "unreadable" });
-    });
-  });
-
-  it("keeps auth schema classifications fresh after owner schema changes", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-invalid-schema-", (agentDir) => {
-      const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(agentDir));
-      const createTable = `
-        CREATE TABLE auth_profile_store (
-          store_key TEXT NOT NULL PRIMARY KEY,
-          store_json TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-      `;
-      try {
-        database.exec(
-          "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
-        );
-        expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({ status: "unreadable" });
-        expect(() => loadAuthProfileStoreForRuntime(agentDir, { readOnly: true })).toThrow(
-          "is unreadable",
-        );
-
-        for (const key of ["synthetic-first", "synthetic-recreated"]) {
-          database.exec(`DROP VIEW auth_profile_store; ${createTable}`);
-          database
-            .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
-            .run(JSON.stringify(apiKeyStore(key)));
-          expect(loadAuthProfileStoreForRuntime(agentDir, { readOnly: true })).toMatchObject(
-            apiKeyStore(key),
-          );
-          database.exec("DROP TABLE auth_profile_store;");
-          expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({
-            status: "missing",
-            reason: "table",
-          });
-          expect(loadAuthProfileStoreForRuntime(agentDir, { readOnly: true }).profiles).toEqual({});
-          database.exec(
-            "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
-          );
-          expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({ status: "unreadable" });
-          expect(() => loadAuthProfileStoreForRuntime(agentDir, { readOnly: true })).toThrow(
-            "is unreadable",
-          );
-        }
-      } finally {
-        database.close();
-      }
-    });
-  });
-
-  it("waits for brief rollback-journal contention before reading persisted auth", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-contention-", async (agentDir) => {
-      saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
-      closeOpenClawAgentDatabasesForTest();
-
-      const databasePath = resolveAuthProfileDatabasePath(agentDir);
-      const setup = new DatabaseSync(databasePath);
-      setup.exec("PRAGMA journal_mode = DELETE;");
-      setup.close();
-
-      const child = spawn(
-        process.execPath,
-        [
-          "-e",
-          `
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
             const { DatabaseSync } = require("node:sqlite");
             const db = new DatabaseSync(process.argv[1]);
             db.exec("PRAGMA journal_mode = DELETE; BEGIN EXCLUSIVE;");
@@ -478,109 +448,104 @@ describe("auth profile sqlite store", () => {
               db.close();
             }, 250);
           `,
-          databasePath,
-        ],
-        { stdio: ["ignore", "pipe", "pipe"] },
-      );
-      const childExit = new Promise<void>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code) => {
-          if (code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`contention child exited with code ${code}`));
-          }
-        });
-      });
-      await new Promise<void>((resolve, reject) => {
-        let locked = false;
-        child.stdout.once("data", () => {
-          locked = true;
+        databasePath,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const childExit = new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code) => {
+        if (code === 0) {
           resolve();
-        });
-        child.once("error", reject);
-        child.once("exit", (code) => {
-          if (!locked) {
-            reject(new Error(`contention child exited before locking with code ${code}`));
-          }
-        });
+        } else {
+          reject(new Error(`contention child exited with code ${code}`));
+        }
       });
-
-      const loaded = loadPersistedAuthProfileStore(agentDir);
-
-      await childExit;
-      expect(loaded?.profiles["openai:default"]).toMatchObject({ key: "sk-test" });
     });
-  });
-
-  it("uses the configured agent id for custom agentDir databases", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-custom-agent-", (envAgentDir) => {
-      const customAgentDir = path.join(path.dirname(path.dirname(envAgentDir)), "custom-coder");
-      const cfg = {
-        agents: {
-          entries: { coder: { agentDir: customAgentDir } },
-        },
-      };
-      const agentDir = resolveAgentDir(cfg, "coder");
-
-      saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
-
-      const database = openOpenClawAgentDatabase({
-        agentId: "coder",
-        path: resolveAuthProfileDatabasePath(agentDir),
+    await new Promise<void>((resolve, reject) => {
+      let locked = false;
+      child.stdout.once("data", () => {
+        locked = true;
+        resolve();
       });
-      expect(database.agentId).toBe("coder");
+      child.once("error", reject);
+      child.once("exit", (code) => {
+        if (!locked) {
+          reject(new Error(`contention child exited before locking with code ${code}`));
+        }
+      });
     });
+
+    const loaded = loadPersistedAuthProfileStore(agentDir);
+
+    await childExit;
+    expect(loaded?.profiles["openai:default"]).toMatchObject({ key: "sk-test" });
   });
 
-  it("keeps an explicit inherited snapshot authoritative for an omitted agent", async () => {
-    await withAgentDirEnv("openclaw-auth-inherited-selection-", (agentDir, stateDir) => {
-      const inheritedAuthDir = path.join(stateDir, "inherited");
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { agentDir, store: apiKeyStore("shared") },
-        { agentDir: inheritedAuthDir, store: apiKeyStore("inherited") },
-      ]);
-      expect(
-        ensureAuthProfileStoreWithoutExternalProfiles(undefined, { inheritedAuthDir }).profiles,
-      ).toEqual(apiKeyStore("inherited").profiles);
+  it("uses the configured agent id for custom agentDir databases", async ({
+    auth: { agentDir: envAgentDir },
+  }) => {
+    const customAgentDir = path.join(path.dirname(path.dirname(envAgentDir)), "custom-coder");
+    const cfg = { agents: { entries: { coder: { agentDir: customAgentDir } } } };
+    const agentDir = resolveAgentDir(cfg, "coder");
+
+    saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "coder",
+      path: resolveAuthProfileDatabasePath(agentDir),
     });
+    expect(database.agentId).toBe("coder");
   });
 
-  it("keeps SecretRef-backed credentials from persisting duplicate plaintext", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-secret-ref-", (agentDir) => {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-plaintext",
-              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            },
-            "anthropic:default": {
-              type: "token",
-              provider: "anthropic",
-              token: "token-plaintext",
-              tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
-            },
+  it("keeps an explicit inherited snapshot authoritative for an omitted agent", async ({
+    auth: { agentDir, stateDir },
+  }) => {
+    const inheritedAuthDir = path.join(stateDir, "inherited");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      { agentDir, store: apiKeyStore("shared") },
+      { agentDir: inheritedAuthDir, store: apiKeyStore("inherited") },
+    ]);
+    expect(ensureLocal(undefined, { inheritedAuthDir }).profiles).toEqual(
+      apiKeyStore("inherited").profiles,
+    );
+  });
+
+  it("keeps SecretRef-backed credentials from persisting duplicate plaintext", async ({
+    auth: { agentDir },
+  }) => {
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-plaintext",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: "token-plaintext",
+            tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
           },
         },
-        agentDir,
-      );
+      },
+      agentDir,
+    );
 
-      const loaded = ensureAuthProfileStore(agentDir, noExternal);
+    const loaded = ensureAuthProfileStore(agentDir, noExternal);
 
-      expect(loaded.profiles["openai:default"]).toEqual({
-        type: "api_key",
-        provider: "openai",
-        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      });
-      expect(loaded.profiles["anthropic:default"]).toEqual({
-        type: "token",
-        provider: "anthropic",
-        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
-      });
+    expect(loaded.profiles["openai:default"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    });
+    expect(loaded.profiles["anthropic:default"]).toEqual({
+      type: "token",
+      provider: "anthropic",
+      tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
     });
   });
 });

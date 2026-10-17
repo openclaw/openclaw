@@ -103,53 +103,33 @@ describe("markAuthProfileFailure", () => {
     expect(stats.disabledUntil).toBe(stats.lastFailureAt + 10 * 60_000);
   });
 
-  it("resets old billing failures, then preserves the new deadline across retries", async () => {
+  it.each([
+    { reason: "billing", age: 48 * 60 * 60_000, errors: 9, failures: 1, delay: 600_000 },
+    { reason: "rate_limit", age: 120_000, errors: 3, failures: 4, delay: 240_000 },
+  ] as const)("resets stale $reason backoff and preserves its deadline on retry", async (row) => {
     const now = Date.now();
+    const { reason, age, errors, failures, delay } = row;
+    const field = reason === "billing" ? "disabledUntil" : "cooldownUntil";
     const { store, agentDir } = fixture({
       [profileId]: {
-        errorCount: 9,
-        failureCounts: { billing: 3 },
-        lastFailureAt: now - 48 * 60 * 60_000,
+        errorCount: errors,
+        failureCounts: { [reason]: 3 },
+        lastFailureAt: now - age,
+        ...(reason === "rate_limit" ? { cooldownUntil: now - 60_000 } : {}),
       },
     });
-    const fail = () => markAuthProfileFailure({ store, agentDir, profileId, reason: "billing" });
+    const fail = () => markAuthProfileFailure({ store, agentDir, profileId, reason });
     await fail();
     const first = store.usageStats?.[profileId];
-    expect(first?.errorCount).toBe(1);
-    expect(first?.failureCounts?.billing).toBe(1);
+    expect(first).toMatchObject({ errorCount: 1, failureCounts: { [reason]: failures } });
     assert(first?.lastFailureAt !== undefined);
     expect(first.lastFailureAt).toBeGreaterThanOrEqual(now);
     expect(first.lastFailureAt).toBeLessThanOrEqual(Date.now());
-    expect(first.disabledUntil).toBe(first.lastFailureAt + 10 * 60_000);
-    const deadline = first?.disabledUntil;
+    const deadline = first[field];
+    expect(deadline).toBe(first.lastFailureAt + delay);
     await fail();
-    expect(store.usageStats?.[profileId]?.disabledUntil).toBe(deadline);
-    expect(ensureAuthProfileStore(agentDir).usageStats?.[profileId]?.disabledUntil).toBe(deadline);
-  });
-
-  it("backs off an expired rate-limit probe without extending its deadline on retry", async () => {
-    const now = Date.now();
-    const { store, agentDir } = fixture({
-      [profileId]: {
-        errorCount: 3,
-        failureCounts: { rate_limit: 3 },
-        lastFailureAt: now - 120_000,
-        cooldownUntil: now - 60_000,
-      },
-    });
-    const fail = () => markAuthProfileFailure({ store, agentDir, profileId, reason: "rate_limit" });
-    await fail();
-    const first = store.usageStats?.[profileId];
-    expect(first?.errorCount).toBe(1);
-    expect(first?.failureCounts?.rate_limit).toBe(4);
-    assert(first?.lastFailureAt !== undefined);
-    expect(first.lastFailureAt).toBeGreaterThanOrEqual(now);
-    expect(first.lastFailureAt).toBeLessThanOrEqual(Date.now());
-    expect(first.cooldownUntil).toBe(first.lastFailureAt + 240_000);
-    const deadline = first?.cooldownUntil;
-    await fail();
-    expect(store.usageStats?.[profileId]?.cooldownUntil).toBe(deadline);
-    expect(ensureAuthProfileStore(agentDir).usageStats?.[profileId]?.cooldownUntil).toBe(deadline);
+    expect(store.usageStats?.[profileId]?.[field]).toBe(deadline);
+    expect(ensureAuthProfileStore(agentDir).usageStats?.[profileId]?.[field]).toBe(deadline);
   });
 
   const managedSnapshot = createPluginMetadataSnapshotFixture({
