@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeTunnelSupport from "./node-worker-tunnel.test-support.js";
 import * as support from "./service.test-support.js";
@@ -53,6 +54,70 @@ async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean 
 
 describe("worker provider node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  it.each(["stop", "force"] as const)(
+    "continues %s after a computer driver never settles",
+    async (entrance) => {
+      const environmentId = "wedged-desktop";
+      await support.seedReadyNodeDesktop(environmentId);
+      await support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: { ...support.attachedPatch(environmentId, "session-1"), sharedHost: false },
+      });
+      const cleanupStarted = createDeferred();
+      const finalCleanupStarted = createDeferred();
+      const driverFinished = createDeferred();
+      const destroy = vi.fn(async () => {});
+      const warn = vi.fn();
+      let cleanupCalls = 0;
+      const service = support.createService(support.createProvider({ destroy }), {
+        // This is the real teardown boundary's driver cleanup callback. The driver
+        // ignores cancellation; only releasing it in finally makes the fixture settle.
+        closeEnvironmentComputers: () => {
+          cleanupCalls += 1;
+          (cleanupCalls === 1 ? cleanupStarted : finalCleanupStarted).resolve();
+          return driverFinished.promise;
+        },
+        logger: { warn },
+        nodeTunnelManager: {
+          status: () => "stopped",
+          start: vi.fn(),
+          stop: async () => {},
+          stopAll: async () => {},
+          observeProcesses: vi.fn(),
+        },
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const forceAbandon = vi.fn(async () => {});
+      const stopping = service.destroy(
+        environmentId,
+        undefined,
+        entrance === "force" ? forceAbandon : undefined,
+      );
+      try {
+        await cleanupStarted.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(destroy).toHaveBeenCalledOnce();
+        await finalCleanupStarted.promise;
+        await vi.advanceTimersByTimeAsync(60_000);
+        await expect(stopping).resolves.toMatchObject({ state: "destroyed" });
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /computer cleanup.*wedged-desktop.*continuing provider teardown.*retry Stop/i,
+          ),
+        );
+        expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+        if (entrance === "force") {
+          expect(forceAbandon).toHaveBeenCalledOnce();
+        }
+      } finally {
+        driverFinished.resolve();
+        vi.useRealTimers();
+        await stopping;
+      }
+    },
+  );
 
   it.each(["retained", "restarted"] as const)(
     "cleans the %s node owner after the provider proves the machine is destroyed",
