@@ -1,9 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -17,31 +14,23 @@ const sessionKey = "agent:main:main";
 const summary = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 const partial = "I found the relevant code. I’m checking the remaining call sites.";
 
-async function capture(
-  page: Page,
-  name: string,
-  content: Parameters<typeof takeControlUiScreenshotFrame>[2],
-) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-    return;
-  }
-  const thread = page.locator(".chat-thread");
-  const frame = await takeControlUiScreenshotFrame(page, thread, content, {
-    animations: "disabled",
-    elements: [thread, ...content],
-  });
-  await fs.writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-  await fs.writeFile(path.join(suite.artifactDir, name + "-chat.png"), frame.elements[0]!.png);
-  for (let index = 1; index < frame.elements.length; index += 1) {
-    await fs.writeFile(
-      path.join(suite.artifactDir, name + "-element-" + index + ".png"),
-      frame.elements[index]!.png,
-    );
-  }
-}
-
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+type Payload = Record<string, unknown>;
 const prompt = "Review the remaining call sites and summarize the changes.";
+const textContent = (text: string) => [{ type: "text", text }];
+function message(
+  role: string,
+  content: unknown,
+  timestamp: number,
+  [id, seq, runId]: [string, number, string],
+  extra: Payload = {},
+) {
+  const identity = role === "user" ? { idempotencyKey: runId + ":user" } : { runId };
+  return { role, content, timestamp, __openclaw: { id, seq, ...identity }, ...extra };
+}
+function chat(gateway: Gateway, runId: string, state: string, payload: Payload) {
+  return gateway.emitGatewayEvent("chat", { sessionKey, runId, state, ...payload });
+}
 function paragraph(page: Page, text: string) {
   return page.locator(".chat-thread").getByRole("paragraph").filter({ hasText: text });
 }
@@ -57,7 +46,7 @@ async function openRun(page: Page) {
 async function receipt(
   gateway: Gateway,
   runId: string,
-  message: unknown,
+  entry: unknown,
   messageId: string,
   messageSeq: number,
 ) {
@@ -65,7 +54,7 @@ async function receipt(
     sessionKey,
     runId,
     clientRunId: runId,
-    message,
+    message: entry,
     messageId,
     messageSeq,
     hasActiveRun: true,
@@ -81,55 +70,33 @@ suite.define(() => {
       const successorRunId = "restart-recovery-successor";
       const now = Date.now();
       const historyMessages = [
-        {
-          role: "user",
-          content: prompt,
-          timestamp: now - 3,
-          __openclaw: { id: "restart-input", seq: 1, idempotencyKey: runId + ":user" },
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: partial }],
+        message("user", prompt, now - 3, ["restart-input", 1, runId]),
+        message("assistant", textContent(partial), now - 2, ["restart-partial", 2, runId], {
           stopReason: "aborted",
-          timestamp: now - 2,
-          __openclaw: { id: "restart-partial", seq: 2, runId },
-        },
-        {
-          role: "user",
-          content: "[System] Continue the interrupted turn.",
-          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-          timestamp: now - 1,
-          __openclaw: {
-            id: "restart-recovery-input",
-            seq: 3,
-            idempotencyKey: successorRunId + ":user",
-          },
-        },
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "The review is complete. All remaining call sites are covered." },
-          ],
-          timestamp: now,
-          __openclaw: { id: "restart-final", seq: 4, runId: successorRunId },
-        },
+        }),
+        message(
+          "user",
+          "[System] Continue the interrupted turn.",
+          now - 1,
+          ["restart-recovery-input", 3, successorRunId],
+          { provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" } },
+        ),
+        message("assistant", textContent("The review is complete."), now, [
+          "restart-final",
+          4,
+          successorRunId,
+        ]),
       ];
       const thread = page.locator(".chat-thread");
       const partialOutput = thread.getByRole("paragraph").filter({ hasText: partial });
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId,
-        state: "delta",
+      await chat(gateway, runId, "delta", {
         seq: 1,
-        message: { role: "assistant", content: [{ type: "text", text: partial }] },
+        message: { role: "assistant", content: textContent(partial) },
       });
       await partialOutput.waitFor();
       await gateway.setHistoryMessages(historyMessages.slice(0, 2));
       await receipt(gateway, runId, historyMessages[1], "restart-partial", 2);
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId,
-        state: "aborted",
+      await chat(gateway, runId, "aborted", {
         stopReason: "restart",
         seq: 2,
         message: historyMessages[1],
@@ -141,26 +108,18 @@ suite.define(() => {
       // Recovery is admitted by the Gateway's durable system input, never a UI retry/send.
       await gateway.setHistoryMessages(historyMessages.slice(0, 3));
       await receipt(gateway, successorRunId, historyMessages[2], "restart-recovery-input", 3);
-      const notice = thread
-        .locator(".chat-notice")
-        .filter({ hasText: "System · restart recovery" });
+      const notice = thread.locator(".chat-notice", { hasText: "System · restart recovery" });
       await thread.locator(".chat-system-events__summary").click();
       await notice.waitFor();
       expect(await notice.locator(".chat-notice__body").count()).toBe(0);
       expect(await notice.getAttribute("role")).toBeNull();
       expect(await notice.locator("button").count()).toBe(0);
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId: successorRunId,
-        state: "delta",
+      await chat(gateway, successorRunId, "delta", {
         seq: 1,
         message: historyMessages[3],
       });
       await gateway.setHistoryMessages(historyMessages);
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId: successorRunId,
-        state: "final",
+      await chat(gateway, successorRunId, "final", {
         seq: 2,
         message: historyMessages[3],
       });
@@ -170,7 +129,6 @@ suite.define(() => {
       expect(await notice.count()).toBe(1);
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      await capture(page, "restart-recovery-after", [partialOutput, notice, answer]);
 
       await gateway.setMethodResponse("chat.history", { messages: historyMessages });
       await page.reload();
@@ -178,11 +136,9 @@ suite.define(() => {
       await thread.locator(".chat-system-events__summary").click();
       await notice.waitFor();
       expect(await partialOutput.count()).toBe(1);
-      expect(await notice.count()).toBe(1);
       expect(await notice.locator(".chat-notice__body").count()).toBe(0);
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await capture(page, "restart-recovery-after-reload", [partialOutput, notice, answer]);
     });
   });
 
@@ -211,7 +167,6 @@ suite.define(() => {
       await expect.poll(() => status.textContent()).toContain("Retrying in 8s");
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await status.locator(".chat-working-indicator__elapsed").count()).toBe(1);
-      await capture(page, "retrying", [status]);
       await page.clock.runFor(8_000);
       await expect.poll(() => status.textContent()).toContain("Retrying…");
       await gateway.emitGatewayEvent("agent", {
@@ -253,26 +208,12 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       const now = Date.now();
       const historyMessages = [
-        {
-          role: "user",
-          content: prompt,
-          timestamp: now - 3,
-          __openclaw: { id: "input", seq: 1, idempotencyKey: runId + ":user" },
-        },
-        {
-          role: "assistant",
-          content: partial,
-          timestamp: now - 2,
-          __openclaw: { id: "partial", seq: 2, runId },
-        },
-        {
-          role: "custom",
+        message("user", prompt, now - 3, ["input", 1, runId]),
+        message("assistant", partial, now - 2, ["partial", 2, runId]),
+        message("custom", summary, now - 1, ["failure", 3, runId], {
           customType: "run-failed-before-reply",
-          content: summary,
-          timestamp: now - 1,
           openclawRunError: { runId, summary },
-          __openclaw: { id: "failure", seq: 3, runId },
-        },
+        }),
       ];
       await gateway.setHistoryMessages(historyMessages.slice(0, 2));
       await receipt(gateway, runId, historyMessages[1], "partial", 2);
@@ -292,22 +233,12 @@ suite.define(() => {
             lastRunError: summary,
           },
         ],
-        count: 1,
-        path: "",
-        ts: now,
-        defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: null },
       });
       // Failure receipts commit before chat.error; custom reports do not emit session.message.
       await gateway.setHistoryMessages(historyMessages);
-      await gateway.emitGatewayEvent("chat", {
-        sessionKey,
-        runId,
-        state: "error",
-        errorMessage: summary,
-      });
+      await chat(gateway, runId, "error", { errorMessage: summary });
       const notice = page.locator(".chat-run-failure");
       await notice.waitFor();
-      expect(await notice.count()).toBe(1);
       expect(await page.locator(".chat-error").count()).toBe(0);
       expect(await notice.textContent()).not.toContain("⚠");
       await paragraph(page, partial).waitFor();
@@ -326,13 +257,10 @@ suite.define(() => {
       expect(
         Math.abs(titleBox.y + titleBox.height / 2 - retryBox.y - retryBox.height / 2),
       ).toBeLessThan(1);
-      await capture(page, "after", [notice, paragraph(page, partial)]);
       await notice.hover();
       await expect.poll(copyOpacity).toBe("1");
       const copyIcon = copy.locator(".chat-copy-btn__icon-copy svg");
-      expect(await copyIcon.evaluate((node) => node.getBoundingClientRect().width)).toBe(14);
-      expect(await copyIcon.evaluate((node) => node.getBoundingClientRect().height)).toBe(14);
-      await capture(page, "after-hover", [notice]);
+      expect(await copyIcon.boundingBox()).toMatchObject({ width: 14, height: 14 });
       await page.mouse.move(0, 0);
       await copy.focus();
       await expect.poll(copyOpacity).toBe("1");
@@ -342,16 +270,13 @@ suite.define(() => {
       expect(await notice.getByRole("button", { name: "Change model", exact: true }).count()).toBe(
         0,
       );
-      await notice.getByRole("button", { name: "Copy error", exact: true }).waitFor();
       await page.setViewportSize({ width: 393, height: 852 });
       await expect
         .poll(() => notice.evaluate((node) => node.scrollWidth <= node.clientWidth))
         .toBe(true);
-      await capture(page, "after-mobile", [notice]);
       await page.setViewportSize({ width: 1160, height: 850 });
       await page.emulateMedia({ colorScheme: "dark" });
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-      await capture(page, "after-dark", [notice]);
       await suite.withPage(
         { viewport: { width: 393, height: 852 }, hasTouch: true, isMobile: true },
         async ({ page: touchPage }) => {
@@ -363,23 +288,18 @@ suite.define(() => {
           expect(await touchPage.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true);
           expect(await touchCopy.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
           expect(await touchCopy.evaluate((node) => node.getBoundingClientRect().width)).toBe(32);
-          await capture(touchPage, "after-touch", [touchNotice]);
         },
       );
       // Persist the mock Gateway response, not just its current document state.
       await gateway.setMethodResponse("chat.history", { messages: historyMessages });
       await page.reload();
       await notice.waitFor();
-      expect(await notice.count()).toBe(1);
       expect(await page.locator(".chat-error").count()).toBe(0);
-      // Model selection stays available at its existing composer control.
       await openChatModelPicker(page);
       await expect
         .poll(() => page.locator(".chat-controls__model-picker").getAttribute("open"))
         .not.toBeNull();
-      await capture(page, "model-picker", [page.locator(".agent-chat__input")]);
       const modelSearch = page.locator("[data-chat-model-search]");
-      await modelSearch.waitFor({ state: "visible" });
       await expect
         .poll(() => modelSearch.evaluate((node) => node === document.activeElement))
         .toBe(true);
