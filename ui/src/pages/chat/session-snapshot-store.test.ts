@@ -2,6 +2,8 @@
 
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseSidebarSnapshot } from "../../components/sidebar-snapshot-data.ts";
+import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
 import {
   requestResult,
   transactionComplete as transactionDone,
@@ -108,6 +110,90 @@ describe("persistent chat session snapshots", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it("restores bounded sidebar facts with legacy defaults and strips live-only fields", async () => {
+    const store = new SessionSnapshotStore();
+    store.connect();
+    const sidebarKey = `${key("").split("\u0000")[0]}\u0000sidebar:operator`;
+    const row = { key: "agent:main:cedar", kind: "direct", label: "Cedar" };
+    const roster = {
+      agentId: "main",
+      result: {
+        ts: 1,
+        path: "sessions",
+        count: 1,
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+        sessions: [{ ...row, hasActiveRun: true }],
+      },
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    };
+    try {
+      expect(
+        await store.writeSidebar(
+          sidebarKey,
+          {
+            ...sidebarSnapshot,
+            peoplePresenceFilter: undefined,
+            offlineUsers: undefined,
+            roster,
+            footer: { id: "operator", scopes: ["operator.admin"] },
+            token: "synthetic-disallowed-field",
+          },
+          parseSidebarSnapshot,
+        ),
+      ).toBe(true);
+      const restored = await store.readSidebar(sidebarKey, parseSidebarSnapshot);
+      expect(restored?.peoplePresenceFilter).toBe("online");
+      expect(restored?.offlineUsers).toEqual([]);
+      expect(restored?.roster?.result.sessions).toEqual([row]);
+      expect(restored?.footer).toEqual({ id: "operator" });
+      expect(restored).not.toHaveProperty("token");
+      expect(
+        await store.writeSidebar(
+          sidebarKey,
+          {
+            ...sidebarSnapshot,
+            roster: {
+              ...roster,
+              result: { ...roster.result, sessions: [{ ...row, incognito: true }] },
+            },
+          },
+          parseSidebarSnapshot,
+        ),
+      ).toBe(false);
+      expect(await store.readSidebar(sidebarKey, parseSidebarSnapshot)).toBeNull();
+    } finally {
+      store.disconnect();
+      await store.whenIdle();
+    }
+  });
+
+  it.each([
+    { snapshot: { ...snapshot("message"), unexpected: true } },
+    { snapshot: { ...snapshot("message"), pagination: { hasMore: false, nextOffset: 1 } } },
+    { snapshot: { ...snapshot("message"), pagination: { hasMore: true, nextOffset: -1 } } },
+    { sessionId: "different-session" },
+  ])(
+    "rejects malformed durable snapshot envelopes without exposing cached history ($snapshot)",
+    async (corrupt) => {
+      const sessionKey = key("agent:main:corrupt-envelope");
+      const writer = new SessionSnapshotStore();
+      writer.write(sessionKey, snapshot("message"));
+      await writer.flush();
+      await putRawRecord({
+        projectionVersion: 2,
+        savedAt: 1,
+        sessionId: "session-1",
+        sessionKey,
+        snapshot: snapshot("message"),
+        ...corrupt,
+      });
+      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+      expect(await readStoredChatSnapshotRecord(sessionKey)).toBeUndefined();
+    },
+  );
 
   it("retires one Gateway cache without touching another Gateway or account", async () => {
     const memory: ChatMessageCache = new Map();

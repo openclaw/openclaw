@@ -1,0 +1,1 @@
+export const TALK_VOICE_CHANGE_TIMEOUT_MS = 60_000;

@@ -1,8 +1,4 @@
-import {
-  GATEWAY_SERVER_CAPS,
-  type BoardGetParams,
-  type BoardSnapshot,
-} from "@openclaw/gateway-protocol";
+import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
 import {
   createEffect,
   createMemo,
@@ -12,6 +8,7 @@ import {
   runWithOwner,
   Show,
 } from "solid-js";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   hasOperatorApprovalsAccess,

@@ -1,11 +1,8 @@
-import {
-  TALK_VOICE_CHANGE_TIMEOUT_MS,
-  validateTalkVoiceChangeEvent,
-  type TalkVoiceChangeEvent,
-  type TalkVoiceCompleteParams,
-} from "@openclaw/gateway-protocol";
+import type { TalkVoiceChangeEvent, TalkVoiceCompleteParams } from "@openclaw/gateway-protocol";
+import { TALK_VOICE_CHANGE_TIMEOUT_MS } from "../../../../../packages/gateway-protocol/src/talk-voice-limits.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
+import { isTalkVoiceChangeEvent } from "../../../lib/protocol-validators.generated/session-input.js";
 
 export type RealtimeVoiceCall = { getVoiceSessionId(): string | undefined };
 type VoiceChange = {
@@ -35,7 +32,7 @@ export class RealtimeTalkVoiceSelection {
     },
   ) {
     this.unsubscribe = owner.client.addEventListener((event) => {
-      if (event.event === "talk.voice.change" && validateTalkVoiceChangeEvent(event.payload)) {
+      if (event.event === "talk.voice.change" && isTalkVoiceChangeEvent(event.payload)) {
         this.receive(event.payload);
       }
     });
