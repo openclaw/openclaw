@@ -1,15 +1,14 @@
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { expect, it } from "vitest";
 import type { Model } from "../../../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
-import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "../model.static-id.js";
+import { makeModel } from "../model.test-harness.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
@@ -18,111 +17,74 @@ import { resolveInitialEmbeddedRunModel } from "./runtime-resolution.js";
 const provider = "first-selected";
 const otherProvider = "hook-selected";
 const selected = { provider, model: "middle", requestedRouteResolution: "resolved" } as const;
-const entry = { provider, model: "entry" };
 const modelRedirect = { modelOverride: "entry" };
+const providerRedirect = { providerOverride: otherProvider };
+const locked = { ...selected, modelSelectionLocked: true };
 const cases = [
-  { name: "configured default", tier: "registry", input: {}, expected: "middle" },
-  ...(["registry", "prepared static"] as const).flatMap((tier) => [
-    { name: "raw entry", tier, input: entry, expected: "middle" },
-    { name: "selected middle", tier, input: selected, expected: "middle" },
+  ["default", "registry", {}, undefined, "middle"],
+  ...(["registry", "static"] as const).flatMap((tier) => [
+    ["raw entry", tier, { provider, model: "entry" }, undefined, "middle"] as const,
+    ["selected", tier, selected, undefined, "middle"] as const,
   ]),
-  {
-    name: "selected model hook redirect",
-    tier: "registry",
-    input: selected,
-    hook: modelRedirect,
-    expected: "middle",
-  },
-  {
-    name: "selected provider hook redirect",
-    tier: "prepared static",
-    input: selected,
-    hook: { providerOverride: otherProvider },
-    expected: "other-final",
-  },
-  {
-    name: "locked selection ignores hook",
-    tier: "registry",
-    input: { ...selected, modelSelectionLocked: true },
-    hook: modelRedirect,
-    expected: "middle",
-  },
+  ["model hook", "registry", selected, modelRedirect, "middle"],
+  ["provider hook", "static", selected, providerRedirect, "other-final"],
+  ["locked hook", "registry", locked, modelRedirect, "middle"],
 ] as const;
 
-describe("initial model setup", () => {
-  it.each(cases)("preserves $name through $tier materialization", async (scenario) => {
-    const { tier, input, expected } = scenario;
-    const hook = "hook" in scenario ? scenario.hook : undefined;
+it.each(cases)(
+  "preserves %s selection through %s materialization",
+  async (_name, tier, input, hook, expected) => {
     await withOpenClawTestState(
       { label: "initial-model-selection", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
-        const config: OpenClawConfig = {
+        const config = {
           agents: { defaults: { workspace: state.workspaceDir, model: `${provider}/entry` } },
         };
-        writePersistedAuthProfileStoreRaw(
-          {
-            version: 1,
-            profiles: Object.fromEntries(
-              [provider, otherProvider].map((id) => [
-                `${id}:fixture`,
-                { type: "api_key" as const, provider: id, key: "synthetic-fixture" },
-              ]),
-            ),
-          },
-          state.agentDir(),
+        const credential = { type: "api_key" as const, key: "synthetic-fixture" };
+        const profiles = Object.fromEntries(
+          [provider, otherProvider].map((id) => [`${id}:fixture`, { ...credential, provider: id }]),
         );
+        writePersistedAuthProfileStoreRaw({ version: 1, profiles }, state.agentDir());
+        const normalization = {
+          [provider]: { aliases: { entry: "middle", middle: "final" } },
+          [otherProvider]: { aliases: { middle: "other-final" } },
+        };
         const metadataSnapshot = createPluginMetadataSnapshotFixture({
           plugins: [
             {
               id: provider,
               providers: [provider, otherProvider],
-              modelIdNormalization: {
-                providers: {
-                  [provider]: { aliases: { entry: "middle", middle: "final" } },
-                  [otherProvider]: { aliases: { middle: "other-final" } },
-                },
-              },
+              modelIdNormalization: { providers: normalization },
             },
           ],
         });
-        const createModel = (modelProvider: string, id: string) =>
-          ({
-            provider: modelProvider,
-            id,
-            name: id,
-            api: "openai-completions",
-            baseUrl: "https://initial-model.example/v1",
-            input: ["text"],
-            reasoning: false,
-            contextWindow: 32000,
-            maxTokens: 256,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          }) satisfies Model;
-        const modelGroups: Array<[string, Model[]]> = [
-          [provider, ["middle", "final"].map((id) => createModel(provider, id))],
-          [otherProvider, [createModel(otherProvider, "other-final")]],
+        const createModel = (modelProvider: string, id: string): Model => ({
+          ...makeModel(id),
+          provider: modelProvider,
+          api: "openai-completions",
+          baseUrl: "https://initial-model.example/v1",
+          contextWindow: 32000,
+          maxTokens: 256,
+        });
+        const models = [
+          ...["middle", "final"].map((id) => createModel(provider, id)),
+          createModel(otherProvider, "other-final"),
         ];
         const stores = createEmptyAgentDiscoveryStores();
         if (tier === "registry") {
-          for (const [id, models] of modelGroups) {
+          for (const id of [provider, otherProvider]) {
             stores.modelRegistry.registerProvider(id, {
               api: "openai-completions",
               baseUrl: "https://initial-model.example/v1",
-              models,
+              models: models.filter((m) => m.provider === id),
             });
           }
         }
         const configuredRuntimeModels =
-          tier === "prepared static"
-            ? modelGroups
-                .flatMap(([, models]) => models)
-                .map((model) => ({
-                  provider: model.provider,
-                  modelId: model.id,
-                  model,
-                }))
+          tier === "static"
+            ? models.map((model) => ({ provider: model.provider, modelId: model.id, model }))
             : [];
-        const snapshot: PreparedModelRuntimeSnapshot = {
+        const snapshot = {
           ...createEmptyPreparedModelRuntimeFixture({
             config,
             agentDir: state.agentDir(),
@@ -151,19 +113,22 @@ describe("initial model setup", () => {
             ...input,
           };
           const initial = resolveInitialEmbeddedRunModel(runParams);
-          const setup = await resolveEmbeddedRunModelSetup({
+          const context = {
             assertCurrent: () => {},
             runParams,
-            ...initial,
             agentDir: snapshot.agentDir,
             workspaceDir: state.workspaceDir,
+            preparedModelRuntime: snapshot,
+          };
+          const setup = await resolveEmbeddedRunModelSetup({
+            ...context,
+            ...initial,
             globalLane: "test",
             hookRunner: hook
               ? { hasHooks: () => true, runBeforeModelResolve: async () => hook }
               : undefined,
             hookContext: { sessionId: runParams.sessionId, workspaceDir: state.workspaceDir },
             onHooksResolved: () => {},
-            preparedModelRuntime: snapshot,
           });
           const requestedModelId =
             hook && "modelOverride" in hook && runParams.modelSelectionLocked !== true
@@ -173,36 +138,27 @@ describe("initial model setup", () => {
           let currentModel = setup.model;
           let harness = setup.agentHarness;
           const auth = await prepareEmbeddedRunAuthPlan({
-            assertCurrent: () => {},
-            runParams,
+            ...context,
             provider: setup.provider,
             modelId: setup.modelId,
             model: setup.model,
-            agentDir: snapshot.agentDir,
-            workspaceDir: state.workspaceDir,
             nativeModelOwned: false,
             authStorage: setup.authStorage,
             modelRegistry: setup.modelRegistry,
-            preparedModelRuntime: snapshot,
             getAgentHarness: () => harness,
-            setAgentHarness: (next) => {
-              harness = next;
-            },
+            setAgentHarness: (next) => (harness = next),
             getRuntimeModel: () => currentModel,
             getEffectiveModel: () => currentModel,
-            applyResolvedRuntimeModel: (next) => {
-              currentModel = next;
-            },
+            applyResolvedRuntimeModel: (next) => (currentModel = next),
             selectHarnessForPreparedAttempts: () => harness,
           });
           const rematerialized = await auth.materializeAuthPlanUncached(
             auth.activePreparedAuthPlan,
             true,
           );
-          expect(setup.modelId).toBe(expected);
-          expect(rematerialized?.id).toBe(expected);
+          expect([setup.modelId, rematerialized?.id]).toEqual([expected, expected]);
         });
       },
     );
-  });
-});
+  },
+);

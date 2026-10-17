@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   PROVIDER_CONTEXT_HANDOFF,
   resolveProviderContext,
@@ -76,25 +76,16 @@ const sandboxMaterializer =
     });
 
 describe("direct provider context handoff", () => {
-  const tempDirs: string[] = [];
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
   it("keeps canonical omissions while materializing persisted and current facts in order", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-video-"));
-    tempDirs.push(stateDir);
     const env = captureEnv(["OPENCLAW_STATE_DIR"]);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    const inbound = path.join(stateDir, "media", "inbound");
-    await fs.mkdir(inbound, { recursive: true });
-    for (const name of ["old", "recent", "steer"]) {
-      await fs.writeFile(path.join(inbound, `${name}.mp4`), MP4);
-    }
-
     try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const inbound = path.join(stateDir, "media", "inbound");
+      await fs.mkdir(inbound, { recursive: true });
+      for (const name of ["old", "recent", "steer"]) {
+        await fs.writeFile(path.join(inbound, `${name}.mp4`), MP4);
+      }
       const historical = imagePair(
         "historical",
         1,
@@ -174,6 +165,7 @@ describe("direct provider context handoff", () => {
       expect(materialize).toHaveBeenCalledTimes(1);
     } finally {
       env.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

@@ -7,13 +7,11 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import { createStubSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { Agent } from "../../runtime/index.js";
 import { createMessageTool } from "../../tools/message-tool-execution.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
-import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 import {
-  terminalModel as model,
+  terminalMessageAgent,
   terminalResponse,
   terminalToolCall,
 } from "./message-tool-terminal.test-support.js";
@@ -28,8 +26,6 @@ describe("confirmed message-tool turn completion", () => {
       const config = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(config);
       const { session, emit } = createStubSessionHarness();
-      let requests = 0;
-      let delivered = false;
       const sourceTool = createMessageTool({
         config,
         preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
@@ -45,37 +41,33 @@ describe("confirmed message-tool turn completion", () => {
           hadUnresolvedTargets: false,
         }),
       });
-      const agent = new Agent({
-        initialState: {
-          model,
-          tools: [
-            {
-              name: "message",
-              label: "Message",
-              description: "Reply to source",
-              parameters: Type.Object({
-                action: Type.String(),
-                message: Type.String(),
-                final: Type.Boolean(),
-              }),
-              execute: async (id, args) => {
-                const result = await sourceTool.execute(id, args);
-                expect(result.details).toMatchObject({
-                  messageDelivery: { status: "settled" },
-                });
-                agent.steer({
-                  role: "user",
-                  content: "Input B: answer my next question.",
-                  timestamp: 1,
-                });
-                return result;
-              },
+      const run = terminalMessageAgent(
+        [
+          {
+            name: "message",
+            label: "Message",
+            description: "Reply to source",
+            parameters: Type.Object({
+              action: Type.String(),
+              message: Type.String(),
+              final: Type.Boolean(),
+            }),
+            execute: async (id, args) => {
+              const result = await sourceTool.execute(id, args);
+              expect(result.details).toMatchObject({
+                messageDelivery: { status: "settled" },
+              });
+              agent.steer({
+                role: "user",
+                content: "Input B: answer my next question.",
+                timestamp: 1,
+              });
+              return result;
             },
-          ],
-        },
-        streamFn: () => {
-          requests += 1;
-          return terminalResponse(
+          },
+        ],
+        (requests) =>
+          terminalResponse(
             requests === 1
               ? [
                   terminalToolCall("message", "source-a", {
@@ -92,26 +84,18 @@ describe("confirmed message-tool turn completion", () => {
                 ? {}
                 : { errorMessage: "Provider failed answering steered input B" }),
             },
+          ),
+        async (context) => {
+          recordEmbeddedToolReceipt(
+            session.sessionManager,
+            context.toolCall.id,
+            context.result.details,
+            true,
           );
         },
-      });
+      );
+      const { agent, counts } = run;
       Object.assign(session, { agent });
-      agent.afterToolCall = async (context) => {
-        recordEmbeddedToolReceipt(
-          session.sessionManager,
-          context.toolCall.id,
-          context.result.details,
-          true,
-        );
-        return undefined;
-      };
-      installMessageToolTerminalHook({
-        agent,
-        sourceReplyDeliveryMode: "automatic",
-        onDeliveredSourceReply: () => {
-          delivered = true;
-        },
-      });
       const subscription = subscribeEmbeddedAgentSession({
         session,
         runId: "steered-source-reply",
@@ -123,7 +107,8 @@ describe("confirmed message-tool turn completion", () => {
         await agent.prompt("Input A: reply through the message tool.");
         await subscription.waitForPendingEvents();
         const sourceReplyDeliveryState = subscription.getSourceReplyDeliveryState();
-        expect([requests, delivered, sourceReplyDeliveryState]).toEqual([2, final, "missing"]);
+        const { requests, deliveries } = counts;
+        expect([requests, deliveries > 0, sourceReplyDeliveryState]).toEqual([2, final, "missing"]);
         expect(subscription.answerSegments).toEqual([
           expect.objectContaining({ sourceReplyDeliveryState: final ? "delivered" : "missing" }),
         ]);
@@ -165,48 +150,42 @@ describe("confirmed message-tool turn completion", () => {
   ])(
     "settles sibling tools and only continues progress (final=$final, hookThrows=$hookThrows)",
     async ({ final, hookThrows }) => {
-      let requests = 0;
-      let deliveries = 0;
       const executed: string[] = [];
-      const agent = new Agent({
-        initialState: {
-          model,
-          tools: [
-            {
-              name: "message",
-              label: "Message",
-              description: "Reply to the current source",
-              parameters: Type.Object({ action: Type.String(), final: Type.Boolean() }),
-              execute: async () => {
-                executed.push("message");
-                return {
-                  content: [],
-                  details: {
-                    messageDelivery: {
-                      status: "settled",
-                      partialDelivery: false,
-                      createdThreadIds: [],
-                      ...(final ? { sourceReplyDelivered: true } : {}),
-                    },
-                    sourceReplyRoute: "current-source",
+      const run = terminalMessageAgent(
+        [
+          {
+            name: "message",
+            label: "Message",
+            description: "Reply to the current source",
+            parameters: Type.Object({ action: Type.String(), final: Type.Boolean() }),
+            execute: async () => {
+              executed.push("message");
+              return {
+                content: [],
+                details: {
+                  messageDelivery: {
+                    status: "settled",
+                    partialDelivery: false,
+                    createdThreadIds: [],
+                    ...(final ? { sourceReplyDelivered: true } : {}),
                   },
-                };
-              },
+                  sourceReplyRoute: "current-source",
+                },
+              };
             },
-            {
-              name: "lookup",
-              label: "Lookup",
-              description: "Read a value",
-              parameters: Type.Object({}),
-              execute: async () => {
-                executed.push("lookup");
-                return { content: [], details: { value: 42 } };
-              },
+          },
+          {
+            name: "lookup",
+            label: "Lookup",
+            description: "Read a value",
+            parameters: Type.Object({}),
+            execute: async () => {
+              executed.push("lookup");
+              return { content: [], details: { value: 42 } };
             },
-          ],
-        },
-        streamFn: () => {
-          requests += 1;
+          },
+        ],
+        (requests) => {
           const content: AssistantMessage["content"] =
             requests === 1
               ? [
@@ -216,26 +195,19 @@ describe("confirmed message-tool turn completion", () => {
               : [{ type: "text", text: "Another visible answer." }];
           return terminalResponse(content, requests === 1 ? "toolUse" : "stop");
         },
-      });
-      agent.afterToolCall = async (context) => {
-        if (hookThrows && context.toolCall.name === "message") {
-          context.result.details = { redacted: true };
-          context.args = { action: "send", final: false };
-          throw new Error("Presentation hook failed");
-        }
-        return undefined;
-      };
-      installMessageToolTerminalHook({
-        agent,
-        sourceReplyDeliveryMode: "automatic",
-        onDeliveredSourceReply: () => {
-          deliveries += 1;
+        async (context) => {
+          if (hookThrows && context.toolCall.name === "message") {
+            context.result.details = { redacted: true };
+            context.args = { action: "send", final: false };
+            throw new Error("Presentation hook failed");
+          }
         },
-      });
+      );
+      const { agent, counts } = run;
 
       await agent.prompt("Answer with a source reply.");
 
-      expect({ executed, deliveries, requests }).toEqual({
+      expect({ executed, ...counts }).toEqual({
         executed: ["message", "lookup"],
         deliveries: 1,
         requests: final ? 1 : 2,
