@@ -282,7 +282,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       );
     } finally {
       server.closeAllConnections();
-      await promisify(server.close).call(server);
+      await promisify(server.close.bind(server))();
       roots.cleanup();
     }
   },

@@ -19,8 +19,10 @@ const {
   startQaProviderServer: vi.fn(),
 }));
 
+// mock-isolation: Lifecycle ordering uses owned fake servers, not live HTTP listeners.
 vi.mock("./lab-server.js", () => ({ startQaLabServer }));
 
+// mock-isolation: The lane must not launch a real Gateway child during orchestration assertions.
 vi.mock("./gateway-child.js", () => ({
   createQaGatewayChild: () => ({
     start: startQaGatewayChild,
@@ -28,8 +30,10 @@ vi.mock("./gateway-child.js", () => ({
   }),
 }));
 
+// mock-isolation: Provider startup and failure are controlled by the lifecycle fixture.
 vi.mock("./providers/server-runtime.js", () => ({ startQaProviderServer }));
 
+// mock-isolation: Synthetic transport cleanup is observed without loading live adapters.
 vi.mock("./qa-transport-registry.js", () => ({ createQaTransportAdapter }));
 
 import { runQaManualLane } from "./manual-lane.runtime.js";

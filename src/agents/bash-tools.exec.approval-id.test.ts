@@ -41,6 +41,7 @@ vi.mock("./tools/nodes-utils.js", () => ({
   resolveNodeIdFromList: vi.fn((nodes: Array<{ nodeId: string }>) => nodes[0]?.nodeId),
 }));
 
+// mock-isolation: Approval routing is observed without sending notices to real channels.
 vi.mock("../infra/outbound/message.js", () => ({ sendMessage: vi.fn(async () => ({ ok: true })) }));
 
 // mock-isolation: Approval-id routing uses synthetic clients without consulting live channel approvals.

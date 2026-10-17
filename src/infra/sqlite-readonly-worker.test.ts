@@ -68,7 +68,9 @@ function createDatabase(paddingBytes: number | null, sql = ""): string {
 
 async function withWorker<T>(
   run: (worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>) => Promise<T>,
-  launch = captureSqliteReadOnlyWorkerLaunch(),
+  launch: Parameters<
+    typeof createScopedSqliteReadOnlyWorker
+  >[0] = captureSqliteReadOnlyWorkerLaunch(),
 ) {
   const worker = createScopedSqliteReadOnlyWorker(launch);
   try {

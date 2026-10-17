@@ -497,6 +497,16 @@ const createDemoAliasOutbound = (
   } = {},
 ): ChannelOutboundAdapter => ({
   deliveryMode: opts.deliveryMode ?? "direct",
+  sendText: async ({ deps, to, text }) => {
+    const send = deps?.["demo-alias-channel"] as
+      | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
+      | undefined;
+    if (!send) {
+      throw new Error("demo-alias-channel missing");
+    }
+    const result = await send(to, text);
+    return { channel: "demo-alias-channel", ...result };
+  },
   pollMaxOptions: 12,
   ...(opts.supportsAnonymousPolls ? { supportsAnonymousPolls: true } : {}),
   sendPoll: opts.sendPoll ?? (async () => ({ messageId: "p1" })),

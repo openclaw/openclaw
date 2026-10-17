@@ -168,7 +168,6 @@ describe("runMessageAction core send routing", () => {
         currentChannelProvider: "telegram",
         currentChannelId: topicTarget,
         currentThreadTs: "77",
-        currentSourceTurnId: "source-turn-1",
       },
       {
         params: {

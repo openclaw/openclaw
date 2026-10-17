@@ -9,6 +9,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import {
   placementTurnOwner,
+  type WorkerPlacementExecutionMode,
   type WorkerSessionTurnOwner,
   type WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
@@ -96,12 +97,20 @@ describe("worker session placement store", () => {
     expect(await reader.getAsync(SESSION.sessionId)).toBeUndefined();
   });
 
-  function advanceToActive() {
-    return advancePlacementFixtureToActive(store, database, SESSION, {
-      environmentId: `environment-${SESSION.sessionId}`,
-      remoteWorkspaceDir: `/workspace/${SESSION.sessionId}`,
-      seedEnvironment: "before-dispatch",
-    });
+  function advanceToActive(
+    identity: WorkerSessionPlacementIdentity = SESSION,
+    executionMode: WorkerPlacementExecutionMode = "worker-turn",
+  ) {
+    return advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...identity, executionMode },
+      {
+        environmentId: `environment-${identity.sessionId}`,
+        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        seedEnvironment: "before-dispatch",
+      },
+    );
   }
 
   it("closes local admission before draining the existing local turn", async () => {

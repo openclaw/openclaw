@@ -50,6 +50,7 @@ function closeAdmission(mode: "suspension" | "restart signal" | "restart drain" 
     expect(suspension?.drain()).toBe(true);
     return suspension;
   }
+  return undefined;
 }
 
 const nodeDevice = {

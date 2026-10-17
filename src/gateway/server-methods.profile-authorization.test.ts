@@ -50,7 +50,7 @@ async function dispatchProfile(
     methodRegistry?: ReturnType<typeof createGatewayMethodRegistry>;
     expectedProfileId?: string;
     context?: Parameters<typeof handleGatewayRequest>[0]["context"];
-    respond?: ReturnType<typeof vi.fn>;
+    respond?: Parameters<typeof handleGatewayRequest>[0]["respond"];
     webchat?: boolean;
   } = {},
 ) {

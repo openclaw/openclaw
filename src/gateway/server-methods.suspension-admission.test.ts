@@ -276,7 +276,7 @@ describe("gateway request suspension admission", () => {
           "admitted observation",
         );
         child = trackAsyncWork(async () => {
-          signal.addEventListener("abort", draining.resolve, { once: true });
+          signal.addEventListener("abort", () => draining.resolve(), { once: true });
           await finishChild.promise;
           admission.runSync(settledChild);
         });

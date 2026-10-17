@@ -94,9 +94,19 @@ it(
         });
         const linkPort = await listen(linkServer);
 
-        providerServer = createServer(async (request, response) => {
-          providerBodies.push(await text(request));
-          writeOpenAiResponsesText(response, { text: "OK", messageId: "msg", responseId: "resp" });
+        providerServer = createServer((request, response) => {
+          void text(request)
+            .then((body) => {
+              providerBodies.push(body);
+              writeOpenAiResponsesText(response, {
+                text: "OK",
+                messageId: "msg",
+                responseId: "resp",
+              });
+            })
+            .catch((error: unknown) => {
+              response.destroy(error instanceof Error ? error : new Error(String(error)));
+            });
         });
         const providerPort = await listen(providerServer);
         const provider = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${providerPort}/v1`);
