@@ -27,7 +27,7 @@ export function renderSidebarSessionSectionHeader(params: {
     <div
       class={`sidebar-recent-sessions__head ${draggable() ? "sidebar-recent-sessions__head--draggable" : ""}`}
       draggable={draggable() ? "true" : "false"}
-      title={params.disabledReason ?? undefined}
+      title={params.disabledReason}
       onMouseDown={(event) => {
         const header = event.currentTarget;
         header.toggleAttribute(
@@ -61,7 +61,7 @@ export function renderSidebarSessionSectionHeader(params: {
         event.currentTarget.removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
-      onContextMenu={params.onContextMenu ?? undefined}
+      onContextMenu={params.onContextMenu}
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true" />
       {params.content}
@@ -73,7 +73,7 @@ export function renderSidebarSessionSectionHeader(params: {
           tabindex="-1"
           aria-label={params.status.label}
           aria-expanded={params.status.expanded ? "true" : "false"}
-          title={params.status.title ?? undefined}
+          title={params.status.title}
           onClick={params.status.onToggle}
         >
           {params.status.content}

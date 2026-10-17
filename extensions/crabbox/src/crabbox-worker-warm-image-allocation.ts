@@ -49,6 +49,7 @@ export function createCrabboxWarmImageAllocation({
   lookupLease,
   selectAllocation,
   openStore,
+  verifyCheckpoint,
   policy,
   assertCurrent,
 }: {
@@ -59,6 +60,12 @@ export function createCrabboxWarmImageAllocation({
     profile: AllocationContext["profile"] & { class: string },
   ) => Promise<AllocationOwner>;
   openStore: () => Store;
+  verifyCheckpoint: (
+    context: AllocationContext,
+    key: string,
+    checkpointId: string,
+    retireHeld?: boolean,
+  ) => Promise<unknown>;
   policy: CrabboxWarmImagePolicy;
   assertCurrent: (context: CheckpointContext) => void;
 }) {
@@ -121,7 +128,10 @@ export function createCrabboxWarmImageAllocation({
               "--json",
             ],
             context.timeoutMs(),
-          ),
+          ).catch(async (error: unknown) => {
+            await verifyCheckpoint(context, owner.key, checkpointId, true);
+            throw error;
+          }),
           { checkpointId, leaseId: context.id, provider: context.provider, slug: context.slug },
         );
         await openStore().update(owner.key, (current) => {

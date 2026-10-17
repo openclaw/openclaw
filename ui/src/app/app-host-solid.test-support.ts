@@ -1,8 +1,8 @@
 import { render } from "@solidjs/testing-library";
-import { createEffect, createRoot, flush, onSettled } from "solid-js";
+import { createComponent, createEffect, createRoot, flush, onSettled } from "solid-js";
 import { onTestFinished } from "vitest";
 import { ShellOwner } from "./app-host.tsx";
-import { renderApplicationShell } from "./app-shell-view.tsx";
+import { ApplicationShell } from "./app-shell-view.tsx";
 
 export function createShellOwner(): ShellOwner {
   const { shell, dispose } = createRoot((disposeRoot) => ({
@@ -23,7 +23,7 @@ export function mountShellView(shell: ShellOwner) {
         () => shell.shellRevision(),
         () => shell.afterCommit(),
       );
-      return renderApplicationShell(shell);
+      return createComponent(ApplicationShell, { host: shell });
     },
     { container: shell.element },
   );

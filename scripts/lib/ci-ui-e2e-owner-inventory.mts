@@ -917,7 +917,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-tool-output-fidelity.e2e.test.ts",
     ["chat"],
-    ["ui/src/pages/chat/components/chat-tool-output.ts"],
+    ["ui/src/pages/chat/components/chat-tool-output-view.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-tool-steering-skip.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-tool-turn-outcome.e2e.test.ts", ["chat", "terminal"]),

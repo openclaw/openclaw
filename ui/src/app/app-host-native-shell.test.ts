@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "../components/modal-dialog.ts";
 import "../components/sidebar-update-card.tsx";
 import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
@@ -8,21 +8,26 @@ import { createNavigationPreferencesFixture } from "../test-helpers/application-
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 type ShellNavigationState = {
+  elements: ShellOwnedElements;
   runtime: { context: ApplicationContext };
   handleNativeToggleSidebar: () => void;
   handleNativeOpenSearch: () => void;
   handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
+  handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleNativeNavigate: (event: Event) => void;
   onboarding: boolean;
   afterCommit: () => void;
 };
 
 type ShellSettingsEscapeState = ShellKeyboardState & {
+  element: HTMLElement;
+  elements: ShellOwnedElements;
   lastWorkspaceLocation: { routeId: "usage"; pathname: string; search: string; hash: string };
   navDrawerOpen: boolean;
   routeState: { routeId: "appearance" };
@@ -72,6 +77,7 @@ describe("OpenClaw native shell", () => {
     Object.assign(shell, { runtime: { context } });
     const drawer = document.createElement("nav");
     drawer.className = "shell-nav";
+    shell.navDrawerElement = drawer;
     const { tooltip, trigger } = createTooltip("Workspace options");
     Object.defineProperty(trigger, "checkVisibility", { value: () => true });
     drawer.append(tooltip);
@@ -174,32 +180,53 @@ describe("OpenClaw native shell", () => {
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
-  it("restores the complete prior workspace URL when Escape leaves Settings", () => {
-    const navigate = vi.fn();
-    const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
-    shell.runtime = {
-      context: {
-        navigate,
-        overlays: { snapshot: { devicePairSetupOpen: false } },
-      } as unknown as ApplicationContext,
-    };
-    shell.lastWorkspaceLocation = {
-      routeId: "usage",
-      pathname: "/usage",
-      search: "?agent=main",
-      hash: "#queue",
-    };
-    shell.navDrawerOpen = false;
-    shell.routeState = { routeId: "appearance" };
+  it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
+    "restores the complete prior workspace URL when Escape leaves Settings after %s detaches",
+    (surface) => {
+      const navigate = vi.fn();
+      const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
+      shell.runtime = {
+        context: {
+          navigate,
+          overlays: { snapshot: { devicePairSetupOpen: false } },
+        } as unknown as ApplicationContext,
+      };
+      shell.lastWorkspaceLocation = {
+        routeId: "usage",
+        pathname: "/usage",
+        search: "?agent=main",
+        hash: "#queue",
+      };
+      shell.navDrawerOpen = false;
+      shell.routeState = { routeId: "appearance" };
 
-    shell.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+      if (surface !== "none") {
+        const overlay = Object.assign(document.createElement("div"), {
+          isOpen: true,
+          dialogOpen: true,
+        });
+        Object.assign(shell.elements, { [surface]: overlay });
+        shell.element.append(overlay);
+        document.body.append(shell.element);
+        onTestFinished(() => shell.element.remove());
+        shell.handleDocumentKeydown(
+          new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+        );
+        expect(navigate).not.toHaveBeenCalled();
+        overlay.remove();
+      }
 
-    expect(navigate).toHaveBeenCalledWith("usage", {
-      pathname: "/usage",
-      search: "?agent=main",
-      hash: "#queue",
-    });
-  });
+      shell.handleDocumentKeydown(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+      );
+
+      expect(navigate).toHaveBeenCalledWith("usage", {
+        pathname: "/usage",
+        search: "?agent=main",
+        hash: "#queue",
+      });
+    },
+  );
 
   it("keeps the raw config editor unchanged when Escape is pressed", () => {
     const navigate = vi.fn();
@@ -296,10 +323,18 @@ describe("OpenClaw native shell", () => {
       const openPalette = vi.fn();
       const togglePalette = vi.fn();
       const shell = createShellOwner() as unknown as ShellNavigationState;
-      Object.defineProperty(shell, "commandPalette", {
-        configurable: true,
-        value: { openPalette, togglePalette },
-      });
+      shell.elements.commandPalette = Object.assign(
+        document.createElement("openclaw-command-palette"),
+        {
+          custodianAvailable: false,
+          desktopAvailable: false,
+          isOpen: false,
+          openPalette,
+          togglePalette,
+        },
+      );
+      document.body.append(shell.elements.commandPalette);
+      onTestFinished(() => shell.elements.commandPalette?.remove());
       shell.runtime = {
         context: nativeSessionContext(navigate, "agent/a", { scopes: [scope] }),
       };
@@ -313,6 +348,18 @@ describe("OpenClaw native shell", () => {
       // preventDefault is the handled signal for the native legacy fallback.
       expect(toggleEvent.defaultPrevented).toBe(true);
       expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      onTestFinished(() => platform.mockRestore());
+      shell.elements.commandPalette.remove();
+      const shortcut = new KeyboardEvent("keydown", {
+        key: "k",
+        metaKey: true,
+        cancelable: true,
+      });
+      shell.handleDocumentKeydown(shortcut);
+      expect(shortcut.defaultPrevented).toBe(true);
+      expect(togglePalette).toHaveBeenCalledOnce();
     },
   );
 
@@ -409,6 +456,7 @@ describe("OpenClaw native shell", () => {
     const drawer = document.body.appendChild(document.createElement("nav"));
     drawer.className = "shell-nav";
     drawer.setAttribute("aria-modal", "true");
+    Object.assign(shell, { navDrawerElement: drawer });
     try {
       shell.handleDocumentKeydown(
         new KeyboardEvent("keydown", {

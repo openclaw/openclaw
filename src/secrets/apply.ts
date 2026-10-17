@@ -163,7 +163,7 @@ function applyProviderPlanMutations(params: {
     if (isDeepStrictEqual(previous, providerConfig)) {
       continue;
     }
-    currentProviders[providerAlias] = structuredClone(providerConfig);
+    currentProviders[providerAlias] = providerConfig;
     changed = true;
   }
 
@@ -205,7 +205,7 @@ function applyProviderPlanMutations(params: {
       continue;
     }
     params.config.plugins.entries[pluginId] = {
-      ...(isRecord(previousEntry) ? previousEntry : {}),
+      ...previousEntry,
       enabled: true,
     };
     changed = true;

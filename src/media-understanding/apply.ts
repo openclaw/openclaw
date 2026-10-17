@@ -19,6 +19,7 @@ import {
   type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
+import type { MediaExecutionContext } from "./provider-execution.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   buildProviderRegistry,
@@ -134,6 +135,7 @@ export async function applyMediaUnderstanding(params: {
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
+  execution?: MediaExecutionContext;
   /** Limit utility processing while preserving native image and video inputs. */
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   /** Render local paths immediately only when the caller owns the final tool surface. */
@@ -197,6 +199,7 @@ export async function applyMediaUnderstanding(params: {
           providerRegistry,
           config: cfg.tools?.media?.[capability],
           activeModel: params.activeModel,
+          execution: params.execution,
         };
         try {
           return await runCapability(request);

@@ -555,7 +555,15 @@ function openAgentDatabaseBackend(
       return domain.execute(command);
     }
     if (command.type === "database.prepareWrite") {
-      openWriter(true);
+      try {
+        openWriter(true);
+      } catch (error) {
+        // Factory refusal markers must not hide typed causes during lazy preparation.
+        if (!preparingCreation && error instanceof SqliteWorkerOpenRefusedError) {
+          throw error.originalError;
+        }
+        throw error;
+      }
       return undefined;
     }
     if (command.type === "database.walMaintenance") {

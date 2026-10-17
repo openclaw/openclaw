@@ -8,6 +8,7 @@ type PickerDependencies = {
   hosted: () => boolean;
   currentSessionIds: () => ReadonlySet<string>;
   list: () => Promise<TerminalSessionInfo[] | null>;
+  showError: (error: unknown) => void;
   attach: (sessionId: string, agentOwned: boolean) => Promise<void>;
 };
 
@@ -28,14 +29,23 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
       return;
     }
     setLoading(true);
-    const result = await deps.list();
-    if (request !== generation || client !== deps.client() || !deps.available()) {
-      return;
+    const isCurrent = () => request === generation && client === deps.client() && deps.available();
+    try {
+      const result = await deps.list();
+      if (isCurrent() && result !== null) {
+        setSessions(result);
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        setOpen(false);
+        trigger?.focus();
+        deps.showError(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        setLoading(false);
+      }
     }
-    if (result !== null) {
-      setSessions(result);
-    }
-    setLoading(false);
   }
 
   function dismiss(restoreFocus: boolean) {

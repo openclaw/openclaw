@@ -182,6 +182,11 @@ clean-close seal requirements are unchanged; a deferred store is never
 admitted for writes merely because the foreground wait expired.
 Chat metadata and model listings refresh when an agent finishes admission, so
 they include newly recovered stores.
+The shared HTTP error handler maps pending agent admission to `503 Service Unavailable`
+with `Retry-After: 1` and `Cache-Control: no-store`, rather than an internal-error
+response. Retry the request after that delay; the Gateway does not replay it or
+hold it open while inspection finishes. Database inspection failures and ownership
+mismatches remain failures requiring operator attention.
 Update canaries retain foreground inspection and strict database readiness because
 they do not activate background agent preparation.
 
@@ -210,6 +215,12 @@ runtime proof. A later last writer can certify that verification after a complet
 checkpoint and native close; failed close or uncertain storage errors revoke both.
 The first open in a new process still requires matching clean-close metadata or
 the admission gate. Idle close within the same process preserves admitted facts.
+After native admission of an existing agent file, its initial integrity and schema
+preparation belong to the physical owner. Concurrent callers join that preparation;
+cancelling one caller ends only its wait. Each caller must still pass its own
+authority checks before using the prepared database. First-use creation retains
+its caller's creation claim, and native worker loss still invalidates the old
+generation's authority.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.

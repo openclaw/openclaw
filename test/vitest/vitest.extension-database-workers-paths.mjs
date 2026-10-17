@@ -10,6 +10,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
+  "extensions/codex/src/app-server/native-execution-policy.authority-chain.test.ts",
   "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",
   "extensions/codex/src/app-server/model-catalog.process.test.ts",
   "extensions/codex/src/app-server/trajectory.test.ts",

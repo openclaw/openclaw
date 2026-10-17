@@ -823,10 +823,11 @@ receipts remain intact; recovery uses its normal transcript replay checks.
 
 If a Gateway left a dead writer and an unfinished recovery cycle,
 `sessions.recover` reconciles that writer
-and starts a continuation in the same session. A new Control UI message also reconciles this
-state before admission, so a rejected send cannot trap the conversation in a
-"conversation changed" retry loop. Both paths preserve the session key and
-transcript. A live run or cloud worker still prevents this repair. Tombstoned
+and starts a continuation in the same session. New Control UI and channel messages
+also reconcile this state before admission, so a rejected send cannot trap the
+conversation in a "conversation changed" retry loop. Channel messages wait behind
+live recovery ownership and resume admission when it settles. These paths preserve
+the session key and transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
 
 If recovery fails during preparation before the agent starts, the Gateway restores

@@ -17,7 +17,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabasePreparationExecution } from "../state/openclaw-agent-execution.js";
 import {
   assertClientVoiceSessionSettlementCurrent,
   captureClientVoiceSessionSettlementContext,
@@ -58,19 +58,18 @@ export async function captureClientVoiceEntrySource(
     }
     const observed = captured.resolveIdentity(target.path);
     const options = { agentId: target.agentId, path: observed.canonicalPath, env: original.env };
-    const execution = captureOpenClawAgentDatabaseExecution(options, {
-      ...(observed.key.startsWith("file:")
+    const execution = captureOpenClawAgentDatabasePreparationExecution(
+      options,
+      observed.key.startsWith("file:")
         ? {
-            expectedIdentity: {
-              kind: "file" as const,
-              physicalIdentity: observed.key.slice("file:".length),
-              nativeLocation: observed.canonicalPath,
-              birthtime: observed.birthtime,
-            },
+            kind: "file",
+            physicalIdentity: observed.key.slice("file:".length),
+            nativeLocation: observed.canonicalPath,
+            birthtime: observed.birthtime,
           }
-        : { expectedCreationIdentity: observed }),
-      requestedPath: target.path,
-    });
+        : undefined,
+      target.path,
+    );
     return {
       options,
       execution,

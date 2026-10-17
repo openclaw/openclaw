@@ -75,6 +75,7 @@ export type SessionPendingInputReceipt =
 
 export type SessionTranscriptEventMatch =
   | { kind: "latest" }
+  | { kind: "canvas-widget"; docId: string }
   | { kind: "visible-final"; runId: string }
   | {
       kind: "idempotency";
