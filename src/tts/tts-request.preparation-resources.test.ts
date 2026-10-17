@@ -152,80 +152,83 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+async function withInspection(
+  run: (
+    fixture: ReturnType<typeof createPreparationFixture>,
+    inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>,
+  ) => Promise<void>,
+) {
+  const fixture = createPreparationFixture();
+  await fixture.runTest(async () => {
+    const inspection = await acquirePluginRegistryForInspection({ config: fixture.cfg });
+    try {
+      await run(fixture, inspection);
+    } finally {
+      await inspection.release();
+    }
+  });
+}
+
 describe("async speech preparation resources", () => {
   it("reuses registrations and preserves opaque overrides for synthesis after inspection retirement", async () => {
-    const fixture = createPreparationFixture();
-    await fixture.runTest(async () => {
-      const inspection = await acquirePluginRegistryForInspection({ config: fixture.cfg });
-      try {
-        const prepared = await withPluginRuntimeRegistryScope(inspection.registry, async () => {
-          const first = await fixture.prepare();
-          for (let index = 0; index < 3; index++) {
-            const next = await fixture.prepare();
-            expect(
-              next.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings ===
-                first.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
-            ).toBe(true);
-          }
-          const synthesis = await fixture.runtime.tts.textToSpeechTelephony({
-            cfg: first.cfg,
-            text: first.directives.cleanedText,
-            overrides: first.directives.overrides,
-          });
-          expect(synthesis.success).toBe(true);
-          // Ordinary dispatch must restore the handle inside its exact owning plugin.
-          expect(fixture.state.receivedOverrides[0] === fixture.state.connections[0]?.opaque).toBe(
-            true,
-          );
-          return first;
+    await withInspection(async (fixture, inspection) => {
+      const prepared = await withPluginRuntimeRegistryScope(inspection.registry, async () => {
+        const first = await fixture.prepare();
+        for (let index = 0; index < 3; index++) {
+          const next = await fixture.prepare();
+          expect(
+            next.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings ===
+              first.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
+          ).toBe(true);
+        }
+        const synthesis = await fixture.runtime.tts.textToSpeechTelephony({
+          cfg: first.cfg,
+          text: first.directives.cleanedText,
+          overrides: first.directives.overrides,
         });
-        expect(fixture.state.connections.length).toBe(1);
-        await inspection.release();
-        expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
-        expect(
-          prepared.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
-        ).toHaveProperty("voiceId", "voice-42");
-        const result = await fixture.runtime.tts.textToSpeechTelephony({
-          cfg: prepared.cfg,
-          text: prepared.directives.cleanedText,
-          overrides: prepared.directives.overrides,
-        });
-        expect(result.success).toBe(true);
-        expect(fixture.state.consumedVoices).toEqual(["voice-42", "voice-42"]);
-        await fixture.host.close();
-        expect(fixture.state.connections.every((entry) => !entry.database.isOpen)).toBe(true);
-        expect(fixture.state.connections.every((entry) => entry.disposals === 1)).toBe(true);
-      } finally {
-        await inspection.release();
-      }
+        expect(synthesis.success).toBe(true);
+        // Ordinary dispatch must restore the handle inside its exact owning plugin.
+        expect(fixture.state.receivedOverrides[0] === fixture.state.connections[0]?.opaque).toBe(
+          true,
+        );
+        return first;
+      });
+      expect(fixture.state.connections.length).toBe(1);
+      await inspection.release();
+      expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
+      expect(
+        prepared.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
+      ).toHaveProperty("voiceId", "voice-42");
+      const result = await fixture.runtime.tts.textToSpeechTelephony({
+        cfg: prepared.cfg,
+        text: prepared.directives.cleanedText,
+        overrides: prepared.directives.overrides,
+      });
+      expect(result.success).toBe(true);
+      expect(fixture.state.consumedVoices).toEqual(["voice-42", "voice-42"]);
+      await fixture.host.close();
+      expect(fixture.state.connections.every((entry) => !entry.database.isOpen)).toBe(true);
+      expect(fixture.state.connections.every((entry) => entry.disposals === 1)).toBe(true);
     });
   });
 
   it("retains the selected source before provider metadata can retire its inspection", async () => {
-    const fixture = createPreparationFixture();
-    await fixture.runTest(async () => {
-      const inspection = await acquirePluginRegistryForInspection({ config: fixture.cfg });
+    await withInspection(async (fixture, inspection) => {
       let retirement: Promise<void> | undefined;
       fixture.state.callbacks.onMetadata = () => {
         retirement ??= inspection.release();
       };
-      try {
-        const prepared = await withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare);
-        await retirement;
-        expect(prepared.directives.hasDirective).toBe(true);
-        expect(fixture.state.connections[0]?.opaque.voiceId).toBe("voice-42");
-        await fixture.host.close();
-        expect(fixture.state.connections[0]?.disposals).toBe(1);
-      } finally {
-        await inspection.release();
-      }
+      const prepared = await withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare);
+      await retirement;
+      expect(prepared.directives.hasDirective).toBe(true);
+      expect(fixture.state.connections[0]?.opaque.voiceId).toBe("voice-42");
+      await fixture.host.close();
+      expect(fixture.state.connections[0]?.disposals).toBe(1);
     });
   });
 
   it("owns failed projection cleanup until asynchronous disposal finishes", async () => {
-    const fixture = createPreparationFixture();
-    await fixture.runTest(async () => {
-      const inspection = await acquirePluginRegistryForInspection({ config: fixture.cfg });
+    await withInspection(async (fixture, inspection) => {
       const disposeResume = createDeferredCore();
       let retirement: Promise<void> | undefined;
       fixture.state.callbacks.onDispose = () => disposeResume.promise;
@@ -249,7 +252,6 @@ describe("async speech preparation resources", () => {
       } finally {
         disposeResume.resolve();
         await retirement;
-        await inspection.release();
       }
     });
   });
@@ -257,9 +259,7 @@ describe("async speech preparation resources", () => {
   it.each([false, true])(
     "joins directive tails before closing resources (projection fails: %s)",
     async (fails) => {
-      const fixture = createPreparationFixture();
-      await fixture.runTest(async () => {
-        const inspection = await acquirePluginRegistryForInspection({ config: fixture.cfg });
+      await withInspection(async (fixture, inspection) => {
         let retirement: Promise<void> | undefined;
         fixture.state.callbacks.trackTail = true;
         if (fails) {
@@ -294,30 +294,23 @@ describe("async speech preparation resources", () => {
           fixture.state.tailResume.resolve();
           await Promise.allSettled(fixture.state.tails);
           await retirement;
-          await inspection.release();
         }
       });
     },
   );
 
   it("rejects projection when its SDK host closes during preparation", async () => {
-    const fixture = createPreparationFixture();
-    await fixture.runTest(async () => {
-      const inspection = await acquirePluginRegistryForInspection({ config: fixture.cfg });
+    await withInspection(async (fixture, inspection) => {
       let closing: Promise<void> | undefined;
       fixture.state.callbacks.onProjection = () => {
         closing ??= fixture.host.close();
       };
-      try {
-        await expect(
-          withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare),
-        ).rejects.toThrow("Plugin SDK resource host is closed");
-        await closing;
-        await inspection.release();
-        expect(fixture.state.connections[0]?.disposals).toBe(1);
-      } finally {
-        await inspection.release();
-      }
+      await expect(
+        withPluginRuntimeRegistryScope(inspection.registry, fixture.prepare),
+      ).rejects.toThrow("Plugin SDK resource host is closed");
+      await closing;
+      await inspection.release();
+      expect(fixture.state.connections[0]?.disposals).toBe(1);
     });
   });
 

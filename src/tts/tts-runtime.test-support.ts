@@ -1,4 +1,3 @@
-// TTS runtime tests cover speech synthesis behavior.
 import crypto from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -6,10 +5,7 @@ import path from "node:path";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS as MAX_TIMER_TIMEOUT_MS_CORE } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import {
-  clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotCore,
-  setRuntimeConfigSnapshot as setRuntimeConfigSnapshotCore,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
   SpeechListVoicesRequest,
   SpeechProviderPlugin,
@@ -42,26 +38,10 @@ const getSpeechProviderMock = vi.hoisted(() =>
   vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
 );
 const transcodeAudioBufferMock = vi.hoisted(() =>
-  // Default off: most tests rely on the synthesized buffer reaching the
-  // channel unchanged. Tests that exercise the pre-transcode branch override
-  // per-call via `transcodeAudioBufferMock.mockResolvedValueOnce(...)`.
-  // Typed as the helper's full return shape so per-call overrides aren't
-  // narrowed to the default's literal.
-  vi.fn<
-    () => Promise<
-      | { ok: true; buffer: Buffer }
-      | {
-          ok: false;
-          reason:
-            | "platform-unsupported"
-            | "invalid-extension"
-            | "noop-same-container"
-            | "no-recipe"
-            | "transcoder-failed";
-          detail?: string;
-        }
-    >
-  >(async () => ({ ok: false, reason: "platform-unsupported" })),
+  // Keep the real return union so individual cases can enable transcoding.
+  vi.fn<() => ReturnType<typeof import("../media/media-services.js").transcodeAudioBuffer>>(
+    async () => ({ ok: false, reason: "platform-unsupported" }),
+  ),
 );
 
 vi.mock("../media/media-services.js", () => ({
@@ -165,12 +145,10 @@ export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
 export const CODE_HEAVY_SPOKEN_FALLBACK = CODE_HEAVY_SPOKEN_FALLBACK_CORE;
 export const MAX_TIMER_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS_CORE;
-export function clearRuntimeConfigSnapshot(): void {
-  clearRuntimeConfigSnapshotCore();
-}
-export const setRuntimeConfigSnapshot = (
-  ...args: Parameters<typeof setRuntimeConfigSnapshotCore>
-) => setRuntimeConfigSnapshotCore(...args);
+export {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export const nativeVoiceNoteChannels = [
   "discord",
@@ -202,6 +180,16 @@ export function installSpeechProviders(providers: SpeechProviderPlugin[]): void 
   );
 }
 
+export function resetTtsRuntime(): void {
+  setTtsMachinePrefsPathResolver();
+  clearRuntimeConfigSnapshot();
+  delete (Object.prototype as Record<string, unknown>).polluted;
+  synthesizeMock.mockClear();
+  prepareSynthesisMock.mockClear();
+  transcodeAudioBufferMock.mockClear();
+  installSpeechProviders([createMockSpeechProvider()]);
+}
+
 // macOS os.tmpdir() is a /var -> /private/var symlink and fs-safe rejects
 // symlinked store roots; resolve the canonical dir before writing prefs.
 const PREFS_TMP_DIR = realpathSync(os.tmpdir());
@@ -223,6 +211,20 @@ export function textToSpeech(params: Parameters<typeof textToSpeechCore>[0]) {
 
 export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsToPayloadCore>[0]) {
   return maybeApplyTtsToPayloadCore(params, persistTestTtsAudio);
+}
+
+export async function withTtsPayload(
+  params: Parameters<typeof maybeApplyTtsToPayload>[0],
+  check: (result: Awaited<ReturnType<typeof maybeApplyTtsToPayload>>) => void | Promise<void>,
+) {
+  const result = await maybeApplyTtsToPayload(params);
+  try {
+    await check(result);
+  } finally {
+    if (result.mediaUrl) {
+      rmSync(path.dirname(result.mediaUrl), { recursive: true, force: true });
+    }
+  }
 }
 
 export function prefsPathFor(prefsName: string): string {
@@ -279,35 +281,29 @@ export async function expectTtsPayloadResult(params: {
     synthesizeMock.mockResolvedValueOnce(params.providerResult);
   }
   const cfg = createTtsConfig(params.prefsName);
-  let mediaDir: string | undefined;
-  try {
-    const result = await maybeApplyTtsToPayload({
+  await withTtsPayload(
+    {
       payload: { text: params.text },
       cfg,
       channel: params.channel,
       kind: params.kind ?? "final",
-    });
-
-    expect(synthesizeMock).toHaveBeenCalled();
-    const request = requireRecord(
-      synthesizeMock.mock.calls.at(-1)?.[0],
-      "latest synthesis request",
-    );
-    expect(request.target).toBe(params.target);
-    expect(result.audioAsVoice).toBe(params.audioAsVoice);
-    expect(result.mediaUrl).toMatch(
-      new RegExp(`voice---[a-f0-9-]+\\.${params.mediaExtension ?? "ogg"}$`),
-    );
-    expect(result.spokenText).toBe(params.text);
-    expect(result.ttsSupplement).toEqual({ spokenText: params.text });
-    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
-
-    mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
-  } finally {
-    if (mediaDir) {
-      rmSync(mediaDir, { recursive: true, force: true });
-    }
-  }
+    },
+    (result) => {
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls.at(-1)?.[0],
+        "latest synthesis request",
+      );
+      expect(request.target).toBe(params.target);
+      expect(result.audioAsVoice).toBe(params.audioAsVoice);
+      expect(result.mediaUrl).toMatch(
+        new RegExp(`voice---[a-f0-9-]+\\.${params.mediaExtension ?? "ogg"}$`),
+      );
+      expect(result.spokenText).toBe(params.text);
+      expect(result.ttsSupplement).toEqual({ spokenText: params.text });
+      expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
+    },
+  );
 }
 
 export { prepareSynthesisMock, synthesizeMock, transcodeAudioBufferMock };

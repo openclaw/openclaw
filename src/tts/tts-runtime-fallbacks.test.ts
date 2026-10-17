@@ -1,5 +1,4 @@
 import { rmSync } from "node:fs";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   markCommandReplyForDelivery,
@@ -8,17 +7,14 @@ import {
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import * as bundledChannelPlugins from "../channels/plugins/bundled.js";
-import { getChannelPlugin } from "../channels/plugins/registry.js";
 import * as globals from "../globals.js";
 import {
   captureActivePluginRegistrySnapshot,
-  getActivePluginRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  clearRuntimeConfigSnapshot,
   createMockSpeechProvider,
   createTtsConfig,
   expectTtsPayloadResult,
@@ -26,21 +22,42 @@ import {
   maybeApplyTtsToPayload,
   maybeApplyTtsToPayloadCore,
   prefsPathFor,
-  prepareSynthesisMock,
   requireFirstSynthesisRequest,
   requireRecord,
+  resetTtsRuntime,
   setSummarizationEnabled,
-  setTtsMachinePrefsPathResolver,
   setTtsMaxLength,
   synthesizeMock,
   synthesizeSpeech,
   testApi,
-  transcodeAudioBufferMock,
+  withTtsPayload,
   type OpenClawConfig,
   type ReplyPayload,
 } from "./tts-runtime.test-support.js";
 
 const routedPayloads = vi.hoisted(() => [] as ReplyPayload[]);
+
+function payloadRequest(
+  payload: ReplyPayload,
+  prefsName: string,
+): Parameters<typeof maybeApplyTtsToPayload>[0] {
+  return {
+    payload,
+    cfg: createTtsConfig(prefsName),
+    channel: "telegram",
+    kind: "final",
+  };
+}
+
+function slackData(structured: boolean) {
+  return structured
+    ? {
+        slack: {
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Visible channel card" } }],
+        },
+      }
+    : { slack: { unfurl: false } };
+}
 
 vi.mock("../channels/message/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/message/runtime.js")>();
@@ -123,14 +140,8 @@ async function dispatchSpeechReply(
 
 describe("TTS runtime provider fallback and delivery behavior", () => {
   afterEach(() => {
-    setTtsMachinePrefsPathResolver();
-    clearRuntimeConfigSnapshot();
-    delete (Object.prototype as Record<string, unknown>).polluted;
-    synthesizeMock.mockClear();
-    prepareSynthesisMock.mockClear();
-    transcodeAudioBufferMock.mockClear();
+    resetTtsRuntime();
     routedPayloads.length = 0;
-    installSpeechProviders([createMockSpeechProvider()]);
   });
 
   it("keeps terminal command replies text-only with automatic TTS enabled", async () => {
@@ -246,9 +257,7 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
         tts: {
           enabled: true,
           provider: "xiaomi",
-          providers: {
-            mimo: { apiKey: "fake" },
-          },
+          providers: { mimo: { apiKey: "fake" } },
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -267,15 +276,7 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
           enabled: true,
           provider: "mock",
           persona: "narrator",
-          personas: {
-            narrator: {
-              providers: {
-                mock: {
-                  speakerVoice: "marin",
-                },
-              },
-            },
-          },
+          personas: { narrator: { providers: { mock: { speakerVoice: "marin" } } } },
         },
       } as OpenClawConfig,
       disableFallback: true,
@@ -311,39 +312,22 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
   });
 
   it.each([
-    { failure: "speech provider fails", failProvider: true, structured: false, loaded: true },
+    { failure: "speech provider fails", failProvider: true, structured: false },
     {
       failure: "audio persistence fails with visible blocks",
       failProvider: false,
       structured: true,
-      loaded: true,
     },
   ])(
     "routes hidden speech through the actual dispatcher and channel router when $failure",
-    async ({ failProvider, structured, loaded }) => {
-      const restoreRegistry = installStructuredReplyTestChannel(loaded);
+    async ({ failProvider, structured }) => {
+      const restoreRegistry = installStructuredReplyTestChannel(true);
       try {
         const answer = "Your important answer is ready.";
         const cfg = createTtsConfig(
-          `openclaw-speech-core-hidden-tts-router-${failProvider}-${structured}-${loaded}`,
+          `openclaw-speech-core-hidden-tts-router-${failProvider}-${structured}-true`,
         );
-        const channelData = structured
-          ? {
-              slack: {
-                blocks: [
-                  { type: "section", text: { type: "mrkdwn", text: "Visible channel card" } },
-                ],
-              },
-            }
-          : { slack: { unfurl: false } };
-        if (!loaded) {
-          expect(getActivePluginRegistry()?.channels).toEqual([]);
-          expect(
-            getChannelPlugin("slack")?.messaging?.hasStructuredReplyPayload?.({
-              payload: { channelData },
-            }),
-          ).toBe(structured);
-        }
+        const channelData = slackData(structured);
         if (failProvider) {
           synthesizeMock.mockRejectedValueOnce(new Error("Speech provider unavailable"));
         }
@@ -397,15 +381,13 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
 
   it("keeps hidden TTS text private when the reply already contains an attachment", async () => {
     const result = await maybeApplyTtsToPayloadCore(
-      {
-        payload: {
+      payloadRequest(
+        {
           text: "[[tts:text]]This must remain audio-only.[[/tts:text]]",
           mediaUrl: "https://example.invalid/already-attached.png",
         },
-        cfg: createTtsConfig("openclaw-speech-core-hidden-tts-existing-attachment"),
-        channel: "telegram",
-        kind: "final",
-      },
+        "openclaw-speech-core-hidden-tts-existing-attachment",
+      ),
       async () => {
         throw new Error("Media storage must not be called");
       },
@@ -422,12 +404,7 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     const prose = "This explanation is ordinary prose and should be spoken in full.";
     const text = `${prefix}\n\n${prose}`;
     const result = await maybeApplyTtsToPayloadCore(
-      {
-        payload: { text },
-        cfg: createTtsConfig("fenced-prose"),
-        channel: "telegram",
-        kind: "final",
-      },
+      payloadRequest({ text }, "fenced-prose"),
       async () => "/synthetic-speech.mp3",
     );
 
@@ -438,44 +415,30 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
 
   it("skips channel auto-TTS audio for code-heavy replies", async () => {
     const text = "```ts\nexport function answer() {\n  return 42;\n}\n```";
-    const result = await maybeApplyTtsToPayload({
-      payload: { text },
-      cfg: createTtsConfig("openclaw-speech-core-code-heavy-voice-note-test"),
-      channel: "telegram",
-      kind: "final",
-    });
+    const result = await maybeApplyTtsToPayload(
+      payloadRequest({ text }, "openclaw-speech-core-code-heavy-voice-note-test"),
+    );
 
     expect(synthesizeMock).not.toHaveBeenCalled();
     expect(result).toEqual({ text });
   });
 
   it("synthesizes explicitly tagged short hidden TTS text", async () => {
-    const cfg = createTtsConfig("openclaw-speech-core-short-hidden-tts-test");
-    let mediaDir: string | undefined;
-    try {
-      const result = await maybeApplyTtsToPayload({
-        payload: {
-          text: "[[tts:text]]hello[[/tts:text]]",
-          audioAsVoice: true,
-        },
-        cfg,
-        channel: "telegram",
-        kind: "final",
-      });
-
-      expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireFirstSynthesisRequest("hidden TTS request");
-      expect(request.text).toBe("hello");
-      expect(result.mediaUrl).toMatch(/voice---[a-f0-9-]+\.ogg$/);
-      expect(result.audioAsVoice).toBe(true);
-      expect(result.text).toBeUndefined();
-      expect(result.ttsSupplement).toBeUndefined();
-      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
-    } finally {
-      if (mediaDir) {
-        rmSync(mediaDir, { recursive: true, force: true });
-      }
-    }
+    await withTtsPayload(
+      payloadRequest(
+        { text: "[[tts:text]]hello[[/tts:text]]", audioAsVoice: true },
+        "openclaw-speech-core-short-hidden-tts-test",
+      ),
+      (result) => {
+        expect(synthesizeMock).toHaveBeenCalled();
+        const request = requireFirstSynthesisRequest("hidden TTS request");
+        expect(request.text).toBe("hello");
+        expect(result.mediaUrl).toMatch(/voice---[a-f0-9-]+\.ogg$/);
+        expect(result.audioAsVoice).toBe(true);
+        expect(result.text).toBeUndefined();
+        expect(result.ttsSupplement).toBeUndefined();
+      },
+    );
   });
 
   it("truncates long TTS text on a UTF-16 boundary", async () => {
@@ -484,27 +447,25 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     const cfg = createTtsConfig(prefsName);
     setTtsMaxLength(prefsPath, 11);
     setSummarizationEnabled(prefsPath, false);
-    let mediaDir: string | undefined;
     try {
-      const result = await maybeApplyTtsToPayload({
-        payload: { text: `${"a".repeat(7)}😀tail long enough for TTS` },
-        cfg,
-        preparedTtsPreferences: { machinePrefsPath: prefsPath },
-        channel: "telegram",
-        kind: "final",
-      });
-
-      expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireFirstSynthesisRequest("utf16 truncated TTS request");
-      const spokenText = String(request.text);
-      expect(spokenText).toBe(`${"a".repeat(7)}...`);
-      expect(result.spokenText).toBe(spokenText);
-      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+      await withTtsPayload(
+        {
+          payload: { text: `${"a".repeat(7)}😀tail long enough for TTS` },
+          cfg,
+          preparedTtsPreferences: { machinePrefsPath: prefsPath },
+          channel: "telegram",
+          kind: "final",
+        },
+        (result) => {
+          expect(synthesizeMock).toHaveBeenCalled();
+          const request = requireFirstSynthesisRequest("utf16 truncated TTS request");
+          const spokenText = String(request.text);
+          expect(spokenText).toBe(`${"a".repeat(7)}...`);
+          expect(result.spokenText).toBe(spokenText);
+        },
+      );
     } finally {
       rmSync(prefsPath, { force: true });
-      if (mediaDir) {
-        rmSync(mediaDir, { recursive: true, force: true });
-      }
     }
   });
 
@@ -524,16 +485,12 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
   });
 
   it("keeps skipping untagged short TTS text", async () => {
-    const cfg = createTtsConfig("openclaw-speech-core-short-plain-tts-test");
-    const result = await maybeApplyTtsToPayload({
-      payload: {
-        text: "hello",
-        audioAsVoice: true,
-      },
-      cfg,
-      channel: "telegram",
-      kind: "final",
-    });
+    const result = await maybeApplyTtsToPayload(
+      payloadRequest(
+        { text: "hello", audioAsVoice: true },
+        "openclaw-speech-core-short-plain-tts-test",
+      ),
+    );
 
     expect(synthesizeMock).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -543,16 +500,12 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
   });
 
   it("keeps skipping explicit tagged TTS text that strips to empty markdown", async () => {
-    const cfg = createTtsConfig("openclaw-speech-core-empty-hidden-tts-test");
-    const result = await maybeApplyTtsToPayload({
-      payload: {
-        text: "[[tts:text]]***[[/tts:text]]",
-        audioAsVoice: true,
-      },
-      cfg,
-      channel: "telegram",
-      kind: "final",
-    });
+    const result = await maybeApplyTtsToPayload(
+      payloadRequest(
+        { text: "[[tts:text]]***[[/tts:text]]", audioAsVoice: true },
+        "openclaw-speech-core-empty-hidden-tts-test",
+      ),
+    );
 
     expect(synthesizeMock).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -577,15 +530,7 @@ describe("cold speech runtime visible fallback", () => {
       synthesizeMock.mockClear();
       try {
         const answer = "Spoken greeting";
-        const channelData = structured
-          ? {
-              slack: {
-                blocks: [
-                  { type: "section", text: { type: "mrkdwn", text: "Visible channel card" } },
-                ],
-              },
-            }
-          : { slack: { unfurl: false } };
+        const channelData = slackData(structured);
         const cfg = createTtsConfig(`openclaw-speech-cold-runtime-${loaded}-${structured}`);
         await dispatchSpeechReply(
           setReplyPayloadMetadata(

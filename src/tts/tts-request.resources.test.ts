@@ -203,6 +203,29 @@ function combineConfig(
   };
 }
 
+type SpeechFixture = ReturnType<typeof createNativeSpeechFixture>;
+
+async function withFixtures(
+  fixtures: [SpeechFixture, ...SpeechFixture[]],
+  run: () => Promise<void>,
+) {
+  try {
+    await fixtures[0].withEnvironment(async () => {
+      useNoBundledPlugins();
+      await run();
+    });
+  } finally {
+    fixtures.forEach((fixture) => fixture.cleanup());
+  }
+}
+
+function expectDisposed(fixtures: SpeechFixture[], raw = false) {
+  for (const entry of fixtures.flatMap((fixture) => fixture.state.connections)) {
+    expect(entry.database.isOpen).toBe(raw);
+    expect(entry.disposals).toBe(raw ? 0 : 1);
+  }
+}
+
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
@@ -220,45 +243,37 @@ describe.each([
     "disposes cold speech resources after settlement (reject=%s)",
     async (reject) => {
       const fixture = createFixture("native-telephony", reject);
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const result = settle(fixture.run());
-          try {
-            await waitForHook(fixture.state.prepareStarted.promise, result);
-            expect(fixture.state.connections.length).toBeGreaterThan(0);
-            expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
-            fixture.state.prepareResume.resolve();
-            await waitForHook(fixture.state.synthesizeStarted.promise, result);
-            fixture.state.synthesizeResume.resolve();
-            const outcome = await result;
-            expect(outcome.error).toBeUndefined();
-            expect(outcome.value?.success).toBe(!reject);
-            if (reject) {
-              expect(outcome.value?.error).toContain("native speech failure");
-            } else {
-              expect(outcome.value?.audioBuffer).toEqual(pcm);
-              expect(outcome.value).toHaveProperty(
-                surface === "telephony" ? "sampleRate" : "fileExtension",
-                surface === "telephony" ? 8000 : ".pcm",
-              );
-              expect(outcome.value?.providerVoice).toBe("native-voice");
-            }
-            const requests = fixture.state.connections.flatMap((entry) => entry.requests);
-            expect(requests.length).toBe(1);
-            expect(requests[0]?.timeoutMs).toBe(12345);
-            for (const entry of fixture.state.connections) {
-              expect(entry.database.isOpen).toBe(false);
-              expect(entry.disposals).toBe(1);
-            }
-          } finally {
-            fixture.resume();
-            await result;
+      await withFixtures([fixture], async () => {
+        const result = settle(fixture.run());
+        try {
+          await waitForHook(fixture.state.prepareStarted.promise, result);
+          expect(fixture.state.connections.length).toBeGreaterThan(0);
+          expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
+          fixture.state.prepareResume.resolve();
+          await waitForHook(fixture.state.synthesizeStarted.promise, result);
+          fixture.state.synthesizeResume.resolve();
+          const outcome = await result;
+          expect(outcome.error).toBeUndefined();
+          expect(outcome.value?.success).toBe(!reject);
+          if (reject) {
+            expect(outcome.value?.error).toContain("native speech failure");
+          } else {
+            expect(outcome.value?.audioBuffer).toEqual(pcm);
+            expect(outcome.value).toHaveProperty(
+              surface === "telephony" ? "sampleRate" : "fileExtension",
+              surface === "telephony" ? 8000 : ".pcm",
+            );
+            expect(outcome.value?.providerVoice).toBe("native-voice");
           }
-        });
-      } finally {
-        fixture.cleanup();
-      }
+          const requests = fixture.state.connections.flatMap((entry) => entry.requests);
+          expect(requests.length).toBe(1);
+          expect(requests[0]?.timeoutMs).toBe(12345);
+          expectDisposed([fixture]);
+        } finally {
+          fixture.resume();
+          await result;
+        }
+      });
     },
   );
 });
@@ -274,51 +289,42 @@ describe.each([
     "retains the %s host through setup and synthesis",
     async (owner) => {
       const fixture = createFixture();
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const inspection =
-            owner === "raw"
-              ? undefined
-              : await acquirePluginRegistryForInspection({ config: fixture.cfg });
-          const registry =
-            inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.cfg });
-          let parentRelease: Promise<void> | undefined;
-          if (owner === "managed-config") {
-            fixture.state.callbacks.onResolveConfig = () => {
-              parentRelease ??= inspection!.release();
-            };
-          }
-          const result = settle(withPluginRuntimeRegistryScope(registry, fixture.run));
-          try {
-            await waitForHook(
-              owner === "managed-config"
-                ? fixture.state.configStarted.promise
-                : fixture.state.prepareStarted.promise,
-              result,
-            );
-            await (parentRelease ?? inspection?.release());
-            expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
-            fixture.state.prepareResume.resolve();
-            await waitForHook(fixture.state.synthesizeStarted.promise, result);
-            fixture.state.synthesizeResume.resolve();
-            const outcome = await result;
-            expect(outcome.error).toBeUndefined();
-            expect(outcome.value?.success).toBe(true);
-            expect(outcome.value?.audioBuffer).toEqual(pcm);
-            for (const entry of fixture.state.connections) {
-              expect(entry.database.isOpen).toBe(owner === "raw");
-              expect(entry.disposals).toBe(owner === "raw" ? 0 : 1);
-            }
-          } finally {
-            fixture.resume();
-            await result;
-            await inspection?.release();
-          }
-        });
-      } finally {
-        fixture.cleanup();
-      }
+      await withFixtures([fixture], async () => {
+        const inspection =
+          owner === "raw"
+            ? undefined
+            : await acquirePluginRegistryForInspection({ config: fixture.cfg });
+        const registry = inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.cfg });
+        let parentRelease: Promise<void> | undefined;
+        if (owner === "managed-config") {
+          fixture.state.callbacks.onResolveConfig = () => {
+            parentRelease ??= inspection!.release();
+          };
+        }
+        const result = settle(withPluginRuntimeRegistryScope(registry, fixture.run));
+        try {
+          await waitForHook(
+            owner === "managed-config"
+              ? fixture.state.configStarted.promise
+              : fixture.state.prepareStarted.promise,
+            result,
+          );
+          await (parentRelease ?? inspection?.release());
+          expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
+          fixture.state.prepareResume.resolve();
+          await waitForHook(fixture.state.synthesizeStarted.promise, result);
+          fixture.state.synthesizeResume.resolve();
+          const outcome = await result;
+          expect(outcome.error).toBeUndefined();
+          expect(outcome.value?.success).toBe(true);
+          expect(outcome.value?.audioBuffer).toEqual(pcm);
+          expectDisposed([fixture], owner === "raw");
+        } finally {
+          fixture.resume();
+          await result;
+          await inspection?.release();
+        }
+      });
     },
   );
 
@@ -326,33 +332,25 @@ describe.each([
     const catalog = createFixture("catalog-voice", false, 20);
     const override = createFixture("override-voice", true, 10);
     const preferred = createFixture("preference-voice", false, 0);
-    const fixtures = [catalog, override, preferred];
+    const fixtures: [SpeechFixture, ...SpeechFixture[]] = [catalog, override, preferred];
     fixtures.forEach((fixture) => fixture.resume());
     fs.writeFileSync(
       catalog.prefsPath,
       JSON.stringify({ tts: { provider: "preference-voice-alias" } }),
     );
-    try {
-      await catalog.withEnvironment(async () => {
-        useNoBundledPlugins();
-        const result = await synthesize({
-          text: "override with configured fallback",
-          cfg: combineConfig(catalog, [override, preferred]),
-          prefsPath: catalog.prefsPath,
-          overrides: { provider: "override-voice-alias" },
-        });
-        expect(result.success).toBe(true);
-        expect(result.provider).toBe("catalog-voice");
-        expect(result.attemptedProviders).toEqual(["override-voice", "catalog-voice"]);
-        expect(preferred.state.connections.flatMap((entry) => entry.requests).length).toBe(0);
-        for (const entry of fixtures.flatMap((fixture) => fixture.state.connections)) {
-          expect(entry.database.isOpen).toBe(false);
-          expect(entry.disposals).toBe(1);
-        }
+    await withFixtures(fixtures, async () => {
+      const result = await synthesize({
+        text: "override with configured fallback",
+        cfg: combineConfig(catalog, [override, preferred]),
+        prefsPath: catalog.prefsPath,
+        overrides: { provider: "override-voice-alias" },
       });
-    } finally {
-      fixtures.forEach((fixture) => fixture.cleanup());
-    }
+      expect(result.success).toBe(true);
+      expect(result.provider).toBe("catalog-voice");
+      expect(result.attemptedProviders).toEqual(["override-voice", "catalog-voice"]);
+      expect(preferred.state.connections.flatMap((entry) => entry.requests).length).toBe(0);
+      expectDisposed(fixtures);
+    });
   });
 
   it("does not turn a prior override-only provider into an automatic fallback", async () => {
@@ -360,35 +358,26 @@ describe.each([
     const override = createFixture("override-voice", false);
     catalog.resume();
     override.resume();
-    try {
-      await catalog.withEnvironment(async () => {
-        useNoBundledPlugins();
-        const cfg = combineConfig(catalog, [override]);
-        const first = await synthesize({
-          text: "explicit override",
-          cfg,
-          prefsPath: catalog.prefsPath,
-          overrides: { provider: "override-voice-alias" },
-        });
-        expect(first.success).toBe(true);
-        expect(first.provider).toBe("override-voice");
-        const second = await synthesize({
-          text: "configured provider only",
-          cfg,
-          prefsPath: catalog.prefsPath,
-        });
-        expect(second.success).toBe(false);
-        expect(second.attemptedProviders).toEqual(["catalog-voice"]);
-        expect(override.state.connections.flatMap((entry) => entry.requests).length).toBe(1);
-        for (const entry of [...catalog.state.connections, ...override.state.connections]) {
-          expect(entry.database.isOpen).toBe(false);
-          expect(entry.disposals).toBe(1);
-        }
+    await withFixtures([catalog, override], async () => {
+      const cfg = combineConfig(catalog, [override]);
+      const first = await synthesize({
+        text: "explicit override",
+        cfg,
+        prefsPath: catalog.prefsPath,
+        overrides: { provider: "override-voice-alias" },
       });
-    } finally {
-      catalog.cleanup();
-      override.cleanup();
-    }
+      expect(first.success).toBe(true);
+      expect(first.provider).toBe("override-voice");
+      const second = await synthesize({
+        text: "configured provider only",
+        cfg,
+        prefsPath: catalog.prefsPath,
+      });
+      expect(second.success).toBe(false);
+      expect(second.attemptedProviders).toEqual(["catalog-voice"]);
+      expect(override.state.connections.flatMap((entry) => entry.requests).length).toBe(1);
+      expectDisposed([catalog, override]);
+    });
   });
   it.each([true, false])(
     "refreshes only runtime-owned fallback config without a source snapshot (runtimeOwned=%s)",
@@ -397,58 +386,49 @@ describe.each([
       const fallback = createFixture("refresh-fallback");
       primary.state.prepareResume.resolve();
       fallback.resume();
-      try {
-        await primary.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const base = combineConfig(primary, [fallback]);
-          const cfg: OpenClawConfig = {
-            ...base,
+      await withFixtures([primary, fallback], async () => {
+        const base = combineConfig(primary, [fallback]);
+        const cfg: OpenClawConfig = {
+          ...base,
+          plugins: {
+            ...base.plugins,
+            entries: { [fallback.id]: { config: { voiceId: "before-refresh" } } },
+          },
+          tts: { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } },
+        };
+        setRuntimeConfigSnapshot(runtimeOwned ? cfg : { ...cfg });
+        const pending = settle(
+          synthesize({
+            text: "refresh during fallback",
+            cfg,
+            prefsPath: primary.prefsPath,
+          }),
+        );
+        try {
+          await waitForHook(primary.state.synthesizeStarted.promise, pending);
+          setRuntimeConfigSnapshot({
+            ...cfg,
             plugins: {
-              ...base.plugins,
-              entries: { [fallback.id]: { config: { voiceId: "before-refresh" } } },
+              ...cfg.plugins,
+              entries: { [fallback.id]: { config: { voiceId: "after-refresh" } } },
             },
-            tts: { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } },
-          };
-          setRuntimeConfigSnapshot(runtimeOwned ? cfg : { ...cfg });
-          const pending = settle(
-            synthesize({
-              text: "refresh during fallback",
-              cfg,
-              prefsPath: primary.prefsPath,
-            }),
+          });
+          primary.state.synthesizeResume.resolve();
+          const result = await pending;
+          expect(result.error).toBeUndefined();
+          expect(result.value?.success).toBe(true);
+          expect(result.value?.attemptedProviders).toEqual([primary.id, fallback.id]);
+          expect(result.value?.providerVoice).toBe(
+            runtimeOwned ? "after-refresh" : "before-refresh",
           );
-          try {
-            await waitForHook(primary.state.synthesizeStarted.promise, pending);
-            setRuntimeConfigSnapshot({
-              ...cfg,
-              plugins: {
-                ...cfg.plugins,
-                entries: { [fallback.id]: { config: { voiceId: "after-refresh" } } },
-              },
-            });
-            primary.state.synthesizeResume.resolve();
-            const result = await pending;
-            expect(result.error).toBeUndefined();
-            expect(result.value?.success).toBe(true);
-            expect(result.value?.attemptedProviders).toEqual([primary.id, fallback.id]);
-            expect(result.value?.providerVoice).toBe(
-              runtimeOwned ? "after-refresh" : "before-refresh",
-            );
-            expect(result.value?.audioBuffer).toEqual(pcm);
-            for (const entry of [...primary.state.connections, ...fallback.state.connections]) {
-              expect(entry.database.isOpen).toBe(false);
-              expect(entry.disposals).toBe(1);
-            }
-          } finally {
-            primary.resume();
-            await pending;
-            clearRuntimeConfigSnapshot();
-          }
-        });
-      } finally {
-        primary.cleanup();
-        fallback.cleanup();
-      }
+          expect(result.value?.audioBuffer).toEqual(pcm);
+          expectDisposed([primary, fallback]);
+        } finally {
+          primary.resume();
+          await pending;
+          clearRuntimeConfigSnapshot();
+        }
+      });
     },
   );
   it("joins provider work that outlives its buffered result before closing SQLite", async () => {
@@ -456,43 +436,37 @@ describe.each([
     fixture.state.callbacks.trackTail = true;
     fixture.state.prepareResume.resolve();
     fixture.state.synthesizeResume.resolve();
-    try {
-      await fixture.withEnvironment(async () => {
-        useNoBundledPlugins();
-        let settled = false;
-        const pending = settle(fixture.run()).then((result) => {
-          settled = true;
-          return result;
-        });
-        try {
-          await waitForHook(fixture.state.tailStarted.promise, pending);
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          expect(settled).toBe(false);
-          expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
-          fixture.state.tailResume.resolve();
-          const result = await pending;
-          expect(result.error).toBeUndefined();
-          expect(result.value?.success).toBe(true);
-          for (const entry of fixture.state.connections) {
-            expect(entry.database.isOpen).toBe(false);
-            expect(entry.disposals).toBe(1);
-            const reopened = new DatabaseSync(entry.databasePath, { readOnly: true });
-            try {
-              expect(reopened.prepare("SELECT value FROM fixture").get()?.value).toBe(42);
-            } finally {
-              reopened.close();
-            }
-          }
-        } finally {
-          fixture.resume();
-          await pending;
-          await Promise.all(fixture.state.tails);
-        }
+    await withFixtures([fixture], async () => {
+      let settled = false;
+      const pending = settle(fixture.run()).then((result) => {
+        settled = true;
+        return result;
       });
-    } finally {
-      fixture.cleanup();
-    }
+      try {
+        await waitForHook(fixture.state.tailStarted.promise, pending);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
+        fixture.state.tailResume.resolve();
+        const result = await pending;
+        expect(result.error).toBeUndefined();
+        expect(result.value?.success).toBe(true);
+        expectDisposed([fixture]);
+        for (const entry of fixture.state.connections) {
+          const reopened = new DatabaseSync(entry.databasePath, { readOnly: true });
+          try {
+            expect(reopened.prepare("SELECT value FROM fixture").get()?.value).toBe(42);
+          } finally {
+            reopened.close();
+          }
+        }
+      } finally {
+        fixture.resume();
+        await pending;
+        await Promise.all(fixture.state.tails);
+      }
+    });
   });
 });

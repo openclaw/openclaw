@@ -1,5 +1,3 @@
-import { rmSync } from "node:fs";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activateSecretsRuntimeSnapshot,
@@ -9,24 +7,23 @@ import {
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  clearRuntimeConfigSnapshot,
   createMockSpeechProvider,
   getTtsPersona,
   getTtsProviderAsync,
   installSpeechProviders,
   isTtsProviderConfiguredAsync,
-  maybeApplyTtsToPayload,
   prepareSynthesisMock,
   requireAttempt,
   requireFirstCallParam,
   requireFirstSynthesisRequest,
   requireRecord,
+  resetTtsRuntime,
   resolveTtsConfig,
   setTtsMachinePrefsPathResolver,
   synthesizeMock,
   synthesizeSpeech,
   textToSpeechTelephony,
-  transcodeAudioBufferMock,
+  withTtsPayload,
   type OpenClawConfig,
   type SpeechTelephonySynthesisRequest,
   type TtsConfig,
@@ -67,20 +64,12 @@ describe("TTS runtime persona behavior", () => {
         tts: {
           enabled: true,
           provider: "mock",
-          providers: {
-            mock: {
-              modelId: "telephony-model",
-              voiceId: "default-voice",
-            },
-          },
+          providers: { mock: { modelId: "telephony-model", voiceId: "default-voice" } },
         },
       },
       overrides: {
         providerOverrides: {
-          mock: {
-            speakerVoice: "directed-voice",
-            speed: 1.5,
-          },
+          mock: { speakerVoice: "directed-voice", speed: 1.5 },
         },
       },
     });
@@ -102,14 +91,8 @@ describe("TTS runtime persona behavior", () => {
   });
 
   afterEach(() => {
-    setTtsMachinePrefsPathResolver();
-    clearRuntimeConfigSnapshot();
+    resetTtsRuntime();
     clearSecretsRuntimeSnapshot();
-    delete (Object.prototype as Record<string, unknown>).polluted;
-    synthesizeMock.mockClear();
-    prepareSynthesisMock.mockClear();
-    transcodeAudioBufferMock.mockClear();
-    installSpeechProviders([createMockSpeechProvider()]);
   });
 
   it("selects persona preferred provider before config fallback", async () => {
@@ -138,11 +121,7 @@ describe("TTS runtime persona behavior", () => {
     ]);
     const prefsPath = "/tmp/openclaw-speech-core-invalid-provider.json";
     setTtsMachinePrefsPathResolver(() => prefsPath);
-    const cfg = {
-      tts: {
-        providers: { broken: {} },
-      },
-    } as OpenClawConfig;
+    const cfg: OpenClawConfig = { tts: { providers: { broken: {} } } };
     const config = resolveTtsConfig(cfg);
 
     expect(await isTtsProviderConfiguredAsync(config, "broken", cfg)).toBe(false);
@@ -181,12 +160,7 @@ describe("TTS runtime persona behavior", () => {
       const personas = {
         "reader.uk": {
           provider: "mock",
-          providers: {
-            mock: {
-              voice: "persona-voice",
-              apiKey: personaRef,
-            },
-          },
+          providers: { mock: { voice: "persona-voice", apiKey: personaRef } },
         },
       };
       const cfg: OpenClawConfig = {
@@ -297,10 +271,12 @@ describe("TTS runtime persona behavior", () => {
 
     expect(result.success).toBe(true);
     const attempt = requireAttempt(result.attempts, 0);
-    expect(attempt.provider).toBe("missing");
-    expect(attempt.outcome).toBe("skipped");
-    expect(attempt.reasonCode).toBe("no_provider_registered");
-    expect(attempt.persona).toBe("alfred");
+    expect(attempt).toMatchObject({
+      provider: "missing",
+      outcome: "skipped",
+      reasonCode: "no_provider_registered",
+      persona: "alfred",
+    });
     expect(attempt).not.toHaveProperty("personaBinding");
   });
 
@@ -312,10 +288,12 @@ describe("TTS runtime persona behavior", () => {
 
     expect(result.success).toBe(false);
     const attempt = requireAttempt(result.attempts, 0);
-    expect(attempt.provider).toBe("mock");
-    expect(attempt.outcome).toBe("skipped");
-    expect(attempt.reasonCode).toBe("unsupported_for_telephony");
-    expect(attempt.persona).toBe("alfred");
+    expect(attempt).toMatchObject({
+      provider: "mock",
+      outcome: "skipped",
+      reasonCode: "unsupported_for_telephony",
+      persona: "alfred",
+    });
     expect(attempt).not.toHaveProperty("personaBinding");
   });
 
@@ -372,29 +350,16 @@ describe("TTS runtime per-agent config", () => {
       tts: {
         enabled: true,
         provider: "mock",
-        providers: {
-          mock: {
-            model: "base-model",
-            voice: "base-voice",
-          },
-        },
+        providers: { mock: { model: "base-model", voice: "base-voice" } },
         persona: "alfred",
         personas: {
           alfred: {
             provider: "mock",
-            providers: {
-              mock: {
-                voice: "alfred-voice",
-              },
-            },
+            providers: { mock: { voice: "alfred-voice" } },
           },
           jarvis: {
             provider: "mock",
-            providers: {
-              mock: {
-                style: "jarvis-style",
-              },
-            },
+            providers: { mock: { style: "jarvis-style" } },
           },
         },
       },
@@ -403,39 +368,35 @@ describe("TTS runtime per-agent config", () => {
           reader: {
             tts: {
               persona: "jarvis",
-              providers: {
-                mock: {
-                  voice: "agent-voice",
-                },
-              },
+              providers: { mock: { voice: "agent-voice" } },
             },
           },
         },
       },
     } satisfies OpenClawConfig;
 
-    let mediaDir: string | undefined;
-    try {
-      const result = await maybeApplyTtsToPayload({
+    await withTtsPayload(
+      {
         payload: { text: "This agent reply should use the composed persona config." },
         cfg,
         channel: "slack",
         kind: "final",
         agentId: "reader",
-      });
-
-      expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireFirstSynthesisRequest("agent persona synthesis request");
-      const providerConfig = requireRecord(request.providerConfig, "agent persona provider config");
-      expect(providerConfig.model).toBe("base-model");
-      expect(providerConfig.voice).toBe("agent-voice");
-      expect(providerConfig.style).toBe("jarvis-style");
-      expect(result.mediaUrl).toMatch(/voice---[a-f0-9-]+\.ogg$/);
-      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
-    } finally {
-      if (mediaDir) {
-        rmSync(mediaDir, { recursive: true, force: true });
-      }
-    }
+      },
+      (result) => {
+        expect(synthesizeMock).toHaveBeenCalled();
+        const request = requireFirstSynthesisRequest("agent persona synthesis request");
+        const providerConfig = requireRecord(
+          request.providerConfig,
+          "agent persona provider config",
+        );
+        expect(providerConfig).toMatchObject({
+          model: "base-model",
+          voice: "agent-voice",
+          style: "jarvis-style",
+        });
+        expect(result.mediaUrl).toMatch(/voice---[a-f0-9-]+\.ogg$/);
+      },
+    );
   });
 });
