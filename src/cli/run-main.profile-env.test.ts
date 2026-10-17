@@ -155,7 +155,7 @@ describe("runCli environment and passive startup", () => {
       await initializeDebugProxyCaptureAsync("cli-enabled-control");
       expect(existsSync(database)).toBe(true);
     } finally {
-      await finalizeDebugProxyCaptureAsync().finally(closeOpenClawStateDatabaseAsync);
+      await finalizeDebugProxyCaptureAsync().finally(() => closeOpenClawStateDatabaseAsync());
     }
   });
 

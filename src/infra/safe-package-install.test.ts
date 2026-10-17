@@ -63,8 +63,9 @@ function npmFixture(dir: string, userConfig = "") {
     ) => createSafeNpmInstallEnv({ ...env, ...extra }, { npmConfigCwd: dir, ...options }),
   };
 }
-const expectPolicies = (env: NodeJS.ProcessEnv, git?: string, remote?: string) =>
+const expectPolicies = (env: NodeJS.ProcessEnv, git?: string, remote?: string) => {
   expect([env.npm_config_allow_git, env.npm_config_allow_remote]).toEqual([git, remote]);
+};
 const npmValues = (value: string | undefined, names: string) =>
   Object.fromEntries(names.split(" ").map((name) => [`npm_config_${name}`, value]));
 

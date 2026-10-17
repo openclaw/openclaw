@@ -163,7 +163,12 @@ export function buildScriptProducerEvidence(
         execution: {
           runner: "evidence-producer-script",
           environment: { ref: "scenario-ref", os: "darwin", nodeVersion: "v24.0.0" },
-          provider: { id: "script-producer", live: false, model: { name: null, ref: null } },
+          provider: {
+            id: "script-producer",
+            live: false,
+            model: { name: null, ref: null },
+            fixture: "synthetic-script-evidence",
+          },
           packageSource: { kind: "source-checkout", sha: "abc123" },
           artifacts: (params.artifacts ?? []).map((artifact) =>
             Object.assign({ source: "script-producer:web-ui:smoke" }, artifact),

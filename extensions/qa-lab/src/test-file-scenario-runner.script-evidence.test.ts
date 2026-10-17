@@ -247,6 +247,7 @@ describe("qa test file scenario runner", () => {
       ...QA_TEST_RUNNER_DEFAULTS,
       outputDir: path.join(tempRoot, "out"),
       scenarios: [infrastructureFixture],
+      evidenceMode: "full",
       commandTimeoutMs: 20_000,
       env: { OPENCLAW_QA_REF: "temporary-script-fixture", OPENCLAW_QA_PROFILE: "smoke-ci" },
     });

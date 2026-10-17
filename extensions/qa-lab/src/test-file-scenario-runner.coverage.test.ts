@@ -215,8 +215,8 @@ describe("producer coverage claims", () => {
       expect(imported).toMatchObject({
         test: original.test,
         result: original.result,
-        execution: undefined,
       });
+      expect(imported?.execution).toBeUndefined();
     }
   });
 });
