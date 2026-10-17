@@ -53,18 +53,19 @@ type TelegramRequest = { body: string; url: string };
 async function startTelegramAskUserLoopback() {
   const requests: TelegramRequest[] = [];
   const promptRequest = createDeferredCore<TelegramRequest>();
-  const server = createServer(async (request, response) => {
-    const entry = {
-      body: await text(request),
-      url: request.url ?? "",
-    };
-    requests.push(entry);
-    response.writeHead(200, { "content-type": "application/json" });
-    const result = { message_id: requests.length, chat: { id: 1, type: "private" } };
-    response.end(JSON.stringify({ ok: true, result }));
-    if (entry.url.includes("sendMessage")) {
-      promptRequest.resolve(entry);
-    }
+  const server = createServer((request, response) => {
+    void text(request)
+      .then((body) => {
+        const entry = { body, url: request.url ?? "" };
+        requests.push(entry);
+        response.writeHead(200, { "content-type": "application/json" });
+        const result = { message_id: requests.length, chat: { id: 1, type: "private" } };
+        response.end(JSON.stringify({ ok: true, result }));
+        if (entry.url.includes("sendMessage")) {
+          promptRequest.resolve(entry);
+        }
+      })
+      .catch((error: Error) => response.destroy(error));
   });
   await once(server.listen(0, "127.0.0.1"), "listening");
   const { port } = server.address() as AddressInfo;

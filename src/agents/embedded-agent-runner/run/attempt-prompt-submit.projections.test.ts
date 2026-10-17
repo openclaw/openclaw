@@ -10,7 +10,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { Context } from "../../../llm/types.js";
+import type { Context, ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import {
@@ -149,7 +149,7 @@ function submitProjection(session: TestSession, input: Partial<Submission>) {
   });
 }
 
-function promptImages(buffer: Buffer) {
+function promptImages(buffer: Buffer): ImageContent[] {
   return finalizeRuntimePromptImages([
     {
       image: { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },

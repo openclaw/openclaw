@@ -222,7 +222,7 @@ describe("backup run records", () => {
         createdAt: 1_000,
         archivePath: "storage://archive/backups/host-a/backup.tar.gz",
         target: "archive",
-        location: namespace ? offsiteLocation(namespace) : undefined,
+        location: namespace ? { ...offsiteLocation(namespace), name: "archive" } : undefined,
       };
       await record(ok);
       await saveCronJobsStore(resolveCronJobsStorePathFromConfig({}, env), {

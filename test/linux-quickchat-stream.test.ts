@@ -589,7 +589,7 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
   for (const [name, viewId] of [
     ["emoji", "🦞".repeat(65)],
     ["cjk", "界".repeat(201)],
-  ]) {
+  ] as const) {
     const [bounded] = chatMessageWidgets(canvasMessage("assistant", documentUrl(name), { viewId }));
     assert.notEqual(bounded?.key, viewId);
     assert.ok(Buffer.byteLength(bounded?.key ?? "", "utf8") <= 256);

@@ -42,7 +42,7 @@ import {
 const runMessageAction = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({ runMessageAction }));
 
-function writeFixture(build: (db: Kysely<DB>) => Compilable<unknown>) {
+function writeFixture(build: (db: Kysely<DB>) => Compilable) {
   return runOpenClawAgentWriteTransaction(
     (database) => executeSqliteQuerySync(database.db, build(getNodeSqliteKysely<DB>(database.db))),
     { agentId: "main" },

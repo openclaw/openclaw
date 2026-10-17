@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -11,15 +11,7 @@ import {
   turnModelVerdict,
   type TurnModelDifferentialFixture,
 } from "../../test-utils/turn-model-selection-differential.js";
-
-const { parseRef } = vi.hoisted(() => ({
-  parseRef: (raw: string, defaultProvider: string) => {
-    const slash = raw.indexOf("/");
-    return slash > 0
-      ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
-      : { provider: defaultProvider, model: raw };
-  },
-}));
+import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 vi.mock("../agent-scope.js", () => ({
   clearAutoFallbackPrimaryProbeSelection: vi.fn(),
@@ -29,12 +21,20 @@ vi.mock("../agent-scope.js", () => ({
   resolveAgentConfig: () => undefined,
   resolveNativeModelPrimary: () => undefined,
 }));
+vi.mock("../../auto-reply/thinking.js", () => ({
+  formatThinkingLevels: () => "",
+  normalizeThinkLevel: (value: string | undefined) => value,
+}));
 vi.mock("../../channels/model-overrides.js", () => ({
-  resolveChannelModelOverride: (
-    params: Parameters<
-      typeof import("../../channels/model-overrides.js").resolveChannelModelOverride
-    >[0],
-  ) => {
+  resolveChannelModelOverride: (params: {
+    cfg: OpenClawConfig;
+    channel?: string | null;
+    groupId?: string | null;
+    groupChatType?: string | null;
+    groupChannel?: string | null;
+    groupSubject?: string | null;
+    directUserIds?: (string | null | undefined)[];
+  }) => {
     const channel = params.channel?.trim().toLowerCase();
     const entries = channel ? params.cfg.channels?.modelByChannel?.[channel] : undefined;
     if (!channel || !entries) {
@@ -56,6 +56,12 @@ vi.mock("../../utils/message-channel.js", () => ({
   isDeliverableMessageChannel: (value: string) => value !== "internal",
 }));
 
+vi.mock("../auth-profiles/order.js", () => ({
+  isStoredCredentialCompatibleWithAuthProvider: () => true,
+}));
+vi.mock("../auth-profiles/session-override.js", () => ({
+  clearSessionAuthProfileOverride: vi.fn(async () => undefined),
+}));
 // mock-isolation: Selection fixtures have no auth profiles and must not discover host accounts.
 vi.mock("../auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
@@ -64,6 +70,10 @@ vi.mock("../auth-profiles/store-runtime.js", () => ({
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
+vi.mock("../harness/selection.js", () => ({
+  resolveAvailableAgentHarnessPolicy: () => ({ runtime: "openclaw" }),
+}));
+vi.mock("../model-catalog.js", () => ({ loadManifestModelCatalog: () => [] }));
 vi.mock("../model-selection.js", () => ({
   modelKey: (provider: string, model: string) => `${provider}/${model}`,
   resolveDefaultModelForAgent: ({ cfg }: { cfg: OpenClawConfig }) => {
@@ -72,7 +82,10 @@ vi.mock("../model-selection.js", () => ({
       typeof configured === "string"
         ? configured
         : (configured?.primary ?? turnModelRefLabel(TURN_MODEL_DEFAULT_REF));
-    return parseRef(raw, TURN_MODEL_DEFAULT_REF.provider);
+    const slash = raw.indexOf("/");
+    return slash > 0
+      ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
+      : { provider: TURN_MODEL_DEFAULT_REF.provider, model: raw };
   },
   resolveModelAliasFromPair: () => null,
 }));
@@ -90,6 +103,12 @@ vi.mock("../model-visibility-policy.js", () => ({
     resolveSelection: (ref: { provider: string; model: string }) => ref,
   }),
 }));
+vi.mock("../openai-routing.js", () => ({
+  listOpenAIAuthProfileProvidersForAgentRuntime: ({ provider }: { provider: string }) => [provider],
+}));
+vi.mock("../provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider,
+}));
 vi.mock("../session-runtime-compat.js", () => ({
   resolveSessionRuntimeOverrideForProvider: () => undefined,
 }));
@@ -97,10 +116,23 @@ vi.mock("../thinking-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../thinking-runtime.js")>();
   return {
     ...actual,
+    normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
     resolveEffectiveAgentRuntime: () => undefined,
   };
 });
 vi.mock("../../plugins/runtime.js", () => ({ requireActivePluginRegistry: () => ({}) }));
+vi.mock("../../sessions/agent-harness-session-key.js", () => ({
+  isValidAgentHarnessSessionStoreEntry: () => false,
+}));
+vi.mock("../../sessions/model-overrides.js", () => ({
+  applyModelOverrideToSessionEntry: () => ({ updated: false }),
+  isModelSelectionLocked: (entry?: SessionEntry) => entry?.modelSelectionLocked === true,
+  ModelSelectionLockedError: class ModelSelectionLockedError extends Error {},
+  repairProviderWrappedModelOverride: () => ({ updated: false }),
+}));
+vi.mock("./attempt-execution.shared.js", () => ({
+  persistAgentSession: async ({ entry }: { entry?: SessionEntry }) => entry,
+}));
 vi.mock("./model-ref.js", () => ({
   normalizeExplicitOverrideInput: (value: string) => value.trim() || undefined,
   normalizeAgentCommandModelRef: (_cfg: OpenClawConfig, provider: string, model: string) => ({
@@ -112,50 +144,74 @@ vi.mock("./model-ref.js", () => ({
     _agentId: string,
     raw: string,
     defaultProvider: string,
-  ) => parseRef(raw, defaultProvider),
+  ) => {
+    const slash = raw.indexOf("/");
+    return slash > 0
+      ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
+      : { provider: defaultProvider, model: raw };
+  },
 }));
 
 const { resolveEmbeddedModelSelection } = await import("./model-selection.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+let suiteTempRoot = "";
+
+beforeAll(() => {
+  suiteTempRoot = tempDirs.make("turn-model-command-");
+});
+
+function createConfig(fixture: TurnModelDifferentialFixture): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) } } },
+    channels: fixture.modelByChannel ? { modelByChannel: fixture.modelByChannel } : undefined,
+  } as OpenClawConfig;
+}
 
 async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
-  const workspaceDir = tempDirs.make("turn-model-command-");
+  const fixtureIndex = TURN_MODEL_DIFFERENTIAL_FIXTURES.indexOf(fixture);
   const sessionKey = "agent:main:telegram:group:selection";
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: fixture.child };
   if (fixture.parent) {
     sessionStore[fixture.parent.key] = fixture.parent.entry;
   }
-  const routing = {
+  const opts: AgentCommandOpts = {
+    message: "hello",
+    to: "target",
+    channel: fixture.ctx.Provider,
     messageChannel: fixture.ctx.Provider,
     groupId: fixture.child.groupId,
     groupChannel: fixture.child.groupChannel,
+    ...(fixture.heartbeat
+      ? {
+          provider: TURN_MODEL_OVERRIDE_REF.provider,
+          model: TURN_MODEL_OVERRIDE_REF.model,
+          allowModelOverride: true,
+        }
+      : {}),
+  };
+  const runContext: AgentRunContext = {
+    messageChannel: fixture.ctx.Provider,
+    groupId: fixture.child.groupId,
+    groupChannel: fixture.child.groupChannel,
+    currentChannelId: "target",
   };
   const selection = await resolveEmbeddedModelSelection({
-    cfg: {
-      agents: { defaults: { model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) } } },
-      channels: fixture.modelByChannel ? { modelByChannel: fixture.modelByChannel } : undefined,
-    },
-    opts: {
-      ...routing,
-      message: "hello",
-      to: "target",
-      channel: fixture.ctx.Provider,
-      ...(fixture.heartbeat ? { ...TURN_MODEL_OVERRIDE_REF, allowModelOverride: true } : {}),
-    },
+    cfg: createConfig(fixture),
+    opts,
     sessionEntry: fixture.child,
     sessionStore,
     sessionKey,
     sessionId: fixture.child.sessionId,
-    storePath: path.join(workspaceDir, "sessions.json"),
+    storePath: path.join(suiteTempRoot, `sessions-${fixtureIndex}.json`),
     sessionAgentId: "main",
-    workspaceDir,
+    workspaceDir: suiteTempRoot,
     pluginsEnabled: false,
     modelManifestContext: {},
     configuredThinkingCatalog: [],
     isSubagentLane: false,
     suppressVisibleSessionEffects: true,
-    runContext: { ...routing, currentChannelId: "target" },
+    runContext,
   });
   return turnModelVerdict(
     { provider: selection.provider, model: selection.model },
@@ -163,6 +219,8 @@ async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
   );
 }
 
-it.each(TURN_MODEL_DIFFERENTIAL_FIXTURES)("command-path selection: $name", async (fixture) => {
-  await expect(observeCommandSelection(fixture)).resolves.toEqual(fixture.expected.command);
+describe("turn model selection command-path differential", () => {
+  it.each(TURN_MODEL_DIFFERENTIAL_FIXTURES)("pins observed $name behavior", async (fixture) => {
+    await expect(observeCommandSelection(fixture)).resolves.toEqual(fixture.expected.command);
+  });
 });

@@ -690,8 +690,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       }),
       toolResult("small", "huge__small_text", small, 4),
       {
-        role: "assistant",
-        content: [{ type: "text", text: "results processed" }],
+        ...createAssistant(testModel, "results processed"),
         timestamp: 5,
       },
       userMessage("continue", 6),

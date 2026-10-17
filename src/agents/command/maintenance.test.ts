@@ -48,13 +48,16 @@ async function transcript(target: Parameters<typeof loadTranscriptEvents>[0]) {
 function answer(sessionId: string, text: string, runner: "cli" | "embedded" = "embedded") {
   return makeCompactionResult({ sessionId, text, runner, agentHarnessId: "openclaw" });
 }
-const { objectContaining: contains } = expect;
 function expectDelivered(text: string, sessionId?: string) {
   expect(deliver).toHaveBeenCalledWith(
-    contains({
+    expect.objectContaining({
       payloads: [{ text }],
       ...(sessionId
-        ? { result: contains({ meta: contains({ agentMeta: contains({ sessionId }) }) }) }
+        ? {
+            result: expect.objectContaining({
+              meta: expect.objectContaining({ agentMeta: expect.objectContaining({ sessionId }) }),
+            }),
+          }
         : {}),
     }),
   );

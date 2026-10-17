@@ -93,7 +93,7 @@ function mutateRecord(profileId: string, transform: (value: string) => string | 
             .updateTable("secret_store_entries")
             .set({ value })
             .where((eb) => eb.and(scope));
-    executeSqliteQuerySync<unknown>(db, mutation);
+    executeSqliteQuerySync(db, mutation);
   });
 }
 

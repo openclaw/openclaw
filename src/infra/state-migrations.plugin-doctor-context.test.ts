@@ -230,7 +230,10 @@ describe("plugin doctor session identity evidence", () => {
     inDoctorState(async ({ env }) => {
       const authority = expiringAuthority();
       const context = doctorContext(env, {
-        repairAuthority: { assertCurrent: authority.assertCurrent, assertOwnedInTransaction() {} },
+        repairAuthority: {
+          assertCurrent: () => authority.assertCurrent(),
+          assertOwnedInTransaction() {},
+        },
       });
       const options = { namespace: "doctor-repair", maxEntries: 10 };
       const range = { prefix: "binding:", limit: 10 };

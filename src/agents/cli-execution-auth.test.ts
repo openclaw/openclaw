@@ -124,7 +124,9 @@ describe("resolveCliExecutionAuthProfileId", () => {
       mocks.profiles[authProfileId] =
         type === "api_key"
           ? { type, provider: "anthropic", key: "test-anthropic-key" }
-          : { type, provider: "anthropic", token: "test-anthropic-token" };
+          : type === "oauth"
+            ? oauth("anthropic")
+            : { type, provider: "anthropic", token: "test-anthropic-token" };
 
       await expect(resolveAuth("claude-cli", "anthropic", authProfileId)).resolves.toBe(
         authProfileId,
@@ -159,7 +161,10 @@ describe("resolveCliExecutionAuthProfileId", () => {
   it.each(["absent", "auto"] as const)(
     "forwards only automatic Claude profiles owned by Claude CLI (%s selection)",
     async (selection) => {
-      const selected = { authProfileId: "anthropic:default", authProfileIdSource: selection };
+      const selected =
+        selection === "auto"
+          ? { authProfileId: "anthropic:default", authProfileIdSource: "auto" as const }
+          : undefined;
       mocks.profiles["anthropic:default"] = createApiKeyCredential(
         "anthropic",
         "test-anthropic-key",
