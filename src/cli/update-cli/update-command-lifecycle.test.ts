@@ -218,6 +218,35 @@ import {
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
+function convergenceInput(
+  overrides: Partial<Parameters<typeof convergeUpdatePlugins>[0]> = {},
+): Parameters<typeof convergeUpdatePlugins>[0] {
+  return {
+    coreAlreadyCurrent: true,
+    result: { status: "skipped", mode: "npm", reason: "already-current", steps: [], durationMs: 1 },
+    root: "/fixture/openclaw",
+    installKindChanged: false,
+    configSnapshot: validConfigSnapshot,
+    requestedChannel: null,
+    storedChannel: null,
+    channel: "stable",
+    downgradeRisk: false,
+    opts: {},
+    preUpdatePluginInstallRecords: {},
+    startedAt: 1,
+    updateStepTimeoutMs: 1_000,
+    ...overrides,
+  };
+}
+
+const resume = () =>
+  resumePostCoreUpdate({
+    root: "/tmp/openclaw",
+    channel: "stable",
+    opts: { yes: true },
+    timeoutMs: 1_000,
+  });
+
 describe("update plugin lifecycle lease boundaries", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -535,39 +564,14 @@ describe("update plugin lifecycle lease boundaries", () => {
           };
         });
       }
-      vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
-        record("target-convergence");
-        return {
-          resumed: true,
-          pluginUpdate: { ...successfulPluginUpdate, changed: false },
-        };
-      });
-
-      const result = await convergeUpdatePlugins({
-        coreAlreadyCurrent: true,
-        result: {
-          status: "skipped",
-          mode: "npm",
-          root: "/tmp/openclaw",
-          reason: "already-current",
-          before: { version: installedVersion },
-          after: { version: installedVersion },
-          steps: [],
-          durationMs: 1,
-        },
-        root: "/tmp/openclaw",
-        previousInstallRoot,
-        installKindChanged: false,
-        configSnapshot: validConfigSnapshot,
-        requestedChannel: null,
-        storedChannel: null,
-        channel: "stable",
-        downgradeRisk: false,
-        opts: {},
-        preUpdatePluginInstallRecords: {},
-        startedAt: 1,
-        updateStepTimeoutMs: 1_000,
-      });
+      const input = convergenceInput({ root: "/tmp/openclaw", previousInstallRoot });
+      input.result = {
+        ...input.result,
+        root: input.root,
+        before: { version: installedVersion },
+        after: { version: installedVersion },
+      };
+      const result = await convergeUpdatePlugins(input);
 
       if (needsTargetRuntime) {
         expect(mocks.events).toEqual(["target-convergence:false"]);
@@ -608,27 +612,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         ],
       },
     });
-    const { resultWithPostUpdate } = await convergeUpdatePlugins({
-      coreAlreadyCurrent: true,
-      result: {
-        status: "skipped",
-        mode: "npm",
-        reason: "already-current",
-        steps: [],
-        durationMs: 1,
-      },
-      root: "/fixture/openclaw",
-      installKindChanged: false,
-      configSnapshot: validConfigSnapshot,
-      requestedChannel: null,
-      storedChannel: null,
-      channel: "stable",
-      downgradeRisk: false,
-      opts: {},
-      preUpdatePluginInstallRecords: {},
-      startedAt: 1,
-      updateStepTimeoutMs: 1000,
-    });
+    const { resultWithPostUpdate } = await convergeUpdatePlugins(convergenceInput());
     expect(resultWithPostUpdate.steps).toContainEqual(
       expect.objectContaining({
         exitCode: 1,
@@ -696,12 +680,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       vi.mocked(writePostCorePluginUpdateResultFile).mockImplementationOnce(async () => {
         record("publish-result");
       });
-      await resumePostCoreUpdate({
-        root: "/tmp/openclaw",
-        channel: "stable",
-        opts: { yes: true },
-        timeoutMs: 1_000,
-      });
+      await resume();
 
       expectLifecycleBoundary(mocks.events, "handoff-records");
       expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
@@ -762,12 +741,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       } else if (phase === "plugins") {
         vi.mocked(updatePluginsAfterCoreUpdate).mockRejectedValueOnce(failure);
       }
-      const run = resumePostCoreUpdate({
-        root: "/tmp/openclaw",
-        channel: "stable",
-        opts: { yes: true },
-        timeoutMs: 1_000,
-      });
+      const run = resume();
       if (phase === "success") {
         await run;
       } else {

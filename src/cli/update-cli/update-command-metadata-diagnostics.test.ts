@@ -243,24 +243,21 @@ it.each([
   ).rejects.toMatchObject({ name: "ExitError", code: 1 });
   const printed = readPrintedFailureReport();
   const message = entry.kind === "graph" ? "Lookup failed" : "Target response was invalid";
+  const failureFacts = [
+    expect.objectContaining({
+      ...(entry.kind === "graph"
+        ? { code: "EACCES" }
+        : {
+            check: "target-resolution",
+            errorName: entry.metadata === "constructor" ? "Error" : "TypeError",
+          }),
+      message: expect.stringContaining(message),
+    }),
+  ];
   expect(printed.result).toMatchObject({
     status: "error",
     reason: "update-failed",
-    steps: expect.arrayContaining([
-      expect.objectContaining({
-        failureFacts: [
-          expect.objectContaining({
-            ...(entry.kind === "graph"
-              ? { code: "EACCES" }
-              : {
-                  check: "target-resolution",
-                  errorName: entry.metadata === "constructor" ? "Error" : "TypeError",
-                }),
-            message: expect.stringContaining(message),
-          }),
-        ],
-      }),
-    ]),
+    steps: expect.arrayContaining([expect.objectContaining({ failureFacts })]),
   });
   expect(printed.markdown).toContain(message);
   const recordedRun = ledger.listUpdateRuns()[0];
@@ -312,41 +309,27 @@ it.each([
 
 const privateDiagnostic = "registry.internal.example /private/operator/npmrc";
 const cases = [
-  {
-    kind: "registry lookup error",
-    code: "target-registry-metadata",
-    detail: /registry/i,
-    metadata: { ...targetMetadata, version: null, error: privateDiagnostic },
-  },
-  {
-    kind: "missing exact version",
-    code: "target-version-resolution",
-    detail: /version/i,
-    metadata: { ...targetMetadata, version: null },
-  },
-  {
-    kind: "mismatched exact version",
-    code: "target-version-resolution",
-    detail: /version/i,
-    metadata: { ...targetMetadata, version: "2026.9.1" },
-  },
-  {
-    kind: "missing target schema metadata",
-    code: "target-schema-metadata",
-    detail: /database|schema/i,
-    metadata: { ...targetMetadata, schemaVersions: undefined },
-  },
-  {
-    kind: "unresolved registry dist-tag",
-    code: "target-registry-dist-tag",
-    detail: /dist-tag|registry/i,
-    metadata: targetMetadata,
-  },
-];
+  [
+    "registry lookup error",
+    "target-registry-metadata",
+    /registry/i,
+    { version: null, error: privateDiagnostic },
+  ],
+  ["missing exact version", "target-version-resolution", /version/i, { version: null }],
+  ["mismatched exact version", "target-version-resolution", /version/i, { version: "2026.9.1" }],
+  [
+    "missing target schema metadata",
+    "target-schema-metadata",
+    /database|schema/i,
+    { schemaVersions: undefined },
+  ],
+  ["unresolved registry dist-tag", "target-registry-dist-tag", /dist-tag|registry/i, {}],
+] as const;
 
 it.each(cases)(
-  "explains $kind in CLI JSON, summary, and bounded diagnostics before creating state",
-  async ({ code, detail, metadata }) => {
+  "explains %s in CLI JSON, summary, and bounded diagnostics before creating state",
+  async (_kind, code, detail, overrides) => {
+    const metadata = { ...targetMetadata, ...overrides };
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue(metadata);
     if (code === "target-registry-dist-tag") {
       vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({
@@ -435,35 +418,33 @@ it.each(["metadata", "target policy"] as const)(
       ...(failure === "metadata" ? { registry: { latestVersion: "2026.9.2" } } : {}),
     });
     await updateStatusCommand({ json: true });
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining(
-        failure === "metadata"
-          ? {
-              lastRun: expect.objectContaining({
-                status: "failed",
-                reason: "target-metadata-preflight",
-                origin: expect.objectContaining({
-                  nextAction: expect.stringContaining("openclaw update"),
-                }),
-                steps: expect.arrayContaining([
+    const lastRun =
+      failure === "metadata"
+        ? {
+            status: "failed",
+            reason: "target-metadata-preflight",
+            origin: expect.objectContaining({
+              nextAction: expect.stringContaining("openclaw update"),
+            }),
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                failureFacts: [
                   expect.objectContaining({
-                    failureFacts: [
-                      expect.objectContaining({
-                        code: "target-registry-metadata",
-                        message: expect.stringMatching(/registry[\s\S]*openclaw update/i),
-                      }),
-                    ],
+                    code: "target-registry-metadata",
+                    message: expect.stringMatching(/registry[\s\S]*openclaw update/i),
                   }),
-                ]),
+                ],
               }),
-            }
-          : {
-              update: expect.objectContaining({ packageManager: manager }),
-              lastRun: expect.objectContaining({
-                target: expect.objectContaining({ kind: "package" }),
-              }),
-            },
-      ),
+            ]),
+          }
+        : { target: expect.objectContaining({ kind: "package" }) };
+    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        lastRun: expect.objectContaining(lastRun),
+        ...(failure === "target policy"
+          ? { update: expect.objectContaining({ packageManager: manager }) }
+          : {}),
+      }),
     );
     if (failure === "target policy") {
       expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();

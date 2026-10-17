@@ -135,6 +135,17 @@ export function registerRepairCustodyTests(mocks: {
       const ledger = await import("../../infra/update-run-ledger.js");
       const reconcile = vi.spyOn(ledger, "reconcileAbandonedUpdateRunsAsync").mockResolvedValue([]);
       const acknowledge = vi.spyOn(ledger, "acknowledgeAbandonedUpdateRun").mockReturnValue(true);
+      const expectUnpublished = () => {
+        expect(reconcile).not.toHaveBeenCalled();
+        expect(acknowledge).not.toHaveBeenCalled();
+        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      };
+      const expectCustodyHeld = () => {
+        expect(finish).toHaveBeenCalledTimes(phase === "restoration" ? 1 : 0);
+        expect(release).not.toHaveBeenCalled();
+        expectUnpublished();
+        expect(mocks.triage).not.toHaveBeenCalled();
+      };
       if (phase === "convergence") {
         vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async () => {
           retainCleanup();
@@ -171,12 +182,7 @@ export function registerRepairCustodyTests(mocks: {
           }),
         ]);
         expect(finished).toBe(false);
-        expect(finish).toHaveBeenCalledTimes(phase === "restoration" ? 1 : 0);
-        expect(release).not.toHaveBeenCalled();
-        expect(reconcile).not.toHaveBeenCalled();
-        expect(acknowledge).not.toHaveBeenCalled();
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
+        expectCustodyHeld();
         expect(listUpdateRuns()[0]?.status).toBe("running");
       } finally {
         physicalCleanup.resolve(cleanup);
@@ -189,12 +195,7 @@ export function registerRepairCustodyTests(mocks: {
         if (phase !== "convergence") {
           expect(collectNestedErrorCandidates(error)).toContain(originalError);
         }
-        expect(finish).toHaveBeenCalledTimes(phase === "restoration" ? 1 : 0);
-        expect(release).not.toHaveBeenCalled();
-        expect(reconcile).not.toHaveBeenCalled();
-        expect(acknowledge).not.toHaveBeenCalled();
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
+        expectCustodyHeld();
         expect(listUpdateRuns()[0]?.status).not.toBe("succeeded");
       } else {
         expect(finish).toHaveBeenCalledOnce();
@@ -214,9 +215,7 @@ export function registerRepairCustodyTests(mocks: {
         } else {
           expect(error).toBe(originalError);
           expect(release).toHaveBeenCalledOnce();
-          expect(reconcile).not.toHaveBeenCalled();
-          expect(acknowledge).not.toHaveBeenCalled();
-          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+          expectUnpublished();
           expect(mocks.triage).toHaveBeenCalledOnce();
           expect(listUpdateRuns()[0]?.status).toBe("failed");
         }

@@ -58,6 +58,7 @@ it.skipIf(process.platform === "win32").for([
       let service: Awaited<ReturnType<typeof createMutableInterruptionService>> | undefined;
       try {
         const root = dirs.make("update-owned-signal-");
+        const exists = (name: string) => fs.existsSync(path.join(root, name));
         const publicationMode =
           mode === "publishing-compensation" || mode === "rollback-compensation";
         const installRoot = publicationMode
@@ -320,6 +321,15 @@ it.skipIf(process.platform === "win32").for([
         const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
           child.once("close", (code, exitSignal) => resolve([code, exitSignal]));
         });
+        const beforeExit = <T>(pending: Promise<T>, reason: string): Promise<T> =>
+          Promise.race([
+            pending,
+            closed.then(() => {
+              throw new Error(`Update exited before ${reason}: ${childDiagnostics()}`, {
+                cause: spawnError,
+              });
+            }),
+          ]);
         const stop = () => {
           if (child.exitCode === null && child.signalCode === null) {
             child.kill("SIGKILL");
@@ -330,7 +340,7 @@ it.skipIf(process.platform === "win32").for([
           stop();
         }
         try {
-          const message = await Promise.race([
+          const message = await beforeExit(
             once(child, "message").then(
               ([payload]) =>
                 payload as {
@@ -341,12 +351,8 @@ it.skipIf(process.platform === "win32").for([
                   sibling: ReturnType<typeof createUpdateRun>;
                 },
             ),
-            closed.then(() => {
-              throw new Error(`Update process exited before ready: ${childDiagnostics()}`, {
-                cause: spawnError,
-              });
-            }),
-          ]);
+            "ready",
+          );
           expect(binding.assertPath(message.databasePath)).toBe(binding.databasePath);
           assertManagedHandoffTestConsumer(
             binding,
@@ -383,43 +389,22 @@ it.skipIf(process.platform === "win32").for([
           const interrupted = receiptMode || compensationMode ? once(child, "message") : undefined;
           expect(child.kill(signal)).toBe(true);
           if (interrupted && compensationMode) {
-            const [observed] = await Promise.race([
-              interrupted,
-              closed.then(() => {
-                throw new Error(
-                  `Update exited before observing compensation: ${childDiagnostics()}`,
-                );
-              }),
-            ]);
+            const [observed] = await beforeExit(interrupted, "observing compensation");
             expect(observed).toEqual(
               mode === "sealed-compensation"
                 ? { compensationRefused: true }
                 : { compensationReceipt: true },
             );
-            expect(fs.existsSync(path.join(root, "compensation-native-stop"))).toBe(false);
+            expect(exists("compensation-native-stop")).toBe(false);
             if (mode !== "sealed-compensation") {
               child.send("release");
             }
           } else if (interrupted) {
-            const [observed] = await Promise.race([
-              interrupted,
-              closed.then(() => {
-                throw new Error(
-                  `Update exited before its pending writer drained: ${childDiagnostics()}`,
-                );
-              }),
-            ]);
+            const [observed] = await beforeExit(interrupted, "its pending writer drained");
             expect(observed).toEqual({ lateBlocked: true });
             const forward = once(child, "message");
             child.send("release");
-            const [continuation] = await Promise.race([
-              forward,
-              closed.then(() => {
-                throw new Error(
-                  `Update exited before checking forward authority: ${childDiagnostics()}`,
-                );
-              }),
-            ]);
+            const [continuation] = await beforeExit(forward, "checking forward authority");
             expect(continuation).toEqual(
               mode === "uncertain-progress"
                 ? { receiptFailure: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" }
@@ -427,7 +412,7 @@ it.skipIf(process.platform === "win32").for([
                   ? { receiptFailure: "fixture-step-refused" }
                   : { forwardBlocked: true },
             );
-            expect(fs.existsSync(path.join(root, "unexpected-canary-child"))).toBe(false);
+            expect(exists("unexpected-canary-child")).toBe(false);
           }
           const [code, exitSignal] = await closed;
           if (mode !== "inherited") {
@@ -476,33 +461,10 @@ it.skipIf(process.platform === "win32").for([
               : { env: { OPENCLAW_STATE_DIR: stateDir } };
           const readRun = (runId: string) => getUpdateRun(runId, options);
           const actual = readRun(message.runId);
-          if (compensationMode) {
-            const admitted = mode !== "sealed-compensation";
-            const completed = mode === "accepted-compensation";
-            expect(fs.existsSync(path.join(root, "compensation-signal-snapshot"))).toBe(true);
-            expect(fs.existsSync(path.join(root, "compensation-rollback-entered"))).toBe(admitted);
-            expect(fs.existsSync(path.join(root, "compensation-phase-dispatched"))).toBe(admitted);
-            expect(fs.existsSync(path.join(root, "compensation-native-stop"))).toBe(completed);
-            expect(fs.existsSync(path.join(root, "compensation-package-rollback"))).toBe(completed);
-            if (mode === "uncertain-compensation") {
-              expect(fs.existsSync(path.join(root, "compensation-uncertainty-observed"))).toBe(
-                true,
-              );
-              expect(actual).toMatchObject({
-                status: "running",
-                phase: "activating",
-                reason: null,
-                finishedAtMs: null,
-              });
-              expect(stderr).toContain(
-                "Update interruption could not be recorded; history remains pending.",
-              );
-              expect(stderr).toContain("Update signal cleanup did not complete.");
-            }
-          } else if (mode === "uncertain-progress") {
+          const expectPendingHistory = (phase: "activating" | "validating") => {
             expect(actual).toMatchObject({
               status: "running",
-              phase: "validating",
+              phase,
               reason: null,
               finishedAtMs: null,
             });
@@ -510,6 +472,21 @@ it.skipIf(process.platform === "win32").for([
               "Update interruption could not be recorded; history remains pending.",
             );
             expect(stderr).toContain("Update signal cleanup did not complete.");
+          };
+          if (compensationMode) {
+            const admitted = mode !== "sealed-compensation";
+            const completed = mode === "accepted-compensation";
+            expect(exists("compensation-signal-snapshot")).toBe(true);
+            expect(exists("compensation-rollback-entered")).toBe(admitted);
+            expect(exists("compensation-phase-dispatched")).toBe(admitted);
+            expect(exists("compensation-native-stop")).toBe(completed);
+            expect(exists("compensation-package-rollback")).toBe(completed);
+            if (mode === "uncertain-compensation") {
+              expect(exists("compensation-uncertainty-observed")).toBe(true);
+              expectPendingHistory("activating");
+            }
+          } else if (mode === "uncertain-progress") {
+            expectPendingHistory("validating");
           } else if (
             mode === "fresh" ||
             mode === "queued-progress" ||
@@ -538,9 +515,7 @@ it.skipIf(process.platform === "win32").for([
           expect(readRun(message.sibling.runId)).toEqual(message.sibling);
           if (mode === "missing") {
             for (const suffix of ["", "-wal", "-shm"]) {
-              expect(fs.existsSync(path.join(root, "state", `openclaw.sqlite${suffix}`))).toBe(
-                false,
-              );
+              expect(exists(`state/openclaw.sqlite${suffix}`)).toBe(false);
             }
           }
         } finally {
