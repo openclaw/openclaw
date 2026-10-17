@@ -15,7 +15,17 @@ import {
   type OpenBlobStoreOptions,
 } from "./plugin-blob-store.js";
 import { createPluginBlobKernelStore } from "./plugin-blob-store.test-helpers.js";
+import type { PluginBlobStoreWithReceipts } from "./plugin-blob-store.types.js";
 import { PluginBlobStoreError } from "./plugin-blob-store.types.js";
+
+const bytes = (...values: number[]) => new Uint8Array(values);
+async function expectBlob(
+  store: Pick<PluginBlobStoreWithReceipts<unknown>, "lookup">,
+  key: string,
+  expected: object,
+) {
+  await expect(store.lookup(key)).resolves.toMatchObject(expected);
+}
 
 describe("plugin-blob-store", () => {
   afterEach(async () => {
@@ -45,60 +55,46 @@ describe("plugin-blob-store", () => {
     return createPluginBlobStoreForTests<TMetadata>(pluginId, storeOptions, env);
   }
 
+  const open = <T>(env: NodeJS.ProcessEnv, overrides: Partial<OpenBlobStoreOptions> = {}) =>
+    createPluginBlobStore<T>("diffs", options(env, overrides));
+  const kernel = <T>(env: NodeJS.ProcessEnv, overrides: Partial<OpenBlobStoreOptions> = {}) =>
+    createPluginBlobKernelStore<T>("diffs", options(env, overrides));
+
   describe("plugin blob store", () => {
     it("rejects quota overflow without disturbing existing rows", async () => {
       await withOpenClawTestState({ label: "plugin-blob-reject" }, async (state) => {
-        const store = createPluginBlobStore<{ order: number }>(
-          "diffs",
-          options(state.env, {
-            maxEntries: 1,
-            maxBytesPerEntry: 4,
-            maxBytesPerNamespace: 4,
-            overflowPolicy: "reject-new",
-          }),
-        );
-        await store.register("one", new Uint8Array([1, 2]), { order: 1 });
-        await expect(
-          store.register("two", new Uint8Array([3]), { order: 2 }),
-        ).rejects.toMatchObject({
+        const store = open<{ order: number }>(state.env, {
+          maxEntries: 1,
+          maxBytesPerEntry: 4,
+          maxBytesPerNamespace: 4,
+          overflowPolicy: "reject-new",
+        });
+        await store.register("one", bytes(1, 2), { order: 1 });
+        await expect(store.register("two", bytes(3), { order: 2 })).rejects.toMatchObject({
           code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
         });
         expect((await store.entries()).map((entry) => entry.key)).toEqual(["one"]);
-        await store.register("one", new Uint8Array([4, 5, 6, 7]), { order: 3 });
-        await expect(store.lookup("one")).resolves.toMatchObject({ sizeBytes: 4 });
-        await store.register("one", new Uint8Array(), { order: 4 });
-        await store.register("one", new Uint8Array([8]), { order: 5 });
-        await expect(store.lookup("one")).resolves.toMatchObject({
-          bytes: new Uint8Array([8]),
-          metadata: { order: 5 },
-        });
+        await store.register("one", bytes(4, 5, 6, 7), { order: 3 });
+        await expectBlob(store, "one", { sizeBytes: 4 });
+        await store.register("one", bytes(), { order: 4 });
+        await store.register("one", bytes(8), { order: 5 });
+        await expectBlob(store, "one", { bytes: bytes(8), metadata: { order: 5 } });
 
-        const byteStore = createPluginBlobStore<{ order: number }>(
-          "diffs",
-          options(state.env, {
-            namespace: "byte-limit",
-            maxEntries: 3,
-            maxBytesPerEntry: 3,
-            maxBytesPerNamespace: 4,
-            overflowPolicy: "reject-new",
-          }),
+        const byteStore = open<{ order: number }>(state.env, {
+          namespace: "byte-limit",
+          maxEntries: 3,
+          maxBytesPerEntry: 3,
+          maxBytesPerNamespace: 4,
+          overflowPolicy: "reject-new",
+        });
+        await byteStore.register("one", bytes(1, 2), { order: 1 });
+        await byteStore.register("two", bytes(3, 4), { order: 2 });
+        await expect(byteStore.register("one", bytes(5, 6, 7), { order: 3 })).rejects.toMatchObject(
+          { code: "PLUGIN_BLOB_LIMIT_EXCEEDED" },
         );
-        await byteStore.register("one", new Uint8Array([1, 2]), { order: 1 });
-        await byteStore.register("two", new Uint8Array([3, 4]), { order: 2 });
-        await expect(
-          byteStore.register("one", new Uint8Array([5, 6, 7]), { order: 3 }),
-        ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
-        await expect(byteStore.lookup("one")).resolves.toMatchObject({
-          bytes: new Uint8Array([1, 2]),
-          metadata: { order: 1 },
-        });
-        await expect(byteStore.lookup("two")).resolves.toMatchObject({
-          bytes: new Uint8Array([3, 4]),
-        });
-        await expect(store.lookup("one")).resolves.toMatchObject({
-          bytes: new Uint8Array([8]),
-          metadata: { order: 5 },
-        });
+        await expectBlob(byteStore, "one", { bytes: bytes(1, 2), metadata: { order: 1 } });
+        await expectBlob(byteStore, "two", { bytes: bytes(3, 4) });
+        await expectBlob(store, "one", { bytes: bytes(8), metadata: { order: 5 } });
       });
     });
 
@@ -106,22 +102,19 @@ describe("plugin-blob-store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
       await withOpenClawTestState({ label: "plugin-blob-evict" }, async (state) => {
-        const store = createPluginBlobKernelStore<{ order: number }>(
-          "diffs",
-          options(state.env, { maxEntries: 2 }),
-        );
-        await store.register("one", new Uint8Array([1]), { order: 1 });
+        const store = kernel<{ order: number }>(state.env, { maxEntries: 2 });
+        await store.register("one", bytes(1), { order: 1 });
         vi.setSystemTime(1_001);
-        await store.register("two", new Uint8Array([2]), { order: 2 });
+        await store.register("two", bytes(2), { order: 2 });
         vi.setSystemTime(1_002);
-        await store.register("three", new Uint8Array([3]), { order: 3 });
+        await store.register("three", bytes(3), { order: 3 });
         expect((await store.entries()).map((entry) => entry.key)).toEqual(["two", "three"]);
 
         await store.clear();
-        await store.register("zeta", new Uint8Array([1]), { order: 1 });
-        await store.register("alpha", new Uint8Array([2]), { order: 2 });
+        await store.register("zeta", bytes(1), { order: 1 });
+        await store.register("alpha", bytes(2), { order: 2 });
         vi.setSystemTime(999);
-        await store.register("protected", new Uint8Array([3]), { order: 3 });
+        await store.register("protected", bytes(3), { order: 3 });
         expect((await store.entries()).map((entry) => entry.key)).toEqual(["protected", "zeta"]);
       });
     });
@@ -130,10 +123,10 @@ describe("plugin-blob-store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(2_000);
       await withOpenClawTestState({ label: "plugin-blob-expiry" }, async (state) => {
-        const store = createPluginBlobKernelStore<{ order: number }>("diffs", options(state.env));
-        await store.register("one", new Uint8Array([1]), { order: 1 }, { ttlMs: 10 });
+        const store = kernel<{ order: number }>(state.env);
+        await store.register("one", bytes(1), { order: 1 }, { ttlMs: 10 });
         vi.setSystemTime(2_011);
-        await store.register("two", new Uint8Array([2]), { order: 2 }, { ttlMs: 10 });
+        await store.register("two", bytes(2), { order: 2 }, { ttlMs: 10 });
         await expect(store.deleteExpiredKey("one")).resolves.toEqual({
           key: "one",
           metadata: { order: 1 },
@@ -143,7 +136,7 @@ describe("plugin-blob-store", () => {
         });
         await expect(store.deleteExpiredKey("two")).resolves.toBeUndefined();
         await expect(store.deleteExpired()).resolves.toEqual([]);
-        await expect(store.lookup("two")).resolves.toMatchObject({ metadata: { order: 2 } });
+        await expectBlob(store, "two", { metadata: { order: 2 } });
         vi.setSystemTime(2_022);
         await expect(store.deleteExpired()).resolves.toEqual([
           { key: "two", metadata: { order: 2 }, sizeBytes: 1, createdAt: 2_011, expiresAt: 2_021 },
@@ -156,60 +149,44 @@ describe("plugin-blob-store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(2_500);
       await withOpenClawTestState({ label: "plugin-blob-expired-quota" }, async (state) => {
-        const rejectingStore = createPluginBlobKernelStore<{ path: string }>(
-          "diffs",
-          options(state.env, { maxEntries: 1, overflowPolicy: "reject-new" }),
-        );
-        await rejectingStore.register(
-          "expired",
-          new Uint8Array([1]),
-          { path: "reject-old" },
-          { ttlMs: 10 },
-        );
+        const rejectingStore = kernel<{ path: string }>(state.env, {
+          maxEntries: 1,
+          overflowPolicy: "reject-new",
+        });
+        await rejectingStore.register("expired", bytes(1), { path: "reject-old" }, { ttlMs: 10 });
         vi.setSystemTime(2_511);
 
         await expect(
-          rejectingStore.register("fresh", new Uint8Array([2]), { path: "reject-new" }),
+          rejectingStore.register("fresh", bytes(2), { path: "reject-new" }),
         ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
         await expect(rejectingStore.deleteExpiredKey("expired")).resolves.toMatchObject({
           metadata: { path: "reject-old" },
         });
         await expect(
-          rejectingStore.register("fresh", new Uint8Array([2]), { path: "reject-new" }),
+          rejectingStore.register("fresh", bytes(2), { path: "reject-new" }),
         ).resolves.toBeUndefined();
 
-        const evictingStore = createPluginBlobKernelStore<{ path: string }>(
-          "diffs",
-          options(state.env, {
-            namespace: "evicting",
-            maxEntries: 1,
-            overflowPolicy: "evict-oldest",
-          }),
-        );
-        await evictingStore.register(
-          "expired",
-          new Uint8Array([3]),
-          { path: "evict-old" },
-          { ttlMs: 10 },
-        );
+        const evictingStore = kernel<{ path: string }>(state.env, {
+          namespace: "evicting",
+          maxEntries: 1,
+          overflowPolicy: "evict-oldest",
+        });
+        await evictingStore.register("expired", bytes(3), { path: "evict-old" }, { ttlMs: 10 });
         vi.setSystemTime(2_522);
 
         await expect(
-          evictingStore.register("fresh", new Uint8Array([4]), { path: "evict-new" }),
+          evictingStore.register("fresh", bytes(4), { path: "evict-new" }),
         ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
         await expect(evictingStore.deleteExpiredKey("expired")).resolves.toMatchObject({
           metadata: { path: "evict-old" },
         });
 
-        const replacingStore = createPluginBlobKernelStore<{ path: string }>(
-          "diffs",
-          options(state.env, {
-            namespace: "replacing",
-            maxBytesPerEntry: 10,
-            maxBytesPerNamespace: 10,
-            overflowPolicy: "evict-oldest",
-          }),
-        );
+        const replacingStore = kernel<{ path: string }>(state.env, {
+          namespace: "replacing",
+          maxBytesPerEntry: 10,
+          maxBytesPerNamespace: 10,
+          overflowPolicy: "evict-oldest",
+        });
         await replacingStore.register(
           "expired",
           new Uint8Array(5),
@@ -222,7 +199,7 @@ describe("plugin-blob-store", () => {
         await expect(
           replacingStore.register("target", new Uint8Array(6), { path: "target-new" }),
         ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
-        await expect(replacingStore.lookup("target")).resolves.toMatchObject({
+        await expectBlob(replacingStore, "target", {
           metadata: { path: "target-old" },
           sizeBytes: 4,
         });
@@ -234,13 +211,11 @@ describe("plugin-blob-store", () => {
 
     it("validates hard limits and consistent namespace options", async () => {
       await withOpenClawTestState({ label: "plugin-blob-validation" }, async (state) => {
-        const store = createPluginBlobStore("diffs", options(state.env, { maxBytesPerEntry: 2 }));
-        await expect(store.register("big", new Uint8Array([1, 2, 3]), {})).rejects.toBeInstanceOf(
+        const store = open(state.env, { maxBytesPerEntry: 2 });
+        await expect(store.register("big", bytes(1, 2, 3), {})).rejects.toBeInstanceOf(
           PluginBlobStoreError,
         );
-        expect(() =>
-          createPluginBlobStore("diffs", options(state.env, { maxBytesPerEntry: 3 })),
-        ).toThrow(/incompatible options/);
+        expect(() => open(state.env, { maxBytesPerEntry: 3 })).toThrow(/incompatible options/);
       });
     });
 
@@ -250,14 +225,11 @@ describe("plugin-blob-store", () => {
         vi.useFakeTimers();
         vi.setSystemTime(6_000);
         await withOpenClawTestState({ label: "plugin-blob-plugin-quota" }, async (state) => {
-          const store = createPluginBlobKernelStore<{ owner: string }>(
-            "diffs",
-            options(state.env, { overflowPolicy }),
-          );
-          const emptyNamespace = createPluginBlobKernelStore<{ owner: string }>(
-            "diffs",
-            options(state.env, { namespace: "empty", overflowPolicy }),
-          );
+          const store = kernel<{ owner: string }>(state.env, { overflowPolicy });
+          const emptyNamespace = kernel<{ owner: string }>(state.env, {
+            namespace: "empty",
+            overflowPolicy,
+          });
           const { db } = openOpenClawStateDatabase({ env: state.env });
           db.exec(`WITH RECURSIVE entries(n) AS (
           VALUES (1) UNION ALL SELECT n + 1 FROM entries WHERE n < 49999
@@ -265,27 +237,22 @@ describe("plugin-blob-store", () => {
           (plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
           SELECT 'diffs', 'sibling', 'expired-' || n, '{"owner":"sibling"}', zeroblob(0), 1, 2
           FROM entries`);
-          await store.register("one", new Uint8Array([1]), { owner: "one" });
-          await store.register("one", new Uint8Array([1, 2]), { owner: "replacement" });
+          await store.register("one", bytes(1), { owner: "one" });
+          await store.register("one", bytes(1, 2), { owner: "replacement" });
 
-          const write = store.register("two", new Uint8Array([3]), { owner: "two" });
+          const write = store.register("two", bytes(3), { owner: "two" });
           if (overflowPolicy === "reject-new") {
             await expect(write).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
-            await expect(store.lookup("one")).resolves.toMatchObject({
-              sizeBytes: 2,
-              metadata: { owner: "replacement" },
-            });
+            await expectBlob(store, "one", { sizeBytes: 2, metadata: { owner: "replacement" } });
             await expect(store.lookup("two")).resolves.toBeUndefined();
           } else {
             await expect(write).resolves.toBeUndefined();
             await expect(store.lookup("one")).resolves.toBeUndefined();
-            await expect(store.lookup("two")).resolves.toMatchObject({
-              metadata: { owner: "two" },
-            });
+            await expectBlob(store, "two", { metadata: { owner: "two" } });
           }
 
           await expect(
-            emptyNamespace.register("blocked", new Uint8Array([4]), { owner: "blocked" }),
+            emptyNamespace.register("blocked", bytes(4), { owner: "blocked" }),
           ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
           await expect(emptyNamespace.lookup("blocked")).resolves.toBeUndefined();
           expect(
@@ -293,10 +260,10 @@ describe("plugin-blob-store", () => {
               .prepare("SELECT COUNT(*) AS count FROM plugin_blob_entries WHERE plugin_id = ?")
               .get("diffs"),
           ).toEqual({ count: 50_000 });
-          const sibling = createPluginBlobKernelStore<{ owner: string }>(
-            "diffs",
-            options(state.env, { namespace: "sibling", overflowPolicy }),
-          );
+          const sibling = kernel<{ owner: string }>(state.env, {
+            namespace: "sibling",
+            overflowPolicy,
+          });
           await expect(sibling.deleteExpiredKey("expired-1")).resolves.toMatchObject({
             metadata: { owner: "sibling" },
             sizeBytes: 0,
@@ -307,34 +274,28 @@ describe("plugin-blob-store", () => {
 
     it("isolates plugin ids and namespaces and persists across reopen", async () => {
       await withOpenClawTestState({ label: "plugin-blob-isolation" }, async (state) => {
-        const diffs = createPluginBlobStore<{ owner: string }>("diffs", options(state.env));
+        const diffs = open<{ owner: string }>(state.env);
         const otherPlugin = createPluginBlobStore<{ owner: string }>("other", options(state.env));
-        const otherNamespace = createPluginBlobStore<{ owner: string }>(
-          "diffs",
-          options(state.env, { namespace: "other-artifacts" }),
-        );
-        await diffs.register("same", new Uint8Array([1]), { owner: "diffs" });
+        const otherNamespace = open<{ owner: string }>(state.env, { namespace: "other-artifacts" });
+        await diffs.register("same", bytes(1), { owner: "diffs" });
 
         await expect(otherPlugin.lookup("same")).resolves.toBeUndefined();
         await expect(otherNamespace.lookup("same")).resolves.toBeUndefined();
         await closeOpenClawStateDatabaseAsync();
         resetPluginBlobStoreForTests();
 
-        const reopened = createPluginBlobStore<{ owner: string }>("diffs", options(state.env));
-        await expect(reopened.lookup("same")).resolves.toMatchObject({
-          metadata: { owner: "diffs" },
-          bytes: new Uint8Array([1]),
-        });
+        const reopened = open<{ owner: string }>(state.env);
+        await expectBlob(reopened, "same", { metadata: { owner: "diffs" }, bytes: bytes(1) });
       });
     });
 
     it("publishes persisted timestamps and refuses duplicate registration without replacing data", async () => {
       await withOpenClawTestState({ label: "plugin-blob-receipt" }, async (state) => {
-        const store = createPluginBlobStore<{ version: number }>("diffs", options(state.env));
+        const store = open<{ version: number }>(state.env);
         const startedAt = Date.now();
         const receipt = await store.registerIfAbsentWithReceipt(
           "stable",
-          new Uint8Array([1]),
+          bytes(1),
           { version: 1 },
           { ttlMs: 60_000 },
         );
@@ -343,21 +304,21 @@ describe("plugin-blob-store", () => {
         expect(receipt.createdAt).toBeLessThanOrEqual(Date.now());
         expect(receipt.expiresAt).toBe(receipt.createdAt + 60_000);
         await expect(
-          store.registerIfAbsentWithReceipt("stable", new Uint8Array([2]), { version: 2 }),
+          store.registerIfAbsentWithReceipt("stable", bytes(2), { version: 2 }),
         ).resolves.toBeUndefined();
-        await expect(
-          store.registerIfAbsent("stable", new Uint8Array([3]), { version: 3 }),
-        ).resolves.toBe(false);
+        await expect(store.registerIfAbsent("stable", bytes(3), { version: 3 })).resolves.toBe(
+          false,
+        );
         await expect(store.lookup("stable")).resolves.toEqual({
           ...receipt,
           key: "stable",
-          bytes: new Uint8Array([1]),
+          bytes: bytes(1),
           sizeBytes: 1,
           metadata: { version: 1 },
         });
 
         await store.delete("stable");
-        const replacement = await store.registerIfAbsentWithReceipt("stable", new Uint8Array([4]), {
+        const replacement = await store.registerIfAbsentWithReceipt("stable", bytes(4), {
           version: 4,
         });
         assert.isDefined(replacement);
@@ -365,7 +326,7 @@ describe("plugin-blob-store", () => {
         await expect(store.lookup("stable")).resolves.toEqual({
           ...replacement,
           key: "stable",
-          bytes: new Uint8Array([4]),
+          bytes: bytes(4),
           sizeBytes: 1,
           metadata: { version: 4 },
         });
@@ -376,47 +337,38 @@ describe("plugin-blob-store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(4_000);
       await withOpenClawTestState({ label: "plugin-blob-expired-if-absent" }, async (state) => {
-        const store = createPluginBlobKernelStore<{ path: string }>("diffs", options(state.env));
+        const store = kernel<{ path: string }>(state.env);
         await expect(
-          store.registerIfAbsent("stable", new Uint8Array([1]), { path: "old" }, { ttlMs: 10 }),
+          store.registerIfAbsent("stable", bytes(1), { path: "old" }, { ttlMs: 10 }),
         ).resolves.toBe(true);
 
         vi.setSystemTime(4_011);
-        await expect(
-          store.registerIfAbsent("stable", new Uint8Array([2]), { path: "new" }),
-        ).resolves.toBe(false);
+        await expect(store.registerIfAbsent("stable", bytes(2), { path: "new" })).resolves.toBe(
+          false,
+        );
         await expect(store.deleteExpiredKey("stable")).resolves.toMatchObject({
           key: "stable",
           metadata: { path: "old" },
         });
-        await expect(
-          store.registerIfAbsent("stable", new Uint8Array([2]), { path: "new" }),
-        ).resolves.toBe(true);
-        await expect(store.lookup("stable")).resolves.toMatchObject({
-          metadata: { path: "new" },
-          bytes: new Uint8Array([2]),
-        });
+        await expect(store.registerIfAbsent("stable", bytes(2), { path: "new" })).resolves.toBe(
+          true,
+        );
+        await expectBlob(store, "stable", { metadata: { path: "new" }, bytes: bytes(2) });
       });
     });
 
     it("rolls back a rejected replacement and rejects corrupt metadata", async () => {
       await withOpenClawTestState({ label: "plugin-blob-corrupt" }, async (state) => {
-        const store = createPluginBlobStore<{ ok: boolean }>(
-          "diffs",
-          options(state.env, {
-            maxBytesPerEntry: 3,
-            maxBytesPerNamespace: 3,
-            overflowPolicy: "reject-new",
-          }),
-        );
-        await store.register("stable", new Uint8Array([1, 2]), { ok: true });
-        await expect(
-          store.register("stable", new Uint8Array([1, 2, 3, 4]), { ok: false }),
-        ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
-        await expect(store.lookup("stable")).resolves.toMatchObject({
-          metadata: { ok: true },
-          bytes: new Uint8Array([1, 2]),
+        const store = open<{ ok: boolean }>(state.env, {
+          maxBytesPerEntry: 3,
+          maxBytesPerNamespace: 3,
+          overflowPolicy: "reject-new",
         });
+        await store.register("stable", bytes(1, 2), { ok: true });
+        await expect(
+          store.register("stable", bytes(1, 2, 3, 4), { ok: false }),
+        ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+        await expectBlob(store, "stable", { metadata: { ok: true }, bytes: bytes(1, 2) });
 
         const { db } = openOpenClawStateDatabase({ env: state.env });
         db.prepare(
@@ -439,8 +391,8 @@ describe("plugin-blob-store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(5_000);
       await withOpenClawTestState({ label: "plugin-blob-corrupt-expired" }, async (state) => {
-        const store = createPluginBlobKernelStore<{ path: string }>("diffs", options(state.env));
-        await store.register("valid", new Uint8Array([1]), { path: "valid" }, { ttlMs: 10 });
+        const store = kernel<{ path: string }>(state.env);
+        await store.register("valid", bytes(1), { path: "valid" }, { ttlMs: 10 });
         const { db } = openOpenClawStateDatabase({ env: state.env });
         db.prepare(
           `INSERT INTO plugin_blob_entries
@@ -511,21 +463,19 @@ describe("plugin-blob-store.readonly", () => {
         { label: "blob-read-transaction", applyEnv: false },
         async (state) => {
           const store = createStore(state.env);
-          await store.register("saved", new Uint8Array([1]), { version: 1 });
+          await store.register("saved", bytes(1), { version: 1 });
           const { db } = openOpenClawStateDatabase({ env: state.env });
           db.exec("BEGIN IMMEDIATE; DELETE FROM plugin_blob_entries;");
           try {
             const entry = await store.lookup("saved");
-            expect(entry).toMatchObject({ metadata: { version: 1 }, bytes: new Uint8Array([1]) });
+            expect(entry).toMatchObject({ metadata: { version: 1 }, bytes: bytes(1) });
             entry!.bytes[0] = 9;
-            await expect(store.lookup("saved")).resolves.toMatchObject({
-              bytes: new Uint8Array([1]),
-            });
+            await expectBlob(store, "saved", { bytes: bytes(1) });
             await expect(store.entries()).resolves.toMatchObject([{ key: "saved" }]);
           } finally {
             db.exec("ROLLBACK");
           }
-          await expect(store.lookup("saved")).resolves.toMatchObject({ metadata: { version: 1 } });
+          await expectBlob(store, "saved", { metadata: { version: 1 } });
         },
       );
     });
@@ -533,7 +483,7 @@ describe("plugin-blob-store.readonly", () => {
     it("rejects a newer schema through warm acquisition", async () => {
       await withOpenClawTestState({ label: "blob-read-newer", applyEnv: false }, async (state) => {
         const store = createStore(state.env);
-        await store.register("saved", new Uint8Array([1]), { version: 1 });
+        await store.register("saved", bytes(1), { version: 1 });
         const { db, path: databasePath } = openOpenClawStateDatabase({ env: state.env });
         db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
         for (const operation of ["lookup", "entries"] as const) {

@@ -133,23 +133,16 @@ describe("plugin-state-store.authority", () => {
             const unexpectedSubagent = () => {
               throw new Error("Visitor grant renewal must not dispatch subagent work");
             };
+            const unexpectedGatewayCall = (name: string) => () => {
+              throw new Error(`Unexpected ${name} request`);
+            };
             const gateway: PluginRuntime["gateway"] = {
               isAvailable: async () => true,
-              async openPluginPanel() {
-                throw new Error("Unexpected plugin panel request");
-              },
-              async readSessionFacts() {
-                throw new Error("Unexpected session facts request");
-              },
-              async withSessionFacts() {
-                throw new Error("Unexpected session read scope");
-              },
-              subscribeSessionChanges() {
-                throw new Error("Unexpected session changes subscription");
-              },
-              async request() {
-                throw new Error("Unexpected Gateway request");
-              },
+              openPluginPanel: unexpectedGatewayCall("plugin panel"),
+              readSessionFacts: unexpectedGatewayCall("session facts"),
+              withSessionFacts: unexpectedGatewayCall("session read scope"),
+              subscribeSessionChanges: unexpectedGatewayCall("session changes subscription"),
+              request: unexpectedGatewayCall("Gateway"),
             };
             vi.spyOn(gateway, "request").mockImplementation(async (method) => {
               expect(method).toBe("users.list");
@@ -591,9 +584,7 @@ describe("plugin-state-store.runtime", () => {
       await withOpenClawTestState({ label: "plugin-ingress-runtime-closure" }, async (state) => {
         const record = createPluginRecord("ingress-owner", "config");
         const { registry, runtime } = setup(record, true);
-        const queue = runtime.openChannelIngressQueue<{ text: string }>({
-          now: () => 10,
-        });
+        const queue = runtime.openChannelIngressQueue<{ text: string }>({ now: () => 10 });
         await queue.enqueue("claimed", { text: "retained" });
         const claimed = await queue.claim("claimed", { ownerId: "previous" });
         expect(claimed).not.toBeNull();
@@ -643,9 +634,7 @@ describe("plugin-state-store.runtime", () => {
         await withOpenClawTestState({ label: "plugin-ingress-commit-authority" }, async (state) => {
           const record = createPluginRecord("ingress-owner");
           const { registry, runtime } = setup(record, true);
-          const queue = runtime.openChannelIngressQueue<{ text: string }>({
-            now: () => 10,
-          });
+          const queue = runtime.openChannelIngressQueue<{ text: string }>({ now: () => 10 });
           await queue.enqueue("retained", { text: "retained" });
           const claimed = await queue.claim("retained", { ownerId: "previous" });
           expect(claimed).not.toBeNull();

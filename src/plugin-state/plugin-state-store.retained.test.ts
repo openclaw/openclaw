@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, afterAll, beforeAll, beforeEach, vi } from "vitest";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
-import type { OpenRetainedKeyedStoreOptions } from "../plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenKeyedStoreOptions,
+  OpenRetainedKeyedStoreOptions,
+} from "../plugin-sdk/plugin-state-runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -41,6 +44,18 @@ describe("plugin-state-store.retained", () => {
     retention: "retained",
   };
   const key = (id: number) => String(id).padStart(10, "0");
+  const open = <T>(
+    options: OpenKeyedStoreOptions | OpenRetainedKeyedStoreOptions = retainedOptions,
+  ) => createPluginStateKeyedStore<T>(pluginId, options);
+  type Seed = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
+  const seed = (rows: Array<Pick<Seed, "key" | "value"> & Partial<Seed>>) =>
+    seedPluginStateEntriesForTests(rows.map((row) => ({ pluginId, namespace: "history", ...row })));
+  const snapshot = () =>
+    openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
+      )
+      .all(pluginId);
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -50,9 +65,8 @@ describe("plugin-state-store.retained", () => {
   describe("retained plugin state", () => {
     it("retains all rows across writes and reopening beyond bounded-store limits", async () => {
       await withOpenClawTestState({ label: "retained-storage-capacity" }, async () => {
-        seedPluginStateEntriesForTests(
+        seed(
           Array.from({ length: 50_001 }, (_, id) => ({
-            pluginId,
             namespace: "@retained.history",
             key: key(id),
             value: id,
@@ -62,7 +76,7 @@ describe("plugin-state-store.retained", () => {
         await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
 
-        const retained = createPluginStateKeyedStore<number>(pluginId, retainedOptions);
+        const retained = open<number>();
         await retained.register(key(50_001), 50_001);
         expect(await retained.registerIfAbsent(key(50_002), 50_002)).toBe(true);
         const absent = await retained.observe(key(50_003));
@@ -76,7 +90,7 @@ describe("plugin-state-store.retained", () => {
         expect(await retained.update(key(50_004), () => 50_004)).toBe(true);
         await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
-        const reopened = createPluginStateKeyedStore<number>(pluginId, retainedOptions);
+        const reopened = open<number>();
         expect(await reopened.count()).toBe(50_005);
         expect(await reopened.lookup(key(0))).toBe(0);
         expect(await reopened.lookup(key(50_004))).toBe(50_004);
@@ -86,31 +100,12 @@ describe("plugin-state-store.retained", () => {
     it("moves raw data atomically, preserves canonical targets, and pages lexical keys", async () => {
       await withOpenClawTestState({ label: "retained-storage-move" }, async () => {
         const now = Date.now();
-        seedPluginStateEntriesForTests([
-          { pluginId, namespace: "history", key: "9", value: { body: "legacy 9" }, createdAt: 9 },
+        seed([
+          { key: "9", value: { body: "legacy 9" }, createdAt: 9 },
+          { key: "10", value: { body: "superseded" }, createdAt: 10 },
+          { key: "99", value: { body: "expired" }, expiresAt: now - 1 },
+          { key: "100", value: { body: "expiring" }, expiresAt: now + 86_400_000 },
           {
-            pluginId,
-            namespace: "history",
-            key: "10",
-            value: { body: "superseded" },
-            createdAt: 10,
-          },
-          {
-            pluginId,
-            namespace: "history",
-            key: "99",
-            value: { body: "expired" },
-            expiresAt: now - 1,
-          },
-          {
-            pluginId,
-            namespace: "history",
-            key: "100",
-            value: { body: "expiring" },
-            expiresAt: now + 86_400_000,
-          },
-          {
-            pluginId,
             namespace: "@retained.history",
             key: key(10),
             value: { body: "canonical" },
@@ -124,11 +119,8 @@ describe("plugin-state-store.retained", () => {
             "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
           )
           .run(raw, pluginId, "history", "9");
-        const source = createPluginStateKeyedStore<{ body: string }>(pluginId, {
-          namespace: "history",
-          maxEntries: 10,
-        });
-        const retained = createPluginStateKeyedStore<{ body: string }>(pluginId, retainedOptions);
+        const source = open<{ body: string }>({ namespace: "history", maxEntries: 10 });
+        const retained = open<{ body: string }>();
         await expect(
           retained.moveEntriesFrom({
             namespace: "history",
@@ -157,11 +149,7 @@ describe("plugin-state-store.retained", () => {
               "SELECT value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
             )
             .get(pluginId, "@retained.history", key(9)),
-        ).toEqual({
-          value_json: raw,
-          created_at: 9,
-          expires_at: null,
-        });
+        ).toEqual({ value_json: raw, created_at: 9, expires_at: null });
         const foreign = createPluginStateKeyedStore<{ body: string }>("other-plugin", {
           namespace: "history",
           maxEntries: 10,
@@ -191,23 +179,14 @@ describe("plugin-state-store.retained", () => {
           sourceKey: String(id),
           targetKey: key(id),
         }));
-        seedPluginStateEntriesForTests([
+        seed([
           ...entries.map((entry, id) => ({
-            pluginId,
-            namespace: "history",
             key: entry.sourceKey,
             value: { id },
             createdAt: id + 100,
           })),
+          { namespace: "@retained.history", key: key(0), value: { id: -1 }, createdAt: 1 },
           {
-            pluginId,
-            namespace: "@retained.history",
-            key: key(0),
-            value: { id: -1 },
-            createdAt: 1,
-          },
-          {
-            pluginId,
             namespace: "@retained.history",
             key: key(64),
             value: { id: -2 },
@@ -215,18 +194,11 @@ describe("plugin-state-store.retained", () => {
             expiresAt: Date.now() - 1_000,
           },
         ]);
-        const before = openOpenClawStateDatabase()
-          .db.prepare(
-            "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
-          )
-          .all(pluginId);
+        const before = snapshot();
         expect(before).toHaveLength(67);
         await closeOpenClawStateDatabaseAsync();
-        const source = createPluginStateKeyedStore<{ id: number }>(pluginId, {
-          namespace: "history",
-          maxEntries: 100,
-        });
-        const retained = createPluginStateKeyedStore<{ id: number }>(pluginId, retainedOptions);
+        const source = open<{ id: number }>({ namespace: "history", maxEntries: 100 });
+        const retained = open<{ id: number }>();
         expect(await retained.moveEntriesFrom({ namespace: "history", entries: [] })).toBe(0);
         let commits = 0;
         const stop = pluginStatePublication.subscribeFacts((change) => {
@@ -244,13 +216,7 @@ describe("plugin-state-store.retained", () => {
           moveFault.disable();
           expect(commits).toBe(0);
           await closeOpenClawStateDatabaseAsync();
-          expect(
-            openOpenClawStateDatabase()
-              .db.prepare(
-                "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
-              )
-              .all(pluginId),
-          ).toEqual(before);
+          expect(snapshot()).toEqual(before);
           await closeOpenClawStateDatabaseAsync();
 
           expect(await source.lookup("0")).toEqual({ id: 0 });
@@ -288,17 +254,12 @@ describe("plugin-state-store.retained", () => {
         { label: "retained-storage-namespace-compatibility" },
         async () => {
           const namespace = "retained.history";
-          seedPluginStateEntriesForTests([
-            { pluginId, namespace, key: "legacy", value: 1, createdAt: 1 },
-          ]);
+          seed([{ pluginId, namespace, key: "legacy", value: 1, createdAt: 1 }]);
           const options = { namespace, maxEntries: 1 };
           const sync = createPluginStateSyncKeyedStore<number>(pluginId, options);
           expect(sync.lookup("legacy")).toBe(1);
-          const bounded = createPluginStateKeyedStore<number>(pluginId, options);
-          const retained = createPluginStateKeyedStore<number>(pluginId, {
-            namespace,
-            retention: "retained",
-          });
+          const bounded = open<number>(options);
+          const retained = open<number>({ namespace, retention: "retained" });
           await retained.register("fresh", 3);
           await bounded.register("fresh", 2);
           expect(sync.lookup("legacy")).toBeUndefined();
@@ -311,11 +272,11 @@ describe("plugin-state-store.retained", () => {
     it("preserves the full 128-byte logical namespace limit in retained mode", async () => {
       await withOpenClawTestState({ label: "retained-storage-namespace-length" }, async () => {
         const options = { namespace: "n".repeat(128), retention: "retained" as const };
-        const retained = createPluginStateKeyedStore<number>(pluginId, options);
+        const retained = open<number>(options);
         await retained.register("last-byte", 128);
         await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
-        const reopened = createPluginStateKeyedStore<number>(pluginId, options);
+        const reopened = open<number>(options);
         expect(await reopened.lookup("last-byte")).toBe(128);
         expect(() =>
           createPluginStateKeyedStore(pluginId, {
@@ -331,9 +292,9 @@ describe("plugin-state-store.retained", () => {
         expect(() =>
           Reflect.apply(createPluginStateSyncKeyedStore, undefined, [pluginId, retainedOptions]),
         ).toThrow();
-        for (const open of [createPluginStateKeyedStore, createPluginStateSyncKeyedStore]) {
+        for (const factory of [createPluginStateKeyedStore, createPluginStateSyncKeyedStore]) {
           expect(() =>
-            open(pluginId, { namespace: "@retained.history", maxEntries: 10 }),
+            factory(pluginId, { namespace: "@retained.history", maxEntries: 10 }),
           ).toThrow();
         }
         expect(() =>
@@ -342,11 +303,8 @@ describe("plugin-state-store.retained", () => {
             { ...retainedOptions, maxEntries: 10 },
           ]),
         ).toThrow();
-        const retained = createPluginStateKeyedStore<number>(pluginId, retainedOptions);
-        const bounded = createPluginStateKeyedStore<number>(pluginId, {
-          namespace: "history",
-          maxEntries: 10,
-        });
+        const retained = open<number>();
+        const bounded = open<number>({ namespace: "history", maxEntries: 10 });
         await bounded.register("a", 1);
         await bounded.register("b", 2);
         await expect(retained.register("ttl", 1, { ttlMs: 1_000 })).rejects.toMatchObject({

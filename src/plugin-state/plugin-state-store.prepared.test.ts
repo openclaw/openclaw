@@ -26,7 +26,7 @@ import {
 describe("plugin-state-store.import", () => {
   let testState: OpenClawTestState;
   const pluginId = "import-test";
-  const options = { namespace: "legacy", maxEntries: 2_000 };
+  const importOptions = { namespace: "legacy", maxEntries: 2_000 };
   const entries = Array.from({ length: 1_001 }, (_, index) => ({
     key: `row-${index}`,
     value: index,
@@ -55,7 +55,7 @@ describe("plugin-state-store.import", () => {
       WHEN NEW.entry_key = 'row-750' BEGIN SELECT RAISE(ROLLBACK, 'import transaction aborted'); END`);
       let failure: unknown;
       try {
-        importPluginStateEntriesForDoctor(pluginId, options, entries);
+        importPluginStateEntriesForDoctor(pluginId, importOptions, entries);
       } catch (error) {
         failure = error;
       }
@@ -66,10 +66,10 @@ describe("plugin-state-store.import", () => {
       expect(db.isOpen).toBe(false);
       const reopened = openOpenClawStateDatabase().db;
       expect(reopened === db).toBe(false);
-      const store = createPluginStateSyncKeyedStore(pluginId, options);
+      const store = createPluginStateSyncKeyedStore(pluginId, importOptions);
       // The first bounded batch committed; the entire second batch was aborted.
       expect(store.entries()).toEqual(entries.slice(0, 500));
-      importPluginStateEntriesForDoctor(pluginId, options, entries);
+      importPluginStateEntriesForDoctor(pluginId, importOptions, entries);
       expect(store.entries()).toEqual(entries);
     });
 
@@ -77,7 +77,13 @@ describe("plugin-state-store.import", () => {
       let clock = 10_000;
       vi.spyOn(Date, "now").mockImplementation(() => clock);
       seedPluginStateEntriesForTests([
-        { pluginId, namespace: options.namespace, key: "expiring", value: true, expiresAt: 10_001 },
+        {
+          pluginId,
+          namespace: importOptions.namespace,
+          key: "expiring",
+          value: true,
+          expiresAt: 10_001,
+        },
       ]);
       const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       db.function("advance_import_clock", () => {
@@ -86,7 +92,7 @@ describe("plugin-state-store.import", () => {
       });
       db.exec(`CREATE TEMP TRIGGER advance_clock AFTER INSERT ON plugin_state_entries
       WHEN NEW.entry_key = 'first' BEGIN SELECT advance_import_clock(); END`);
-      const limited = { ...options, maxEntries: 2, overflowPolicy: "reject-new" as const };
+      const limited = { ...importOptions, maxEntries: 2, overflowPolicy: "reject-new" as const };
       const source = [
         { key: "first", value: 1, createdAt: -2 },
         { key: "second", value: 2, createdAt: -1, ttlMs: 100 },
@@ -102,12 +108,12 @@ describe("plugin-state-store.import", () => {
       const invalid = entries.map((entry, offset) =>
         offset === 0 ? { ...entry, createdAt: Number.NaN } : entry,
       );
-      expect(() => importPluginStateEntriesForDoctor(pluginId, options, invalid)).toThrow(
+      expect(() => importPluginStateEntriesForDoctor(pluginId, importOptions, invalid)).toThrow(
         "createdAt must be a safe integer",
       );
-      const store = createPluginStateSyncKeyedStore(pluginId, options);
+      const store = createPluginStateSyncKeyedStore(pluginId, importOptions);
       expect(store.entries()).toEqual([]);
-      importPluginStateEntriesForDoctor(pluginId, options, entries);
+      importPluginStateEntriesForDoctor(pluginId, importOptions, entries);
       expect(store.entries()).toEqual(entries);
     });
 
@@ -117,7 +123,7 @@ describe("plugin-state-store.import", () => {
         seedPluginStateEntriesForTests([
           { pluginId, namespace: "durable", key: "sibling", value: true },
         ]);
-        const limited = { ...options, maxEntries: 2, overflowPolicy };
+        const limited = { ...importOptions, maxEntries: 2, overflowPolicy };
         const source = [
           { key: "z", value: 1, createdAt: 20 },
           { key: "a", value: 2, createdAt: 10 },
@@ -144,24 +150,6 @@ describe("plugin-state-store.import", () => {
       },
     );
   });
-});
-
-describe("plugin-state-store.prepared", () => {
-  let testState: OpenClawTestState;
-  beforeAll(async () => {
-    testState = await createOpenClawTestState({ label: "plugin-state-prepared" });
-  });
-  beforeEach(() => {
-    testState.applyEnv();
-    clearPluginStateStoreForTests();
-  });
-  afterEach(() => {
-    resetPluginStateStoreForTests();
-  });
-  afterAll(async () => {
-    await testState.cleanup();
-  });
-
   describe("plugin state prepared queries", () => {
     it("uses the supplied connection and keeps registration eviction in its owner's transaction", () => {
       const scope = { pluginId: "discord", namespace: "owned-kernel" };
@@ -242,18 +230,14 @@ describe("plugin-state-store.prepared", () => {
                   { key: `${key}-durable`, value: `durable-${index}`, createdAt: 10_010 + index },
                 ]);
               }
-              const writes = compile.mock.results.filter(
-                (result) => result.type === "return" && result.value.sql.startsWith("insert"),
-              );
-              expect(writes).toHaveLength(1);
-              const counts = compile.mock.results.filter(
-                (result) =>
-                  result.type === "return" &&
-                  result.value.sql.startsWith(
-                    'select count(*) as "count" from "plugin_state_entries"',
-                  ),
-              );
-              expect(counts).toHaveLength(1);
+              const compiled = (prefix: string) =>
+                compile.mock.results.filter(
+                  (result) => result.type === "return" && result.value.sql.startsWith(prefix),
+                );
+              expect(compiled("insert")).toHaveLength(1);
+              expect(
+                compiled('select count(*) as "count" from "plugin_state_entries"'),
+              ).toHaveLength(1);
             } finally {
               compile.mockRestore();
             }

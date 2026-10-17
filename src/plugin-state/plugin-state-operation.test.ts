@@ -19,15 +19,13 @@ import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
 } from "./plugin-state-store.js";
+import type { PluginStateOperation } from "./plugin-state-store.types.js";
 import * as workerClient from "./plugin-state-worker-client.js";
 
 const modulePath = fileURLToPath(
   new URL("./plugin-state-operation.test-support.ts", import.meta.url),
 );
-const handler = {
-  moduleName: "plugin-state-operation.test-support.ts",
-  exportName: "execute",
-};
+const handler = { moduleName: "plugin-state-operation.test-support.ts", exportName: "execute" };
 
 describe("plugin state worker operations", () => {
   let state: OpenClawTestState;
@@ -66,14 +64,29 @@ describe("plugin state worker operations", () => {
       },
     );
 
+  const read = (operation: PluginStateOperation<FixtureOperations>, store = 0) =>
+    operation.execute({ type: "read", input: { store, key: "key" } }, { writeStores: [] });
+  const move = (
+    operation: PluginStateOperation<FixtureOperations>,
+    value: string,
+    writeStores = [0, 1],
+  ) => operation.execute({ type: "move", input: { value } }, { writeStores });
+  const pair = async (prefix: string, value = "original") => {
+    const first = open(`${prefix}-first`);
+    const second = open(`${prefix}-second`);
+    await first.register("key", value);
+    return {
+      first,
+      second,
+      operation: first.createOperation<FixtureOperations>([first, second], handler),
+    };
+  };
+
   it("moves rows across namespaces in one worker command and rolls back undeclared writes", async () => {
-    const first = open("move-first");
-    const second = open("move-second");
-    await first.register("key", "original");
-    const operation = first.createOperation<FixtureOperations>([first, second], handler);
-    await expect(
-      operation.execute({ type: "move", input: { value: "moved" } }, { writeStores: [0] }),
-    ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
+    const { first, second, operation } = await pair("move");
+    await expect(move(operation, "moved", [0])).rejects.toMatchObject({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+    });
     expect(await first.lookup("key")).toBe("original");
     expect(await second.lookup("key")).toBeUndefined();
     const dispatch = vi.spyOn(workerClient, "executePluginStateOperationInWorker");
@@ -87,10 +100,7 @@ describe("plugin state worker operations", () => {
       }
     });
     try {
-      const result = await operation.execute(
-        { type: "move", input: { value: "moved" } },
-        { writeStores: [0, 1] },
-      );
+      const result = await move(operation, "moved");
       expect(result.value).toMatchObject({
         before: ["original", undefined],
         after: [undefined, "moved"],
@@ -134,14 +144,13 @@ describe("plugin state worker operations", () => {
     const store = open("receipts");
     await store.register("key", "allowed");
     const operation = store.createOperation<FixtureOperations>([store], handler);
-    const read = () =>
-      operation.execute({ type: "read", input: { store: 0, key: "key" } }, { writeStores: [] });
-    const before = await read();
+
+    const before = await read(operation);
     before.assertCurrent();
     const pending = store.register("key", "revoked");
     expect(before.assertCurrent).toThrow("no longer current");
     await pending;
-    const current = await read();
+    const current = await read(operation);
     expect(current.value.value).toBe("revoked");
     current.assertCurrent();
     createPluginStateSyncKeyedStore<string>("operation-test", {
@@ -151,17 +160,14 @@ describe("plugin state worker operations", () => {
       env: state.env,
     }).delete("key");
     expect(current.assertCurrent).toThrow("no longer current");
-    expect((await read()).value.value).toBeUndefined();
+    expect((await read(operation)).value.value).toBeUndefined();
   });
 
   it("expires receipts without querying SQLite or waiting for a timer", async () => {
     const store = open("ttl");
     await store.register("key", "allowed", { ttlMs: 60_000 });
     const operation = store.createOperation<FixtureOperations>([store], handler);
-    const result = await operation.execute(
-      { type: "read", input: { store: 0, key: "key" } },
-      { writeStores: [] },
-    );
+    const result = await read(operation);
     result.assertCurrent();
     const afterExpiry = Date.now() + 120_000;
     vi.spyOn(Date, "now").mockReturnValue(afterExpiry);
@@ -175,9 +181,8 @@ describe("plugin state worker operations", () => {
     symlinkSync(state.stateDir, alias, process.platform === "win32" ? "junction" : "dir");
     const aliasEnv = { ...state.env, OPENCLAW_STATE_DIR: alias };
     const operation = store.createOperation<FixtureOperations>([store], handler);
-    const read = () =>
-      operation.execute({ type: "read", input: { store: 0, key: "key" } }, { writeStores: [] });
-    const original = await read();
+
+    const original = await read(operation);
     original.assertCurrent();
     createPluginStateSyncKeyedStore<string>("operation-test", {
       namespace: "alias-authority",
@@ -186,22 +191,19 @@ describe("plugin state worker operations", () => {
       env: aliasEnv,
     }).register("key", "sync successor");
     expect(original.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
-    const current = await read();
+    const current = await read(operation);
     expect(current.value.value).toBe("sync successor");
     current.assertCurrent();
     const pending = open("alias-authority", { env: aliasEnv }).register("key", "async successor");
     expect(current.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
     await pending;
-    const latest = await read();
+    const latest = await read(operation);
     expect(latest.value.value).toBe("async successor");
     latest.assertCurrent();
   });
 
   it("keeps scalar and receipt reads behind earlier unfinished mutations", async () => {
-    const first = open("fifo-source");
-    const second = open("fifo-destination");
-    await first.register("key", "old");
-    const operation = first.createOperation<FixtureOperations>([first, second], handler);
+    const { second, operation } = await pair("fifo", "old");
     const committed = createDeferredCore();
     const release = createDeferredCore();
     const execute = workerClient.executePluginStateOperationInWorker;
@@ -215,22 +217,16 @@ describe("plugin state worker operations", () => {
         return result;
       },
     );
-    const write = operation.execute(
-      { type: "move", input: { value: "committed" } },
-      { writeStores: [0, 1] },
-    );
+    const write = move(operation, "committed");
     await committed.promise;
     const followingWrite = second.register("key", "following");
     const scalarRead = second.lookup("key");
-    const read = operation.execute(
-      { type: "read", input: { store: 1, key: "key" } },
-      { writeStores: [] },
-    );
+    const reading = read(operation, 1);
     release.resolve();
     await write;
     await followingWrite;
     expect(await scalarRead).toBe("following");
-    const receipt = await read;
+    const receipt = await reading;
     expect(receipt.value.value).toBe("following");
     receipt.assertCurrent();
     const next = second.delete("key");
@@ -258,10 +254,7 @@ describe("plugin state worker operations", () => {
         return result;
       },
     );
-    const receipt = await operation.execute(
-      { type: "move", input: { value: "settled" } },
-      { writeStores: [0, 1] },
-    );
+    const receipt = await move(operation, "settled");
     expect(receipt.value.after).toEqual([undefined, "settled"]);
     expect(receipt.assertCurrent).toThrow("owner closed after commit");
     expect(await second.lookup("key")).toBe("settled");
@@ -272,10 +265,7 @@ describe("plugin state worker operations", () => {
     const store = open("source", { env });
     await store.register("key", "original");
     const operation = store.createOperation<FixtureOperations>([store], handler);
-    const source = await operation.execute(
-      { type: "read", input: { store: 0, key: "key" } },
-      { writeStores: [] },
-    );
+    const source = await read(operation);
     expect(() =>
       store.createOperation<FixtureOperations>([store], handler, {
         assertCurrent() {},
@@ -293,14 +283,7 @@ describe("plugin state worker operations", () => {
     env.OPENCLAW_STATE_DIR = state.path("source-successor");
     await store.register("key", "successor");
     source.assertCurrent();
-    expect(
-      (
-        await operation.execute(
-          { type: "read", input: { store: 0, key: "key" } },
-          { writeStores: [] },
-        )
-      ).value.value,
-    ).toBe("original");
+    expect((await read(operation)).value.value).toBe("original");
     expect(() =>
       store.createOperation<FixtureOperations>([store], handler, {
         assertCurrent() {},
@@ -334,9 +317,9 @@ describe("plugin state worker operations", () => {
             admit(request, grant);
           }, attachment),
       );
-      await expect(
-        operation.execute({ type: "move", input: { value: "forbidden" } }, { writeStores: [0, 1] }),
-      ).rejects.toMatchObject({ code: "PLUGIN_STATE_WRITE_FAILED" });
+      await expect(move(operation, "forbidden")).rejects.toMatchObject({
+        code: "PLUGIN_STATE_WRITE_FAILED",
+      });
       expect(await first.lookup("key")).toBe("allowed");
       expect(await second.lookup("key")).toBeUndefined();
     },
@@ -361,10 +344,7 @@ describe("plugin state worker operations", () => {
   });
 
   it("does not replay a committed command after its acknowledgement is lost", async () => {
-    const first = open("lost-first");
-    const second = open("lost-second");
-    await first.register("key", "original");
-    const operation = first.createOperation<FixtureOperations>([first, second], handler);
+    const { first, second, operation } = await pair("lost");
     const execute = workerClient.executePluginStateOperationInWorker;
     const dispatch = vi
       .spyOn(workerClient, "executePluginStateOperationInWorker")
@@ -372,28 +352,21 @@ describe("plugin state worker operations", () => {
         await execute(...args);
         throw new Error("acknowledgement lost");
       });
-    await expect(
-      operation.execute({ type: "move", input: { value: "committed" } }, { writeStores: [0, 1] }),
-    ).rejects.toThrow("acknowledgement lost");
+    await expect(move(operation, "committed")).rejects.toThrow("acknowledgement lost");
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(await first.lookup("key")).toBeUndefined();
     expect(await second.lookup("key")).toBe("committed");
   });
 
   it("refuses to issue a receipt when only the result acknowledgement arrives", async () => {
-    const first = open("receipt-first");
-    const second = open("receipt-second");
-    await first.register("key", "original");
-    const operation = first.createOperation<FixtureOperations>([first, second], handler);
+    const { first, second, operation } = await pair("receipt");
     const guard = await preparePluginStateRead(first, "key");
     if (!guard) {
       throw new Error("Expected an owner-published state guard");
     }
     vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(() => {});
     try {
-      await expect(
-        operation.execute({ type: "move", input: { value: "committed" } }, { writeStores: [0, 1] }),
-      ).rejects.toThrow("no committed receipt");
+      await expect(move(operation, "committed")).rejects.toThrow("no committed receipt");
       expect(await first.lookup("key")).toBeUndefined();
       expect(await second.lookup("key")).toBe("committed");
       expect(() => guard.read()).toThrow("unavailable");

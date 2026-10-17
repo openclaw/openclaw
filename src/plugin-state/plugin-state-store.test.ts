@@ -76,11 +76,11 @@ describe("plugin-state-store", () => {
   });
 
   const defaults = { namespace: "test", maxEntries: 10 };
-  function syncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}) {
-    return createPluginStateSyncKeyedStore<T>("discord", { ...defaults, ...options });
+  function syncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
+    return createPluginStateSyncKeyedStore<T>(pluginId, { ...defaults, ...options });
   }
-  function openAsyncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}) {
-    return createPluginStateKeyedStore<T>("discord", { ...defaults, ...options });
+  function openAsyncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
+    return createPluginStateKeyedStore<T>(pluginId, { ...defaults, ...options });
   }
   async function expectPluginStateStoreError(
     promise: Promise<unknown>,
@@ -93,7 +93,7 @@ describe("plugin-state-store", () => {
   describe("plugin state keyed store", () => {
     it("round-trips nested VM realm values across store instances", async () => {
       const options = { namespace: "components", maxEntries: 10 };
-      const store = createPluginStateKeyedStore("discord", options);
+      const store = openAsyncStore(options);
       const value: unknown = runInNewContext(
         '({ nested: [{ count: 1, labels: ["retained", null] }] })',
       );
@@ -105,7 +105,7 @@ describe("plugin-state-store", () => {
       }
       closePluginStateDatabase();
 
-      const reopened = createPluginStateSyncKeyedStore("discord", options);
+      const reopened = syncStore(options);
       expect(reopened.lookup("interaction:1")).toEqual({
         nested: [{ count: 1, labels: ["retained", null] }],
       });
@@ -123,30 +123,23 @@ describe("plugin-state-store", () => {
 
     it("rejects new durable rows at capacity without evicting or blocking updates", async () => {
       vi.useFakeTimers();
-      const store = createPluginStateSyncKeyedStore<number>("codex", {
-        namespace: "durable-bindings",
-        maxEntries: 2,
-        overflowPolicy: "reject-new",
-      });
+      const store = syncStore<number>(
+        { namespace: "durable-bindings", maxEntries: 2, overflowPolicy: "reject-new" },
+        "codex",
+      );
       vi.setSystemTime(1000);
       expect(store.registerIfAbsent("first", 1)).toBe(true);
       vi.setSystemTime(2000);
       expect(store.registerIfAbsent("second", 2)).toBe(true);
 
       expect(() => store.register("third", 3)).toThrowError(
-        expect.objectContaining({
-          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-          operation: "register",
-        }),
+        expect.objectContaining({ code: "PLUGIN_STATE_LIMIT_EXCEEDED", operation: "register" }),
       );
       expect(store.registerIfAbsent("first", 99)).toBe(false);
       vi.setSystemTime(3000);
       expect(store.update("first", () => 10)).toBe(true);
       expect(() => store.update("third", () => 3)).toThrowError(
-        expect.objectContaining({
-          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-          operation: "register",
-        }),
+        expect.objectContaining({ code: "PLUGIN_STATE_LIMIT_EXCEEDED", operation: "register" }),
       );
       expect(store.entries()).toEqual([
         expect.objectContaining({ key: "second", value: 2 }),
@@ -185,14 +178,14 @@ describe("plugin-state-store", () => {
     });
 
     it("validates namespaces, keys, options, and JSON values before writes", async () => {
-      expect(() =>
-        createPluginStateKeyedStore("discord", { namespace: "../bad", maxEntries: 10 }),
-      ).toThrow(PluginStateStoreError);
-      expect(() =>
-        createPluginStateKeyedStore("discord", { namespace: "bad-max", maxEntries: 0 }),
-      ).toThrow(PluginStateStoreError);
+      expect(() => openAsyncStore({ namespace: "../bad", maxEntries: 10 })).toThrow(
+        PluginStateStoreError,
+      );
+      expect(() => openAsyncStore({ namespace: "bad-max", maxEntries: 0 })).toThrow(
+        PluginStateStoreError,
+      );
 
-      const store = createPluginStateKeyedStore("discord", { namespace: "valid", maxEntries: 10 });
+      const store = openAsyncStore({ namespace: "valid", maxEntries: 10 });
       const circular: Record<string, unknown> = {};
       circular.self = circular;
       const sparse: unknown[] = [];
@@ -216,9 +209,9 @@ describe("plugin-state-store", () => {
         PluginStateStoreError,
       );
 
-      expect(() =>
-        createPluginStateKeyedStore("discord", { namespace: "a".repeat(129), maxEntries: 10 }),
-      ).toThrow(PluginStateStoreError);
+      expect(() => openAsyncStore({ namespace: "a".repeat(129), maxEntries: 10 })).toThrow(
+        PluginStateStoreError,
+      );
 
       let deep: unknown = { leaf: true };
       for (let i = 0; i < 65; i += 1) {
@@ -264,6 +257,7 @@ describe("plugin-state-store", () => {
     });
 
     it("allows core owners and reserves core-prefixed plugin ids", async () => {
+      const key = "telegram:personal";
       const options = {
         ownerId: "core:channel-intent" as const,
         namespace: "stopped",
@@ -274,26 +268,22 @@ describe("plugin-state-store", () => {
       const workerStore = createCorePluginStateKeyedStoreV2<{ stopped: boolean }>(options, {
         assertCurrent: () => {},
       });
-      expect(store.update("telegram:personal", () => ({ stopped: true }))).toBe(true);
+      expect(store.update(key, () => ({ stopped: true }))).toBe(true);
       closePluginStateDatabase();
-      await expect(asyncStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
+      await expect(asyncStore.lookup(key)).resolves.toEqual({ stopped: true });
+      await expect(asyncStore.update(key, () => ({ stopped: false }))).resolves.toBe(true);
+      expect(store.lookup(key)).toEqual({ stopped: false });
+      const observation = await workerStore.observe(key);
+      store.register(key, { stopped: true });
       await expect(
-        asyncStore.update("telegram:personal", () => ({ stopped: false })),
-      ).resolves.toBe(true);
-      expect(store.lookup("telegram:personal")).toEqual({ stopped: false });
-      const observation = await workerStore.observe("telegram:personal");
-      store.register("telegram:personal", { stopped: true });
-      await expect(
-        workerStore.compareAndApply("telegram:personal", observation.comparison, {
+        workerStore.compareAndApply(key, observation.comparison, {
           operation: "delete",
           action: "delete",
         }),
       ).resolves.toMatchObject({ status: "conflict" });
-      await expect(workerStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
-      store.register("telegram:personal", { stopped: false });
-      await expect(
-        asyncStore.deleteIf("telegram:personal", (current) => !current.stopped),
-      ).resolves.toBe(true);
+      await expect(workerStore.lookup(key)).resolves.toEqual({ stopped: true });
+      store.register(key, { stopped: false });
+      await expect(asyncStore.deleteIf(key, (current) => !current.stopped)).resolves.toBe(true);
       await expect(asyncStore.lookup(" ")).rejects.toThrow(PluginStateStoreError);
       expect(() => createCorePluginStateKeyedStore({ ...options, maxEntries: 11 })).toThrow(
         PluginStateStoreError,
@@ -364,8 +354,8 @@ describe("plugin-state-store", () => {
 
     it("bulk reads exact keys positionally with sync/async parity across reopen", async () => {
       const options = { namespace: "bulk", maxEntries: 20 };
-      const sync = createPluginStateSyncKeyedStore<{ index: number }>("discord", options);
-      const asyncStore = createPluginStateKeyedStore<{ index: number }>("discord", options);
+      const sync = syncStore<{ index: number }>(options);
+      const asyncStore = openAsyncStore<{ index: number }>(options);
       const keys = [
         "ten:10",
         "two:2",
@@ -376,10 +366,7 @@ describe("plugin-state-store", () => {
       ] as const;
       keys.forEach((key, index) => sync.register(key, { index }));
       createPluginStateSyncKeyedStore("telegram", options).register(keys[0], { index: 99 });
-      createPluginStateSyncKeyedStore("discord", { ...options, namespace: "other" }).register(
-        keys[0],
-        { index: 98 },
-      );
+      syncStore({ ...options, namespace: "other" }).register(keys[0], { index: 98 });
       const now = Date.now();
       seedPluginStateEntriesForTests([
         { pluginId: "discord", namespace: "bulk", key: "expired", value: {}, expiresAt: now },
@@ -413,14 +400,8 @@ describe("plugin-state-store", () => {
     });
 
     it("bounds and validates every bulk key before reading, with one native query", async () => {
-      const store = createPluginStateSyncKeyedStore<number>("discord", {
-        namespace: "bulk-bounds",
-        maxEntries: 10,
-      });
-      const asyncStore = createPluginStateKeyedStore<number>("discord", {
-        namespace: "bulk-bounds",
-        maxEntries: 10,
-      });
+      const store = syncStore<number>({ namespace: "bulk-bounds", maxEntries: 10 });
+      const asyncStore = openAsyncStore<number>({ namespace: "bulk-bounds", maxEntries: 10 });
       store.register("key", 1);
       const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       const reads = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
@@ -450,8 +431,7 @@ describe("plugin-state-store", () => {
       const scope = { pluginId: "codex", namespace };
       seedPluginStateEntriesForTests([
         ...Array.from({ length: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES }, (_, index) => ({
-          pluginId: "codex",
-          namespace,
+          ...scope,
           key: `binding:${String(index).padStart(4, "0")}`,
           value: { generation: 1 },
         })),
@@ -592,7 +572,7 @@ describe("plugin-state-store", () => {
     ])(
       "rejects VM realm %s without replacing state or invoking getters",
       async (_shape, expression) => {
-        const store = createPluginStateKeyedStore("discord", { namespace: "realm", maxEntries: 1 });
+        const store = openAsyncStore({ namespace: "realm", maxEntries: 1 });
         await store.register("retained", "original");
         const onAccess = vi.fn();
         const value: unknown = runInNewContext(`({ nested: [${expression}] })`, { onAccess });
