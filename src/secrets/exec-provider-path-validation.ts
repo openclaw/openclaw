@@ -1,7 +1,7 @@
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { inspectPathPermissions, safeStat } from "@openclaw/fs-safe/permissions";
 import { FsSafeError } from "../infra/fs-safe.js";
-import { resolveUserPath } from "../infra/home-dir.js";
+import { resolveUserPathLiteral } from "../infra/home-dir.js";
 
 /** Checks the same command-path trust boundary before validation, writes, and execution. */
 export async function assertSecureExecCommandPath(params: {
@@ -9,8 +9,8 @@ export async function assertSecureExecCommandPath(params: {
   label: string;
   trustedDirs?: string[];
 }): Promise<string> {
-  const commandPath = resolveUserPath(params.command);
-  // resolveUserPath expands and absolutizes nonempty input; the schema rejects relative commands.
+  const commandPath = resolveUserPathLiteral(params.command);
+  // resolveUserPathLiteral expands and absolutizes without trimming path whitespace.
   if (!commandPath) {
     throw new Error(`${params.label} must be an absolute path.`);
   }
@@ -27,7 +27,7 @@ export async function assertSecureExecCommandPath(params: {
   }
 
   if (params.trustedDirs && params.trustedDirs.length > 0) {
-    const trusted = params.trustedDirs.map((entry) => resolveUserPath(entry));
+    const trusted = params.trustedDirs.map((entry) => resolveUserPathLiteral(entry));
     const inTrustedDir = trusted.some((dir) => isPathInside(dir, commandPath));
     if (!inTrustedDir) {
       throw new Error(`${params.label} is outside trustedDirs: ${commandPath}`);

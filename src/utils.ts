@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
 import { resolveConfigDir } from "./infra/config-dir.js";
-import { resolveEffectiveHomeDir, resolveUserPath } from "./infra/home-dir.js";
+import { resolveEffectiveHomeDir, resolveUserPath, resolveUserPathLiteral } from "./infra/home-dir.js";
 import { shortenPathWithHome } from "./infra/home-display.js";
 import "./infra/plain-object.js";
 import { escapeRegExp as escapeRegExpValue } from "./shared/regexp.js";
@@ -12,7 +12,7 @@ export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
 export { pathExists } from "@openclaw/fs-safe/advanced";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
-export { resolveConfigDir, resolveUserPath };
+export { resolveConfigDir, resolveUserPath, resolveUserPathLiteral };
 
 /** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {

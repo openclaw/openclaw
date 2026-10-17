@@ -208,7 +208,9 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
     }
     provider = { source: "env", ...(allowlist.length > 0 ? { allowlist } : {}) };
   } else if (source === "file") {
-    const filePath = opts.providerPath?.trim();
+    // Preserve literal path bytes (including trailing spaces), matching --batch-file /
+    // connect --target-file: trimming silently retargets a neighboring path on disk.
+    const filePath = readNonBlankString(opts.providerPath);
     if (!filePath) {
       throw new Error("--provider-path is required when --provider-source file is used.");
     }
@@ -227,7 +229,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
   } else if (source === "store") {
     provider = { source: "store" };
   } else {
-    const command = opts.providerCommand?.trim();
+    const command = readNonBlankString(opts.providerCommand);
     if (!command) {
       throw new Error("--provider-command is required when --provider-source exec is used.");
     }
@@ -244,7 +246,11 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
         ? { passEnv: normalizeStringEntries(opts.providerPassEnv) }
         : {}),
       ...(opts.providerTrustedDir?.length
-        ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
+        ? {
+            trustedDirs: opts.providerTrustedDir
+              .map((entry) => readNonBlankString(entry))
+              .filter((entry): entry is string => Boolean(entry)),
+          }
         : {}),
     };
   }

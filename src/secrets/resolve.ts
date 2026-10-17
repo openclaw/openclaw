@@ -20,7 +20,7 @@ import {
 } from "../plugins/manifest-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPathLiteral } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { assertSecureExecCommandPath } from "./exec-provider-path-validation.js";
 import { readJsonPointer } from "./json-pointer.js";
@@ -169,7 +169,7 @@ async function readFileProviderPayload(params: {
   const cacheKey = params.providerName;
   const cache = params.cache;
   const read = async () => {
-    const filePath = resolveUserPath(params.providerConfig.path);
+    const filePath = resolveUserPathLiteral(params.providerConfig.path);
     const timeoutMs = normalizePositiveTimerMs(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
