@@ -285,6 +285,7 @@ function createSharedStateWorkerBackend(
           return pluginState.preparePluginStateOperation(command.input);
         });
       }
+      return undefined;
     },
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (commandType.startsWith("cron.")) {
