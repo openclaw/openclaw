@@ -14,8 +14,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { setTtsMaxLength as persistTtsMaxLength } from "../../tts/tts-settings-writes.js";
 import type { TtsProviderAttempt, TtsResult, TtsStatusEntry } from "../../tts/tts-runtime-types.js";
+import { setTtsMaxLength as persistTtsMaxLength } from "../../tts/tts-settings-writes.js";
 
 const ttsMocks = vi.hoisted(() => ({
   getLastTtsAttempt: vi.fn(),
