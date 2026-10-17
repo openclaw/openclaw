@@ -348,8 +348,10 @@ suite.define(() => {
 
     await modelSelect.waitFor(visible);
     const defaultOption = control(activePane, "model-default");
+    await modelSelect.click();
     await attribute(defaultOption, "aria-selected").toBe("true");
     expect(await defaultOption.getAttribute("data-chat-model-option")).toBe("openai/gpt-5.5");
+    await modelSelect.click();
 
     await selectModel(bedrockModel);
     const patchRequest = await gateway.waitForRequest("sessions.patch");
@@ -362,7 +364,9 @@ suite.define(() => {
 
     await switchSession(page, activePane, "agent:main:session-b", "Session B");
     await modelSelect.waitFor(visible);
+    await modelSelect.click();
     await attribute(defaultOption, "aria-selected").toBe("true");
+    await modelSelect.click();
 
     await switchSession(page, activePane, sessionA, "Session A");
 

@@ -253,7 +253,9 @@ suite.define(() => {
           await page.reload();
           await gateway.waitForRequest("chat.startup");
           await expectText(trigger, selectedModel.name);
+          await trigger.click();
           expect(await selected.getAttribute("aria-selected")).toBe("true");
+          await trigger.click();
           await page.screenshot({ path: `${artifactDir}/refreshed-fallback-model.png` });
           const recovered = {
             ...session,

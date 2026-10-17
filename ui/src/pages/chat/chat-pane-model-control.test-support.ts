@@ -13,19 +13,19 @@ export function renderPaneModelControl(
   container: HTMLElement,
   openModelPicker = false,
 ) {
-  if (openModelPicker) {
-    props = { ...props, model: { ...props.model, modelPickerOpen: true } };
-  }
+  const renderProps = openModelPicker
+    ? { ...props, model: { ...props.model, modelPickerOpen: true } }
+    : props;
   const mounted = modelControlViews.get(container);
   if (mounted) {
-    mounted.update(props);
+    mounted.update(renderProps);
     return;
   }
   if (!container.isConnected) {
     document.body.append(container);
     onTestFinished(() => container.remove());
   }
-  modelControlViews.set(container, mountSolid(ChatPaneModelControl, props, container));
+  modelControlViews.set(container, mountSolid(ChatPaneModelControl, renderProps, container));
   onTestFinished(() => {
     modelControlViews.delete(container);
   });

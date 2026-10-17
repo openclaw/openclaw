@@ -217,7 +217,7 @@ suite.define(() => {
         ).toBe("sample-cloud");
         await page.keyboard.press("Escape");
         await root.locator('.new-session-page__composer [data-chat-model-select="true"]').click();
-        expect(await root.locator("[data-chat-model-option]").count()).toBe(2);
+        await expect.poll(() => root.locator("[data-chat-model-option]").count()).toBe(2);
         await selectChatModelOption(root.locator('[data-chat-model-option="fixture/one"]'));
         expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
         await root.locator("#new-session-where-trigger").click();
@@ -304,12 +304,16 @@ suite.define(() => {
           const rows = root.locator("[data-chat-model-option]");
           const preference = { model: "fixture/three" };
           await page.goto(`${suite.server.baseUrl}new?agent=main`);
+          await trigger.click();
           await expect.poll(() => rows.count()).toBe(2);
+          await trigger.click();
           const reads = (await gateway.getRequests("models.list")).length;
           await navigateInApp(page, "agents-home");
           await expect.poll(() => root.count()).toBe(0);
           await navigateInApp(page, "new-session", "?agent=main");
+          await trigger.click();
           await expect.poll(() => rows.count()).toBe(2);
+          await trigger.click();
           expect(await gateway.getRequests("models.list")).toHaveLength(reads);
           await navigateInApp(page, "agents-home");
           await expect.poll(() => root.count()).toBe(0);
