@@ -85,35 +85,23 @@ describe("session descriptor reads", () => {
     expect(h.read).toHaveBeenCalledTimes(10);
   });
 
-  it("expires completed descriptors while continuing to join pending reads", async () => {
+  it("reuses a descriptor across unchanged row observations without a time limit", async () => {
     const h = harness();
-    await h.sessions.describe({ key });
-    await vi.advanceTimersByTimeAsync(30_000);
-    const pending = createDeferred<{ session: GatewaySessionRow }>();
-    h.read.mockReturnValueOnce(pending.promise);
-    const expired = h.sessions.describe({ key });
-    await vi.advanceTimersByTimeAsync(30_000);
-    const joined = h.sessions.describe({ key });
-    expect(h.read).toHaveBeenCalledTimes(2);
-    pending.resolve({ session: initial });
-    expect(await joined).toEqual(await expired);
-  });
-
-  it.each([{ snapshotAt: 2 }, { lifecycleRevision: "2" }])(
-    "invalidates a descriptor when its observed clock changes: %j",
-    async (clock) => {
-      const h = harness();
-      const first = { ...initial, snapshotAt: 1, lifecycleRevision: "1" };
-      h.setRow(first);
-      await h.sessions.refresh({ agentId: "main" });
+    const first = { ...initial, snapshotAt: 1 };
+    h.setRow(first);
+    await h.sessions.refresh({ agentId: "main" });
+    const described = await h.sessions.describe({ key });
+    for (let step = 1; step <= 12; step += 1) {
+      await vi.advanceTimersByTimeAsync(31_000);
+      const observed = { ...first, snapshotAt: step + 1 };
+      h.setRow(observed);
+      await h.sessions.refresh({ agentId: "main", force: true });
+      expect(h.sessions.state.result?.sessions[0]?.snapshotAt).toBe(step + 1);
       await h.sessions.describe({ key });
-      const next = { ...first, ...clock, label: "Updated without a recency change" };
-      h.setRow(next);
-      h.sessions.captureReconcile()(next);
-      expect(await h.sessions.describe({ key })).toEqual({ session: next });
-      expect(h.read).toHaveBeenCalledTimes(2);
-    },
-  );
+    }
+    expect(h.read).toHaveBeenCalledTimes(1);
+    expect(await h.sessions.describe({ key })).toEqual(described);
+  });
 
   it.each([
     { cause: "observed revision", phase: "completed" },

@@ -22,13 +22,11 @@ type Read = {
   scope: SessionConnectionScope;
   promise: Promise<Result>;
   result?: Result;
-  completedAt?: number;
   issuedRow?: GatewaySessionRow;
   reusable: boolean;
 };
 
 const MAX_DESCRIBED_SESSIONS = 128;
-const DESCRIBE_TTL_MS = 30_000;
 
 /** Descriptor completeness belongs to the read owner, not to partial roster snapshots. */
 export function createSessionDescribeReads(host: {
@@ -59,10 +57,7 @@ export function createSessionDescribeReads(host: {
       Boolean(
         described &&
         held.sessionId === described.sessionId &&
-        (held.updatedAt ?? 0) <= (described.updatedAt ?? 0) &&
-        (held.snapshotAt ?? 0) <= (described.snapshotAt ?? 0) &&
-        (held.lifecycleRevision === undefined ||
-          held.lifecycleRevision === described.lifecycleRevision),
+        (held.updatedAt ?? 0) <= (described.updatedAt ?? 0),
       )
     );
   };
@@ -89,12 +84,7 @@ export function createSessionDescribeReads(host: {
       options.timeoutMs,
     ]);
     const read = reads.get(key);
-    if (
-      read &&
-      current(read) &&
-      !options.refresh &&
-      (!read.result || (host.canReuse() && Date.now() - (read.completedAt ?? 0) < DESCRIBE_TTL_MS))
-    ) {
+    if (read && current(read) && !options.refresh && (!read.result || host.canReuse())) {
       return read.promise;
     }
     reads.delete(key);
@@ -117,7 +107,6 @@ export function createSessionDescribeReads(host: {
               };
         if (reads.get(key) === pending && host.connection.isCurrent(scope)) {
           pending.result = result;
-          pending.completedAt = Date.now();
           if (!pending.reusable || !host.canReuse() || !current(pending)) {
             reads.delete(key);
           }

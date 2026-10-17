@@ -453,9 +453,8 @@ only aggregate swarm counts; it is not the source for member details. A complete
 nested row updates the roster without another `sessions.describe`. Summary-only
 rows and unknown ancestry still require detail reads. Explicit placement and
 goal recovery reads also remain fresh because they validate current state before
-continuing an operation. Shared descriptor reads coalesce within a connection,
-expire after 30 seconds, and retire when newer row clocks or lifecycle revisions
-are observed.
+continuing an operation. Shared descriptor reads retain their existing
+connection-scoped reuse, event invalidation, and explicit refresh behavior.
 
 ## Node helper methods
 
