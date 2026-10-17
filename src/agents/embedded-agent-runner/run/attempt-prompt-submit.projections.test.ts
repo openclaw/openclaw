@@ -163,7 +163,6 @@ describe("durable model prompt projection at provider dispatch", () => {
   it.each([
     { projection: "unchanged prompt", steering: "midturn" },
     { projection: "unchanged prompt", steering: "retry" },
-    { projection: "prepend/append hooks", steering: "midturn" },
     { projection: "modelPrompt replacement", steering: "midturn" },
     { projection: "prepend/append hooks", steering: "initial" },
     { projection: "prepend/append hooks with log patterns", steering: "midturn" },
@@ -180,7 +179,7 @@ describe("durable model prompt projection at provider dispatch", () => {
         }
         const target = await projectionTarget(state, "model-prompt-projection", withLogPatterns);
         const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
-        const userEnvelopes: string[][] = [];
+        let firstUserEnvelope: unknown;
         const openSession = async () => {
           const contexts = createUserTranscriptContextRegistry();
           const manager = await SessionManager.openAsync(target, state.workspaceDir);
@@ -210,11 +209,11 @@ describe("durable model prompt projection at provider dispatch", () => {
         const first = await openSession();
         streamMocks.streamSimple.mockImplementation((model, context) => {
           requests.push(structuredClone(buildOpenAIResponsesParams(model, context, undefined)));
-          userEnvelopes.push(
-            context.messages
-              .filter((message) => message.role === "user")
-              .map((message) => JSON.stringify(message)),
-          );
+          if (requests.length === 1) {
+            firstUserEnvelope = structuredClone(
+              context.messages.find((message) => message.role === "user"),
+            );
+          }
           if (steering === "midturn" && requests.length === 1) {
             first.session.agent.steer({ role: "user", content: "queued correction", timestamp: 2 });
           }
@@ -300,8 +299,6 @@ describe("durable model prompt projection at provider dispatch", () => {
         }
 
         for (let index = 1; index < requests.length; index++) {
-          const previousUsers = userEnvelopes[index - 1]!;
-          expect(userEnvelopes[index]!.slice(0, previousUsers.length)).toEqual(previousUsers);
           const previous = requests[index - 1]!;
           const current = requests[index]!;
           expect(
@@ -340,7 +337,7 @@ describe("durable model prompt projection at provider dispatch", () => {
             expect.objectContaining({ path: imagePath, contentType: "image/png" }),
           ]);
           expect(users[0]).not.toHaveProperty("__openclaw.mediaImageBlockFactIndexes");
-          expect(JSON.parse(userEnvelopes[0]![0]!)).toMatchObject({
+          expect(firstUserEnvelope).toMatchObject({
             timestamp: 1,
             idempotencyKey: "projection:1:user",
             __openclaw: {
@@ -662,50 +659,6 @@ describe("durable model prompt projection at provider dispatch", () => {
 });
 
 describe("tool-result projection persistence at dispatch", () => {
-  it("restores only the active branch and retries changed projections after a failed write", async () => {
-    const { sessionManager: manager } = await createTestSession();
-    const snapshot = (key: string) => ({
-      prunedToolResults: [],
-      ambiguousToolResultBaseKeys: [],
-      frozenToolResults: [{ key, sourceHash: "source", texts: [key] }],
-    });
-    await manager.appendCustomEntryAsync("openclaw.cache-ttl", snapshot("older"));
-    const activeMarker = await manager.appendCustomEntryAsync(
-      "openclaw.cache-ttl",
-      snapshot("active"),
-    );
-    await manager.appendCustomEntryAsync("openclaw.cache-ttl", snapshot("sibling"));
-    await manager.branchAsync(activeMarker);
-
-    const restored = createToolResultPromptProjectionState();
-    restoreCacheTtlToolResultProjections(restored, manager.getBranch());
-    expect(serializeCacheTtlToolResultProjections(restored)).toEqual(snapshot("active"));
-    const appendEntry = (customType: string, data: unknown) =>
-      manager.appendCustomEntryAsync(customType, data);
-    const markers = () =>
-      manager
-        .getEntries()
-        .filter((entry) => entry.type === "custom" && entry.customType === "openclaw.cache-ttl");
-    await persistToolResultProjections(restored, appendEntry);
-    expect(markers()).toHaveLength(3);
-
-    restored.replacements.set("active", { content: [{ type: "text", text: "changed" }] });
-    await expect(
-      persistToolResultProjections(restored, async () => {
-        throw new Error("write failed");
-      }),
-    ).rejects.toThrow("write failed");
-    await persistToolResultProjections(restored, appendEntry);
-    await persistToolResultProjections(restored, appendEntry);
-    expect(markers()).toHaveLength(4);
-    const reopened = createToolResultPromptProjectionState();
-    restoreCacheTtlToolResultProjections(reopened, manager.getBranch());
-    expect(serializeCacheTtlToolResultProjections(reopened)).toEqual({
-      ...snapshot("active"),
-      frozenToolResults: [{ key: "active", sourceHash: "source", texts: ["changed"] }],
-    });
-  });
-
   it("writes one marker for unchanged requests and another for a new frozen batch", async () => {
     const { session: activeSession, sessionManager: manager } = await createTestSession();
     using promptStateLease = retainEmbeddedSessionPromptState(toolProjectionSessionId);

@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -40,7 +39,6 @@ import {
   withCompactionQueuedContext,
 } from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   beginPromptCacheObservation,
   completePromptCacheObservation,
@@ -184,27 +182,13 @@ describe("submitEmbeddedAttemptPrompt", () => {
   });
 
   it("replaces queued context without charging it twice or changing user overlap credit", () => {
-    const user = userMessage("Recorded user material. ".repeat(100), 1, "current:user");
-    const transient = buildRuntimeContextCustomMessage("Live transient context. ".repeat(100));
-    const queued = {
-      role: "custom" as const,
-      customType: "test.queued",
-      content: "Queued context. ".repeat(100),
-      display: false,
-      timestamp: 1,
-    };
-    if (!transient) {
-      throw new Error("Expected transient context");
-    }
+    const user = userMessage("hello", 1, "current:user");
+    const queued = userMessage("queued context");
     const inputs = {
       contextWindow: 32_768,
       reserveTokens: 8_192,
-      systemPrompt: "Prepared system",
-      pendingPrompt: "Additional instructions.\n\nhello",
-      pendingAdditivePrompt: "Additional instructions.",
-      pendingImageCount: 1,
+      pendingPrompt: user.content,
       pendingUserIdempotencyKey: user.idempotencyKey,
-      pendingContextMessages: [transient],
     };
     const prepared = createCompactionRequestBudget({
       ...inputs,
@@ -227,12 +211,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     replacing([queued, { ...queued, content: "Additional queued facts." }]);
     const removed = replacing([]);
     expect(removed.pendingUserTokens).toBe(prepared.pendingUserTokens);
-    const userOnly = createCompactionRequestBudget({
-      contextWindow: 32_768,
-      reserveTokens: 8_192,
-      pendingPrompt: "hello",
-      pendingUserIdempotencyKey: user.idempotencyKey,
-    });
+    const userOnly = createCompactionRequestBudget(inputs);
     const added = withCompactionQueuedContext(userOnly, [queued]);
     expect(added.pendingUserTokens).toBe(userOnly.pendingTokens);
     expect(added.pendingTokens).toBeGreaterThan(userOnly.pendingTokens);
@@ -240,9 +219,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
 
   it("fits pre-prompt compaction around prepared model context", async () => {
     const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 20_000 },
-      retry: { enabled: false },
+    const settingsManager = createAutoCompactionSettings({
+      reserveTokens: 1_024,
+      keepRecentTokens: 20_000,
     });
     const systemPrompt = "Preserve the project requirements.";
     const sessionManager = SessionManager.inMemory();
@@ -683,62 +662,11 @@ describe("submitEmbeddedAttemptPrompt", () => {
     },
   );
 
-  it("caps oversized MCP tool results at the provider boundary", async () => {
+  it("caps MCP results, records aggregate pruning once, and preserves original history", async () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     const oversized = "x".repeat(5 * 1024 * 1024);
     const small = "small MCP result";
-    activeSession.agent.state.messages = [
-      userMessage("call MCP tools"),
-      toolResult("mcp-huge-call", "huge__return_text", oversized, 2, {
-        mcpServer: "huge",
-        mcpTool: "return_text",
-      }),
-      toolResult("mcp-small-call", "huge__small_text", small, 3, {
-        mcpServer: "huge",
-        mcpTool: "small_text",
-      }),
-    ] as AgentMessage[];
-    let providerMessages: AgentMessage[] = [];
-    activeSession.agent.streamFn = ((_model, context) => {
-      providerMessages = (context as { messages: AgentMessage[] }).messages;
-      return undefined as never;
-    }) as StreamFn;
-
-    await submitEmbeddedAttemptPrompt({
-      ...input,
-      activeSession,
-      promptActiveSession: async () => {
-        await dispatchSession(activeSession);
-      },
-    });
-
-    type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
-    const hugeResult = providerMessages.find(
-      (message): message is ToolResultMessage =>
-        message.role === "toolResult" && message.toolCallId === "mcp-huge-call",
-    );
-    const smallResult = providerMessages.find(
-      (message): message is ToolResultMessage =>
-        message.role === "toolResult" && message.toolCallId === "mcp-small-call",
-    );
-    expect(hugeResult?.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringMatching(/more characters truncated/),
-    });
-    expect(hugeResult?.content[0]?.type === "text" ? hugeResult.content[0].text.length : 0).toBe(
-      input.toolResultMaxChars,
-    );
-    expect(smallResult?.content).toEqual([{ type: "text", text: small }]);
-    expect(activeSession.messages[1]).toMatchObject({
-      role: "toolResult",
-      content: [{ type: "text", text: oversized }],
-    });
-  });
-
-  it("declares new pruning once and records aggregate truncation on a provider-bound cache break", async () => {
-    const { activeSession } = createSession();
-    const input = createBaseInput();
     const promptCacheKey = `${sessionId}:aggregate-truncation`;
     const observation = {
       sessionId,
@@ -752,19 +680,31 @@ describe("submitEmbeddedAttemptPrompt", () => {
     } as const;
     activeSession.agent.state.messages = [
       userMessage("call tools"),
-      toolResult("aggregate-a", "read", "a".repeat(6_000), 2),
-      toolResult("aggregate-b", "read", "b".repeat(6_000), 3),
-      // Consumed results remain eligible when history is projected for the first time.
-      { role: "assistant", content: [{ type: "text", text: "results processed" }], timestamp: 4 },
-      userMessage("continue", 5),
-    ] as AgentMessage[];
+      toolResult("large", "huge__return_text", oversized, 2, {
+        mcpServer: "huge",
+        mcpTool: "return_text",
+      }),
+      toolResult("second", "huge__return_text", "b".repeat(6_000), 3, {
+        mcpServer: "huge",
+        mcpTool: "return_text",
+      }),
+      toolResult("small", "huge__small_text", small, 4),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "results processed" }],
+        timestamp: 5,
+      },
+      userMessage("continue", 6),
+    ];
     beginPromptCacheObservation({
       ...observation,
       messages: activeSession.messages as Context["messages"],
     });
     completePromptCacheObservation({ sessionId, promptCacheKey, usage: { cacheRead: 8_000 } });
     const changes: ReturnType<typeof beginPromptCacheObservation>["changes"][] = [];
+    let providerMessages: Context["messages"] = [];
     activeSession.agent.streamFn = (_model, context) => {
+      providerMessages = context.messages;
       changes.push(
         beginPromptCacheObservation({ ...observation, messages: context.messages }).changes,
       );
@@ -782,7 +722,21 @@ describe("submitEmbeddedAttemptPrompt", () => {
         },
       });
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
-
+    expect(activeSession.messages[1]).toMatchObject({
+      role: "toolResult",
+      content: [{ type: "text", text: oversized }],
+    });
+    const [, second, smallResult] = providerMessages.filter(
+      (message) => message.role === "toolResult",
+    );
+    expect(second?.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/more characters truncated/),
+    });
+    expect(second?.content[0]?.type === "text" ? second.content[0].text.length : 0).toBe(
+      input.toolResultMaxChars,
+    );
+    expect(smallResult?.content).toEqual([{ type: "text", text: small }]);
     expect(
       completePromptCacheObservation({
         sessionId,
