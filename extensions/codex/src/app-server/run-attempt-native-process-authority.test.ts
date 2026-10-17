@@ -19,6 +19,7 @@ import {
 import { buildCodexNativeHookRelayId } from "./native-hook-relay.js";
 import {
   flattenCodexDynamicToolFunctions,
+  type CodexServerNotification,
   type CodexThreadStartParams,
   type CodexTurnStartParams,
 } from "./protocol.js";
@@ -55,6 +56,14 @@ import {
 
 setupRunAttemptTestHooks();
 afterEach(() => clearRuntimeConfigSnapshot());
+const sandboxOptions = {
+  pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
+};
+type Harness = ReturnType<typeof createStartedThreadHarness>;
+const requestsFor = (harness: Harness, ...methods: string[]) =>
+  harness.requests.filter(({ method }) => methods.includes(method));
+const startupRequests = (harness: Harness) =>
+  requestsFor(harness, "thread/start", "thread/resume", "turn/start");
 
 type Actor = "maintainer" | "guest";
 type Terminal = {
@@ -200,12 +209,9 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         expect(input.turnId).toBe(turns.at(-1));
         // Codex acknowledges the interrupt before publishing its matching terminal.
         void nextTurn().then(() =>
-          harness.notify({
-            method: "turn/completed",
-            params: {
-              threadId,
-              turn: { id: String(input.turnId), status: "interrupted", items: [] },
-            },
+          notify("turn/completed", {
+            threadId,
+            turn: { id: String(input.turnId), status: "interrupted", items: [] },
           }),
         );
         return {};
@@ -232,6 +238,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     },
     { persistedThreads: [threadId] },
   );
+  const notify = (method: string, params: CodexServerNotification["params"]) =>
+    harness.notify({ method, params });
 
   const begin = async (
     actor: Actor,
@@ -268,10 +276,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     setCodexTestToolFactory(params, () => []);
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
-      bindingStore,
-    });
+    const run = runCodexAppServerAttempt(params, { ...sandboxOptions, bindingStore });
     activeRuns.push({ controller, run });
     await Promise.race([
       admitted.promise,
@@ -287,38 +292,29 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     const commandThreadId = nativeChild?.threadId ?? threadId;
     const commandTurnId = nativeChild?.turnId ?? turnId;
     if (nativeChild) {
-      await harness.notify({
-        method: "thread/started",
-        params: {
-          thread: {
-            id: nativeChild.threadId,
-            parentThreadId: threadId,
-            source: { subAgent: { thread_spawn: { parent_thread_id: threadId, depth: 1 } } },
-          },
+      await notify("thread/started", {
+        thread: {
+          id: nativeChild.threadId,
+          parentThreadId: threadId,
+          source: { subAgent: { thread_spawn: { parent_thread_id: threadId, depth: 1 } } },
         },
       });
       // The registered monitor must claim the child from this exact accepted parent turn.
-      await harness.notify({
-        method: "item/completed",
-        params: {
-          threadId,
-          turnId,
-          item: {
-            id: `${actor}-spawn`,
-            type: "collabAgentToolCall",
-            tool: "spawnAgent",
-            status: "completed",
-            senderThreadId: threadId,
-            receiverThreadIds: [nativeChild.threadId],
-          },
+      await notify("item/completed", {
+        threadId,
+        turnId,
+        item: {
+          id: `${actor}-spawn`,
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "completed",
+          senderThreadId: threadId,
+          receiverThreadIds: [nativeChild.threadId],
         },
       });
-      await harness.notify({
-        method: "turn/started",
-        params: {
-          threadId: nativeChild.threadId,
-          turn: { id: nativeChild.turnId, status: "inProgress", items: [], error: null },
-        },
+      await notify("turn/started", {
+        threadId: nativeChild.threadId,
+        turn: { id: nativeChild.turnId, status: "inProgress", items: [], error: null },
       });
     }
     const server = await sandboxExecServerRegistry.servers.get(sandbox.runtimeId);
@@ -380,35 +376,22 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       commandActions: [],
       aggregatedOutput: "",
     };
-    void child.closed.then(async () => {
-      terminal.alive = false;
-      await harness.notify({
-        method: "item/completed",
-        params: {
-          threadId: commandThreadId,
-          turnId: commandTurnId,
-          item: {
-            ...commandItem,
-            status: "completed",
-            exitCode: 0,
-            durationMs: 1,
-          },
-        },
-      });
-    });
-    await harness.notify({
-      method: "item/started",
-      params: {
+    const notifyCommand = (finished: boolean) =>
+      notify(finished ? "item/completed" : "item/started", {
         threadId: commandThreadId,
         turnId: commandTurnId,
         item: {
           ...commandItem,
-          status: "inProgress",
-          exitCode: null,
-          durationMs: null,
+          status: finished ? "completed" : "inProgress",
+          exitCode: finished ? 0 : null,
+          durationMs: finished ? 1 : null,
         },
-      },
+      });
+    void child.closed.then(async () => {
+      terminal.alive = false;
+      await notifyCommand(true);
     });
+    await notifyCommand(false);
     return {
       terminal,
       turnId,
@@ -423,22 +406,19 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       run,
       complete: async (answer?: string) => {
         if (answer) {
-          await harness.notify({
-            method: "turn/completed",
-            params: {
-              threadId,
-              turn: {
-                id: turnId,
-                status: "completed",
-                items: [
-                  {
-                    id: `${actor}-answer`,
-                    type: "agentMessage",
-                    phase: "final_answer",
-                    text: answer,
-                  },
-                ],
-              },
+          await notify("turn/completed", {
+            threadId,
+            turn: {
+              id: turnId,
+              status: "completed",
+              items: [
+                {
+                  id: `${actor}-answer`,
+                  type: "agentMessage",
+                  phase: "final_answer",
+                  text: answer,
+                },
+              ],
             },
           });
         } else {
@@ -487,7 +467,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         requireProcessAuthority: true,
       });
     },
-    dispose: async () => {
+    [Symbol.asyncDispose]: async () => {
       const errors: unknown[] = [];
       for (const cleanup of [
         async () => {
@@ -560,27 +540,23 @@ function createSandboxPolicyRun() {
 
 describe("native background process source authority", () => {
   it("reports failed real-child settlement and preserves its command custody", async () => {
-    const f = await fixture({ failSettlement: true });
-    try {
-      const guest = await f.begin("guest");
-      await f.retainSecondConsumer();
-      await guest.complete();
-      guest.revoke();
-      await expect(guest.terminal.settled).rejects.toThrow("fixture backend settlement failed");
-      await f.backgroundCleanupFailed;
-      expect(f.events).toContainEqual(
-        expect.objectContaining({
-          stream: "codex_app_server.lifecycle",
-          data: expect.objectContaining({ phase: "background_cleanup_failed" }),
-        }),
-      );
-      expect(guest.terminal.alive).toBe(false);
-      await expect(f.begin("guest", undefined, guest.terminal)).rejects.toThrow(
-        "unsettled native command identity",
-      );
-    } finally {
-      await f.dispose();
-    }
+    await using f = await fixture({ failSettlement: true });
+    const guest = await f.begin("guest");
+    await f.retainSecondConsumer();
+    await guest.complete();
+    guest.revoke();
+    await expect(guest.terminal.settled).rejects.toThrow("fixture backend settlement failed");
+    await f.backgroundCleanupFailed;
+    expect(f.events).toContainEqual(
+      expect.objectContaining({
+        stream: "codex_app_server.lifecycle",
+        data: expect.objectContaining({ phase: "background_cleanup_failed" }),
+      }),
+    );
+    expect(guest.terminal.alive).toBe(false);
+    await expect(f.begin("guest", undefined, guest.terminal)).rejects.toThrow(
+      "unsettled native command identity",
+    );
   });
 
   it("sole sandbox lease normal completion settles its task-owned process", async () => {
@@ -598,161 +574,137 @@ describe("native background process source authority", () => {
   });
 
   it("parent cancellation settles its claimed native child's process and preserves independent maintainer work", async () => {
-    const f = await fixture();
-    try {
-      const staff = await f.begin("maintainer");
-      await f.retainSecondConsumer();
-      await staff.complete();
-      expect(staff.terminal.alive).toBe(true);
-      const guest = await f.begin("guest", {
-        threadId: "guest-native-child",
-        turnId: "guest-native-child-turn",
-      });
-      expect(guest.terminal.alive).toBe(true);
-      guest.controller.abort(new Error("Synthetic parent foreground cancelled"));
-      expect(readAttemptTerminal(await guest.run).aborted).toBe(true);
-      expect(guest.sourceSignal.aborted).toBe(false);
-      expect(f.harness.requests).toContainEqual({
-        method: "turn/interrupt",
-        params: { threadId: f.threadId, turnId: guest.turnId },
-      });
-      expect(guest.terminal.alive).toBe(false);
-      await guest.terminal.settled;
-      expect(f.terminated).toEqual([]);
-      expect(staff.terminal.alive).toBe(true);
-    } finally {
-      await f.dispose();
-    }
+    await using f = await fixture();
+    const staff = await f.begin("maintainer");
+    await f.retainSecondConsumer();
+    await staff.complete();
+    expect(staff.terminal.alive).toBe(true);
+    const guest = await f.begin("guest", {
+      threadId: "guest-native-child",
+      turnId: "guest-native-child-turn",
+    });
+    expect(guest.terminal.alive).toBe(true);
+    guest.controller.abort(new Error("Synthetic parent foreground cancelled"));
+    expect(readAttemptTerminal(await guest.run).aborted).toBe(true);
+    expect(guest.sourceSignal.aborted).toBe(false);
+    expect(f.harness.requests).toContainEqual({
+      method: "turn/interrupt",
+      params: { threadId: f.threadId, turnId: guest.turnId },
+    });
+    expect(guest.terminal.alive).toBe(false);
+    await guest.terminal.settled;
+    expect(f.terminated).toEqual([]);
+    expect(staff.terminal.alive).toBe(true);
   });
 
   it("preserves the earlier maintainer terminal when the later guest source ends on the reused thread", async () => {
-    const f = await fixture();
-    try {
-      const staff = await f.begin("maintainer");
-      await f.retainSecondConsumer();
-      const completed = await staff.complete("Retained the running process for the next turn.");
-      expect(readAttemptTerminal(completed).aborted).toBe(false);
-      expect(completed.messagesSnapshot).toContainEqual(
-        expect.objectContaining({
-          role: "toolResult",
-          toolCallId: staff.terminal.itemId,
-          isError: false,
-          content: [{ type: "text", text: expect.stringContaining("still running") }],
-          __openclaw: expect.objectContaining({
-            toolOutput: expect.objectContaining({ outcome: "unknown" }),
-          }),
+    await using f = await fixture();
+    const staff = await f.begin("maintainer");
+    await f.retainSecondConsumer();
+    const completed = await staff.complete("Retained the running process for the next turn.");
+    expect(readAttemptTerminal(completed).aborted).toBe(false);
+    expect(completed.messagesSnapshot).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: staff.terminal.itemId,
+        isError: false,
+        content: [{ type: "text", text: expect.stringContaining("still running") }],
+        __openclaw: expect.objectContaining({
+          toolOutput: expect.objectContaining({ outcome: "unknown" }),
         }),
-      );
-      expect(staff.terminal.alive).toBe(true);
-      expect(f.terminated).toEqual([]);
-      const guest = await f.begin("guest");
-      expect((await readCodexAppServerBinding(f.sessionFile))?.threadId).toBe(f.threadId);
-      expect(f.harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-      expect(staff.terminal.alive).toBe(true);
-      guest.revoke();
-      await expect(guest.run).rejects.toBe(guest.sourceSignal.reason);
-      expect(f.harness.requests).toContainEqual({
-        method: "turn/interrupt",
-        params: { threadId: f.threadId, turnId: guest.turnId },
-      });
-      await guest.terminal.settled;
-      expect(guest.terminal.alive).toBe(false);
-      expect(f.terminated).toEqual([]);
-      expect(staff.terminal.alive).toBe(true);
-    } finally {
-      await f.dispose();
-    }
+      }),
+    );
+    expect(staff.terminal.alive).toBe(true);
+    expect(f.terminated).toEqual([]);
+    const guest = await f.begin("guest");
+    expect((await readCodexAppServerBinding(f.sessionFile))?.threadId).toBe(f.threadId);
+    expect(requestsFor(f.harness, "thread/start")).toHaveLength(1);
+    expect(staff.terminal.alive).toBe(true);
+    guest.revoke();
+    await expect(guest.run).rejects.toBe(guest.sourceSignal.reason);
+    expect(f.harness.requests).toContainEqual({
+      method: "turn/interrupt",
+      params: { threadId: f.threadId, turnId: guest.turnId },
+    });
+    await guest.terminal.settled;
+    expect(guest.terminal.alive).toBe(false);
+    expect(f.terminated).toEqual([]);
+    expect(staff.terminal.alive).toBe(true);
   });
   it.each(["active", "settled", "peer", "peer replacement"] as const)(
     "rechecks %s background custody at subscription retention",
     async (custody) => {
-      const f = await fixture();
-      try {
-        const peer = custody.startsWith("peer") ? await f.begin("guest") : undefined;
-        if (peer) {
-          await f.retainSecondConsumer();
-          await peer.complete();
-        }
-        const owner = await f.begin("maintainer");
-        const lease = f.armRetentionLeaseWait();
-        const completion = owner.complete();
-        await lease.entered.promise;
-        await f.rotateSessionLineage();
-        if (custody !== "active") {
-          await f.settleBackgroundProcess(owner.terminal);
-          expect(owner.terminal.alive).toBe(false);
-        } else {
-          expect(owner.terminal.alive).toBe(true);
-        }
-        lease.release.resolve();
-        // Existing processes keep cleanup custody, never reusable session authority.
-        await expect(completion).rejects.toMatchObject({
-          name: "AgentHarnessSessionSupersededError",
+      await using f = await fixture();
+      const peer = custody.startsWith("peer") ? await f.begin("guest") : undefined;
+      if (peer) {
+        await f.retainSecondConsumer();
+        await peer.complete();
+      }
+      const owner = await f.begin("maintainer");
+      const lease = f.armRetentionLeaseWait();
+      const completion = owner.complete();
+      await lease.entered.promise;
+      await f.rotateSessionLineage();
+      if (custody !== "active") {
+        await f.settleBackgroundProcess(owner.terminal);
+        expect(owner.terminal.alive).toBe(false);
+      } else {
+        expect(owner.terminal.alive).toBe(true);
+      }
+      lease.release.resolve();
+      // Existing processes keep cleanup custody, never reusable session authority.
+      await expect(completion).rejects.toMatchObject({
+        name: "AgentHarnessSessionSupersededError",
+      });
+      expect(hasCodexAppServerLiveThread(f.harness.client, f.threadId)).toBe(Boolean(peer));
+      await expect(
+        consumeCodexAppServerLiveThread(f.harness.client, f.threadId),
+      ).resolves.toBeUndefined();
+      if (peer) {
+        expect(peer.terminal.alive).toBe(true);
+        expect(f.harness.client.getCloseError()).toBeUndefined();
+        expect(requestsFor(f.harness, "thread/unsubscribe")).toEqual([]);
+        const inventory = await f.harness.client.request("thread/backgroundTerminals/list", {
+          threadId: f.threadId,
         });
-        expect(hasCodexAppServerLiveThread(f.harness.client, f.threadId)).toBe(Boolean(peer));
-        await expect(
-          consumeCodexAppServerLiveThread(f.harness.client, f.threadId),
-        ).resolves.toBeUndefined();
-        if (peer) {
-          expect(peer.terminal.alive).toBe(true);
-          expect(f.harness.client.getCloseError()).toBeUndefined();
-          expect(
-            f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
-          ).toEqual([]);
-          const inventory = await f.harness.client.request("thread/backgroundTerminals/list", {
-            threadId: f.threadId,
+        expect(inventory.data).toEqual([
+          expect.objectContaining({ processId: peer.terminal.processId }),
+        ]);
+        if (custody === "peer replacement") {
+          // A cleanup-only physical claim is still protected native work. A
+          // new source must not change its configuration before peer settlement.
+          await expect(f.begin("maintainer")).rejects.toMatchObject({
+            name: "CodexAdoptedThreadActiveError",
           });
-          expect(inventory.data).toEqual([
-            expect.objectContaining({ processId: peer.terminal.processId }),
-          ]);
-          if (custody === "peer replacement") {
-            // A cleanup-only physical claim is still protected native work. A
-            // new source must not change its configuration before peer settlement.
-            await expect(f.begin("maintainer")).rejects.toMatchObject({
-              name: "CodexAdoptedThreadActiveError",
-            });
-            expect(peer.terminal.alive).toBe(true);
-            expect(
-              f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
-            ).toEqual([]);
-            await f.settleBackgroundProcess(peer.terminal);
-            await f.harness.waitForMethod("thread/unsubscribe");
-            const successor = await f.begin("maintainer");
-            expect(successor.terminal.alive).toBe(true);
-            expect(
-              f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
-            ).toHaveLength(1);
-            expect(readAttemptTerminal(await successor.complete()).aborted).toBe(false);
-          } else {
-            await f.settleBackgroundProcess(peer.terminal);
-            await f.harness.waitForMethod("thread/unsubscribe");
-            expect(peer.terminal.alive).toBe(false);
-            expect(
-              f.harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
-            ).toHaveLength(1);
-          }
+          expect(peer.terminal.alive).toBe(true);
+          expect(requestsFor(f.harness, "thread/unsubscribe")).toEqual([]);
+          await f.settleBackgroundProcess(peer.terminal);
+          await f.harness.waitForMethod("thread/unsubscribe");
+          const successor = await f.begin("maintainer");
+          expect(successor.terminal.alive).toBe(true);
+          expect(requestsFor(f.harness, "thread/unsubscribe")).toHaveLength(1);
+          expect(readAttemptTerminal(await successor.complete()).aborted).toBe(false);
+        } else {
+          await f.settleBackgroundProcess(peer.terminal);
+          await f.harness.waitForMethod("thread/unsubscribe");
+          expect(peer.terminal.alive).toBe(false);
+          expect(requestsFor(f.harness, "thread/unsubscribe")).toHaveLength(1);
         }
-      } finally {
-        await f.dispose();
       }
     },
   );
   it("revokes completed guest work while a later maintainer foreground stays live", async () => {
-    const f = await fixture();
-    try {
-      const guest = await f.begin("guest");
-      await f.retainSecondConsumer();
-      await guest.complete();
-      const staff = await f.begin("maintainer");
-      guest.revoke();
-      await guest.terminal.settled;
-      expect(guest.terminal.alive).toBe(false);
-      expect(staff.terminal.alive).toBe(true);
-      expect(f.harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
-      expect(readAttemptTerminal(await staff.complete()).aborted).toBe(false);
-    } finally {
-      await f.dispose();
-    }
+    await using f = await fixture();
+    const guest = await f.begin("guest");
+    await f.retainSecondConsumer();
+    await guest.complete();
+    const staff = await f.begin("maintainer");
+    guest.revoke();
+    await guest.terminal.settled;
+    expect(guest.terminal.alive).toBe(false);
+    expect(staff.terminal.alive).toBe(true);
+    expect(f.harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+    expect(readAttemptTerminal(await staff.complete()).aborted).toBe(false);
   });
 });
 
@@ -761,9 +713,6 @@ describe("managed-only Codex sandbox compatibility", () => {
     // Keep worker preparation outside the policy fixture's logical attempt budget.
     vi.useFakeTimers({ toFake: ["Date"] });
     const f = createSandboxPolicyRun();
-    const options = {
-      pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
-    };
     const savedText = "Keep this saved conversation across the native catalog change.";
     const createPolicyHarness = (managedOnly: boolean, threadId: string) => {
       const started = createDeferred<void>();
@@ -802,7 +751,7 @@ describe("managed-only Codex sandbox compatibility", () => {
       );
       await appendSqliteHistoryMessage(f.params, userMessage(savedText, 1));
       const priorMessages = await readTranscriptMessagesByIdentity(f.params);
-      run = runCodexAppServerAttempt(f.params, options);
+      run = runCodexAppServerAttempt(f.params, sandboxOptions);
       await Promise.race([harness.started, run]);
       await nextTurn();
       expect(
@@ -820,7 +769,7 @@ describe("managed-only Codex sandbox compatibility", () => {
       harness = createPolicyHarness(true, "managed-fallback");
       f.params.runId = "managed-policy-upgrade";
       f.preparation.length = 0;
-      run = runCodexAppServerAttempt(f.params, options);
+      run = runCodexAppServerAttempt(f.params, sandboxOptions);
       await Promise.race([harness.started, run]);
       await nextTurn();
       const start = harness.requests.find(({ method }) => method === "thread/start")
@@ -903,19 +852,13 @@ describe("managed-only Codex sandbox compatibility", () => {
         acquisitions++ === 0 ? planning.client : startup.client,
       );
       try {
-        await expect(
-          runCodexAppServerAttempt(f.params, {
-            pluginConfig: { appServer: { experimental: { sandboxExecServer: true } } },
-          }),
-        ).rejects.toThrow(/managed-only hooks.*OpenClaw native hook relay/i);
+        await expect(runCodexAppServerAttempt(f.params, sandboxOptions)).rejects.toThrow(
+          /managed-only hooks.*OpenClaw native hook relay/i,
+        );
         expect(acquisitions).toBeGreaterThanOrEqual(2);
         expect(f.preparation.indexOf("allowed")).toBeLessThan(f.preparation.indexOf("tools"));
         expect(f.preparation.indexOf("tools")).toBeLessThan(f.preparation.indexOf("managed"));
-        expect(
-          [...planning.requests, ...startup.requests].filter(({ method }) =>
-            ["thread/start", "thread/resume", "turn/start"].includes(method),
-          ),
-        ).toEqual([]);
+        expect([...startupRequests(planning), ...startupRequests(startup)]).toEqual([]);
         expect(f.exec.execute).not.toHaveBeenCalled();
       } finally {
         f.controller.abort();
@@ -966,11 +909,7 @@ describe("managed-only Codex sandbox compatibility", () => {
         }),
       });
       expect(f.selectTools).not.toHaveBeenCalled();
-      expect(
-        harness.requests.filter(({ method }) =>
-          ["thread/start", "thread/resume", "turn/start"].includes(method),
-        ),
-      ).toEqual([]);
+      expect(startupRequests(harness)).toEqual([]);
     } finally {
       f.controller.abort();
       pending.resolve({ requirements: null });

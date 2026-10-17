@@ -55,35 +55,42 @@ const scheduledAuthority = {
   },
 };
 
+function preparedProfile(profileId = "openai:work", accountId = "account-1") {
+  return {
+    kind: "profile",
+    profileId,
+    snapshot: {
+      loginParams: { type: "chatgptAuthTokens" },
+      chatgptAccountId: accountId,
+    },
+  };
+}
+
 function scheduledConnection(overrides: Record<string, unknown> = {}) {
   return {
     usesSupervisionConnection: false,
     appServer: { start: { homeScope: "agent" } },
-    startupPreparedAuth: {
-      kind: "profile",
-      profileId: "openai:work",
-      snapshot: {
-        loginParams: {
-          type: "chatgptAuthTokens",
-          accessToken: "token",
-          chatgptAccountId: "account-1",
-        },
-        chatgptAccountId: "account-1",
-        secretFreeCacheKey: "profile-key",
-      },
-    },
+    startupPreparedAuth: preparedProfile(),
     ...overrides,
   } as never;
 }
 
+function expectRuntime(
+  connectionOverrides: Record<string, unknown> = {},
+  paramsOverrides: Partial<Parameters<typeof assertScheduledCodexAppAuthorityRuntime>[1]> = {},
+) {
+  return expect(() =>
+    assertScheduledCodexAppAuthorityRuntime(scheduledConnection(connectionOverrides), {
+      trigger: "cron",
+      scheduledRuntimeAuthority: scheduledAuthority,
+      ...paramsOverrides,
+    }),
+  );
+}
+
 describe("assertScheduledCodexAppAuthorityRuntime", () => {
   it("admits the exact cron prepared-profile principal", () => {
-    expect(() =>
-      assertScheduledCodexAppAuthorityRuntime(scheduledConnection(), {
-        trigger: "cron",
-        scheduledRuntimeAuthority: scheduledAuthority,
-      }),
-    ).not.toThrow();
+    expectRuntime().not.toThrow();
   });
 
   it.each([
@@ -128,37 +135,24 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
     // Configured authority is endpoint-owned; prepared-profile accounts do not
     // replace it when the endpoint is reauthenticated between scheduled runs.
     for (const accountId of [undefined, "account-1", "account-2"]) {
-      expect(() =>
-        assertScheduledCodexAppAuthorityRuntime(
-          scheduledConnection({
-            appServer,
-            startupPreparedAuth: accountId
-              ? {
-                  kind: "profile",
-                  profileId: "openai:work",
-                  snapshot: {
-                    loginParams: { type: "chatgptAuthTokens" },
-                    chatgptAccountId: accountId,
-                  },
-                }
-              : undefined,
-          }),
-          { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
-        ),
+      expectRuntime(
+        {
+          appServer,
+          startupPreparedAuth: accountId ? preparedProfile("openai:work", accountId) : undefined,
+        },
+        { scheduledRuntimeAuthority: configuredAuthority },
       ).not.toThrow();
     }
-    expect(() =>
-      assertScheduledCodexAppAuthorityRuntime(
-        scheduledConnection({
-          appServer: {
-            ...appServer,
-            ...serverOverride,
-            start: { ...appServer.start, ...startOverride },
-          },
-          startupPreparedAuth: undefined,
-        }),
-        { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
-      ),
+    expectRuntime(
+      {
+        appServer: {
+          ...appServer,
+          ...serverOverride,
+          start: { ...appServer.start, ...startOverride },
+        },
+        startupPreparedAuth: undefined,
+      },
+      { scheduledRuntimeAuthority: configuredAuthority },
     ).toThrow("different configured Codex app-server");
   });
 
@@ -166,42 +160,10 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
     ["ordinary turn", {}, { trigger: "user" }],
     ["supervision", { usesSupervisionConnection: true }, {}],
     ["user-scoped home", { appServer: { start: { homeScope: "user" } } }, {}],
-    [
-      "different profile",
-      {
-        startupPreparedAuth: {
-          kind: "profile",
-          profileId: "openai:other",
-          snapshot: {
-            loginParams: { type: "chatgptAuthTokens" },
-            chatgptAccountId: "account-1",
-          },
-        },
-      },
-      {},
-    ],
-    [
-      "different account",
-      {
-        startupPreparedAuth: {
-          kind: "profile",
-          profileId: "openai:work",
-          snapshot: {
-            loginParams: { type: "chatgptAuthTokens" },
-            chatgptAccountId: "account-2",
-          },
-        },
-      },
-      {},
-    ],
+    ["different profile", { startupPreparedAuth: preparedProfile("openai:other") }, {}],
+    ["different account", { startupPreparedAuth: preparedProfile("openai:work", "account-2") }, {}],
     ["API-key route", { startupPreparedAuth: { kind: "api-key", apiKey: "key" } }, {}],
   ] as const)("fails closed for %s", (_name, connectionOverrides, paramsOverrides) => {
-    expect(() =>
-      assertScheduledCodexAppAuthorityRuntime(scheduledConnection(connectionOverrides), {
-        trigger: "cron",
-        scheduledRuntimeAuthority: scheduledAuthority,
-        ...paramsOverrides,
-      }),
-    ).toThrow(/Reauthorize|Restore the profile/);
+    expectRuntime(connectionOverrides, paramsOverrides).toThrow(/Reauthorize|Restore the profile/);
   });
 });

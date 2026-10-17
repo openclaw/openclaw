@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonObject } from "./protocol.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
@@ -10,10 +10,10 @@ import {
 } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
+beforeEach(() => vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] }));
 
 describe("Codex channel tool progress", () => {
   it("keeps raw command detail behind the channel commandText policy", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const harness = createStartedThreadHarness();
     const params = createTestParams();
     const onAgentEvent = vi.fn();
@@ -68,7 +68,6 @@ describe("Codex channel tool progress", () => {
   });
 
   it("keeps every tool source available to channel policy and verbose callbacks", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const harness = createStartedThreadHarness();
     const params = createTestParams();
     let expectedToolCallId: string;
@@ -96,69 +95,61 @@ describe("Codex channel tool progress", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    const cases: Array<{
-      label: string;
-      toolCallId: string;
-      name: string;
-      item?: JsonObject;
-      completion?: JsonObject;
-    }> = [
-      {
-        label: "native command",
-        toolCallId: "command-1",
-        name: "bash",
-        item: {
+    const cases: Array<
+      [name: string, toolCallId: string, item?: JsonObject, completion?: JsonObject]
+    > = [
+      [
+        "bash",
+        "command-1",
+        {
           type: "commandExecution",
           command: "printf private-command",
           cwd: params.workspaceDir,
         },
-        completion: { aggregatedOutput: "done", exitCode: 0, durationMs: 1 },
-      },
-      {
-        label: "native file change",
-        toolCallId: "patch-1",
-        name: "apply_patch",
-        item: { type: "fileChange", changes: [{ path: "proof.txt", kind: "update" }] },
-      },
-      {
-        label: "native web search",
-        toolCallId: "search-1",
-        name: "web_search",
-        item: {
+        { aggregatedOutput: "done", exitCode: 0, durationMs: 1 },
+      ],
+      [
+        "apply_patch",
+        "patch-1",
+        { type: "fileChange", changes: [{ path: "proof.txt", kind: "update" }] },
+      ],
+      [
+        "web_search",
+        "search-1",
+        {
           type: "webSearch",
           query: "OpenClaw repository",
           action: { type: "search", query: "OpenClaw repository" },
         },
-        completion: { durationMs: 1 },
-      },
-      {
-        label: "native MCP call",
-        toolCallId: "mcp-1",
-        name: "progressproof.parity_probe",
-        item: {
+        { durationMs: 1 },
+      ],
+      [
+        "progressproof.parity_probe",
+        "mcp-1",
+        {
           type: "mcpToolCall",
           server: "progressproof",
           tool: "parity_probe",
           arguments: { marker: "telegram-progress" },
         },
-        completion: { result: { content: [{ type: "text", text: "ok" }] }, durationMs: 1 },
-      },
-      { label: "OpenClaw dynamic tool", toolCallId: "dynamic-1", name: "agents_list" },
+        { result: { content: [{ type: "text", text: "ok" }] }, durationMs: 1 },
+      ],
+      ["agents_list", "dynamic-1"],
     ];
 
-    for (const testCase of cases) {
-      expectedToolCallId = testCase.toolCallId;
+    for (const [name, toolCallId, sourceItem, completion] of cases) {
+      expectedToolCallId = toolCallId;
       toolEnded = createDeferred<void>();
       progressReceived = createDeferred<void>();
       const resultCount = onToolResult.mock.calls.length;
-      if (testCase.item) {
-        const item = { ...testCase.item, id: testCase.toolCallId };
+      if (sourceItem) {
+        const item = { ...sourceItem, id: toolCallId };
         await harness.notify(itemNotification("item/started", { ...item, status: "inProgress" }));
         await harness.notify(
           itemNotification("item/completed", {
             ...item,
             status: "completed",
-            ...testCase.completion,
+            ...completion,
           }),
         );
       } else {
@@ -168,9 +159,9 @@ describe("Codex channel tool progress", () => {
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            callId: testCase.toolCallId,
+            callId: toolCallId,
             namespace: null,
-            tool: testCase.name,
+            tool: name,
             arguments: {},
           },
         });
@@ -181,38 +172,35 @@ describe("Codex channel tool progress", () => {
         .filter(
           (event) =>
             event.stream === "tool" &&
-            event.data?.toolCallId === testCase.toolCallId &&
-            event.data?.name === testCase.name,
+            event.data?.toolCallId === toolCallId &&
+            event.data?.name === name,
         );
 
-      expect(toolEvents, testCase.label).toHaveLength(2);
+      expect(toolEvents, name).toHaveLength(2);
       expect(
         toolEvents.map((event) => event.data?.phase),
-        `${testCase.label} lifecycle`,
+        `${name} lifecycle`,
       ).toEqual(["start", "result"]);
       for (const event of toolEvents) {
-        expect(event.data, testCase.label).not.toHaveProperty("hideFromChannelProgress");
+        expect(event.data, name).not.toHaveProperty("hideFromChannelProgress");
       }
-      expect(onToolResult.mock.calls.length, `${testCase.label} verbose callback`).toBe(
-        resultCount + 1,
-      );
+      expect(onToolResult.mock.calls.length, `${name} verbose callback`).toBe(resultCount + 1);
       const prepared = onAgentEvent.mock.calls
         .map(([event]) => event)
         .filter(
           (event) =>
             event.stream === "item" &&
-            event.data.toolCallId === testCase.toolCallId &&
+            event.data.toolCallId === toolCallId &&
             !event.data.suppressChannelProgress,
         );
       expect(
-        prepared.map((event) => event.data.phase),
-        testCase.label,
-      ).toEqual(["start", "end"]);
-      expect(
-        prepared.map((event) => event.data.itemId),
-        testCase.label,
-      ).toEqual([`tool:${testCase.toolCallId}`, `tool:${testCase.toolCallId}`]);
-      expect(onToolResult.mock.calls[resultCount]?.[0], testCase.label).toMatchObject({
+        prepared.map(({ data }) => [data.phase, data.itemId]),
+        name,
+      ).toEqual([
+        ["start", `tool:${toolCallId}`],
+        ["end", `tool:${toolCallId}`],
+      ]);
+      expect(onToolResult.mock.calls[resultCount]?.[0], name).toMatchObject({
         channelData: { openclawToolProgressId: prepared[0]?.data.itemId },
       });
     }

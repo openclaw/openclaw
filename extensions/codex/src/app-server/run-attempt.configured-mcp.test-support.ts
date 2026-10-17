@@ -44,15 +44,14 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   return {
     ...actual,
     materializeRequesterScopedMcpToolsForHarnessRun: async (
-      ...args: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>
+      params: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>[0],
     ) => {
       mcpMocks.requesterCalls += 1;
-      const params = args[0] as Record<string, unknown>;
       mcpMocks.requesterParams.push(params);
       if (!mcpMocks.requesterCollisionTool) {
         return undefined;
       }
-      const reserved = new Set(params.reservedToolNames as string[] | undefined);
+      const reserved = new Set(params.reservedToolNames);
       const name = reserved.has("fake__show") ? "fake__show_2" : "fake__show";
       const tool = {
         name,
@@ -67,17 +66,13 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       };
     },
     loadCodexBundleMcpThreadConfig: async (
-      ...args: Parameters<typeof actual.loadCodexBundleMcpThreadConfig>
+      params: Parameters<typeof actual.loadCodexBundleMcpThreadConfig>[0],
     ) => {
-      const params = args[0] as Record<string, unknown>;
       const override = mcpMocks.threadConfigFacade(params);
       if (override) {
         return override;
       }
-      const cfg = params.cfg as
-        | { mcp?: { servers?: Record<string, Record<string, unknown>> } }
-        | undefined;
-      const configuredServers = cfg?.mcp?.servers ?? {};
+      const configuredServers = params.cfg?.mcp?.servers ?? {};
       const staticServerNames = Object.keys(configuredServers).toSorted();
       return {
         configPatch: staticServerNames.length > 0 ? { mcp_servers: configuredServers } : undefined,
@@ -99,19 +94,17 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
       params: Parameters<typeof actual.runWithCronCreatorAuthorityCapabilityResolver>[0],
     ) => {
       if (
-        params.capability?.active !== true ||
-        !params.runId ||
-        params.capability.runId !== params.runId
+        params.capability?.active === true &&
+        params.runId &&
+        params.capability.runId === params.runId
       ) {
-        return actual.runWithCronCreatorAuthorityCapabilityResolver(params as never);
+        mcpMocks.authorityResolvers.push(params.resolve);
       }
-      mcpMocks.authorityResolvers.push(params.resolve);
       return actual.runWithCronCreatorAuthorityCapabilityResolver(params as never);
     },
     materializeStaticMcpToolsForHarnessRun: async (
-      ...args: Parameters<typeof actual.materializeStaticMcpToolsForHarnessRun>
+      params: Parameters<typeof actual.materializeStaticMcpToolsForHarnessRun>[0],
     ) => {
-      const params = args[0];
       mcpMocks.staticCalls.push(params);
       if (mcpMocks.useRealStaticMcp) {
         return actual.materializeStaticMcpToolsForHarnessRun({
@@ -128,25 +121,17 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
         details: { status: "ok" },
       }));
       mcpMocks.staticToolExecutes.push(execute);
+      const tool = (name: string, description: string) => ({
+        name,
+        description,
+        parameters: { type: "object", properties: {} },
+        execute,
+      });
       return {
         tools: mcpMocks.staticDiagnosticNotice
           ? []
-          : [
-              {
-                name: "fake__show",
-                description: "Show the configured MCP fixture result.",
-                parameters: { type: "object", properties: {} },
-                execute,
-              },
-            ],
-        appTools: [
-          {
-            name: "fake__app_only",
-            description: "App-view-only configured MCP fixture.",
-            parameters: { type: "object", properties: {} },
-            execute,
-          },
-        ],
+          : [tool("fake__show", "Show the configured MCP fixture result.")],
+        appTools: [tool("fake__app_only", "App-view-only configured MCP fixture.")],
         ...(mcpMocks.staticDiagnosticNotice
           ? { diagnosticNotice: mcpMocks.staticDiagnosticNotice }
           : {}),
