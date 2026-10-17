@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
@@ -500,6 +500,36 @@ describe("auditGatewayServiceConfig systemd", () => {
       level: "recommended",
       detail: expect.stringContaining("mode: 644"),
     });
+  });
+
+  it.each(["EACCES", "EIO"])("reports a backup inspection failure (%s)", async (code) => {
+    await writeUnit([
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "KillMode=mixed",
+      "TimeoutStopSec=330",
+    ]);
+    const backupPath = `${unitPath}.bak`;
+    const lstat = fs.lstat;
+    const inspection = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation((...args) =>
+        args[0] === backupPath
+          ? Promise.reject(
+              Object.assign(new Error("synthetic backup inspection failure"), { code }),
+            )
+          : lstat(...args),
+      );
+    try {
+      const result = await auditUnit();
+      expect(result.definitionDriftError).toBe(
+        `Systemd service backup could not be inspected; check ${backupPath} and retry the service audit.`,
+      );
+      expect(systemdCodes(result)).toEqual([]);
+    } finally {
+      inspection.mockRestore();
+    }
   });
 });
 

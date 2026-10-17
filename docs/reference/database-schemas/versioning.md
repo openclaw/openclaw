@@ -780,9 +780,12 @@ statistics, such as agent schema 27's, are restored from the archive instead.
 For a fully declared migration, Doctor can write a sibling
 `<database>.pre-startup-migration-<id>.scoped.bak` containing the selected schema
 SQL, rows, and version metadata. Only this smaller archive gets the backup
-integrity scan; the migration's source integrity admission still checks the full
-database once. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
+integrity scan; the migration's source integrity admission runs a whole-database
+quick check plus full checks of affected tables, or a whole-database full check
+when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
+Historical migrations without a declared table scope and legacy transformed
+recovery archives retain full integrity checks.
 The shared database accompanying agent
 migrations retains its full backup for registry and receipt recovery.
 

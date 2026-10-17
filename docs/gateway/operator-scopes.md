@@ -93,8 +93,11 @@ access and the caller to have current permission to start a turn there, includin
 ownership, sharing-role, agent, and sandbox checks. Such previews are read-only.
 `canvas.document.preview` also accepts session read access: it returns the
 caller's HTML and isolated sandbox location without reading session data.
-Stored Canvas documents still require broader read access through
-`canvas.document.view`.
+For saved inline widgets, `canvas.document.view` also accepts session read access
+with `sessionKey`: the Gateway verifies a successful saved `show_widget` result
+for that document in a conversation the caller can currently read. Inaccessible
+conversations and unbound documents remain denied. Broad `operator.read` callers
+retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, and stop their own active runs. Their model, effort,

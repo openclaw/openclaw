@@ -12,10 +12,10 @@ import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-reco
 import { resolveTurnRecap } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
-  type coalesceAgentRunFrames,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -60,7 +60,7 @@ import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.t
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 
 export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
   const state = getTranscriptState(props.paneId);
@@ -446,6 +446,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     state,
     (item) => [liveStatusSignature(item), ...transcriptReplyDependencies(item, loadedReplySources)],
     (item) => {
+      if (item.kind === "system-event-group") {
+        return { kind: "system-events", item };
+      }
       if (item.kind === "group") {
         return { kind: "group", group: item, options: renderGroupOptions(item) };
       }

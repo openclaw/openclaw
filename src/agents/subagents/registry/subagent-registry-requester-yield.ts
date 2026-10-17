@@ -24,7 +24,6 @@ import {
   isRequesterCompletionCohortCurrent,
   isRequesterYieldCohortMember,
   isRequesterSettleWakeForRun,
-  sameRequesterSettleBatch,
 } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
@@ -109,7 +108,6 @@ export type RequesterInitialTransfer = (params: {
   entries: readonly SubagentRunRecord[];
   prepare?: () => Promise<void>;
   mutate: (entries: SubagentRunRecord[]) => ReadonlySet<string> | void;
-  validateSelection?: () => void;
   finish: (entries: readonly SubagentRunRecord[]) => void;
   release?: (entries: SubagentRunRecord[]) => void;
   afterRelease?: (entries: readonly SubagentRunRecord[]) => void;
@@ -288,13 +286,6 @@ export async function markRequesterTurnYieldedInRuns(params: {
     await params.transfer({
       kind: "intent",
       entries: selectedEntries,
-      validateSelection: () => {
-        if (!sameRequesterSettleBatch(selectEntries(), selectedEntries)) {
-          throw new SubagentRegistryMutationRejectedError(
-            "Requester yield membership changed before admission",
-          );
-        }
-      },
       prepare: async () => {
         cronAuthority = await preparedAuthority?.bind({
           batch: selectedEntries,
@@ -303,6 +294,9 @@ export async function markRequesterTurnYieldedInRuns(params: {
       },
       mutate: (entries) => {
         for (const entry of entries) {
+          if (entry.requesterTurnRunId !== requesterTurnRunId) {
+            throw new SubagentRegistryMutationRejectedError("Requester child changed its turn");
+          }
           entry.requesterTurnYielded = true;
         }
       },
@@ -356,6 +350,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
     return (
       spawn !== undefined &&
+      entry.requesterTurnRunId === requesterTurnRunId &&
       entry.childSessionKey === spawn.childSessionKey &&
       (!params.requesterYielded || entry.requesterTurnYielded === true)
     );
@@ -401,30 +396,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       : selectedEntries;
   const children = (candidates: readonly SubagentRunRecord[]) =>
     candidates.filter((entry) => childRunIds.has(entry.runId));
-  const validateSelection = () => {
-    const currentRequester = params.runs.get(requesterTurnRunId);
-    if (
-      ownsRequester(currentRequester) &&
-      !selectedMembers.some((entry) => isSameSubagentRunOwner(entry, currentRequester))
-    ) {
-      throw new SubagentRegistryMutationRejectedError(
-        "Requester pause owner appeared outside the admitted cohort",
-      );
-    }
-    const current = selectEntries();
-    if (
-      current.length !== childRunIds.size ||
-      current.some((entry) => !childRunIds.has(entry.runId))
-    ) {
-      throw new SubagentRegistryMutationRejectedError(
-        "Requester cohort membership changed before admission",
-      );
-    }
-  };
   await params.transfer({
     kind: params.requesterYielded ? "yielded-cohort" : "completed-cohort",
     entries: selectedMembers,
-    validateSelection,
     mutate: (members) => {
       const entries = children(members);
       for (const entry of entries) {
@@ -547,7 +521,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             };
           }
           if (entry.delivery) {
-            entry.delivery = { ...entry.delivery };
             delete entry.delivery.requesterVisibleFinal;
           }
           if (requesterAlreadyDeliveredFinal) {
@@ -569,7 +542,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           }
           if (entry.retireAfterRequesterTurn === true) {
             if (entry.requesterSettleWake) {
-              entry.requesterSettleWake = { ...entry.requesterSettleWake, retireAfterSettle: true };
+              entry.requesterSettleWake.retireAfterSettle = true;
               entry.retireAfterRequesterTurn = undefined;
             } else {
               retired.add(entry.runId);
@@ -580,9 +553,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       // A finished child can dispatch its wake before the requester's lifecycle-end
       // event. Publish the paused task owner in the same commit as that wake batch.
       if (pauseRequester) {
-        pauseRequester.completion = pauseRequester.completion
-          ? { ...pauseRequester.completion }
-          : undefined;
         markSubagentRunPausedAfterYield({ entry: pauseRequester });
       }
       return retired;

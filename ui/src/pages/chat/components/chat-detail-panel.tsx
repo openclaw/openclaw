@@ -11,6 +11,7 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
@@ -45,6 +46,8 @@ registerEnglishCatalog(registerFilePreviewEnglish);
 export type ChatDetailPanel = SolidBridgeElement<ChatDetailPanelProps>;
 
 function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatDetailPanelProps>) {
+  const gateways = nativeGatewaysCapability();
+  const nativeGateways = gateways && projectOwner(gateways, (owner) => owner);
   let disposed = false;
   let invalidateRender = () => {};
   const invalidate = () => invalidateRender();
@@ -570,6 +573,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let previousRuntime: AttachmentSidebarRuntime | undefined;
   let navigate = false;
   function renderPanel(): SidebarPanelProps {
+    nativeGateways?.read();
     const content = props.content;
     const navigation = props.fileNavigation;
     const runtime = props.attachmentRuntime;
@@ -686,10 +690,8 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       });
     },
   );
-  const unsubscribeNativeGateway = nativeGatewaysCapability()?.subscribe(invalidate);
   onCleanup(() => {
     disposed = true;
-    unsubscribeNativeGateway?.();
     if (fileDirty) {
       fileDraftContent = currentFileText();
     }

@@ -33,8 +33,9 @@ from the complete chat and new-session boot totals. Those route totals include
 the entry assets and the route's measured immediate dynamic imports, counting
 each asset once even when both preload lists reference it. Moving an existing
 boot import into the first request wave therefore remains visible in the byte
-accounting. Initial-entry JavaScript is capped at 342,000 B gzip with one startup
-CSS request; route byte totals are reported without introducing a higher limit.
+accounting. Initial-entry JavaScript is capped at 339,000 B gzip with one startup
+CSS request. Complete boot JavaScript is capped at 1,580,000 B gzip for chat and
+1,130,000 B gzip for New Session, including the initial-entry assets.
 JSON5 remains in its own lazy chunk so snapshot validation cannot pull the raw
 configuration parser into chat boot. `--base-dist` on
 `scripts/check-control-ui-performance.mts` compares route bytes and requests when
@@ -42,7 +43,13 @@ both builds contain route preload templates. Older builds report that comparison
 as unavailable, so use a cold-load network capture to compare their complete boot
 cost.
 
-Route boot JavaScript is limited to 35 requests per route to catch facade regressions caused by top-level await disabling chunk optimization. `pnpm ui:check-performance` enforces this limit locally and in CI; `pnpm ui:build` reports it without rejecting the build. Worker scripts and other URL assets remain available in the offline cache without being modulepreloaded into the document.
+JavaScript is limited to 9 initial-entry requests, 29 complete chat boot requests,
+and 24 complete New Session boot requests. Each cap leaves two requests above the
+measured build to catch facade regressions caused by top-level await disabling
+chunk optimization. `pnpm ui:check-performance` enforces the route byte and request
+limits locally and in CI; `pnpm ui:build` reports them without rejecting the build.
+Worker scripts and other URL assets remain available in the offline cache without
+being modulepreloaded into the document.
 
 After a Gateway update, already-open tabs reload the current build when they encounter a missing old asset. Reloading is automatic when no unsaved-work guard blocks it; otherwise, save or discard the protected work and use the **Reload** banner. The Gateway and service worker keep only the current build's assets.
 

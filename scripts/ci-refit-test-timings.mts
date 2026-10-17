@@ -252,11 +252,17 @@ async function main() {
       );
       logs.push(...attemptLogs);
     }
+    // Both rename endpoints changed; similarity detection would fetch historical
+    // blobs from the filtered checkout and omit the old path from exclusion.
     const changedUiFiles = logs.some((log) => log.kind === "uiE2e")
-      ? execFileSync("git", ["diff", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        })
+      ? execFileSync(
+          "git",
+          ["diff", "--no-renames", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        )
           .split("\0")
           .filter((file) => /\.e2e\.test\.[cm]?[jt]sx?$/u.test(file))
       : [];

@@ -7,11 +7,12 @@ import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
-import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
+import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import { terminalOpenResult } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
@@ -108,14 +109,17 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       status: "live",
       controller: terminal as unknown as GhosttyTerminalController,
     };
-    const upload = new TerminalPanelUploadController({
-      config: () => config,
-      activeTab: () => tab,
-      client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
-      isCurrent: () => true,
-      fileInput: () => null,
-      setError: vi.fn(),
-      requestUpdate: vi.fn(),
+    let upload!: TerminalPanelUpload;
+    mountSolid(() => {
+      upload = createTerminalPanelUpload({
+        config: () => config,
+        activeTab: () => tab,
+        client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
+        isCurrent: () => true,
+        fileInput: () => null,
+        setError: vi.fn(),
+      });
+      return null;
     });
     const read = createDeferred<ArrayBuffer>();
     const file = new File(["file"], "file.txt");

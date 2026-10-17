@@ -1,7 +1,6 @@
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { captureRuntimeConfigAsyncReader, readConfigFileSnapshot } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
@@ -37,6 +36,7 @@ type BackupGitCreateOptions = {
 type BackupGitScopeOptions = {
   global?: boolean;
   agent?: string;
+  store?: string;
 };
 
 export const GIT_BACKUP_PUSH_CREDENTIAL_WARNING =
@@ -66,7 +66,6 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
     assertNotUpdateCapturePath(globalPath, resolveStateDir());
   }
   const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
-  assertHomogeneousDatabaseEngines(config, "backup");
   let agents: Array<{ agentId: string; databasePath: string }> = [];
   if (options.all || normalizedAgents.length > 0) {
     const agentIds = options.all
@@ -95,11 +94,21 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
 
 function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
   const agent = options.agent?.trim();
-  if (options.global === true && agent) {
-    throw new Error("Choose exactly one Git backup scope: --global or --agent <id>.");
+  const store = options.store?.trim();
+  if (options.store !== undefined && !store) {
+    throw new Error("--store must not be blank");
   }
-  if (options.global !== true && !agent) {
-    throw new Error("Choose a Git backup scope: --global or --agent <id>.");
+  const scopes = Number(options.global === true) + Number(Boolean(agent)) + Number(Boolean(store));
+  if (scopes > 1) {
+    throw new Error(
+      "Choose exactly one Git backup scope: --global, --agent <id>, or --store <id>.",
+    );
+  }
+  if (scopes === 0) {
+    throw new Error("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
+  }
+  if (store) {
+    return { role: "generic", id: store };
   }
   return options.global === true
     ? { role: "global" }
@@ -233,8 +242,6 @@ export async function backupGitRestoreCommand(
     json?: boolean;
   },
 ) {
-  const config = await readConfigFileSnapshot({ observe: false });
-  assertHomogeneousDatabaseEngines(config.config, "restore");
   const result = await restoreGitBackupRef({
     repositoryPath: resolveRequiredBackupPath(options.repository, "--repository"),
     identity: resolveOneIdentity(options),

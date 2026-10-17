@@ -17,13 +17,18 @@ import { isJsonObject, isRpcResponse } from "./protocol.js";
 import type { CodexRequestAttempt } from "./request-attempt.js";
 
 export type CodexClientRequestAttempt = CodexRequestAttempt & {
-  catalogProjection?: { preview?: CodexCatalogPreviewCache; remainingRows?: number };
+  catalogProjection?: {
+    preview?: CodexCatalogPreviewCache;
+    remainingRows?: number;
+    singleThread?: boolean;
+  };
 };
 
 export type CodexCatalogDecodeInput = {
   bytes: Uint8Array<ArrayBuffer>;
   route: CodexCatalogDecodeRoute;
   remainingRows?: number;
+  oversizedSingleton?: boolean;
 };
 export type CodexCatalogDecodeResult = {
   message?: unknown;
@@ -41,6 +46,35 @@ export function decodeCodexCatalogFrame(input: CodexCatalogDecodeInput): CodexCa
     ),
     (failure) => failures.push(failure),
   );
+  if (input.oversizedSingleton) {
+    try {
+      if (
+        input.route === "unresolved" ||
+        !isRpcResponse(parsed) ||
+        parsed.id !== input.route.id ||
+        parsed.error ||
+        !isJsonObject(parsed.result) ||
+        !Array.isArray(parsed.result.data) ||
+        parsed.result.data.length !== 1 ||
+        parsed.result.nextCursor === undefined
+      ) {
+        return { failures };
+      }
+      const page = projectCodexCatalogNativeResponse(
+        parsed.result,
+        sanitizeTerminalText,
+        undefined,
+        1,
+      );
+      page.data[0]!.catalogError = "oversized-thread";
+      if (input.remainingRows === 0) {
+        page.data = [];
+      }
+      return { message: { id: parsed.id, result: page }, failures };
+    } catch {
+      return { failures };
+    }
+  }
   return { ...projectCodexCatalogMessage(parsed, input), failures };
 }
 

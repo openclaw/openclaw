@@ -34,25 +34,19 @@ suite.define(() => {
           const rows = [alpha, beta];
           // Persisted split layout is the public setup boundary used by sibling split tests.
           await page.addInitScript(
-            ({ storageKey, sessions }) => {
-              localStorage.setItem(
-                storageKey,
-                JSON.stringify({
-                  chatSplitLayout: {
-                    activePaneId: "p1",
-                    columnWeights: [0.5, 0.5],
-                    columns: sessions.map((row, index) => ({
-                      id: `c${index + 1}`,
-                      paneWeights: [1],
-                      panes: [{ id: `p${index + 1}`, sessionKey: row.key }],
-                    })),
-                  },
-                }),
-              );
-            },
+            ({ storageKey, chatSplitLayout }) =>
+              localStorage.setItem(storageKey, JSON.stringify({ chatSplitLayout })),
             {
               storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-              sessions: rows,
+              chatSplitLayout: {
+                activePaneId: "p1",
+                columnWeights: [0.5, 0.5],
+                columns: rows.map((row, index) => ({
+                  id: `c${index + 1}`,
+                  paneWeights: [1],
+                  panes: [{ id: `p${index + 1}`, sessionKey: row.key }],
+                })),
+              },
             },
           );
           const gateway = await installMockGateway(page, {
@@ -138,19 +132,6 @@ suite.define(() => {
               editorPresent: Boolean(input),
               editorText: input?.value ?? null,
               editorFocused: Boolean(input && focus === input),
-              focusTag: focus?.tagName,
-              focusClass: focus?.className,
-              focusedPane: focus
-                ?.closest("openclaw-chat-pane")
-                ?.getAttribute("data-mcp-app-owner-key"),
-              presentedPanes: Array.from(
-                document.querySelectorAll(
-                  'openclaw-chat-page openclaw-chat-pane[aria-hidden="false"]',
-                ),
-              ).map((pane) => ({
-                owner: pane.getAttribute("data-mcp-app-owner-key"),
-                archived: Boolean(pane.querySelector(".agent-chat__disabled-banner")),
-              })),
             };
           });
           await writeFile(
@@ -180,9 +161,9 @@ suite.define(() => {
                 .evaluate((element) => element === document.activeElement),
             ).toBe(true);
           } else {
-            expect.soft(observations.editorPresent).toBe(true);
-            expect.soft(observations.editorText).toBe(unsaved);
-            expect.soft(observations.editorFocused).toBe(true);
+            expect
+              .soft(observations)
+              .toEqual({ editorPresent: true, editorText: unsaved, editorFocused: true });
             if (observations.editorPresent) {
               await page.keyboard.type(" Continue reviewing.");
               expect(await editor.getByRole("textbox").inputValue()).toBe(

@@ -391,6 +391,9 @@ it returns `overloaded` when three requests are already in flight, leaving the
 fourth slot for requested evaluations. Purpose strings do not determine priority.
 All requests retain their slots until the provider physically settles, including
 after cancellation. Consumers can request shorter deadlines and choose their own fallback policy.
+The caller's `timeoutMs` includes runtime preparation. Expired preparation never
+starts a provider evaluation; otherwise the provider receives the remaining budget.
+The call still waits for physical cleanup, which can outlive the deadline.
 Three transport, rate-limit, or invalid-response failures open a ten-second circuit;
 recovery admits one trial. Retry-After is bounded to one minute. Authentication
 failures return to the caller without opening the shared provider circuit: another

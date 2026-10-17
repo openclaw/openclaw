@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   resolveGatewaySystemdServiceName,
@@ -178,8 +179,6 @@ async function readSystemdManagerCommand(
     }
     const readProperties = (scope: "Unit" | "Service", names: string[], signatures: string[]) =>
       query(["get-property", destination, unitPath, `${manager}.${scope}`, ...names], signatures);
-    const isStringArray = (value: unknown): value is string[] =>
-      Array.isArray(value) && value.every((entry) => typeof entry === "string");
     const unitProperties = await readProperties(
       "Unit",
       [

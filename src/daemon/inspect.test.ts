@@ -688,6 +688,7 @@ describe("complete inventory admission", () => {
   it.each([
     ["linux", ".config/systemd/user/custom-worker.service", false],
     ["linux", ".config/systemd/user/openclaw-gateway.service", true],
+    ["linux", ".config/systemd/user/clawdbot-gateway.service.bak", true],
   ] as const)(
     "handles unreadable paths in complete %s inventories: %s",
     async (platform, relative, required) => {

@@ -2,7 +2,6 @@ export type SolidController = {
   hostConnected?(): void;
   hostDisconnected?(): void;
   hostUpdate?(): void;
-  hostUpdated?(): void;
 };
 
 export type SolidControllerHost = {

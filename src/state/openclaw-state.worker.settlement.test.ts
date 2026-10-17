@@ -1,19 +1,17 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
@@ -57,7 +55,7 @@ it("observes a managed schema publication before a placement write", async () =>
   }
 });
 
-it("retires an existing-only idle actor without opening its missing database", async () => {
+it("closes an existing-only actor without recreating its missing database", async () => {
   const databasePath = openOpenClawStateDatabase().path;
   await closeOpenClawStateDatabaseAsync();
   const context = captureOpenClawStateWorkerContext();
@@ -69,19 +67,15 @@ it("retires an existing-only idle actor without opening its missing database", a
   );
   unlinkSync(databasePath);
   try {
-    expect(
-      runWithSqliteWorkerStateContext(context, () =>
-        backend.execute({ type: "database.inspectIdle", input: undefined }),
-      ),
-    ).toBe("retire");
     expect(existsSync(context.admission.databasePath)).toBe(false);
   } finally {
     await backend.close();
   }
+  expect(existsSync(context.admission.databasePath)).toBe(false);
 });
 
 it.each(["subset-only", "native-closed"] as const)(
-  "inspects a retained update writer with a %s backend",
+  "settles a retained update writer with a %s backend",
   async (kind) => {
     const run = createUpdateRun({ trigger: "cli" });
     await closeOpenClawStateDatabaseAsync();
@@ -120,14 +114,7 @@ it.each(["subset-only", "native-closed"] as const)(
         },
       });
       native?.db.close();
-      expect(
-        runWithSqliteWorkerStateContext(context, () =>
-          backend.execute({
-            type: "database.inspectIdle",
-            input: undefined,
-          }),
-        ),
-      ).toBe(kind === "native-closed" ? "retire" : "healthy");
+      expect(() => backend.assertSettled!()).not.toThrow();
     } finally {
       admission.mockRestore();
       await backend.close();
@@ -186,33 +173,6 @@ it.each(["removed", "replaced"] as const)(
     }
   },
 );
-
-it("does not checkpoint a retained existing-schema actor during idle inspection", async () => {
-  const databasePath = openOpenClawStateDatabase().path;
-  await closeOpenClawStateDatabaseAsync();
-  await withExistingOpenClawStateSchema({ path: databasePath }, async () => {
-    const context = captureOpenClawStateWorkerContext();
-    const backend = runWithSqliteWorkerStateContext(context, () =>
-      createSqliteWorkerBackend(undefined, { databasePath }),
-    );
-    const { db } = openOpenClawStateDatabase();
-    const { constants } = requireNodeSqlite();
-    const checkpoints: string[] = [];
-    requireNativeSqliteDatabase(db).setAuthorizer((action, name) => {
-      if (action === constants.SQLITE_PRAGMA && name === "wal_checkpoint") {
-        checkpoints.push(name);
-      }
-      return constants.SQLITE_OK;
-    });
-    try {
-      expect(backend.execute({ type: "database.inspectIdle", input: undefined })).toBe("retire");
-      expect(checkpoints).toEqual([]);
-    } finally {
-      requireNativeSqliteDatabase(db).setAuthorizer(null);
-      await backend.close();
-    }
-  });
-});
 
 it("rejects leaked readers and unfinished transactions through the same actor settlement hook", async () => {
   const context = captureOpenClawStateWorkerContext();

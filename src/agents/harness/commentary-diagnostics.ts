@@ -7,8 +7,6 @@ import {
   type DiagnosticHarnessRunStartedEvent,
 } from "../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
-import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { isCompleteAgentPreamble } from "../agent-activity-presentation.js";
 
 const MAX_COMMENTARY_CHARS = 16_384;
@@ -71,14 +69,6 @@ export function subscribeAgentCommentaryDiagnostics(
             },
           }
         : undefined,
-    );
-    runWithDiagnosticTraceContext(base.trace, () =>
-      diagnosticLogger.debug("agent commentary completed", {
-        runId: base.runId,
-        harnessId: base.harnessId,
-        sourceSequence: evt.seq,
-        textLength: text.length,
-      }),
     );
   });
 }

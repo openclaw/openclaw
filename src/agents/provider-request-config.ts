@@ -12,6 +12,7 @@ import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
+import { TLS_SECRET_FIELDS } from "../secrets/provider-request-secret-fields.js";
 import {
   type ProviderRequestCapabilities,
   type ProviderRequestCapability,
@@ -473,7 +474,7 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+  for (const key of TLS_SECRET_FIELDS) {
     if (tls[key]) {
       next[key] = tls[key];
     }

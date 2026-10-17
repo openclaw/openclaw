@@ -51,9 +51,9 @@ export function updateAgentDeletionJournalCleanupPaths(
   return updateAgentDeletionJournalPaths(
     normalizeAgentId(agentId),
     operationId,
+    options,
     "cleanup_paths_json",
     cleanupPaths,
-    options,
   );
 }
 
@@ -68,22 +68,23 @@ export function updateAgentDeletionJournalDatabasePaths(
   return updateAgentDeletionJournalPaths(
     id,
     operationId,
+    options,
     "database_paths_json",
     normalizedPaths,
-    options,
   );
 }
 
 function updateAgentDeletionJournalPaths(
   agentId: string,
   operationId: string,
-  column: "cleanup_paths_json" | "database_paths_json",
-  paths: readonly AgentDeletionJournalCleanupPath[] | readonly string[],
   options: OpenClawStateDatabaseOptions,
+  ...change:
+    | [column: "cleanup_paths_json", paths: readonly AgentDeletionJournalCleanupPath[]]
+    | [column: "database_paths_json", paths: readonly string[]]
 ): boolean {
   return runOpenClawStateWriteTransaction(
     (database) =>
-      updateAgentDeletionJournalPathsInDatabase(database, agentId, operationId, column, paths),
+      updateAgentDeletionJournalPathsInDatabase(database, agentId, operationId, ...change),
     options,
   );
 }

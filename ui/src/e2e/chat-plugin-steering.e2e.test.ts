@@ -112,7 +112,14 @@ suite.define(() => {
             .toBe(colorScheme);
           expect(await gateway.getRequests("chat.startup")).not.toHaveLength(0);
 
-          const notice = pane
+          const events = pane.locator("details.chat-system-events");
+          const eventsToggle = events.locator(".chat-system-events__summary");
+          await eventsToggle.waitFor();
+          expect(await eventsToggle.textContent()).toContain("1 system event");
+          expect(await events.getAttribute("open")).toBeNull();
+          await eventsToggle.click();
+
+          const notice = events
             .locator("details.chat-notice-inline")
             .filter({ hasText: "Advisor guidance" });
           await notice.waitFor();
@@ -151,7 +158,7 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          // The guidance aligns with the agent's own column rather than centering as a divider.
+          // Expanded events add an 8px margin and 20px content inset to the agent column.
           expect(
             await notice.evaluate((element) => {
               const label = element.querySelector(".chat-notice-inline__label");
@@ -162,7 +169,7 @@ suite.define(() => {
                 throw new Error("Expected a guidance label and an assistant column");
               }
               return Math.abs(
-                element.getBoundingClientRect().left - assistant.getBoundingClientRect().left,
+                element.getBoundingClientRect().left - assistant.getBoundingClientRect().left - 28,
               );
             }),
           ).toBeLessThanOrEqual(2);

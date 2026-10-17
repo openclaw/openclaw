@@ -15,12 +15,8 @@ import {
 } from "../infra/outbound/deliver-hooks.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
 import { createKeyedFifoLeaseRegistry, type KeyedFifoLease } from "../shared/keyed-fifo-lease.js";
-import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import { observeAgentRunStart } from "./agent-run-start.js";
-import {
-  resolveCommandTurnContext,
-  resolveCommandTurnTargetSessionKey,
-} from "./command-turn-context.js";
+import { resolveCommandTurnContext } from "./command-turn-context.js";
 import { isActiveRunSafeCommandTurn } from "./commands-registry.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchGroupThread } from "./group-thread-dispatch.js";
@@ -50,7 +46,7 @@ import {
   resolveReplyOperationRunState,
   type ReplyOperationRunState,
 } from "./reply/reply-operation-run-state.js";
-import type { FinalizedMsgContext, FinalizedRuntimeMsgContext, MsgContext } from "./templating.js";
+import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 
 type InternalDispatchReplyOptions = Omit<
   InternalGetReplyOptions,
@@ -149,30 +145,6 @@ function reserveForegroundReplyLease(
   }
   const key = resolveForegroundReplyOrderKey(finalized);
   return key ? foregroundReplyLeases.reserve([key]) : undefined;
-}
-
-function resolveDispatcherSilentReplyContext(
-  finalized: FinalizedRuntimeMsgContext,
-  cfg: OpenClawConfig,
-) {
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
-  const policySessionKey = commandTargetSessionKey ?? finalized.SessionKey;
-  const chatType = normalizeChatType(finalized.ChatType);
-  const conversationType: SilentReplyConversationType | undefined =
-    commandTargetSessionKey && commandTargetSessionKey !== finalized.SessionKey
-      ? undefined
-      : chatType === "direct"
-        ? "direct"
-        : chatType === "group" || chatType === "channel"
-          ? "group"
-          : undefined;
-  // Cross-session native command dispatch bypasses direct/group inference for silent policy.
-  return {
-    cfg,
-    sessionKey: policySessionKey,
-    surface: finalized.Surface ?? finalized.Provider,
-    conversationType,
-  };
 }
 
 function installReplyPayloadSendingBeforeDeliver(
@@ -308,7 +280,6 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   const foregroundReplyLease = reserveForegroundReplyLease(finalized, params.cfg);
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(params.replyOptions) ?? {};
-  const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   let settledDeliveries = Promise.resolve();
   const settleDeliveries = () =>
     (settledDeliveries = settledDeliveries.then(async () => {
@@ -342,7 +313,6 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       beforeDeliver,
       onSettled: settleDeliveries,
       onFreshSettledDelivery: undefined,
-      silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
   const onTypingController = params.replyOptions?.onTypingController
     ? (typing: Parameters<NonNullable<typeof params.replyOptions.onTypingController>>[0]) => {
@@ -415,7 +385,6 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
   messageSending: "legacy" | "projected",
 ): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   const { replyPayloadRunState, replyPayloadBeforeDeliver, beforeDeliver } =
     prepareInboundReplyHooks(finalized, params.replyOptions, params.dispatcherOptions, {
       messageSending,
@@ -423,7 +392,6 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
     beforeDeliver,
-    silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
   markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   return await dispatchInboundMessage({

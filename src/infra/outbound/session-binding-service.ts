@@ -66,11 +66,11 @@ export { isSessionBindingError } from "./session-binding-errors.js";
 export type SessionBindingService = {
   bind: (input: SessionBindingBindInput) => Promise<SessionBindingRecord>;
   getCapabilities: (params: SessionBindingScope) => SessionBindingCapabilities;
-  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   touch: (bindingId: string, at?: number, scope?: SessionBindingScope) => void;
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
@@ -136,7 +136,7 @@ const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapt
   SESSION_BINDING_ADAPTERS_KEY,
 );
 
-/** @deprecated Use registerSessionBindingAdapterV2; final compatibility day: 2026-12-31. */
+/** @deprecated Use registerSessionBindingAdapterV2; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   warnPluginSdkDeprecation({
     family: "conversation-bindings",
@@ -327,7 +327,7 @@ export async function listSessionBindingsBySessionAsync(
   );
 }
 
-/** @deprecated Use inspectSessionBindingByConversationAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use inspectSessionBindingByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function inspectSessionBindingByConversation(
   ref: ConversationRef,
 ): SessionBindingInspection {
@@ -565,7 +565,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       : (getGenericCurrentConversationBindingCapabilities(params) ??
           resolveAdapterCapabilities(null));
   },
-  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   listBySession: (targetSessionKey) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",
@@ -584,7 +584,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
     results.push(...listGenericCurrentConversationBindingsBySession(key));
     return dedupeBindings(results).filter((record) => routableBinding(record));
   },
-  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   resolveByConversation: (ref) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",
@@ -620,7 +620,7 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
     assertAdapterSelectionCurrent(normalized, adapter);
     return routableBinding(binding);
   },
-  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   touch: (bindingId, at, scope) => {
     warnPluginSdkDeprecation({
       family: "conversation-bindings",

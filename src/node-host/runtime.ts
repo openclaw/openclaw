@@ -97,7 +97,6 @@ export async function prepareNodeHostRuntime(params?: {
   installedAppsSharingEnabled?: boolean;
   desktopSharingEnabled?: boolean;
   commands?: readonly string[];
-  platform?: NodeJS.Platform;
 }) {
   const commandAllowlist = params?.commands === undefined ? undefined : new Set(params.commands);
   if (!commandAllowlist) {
@@ -105,7 +104,7 @@ export async function prepareNodeHostRuntime(params?: {
   }
   const config = params?.config ?? (await captureRuntimeConfigAsyncReader()());
   const env = params?.env ?? process.env;
-  const platform = params?.platform ?? process.platform;
+  const platform = process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
@@ -560,7 +559,6 @@ export async function prepareNodeHostRuntime(params?: {
                 desktopHostConfig,
                 ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
                 installedAppsSharingEnabled,
-                installedAppsPlatform: platform,
                 pluginCommandContext,
                 ...(params?.ephemeral === true && !commandAllowlist
                   ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }

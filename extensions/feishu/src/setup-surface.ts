@@ -301,7 +301,6 @@ async function runEditFlow(params: {
   const { cfg, prompter, options } = params;
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
-  // Check existing appId (top-level or first configured account).
   // Supports both plain string and SecretRef (env-backed) appId values.
   const resolveAppIdLabel = (value: unknown): string | undefined => {
     const asString = normalizeString(value);

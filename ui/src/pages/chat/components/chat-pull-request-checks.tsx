@@ -43,7 +43,7 @@ export function ChatPullRequestChecks(props: {
     overlay.setParent(findOverlayParent(trigger));
     const anchor = createOverlayAnchor(surface);
     anchor.update(trigger, "top-end");
-    // Parking hides the native surface while preserving disclosure intent.
+    // Apply each native close edge synchronously; parking preserves disclosure intent.
     const stop = overlay.subscribe((open) => {
       if (props.presented) {
         details.open = open;

@@ -24,6 +24,7 @@ import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
   sqliteIntegrityCheckSteps,
+  type SqliteIntegrityCheckOptions,
 } from "../infra/sqlite-integrity.js";
 import {
   createScopedMigrationSnapshot,
@@ -47,7 +48,10 @@ import {
 import { isStatePostgres, stateEngineInput } from "../state/openclaw-state-db-engine.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
+import {
+  resolveSchemaMigrationBackupTables,
+  resolveSchemaMigrationIntegrityCheck,
+} from "../state/schema-migration-backup-scope.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
@@ -66,6 +70,7 @@ export async function backupDoctorMigrationDatabases(params: {
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   /** Only the version-phase owner may select a table-scoped checkpoint. */
   versionMigrationsOnly?: boolean;
+  check?: "quick" | "full";
 }): Promise<
   MigrationMessages & {
     versionMigrations?: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>;
@@ -86,6 +91,23 @@ export async function backupDoctorMigrationDatabases(params: {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
+  }
+  const integrityChecks = new Map<string, SqliteIntegrityCheckOptions>();
+  for (const pathname of new Set([...pending, ...params.databasePaths, sharedPath])) {
+    const engine = pathname === sharedPath ? stateEngineInput() : agentEngineInput();
+    if (engine || !existsSync(pathname)) {
+      continue;
+    }
+    const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
+    if (migration) {
+      integrityChecks.set(
+        realpathSync.native(pathname),
+        resolveSchemaMigrationIntegrityCheck(migration, params.check),
+      );
+    } else if (params.versionMigrationsOnly && !pending.has(pathname)) {
+      // Companion databases are preserved for rollback but no schema tables change.
+      integrityChecks.set(realpathSync.native(pathname), { check: params.check ?? "quick" });
+    }
   }
   const postgresPaths = new Map(
     [
@@ -111,6 +133,7 @@ export async function backupDoctorMigrationDatabases(params: {
       databasePaths: params.databasePaths.filter((pathname) => !postgresPaths.has(pathname)),
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       stateFamilyBackedUp: postgresPaths.has(sharedPath) ? true : undefined,
+      integrityChecks,
     });
     return {
       ...native,
@@ -146,7 +169,12 @@ export async function backupDoctorMigrationDatabases(params: {
           for (const pathname of migrationTables.keys()) {
             using database = openNodeSqliteDatabase(pathname, { readOnly: true });
             await runSqliteIntegrityOperationInWorker(
-              sqliteIntegrityCheckSteps(database, pathname),
+              sqliteIntegrityCheckSteps(
+                database,
+                pathname,
+                undefined,
+                integrityChecks.get(pathname),
+              ),
               {
                 busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
                 signal,
@@ -162,6 +190,7 @@ export async function backupDoctorMigrationDatabases(params: {
       pendingDatabasePaths: [...pending],
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       migrationTables: migrationTables.size > 0 ? migrationTables : undefined,
+      integrityChecks,
     });
   };
   let result: MigrationMessages;
@@ -212,6 +241,7 @@ export async function backupDoctorSqliteDatabases(params: {
   repair?: { key: string; validate: (database: DatabaseSync) => void };
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   migrationTables?: ReadonlyMap<string, readonly string[]>;
+  integrityChecks?: ReadonlyMap<string, SqliteIntegrityCheckOptions>;
   stateFamilyBackedUp?: true;
 }): Promise<MigrationMessages> {
   const pending = new Set(params.pendingDatabasePaths);
@@ -432,7 +462,7 @@ export async function backupDoctorSqliteDatabases(params: {
           try {
             snapshot.exec("PRAGMA trusted_schema = OFF;");
             assertCapture();
-            assertSqliteIntegrity(snapshot, targetPath);
+            assertSqliteIntegrity(snapshot, targetPath, params.integrityChecks?.get(sourcePath));
             params.repair?.validate(snapshot);
           } finally {
             snapshot.close();
@@ -470,6 +500,7 @@ export async function backupDoctorSqliteDatabases(params: {
           sourcePath,
           targetPath,
           preserveRowIds: true,
+          integrity: params.integrityChecks?.get(sourcePath),
           transform: sanitizeOpenClawStateLeaseRows,
           beforePublish: assertCapture,
           validate: params.repair?.validate,

@@ -657,12 +657,6 @@
   font-weight: 400;
 }
 
-/* Item titles/subheadings are semantic <h3>s for AT heading navigation; the
- * shared classes own the look, so only the UA heading margin needs a reset. */
-h3.settings-row__title {
-  margin: 0;
-}
-
 .plugins-tile {
   background: var(--bg-elevated);
 }

@@ -461,7 +461,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId`. Use `normalizeAgentId` when omitted input should resolve to `main`; use the Result-returning `normalizeAgentIdStrict` for an explicitly supplied ID that must not fall back to the default agent. |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Private-local after July 2026; Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization, ASCII control-character detection, and literal chat-display sanitization and escaping helpers |
+    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization, ASCII control-character detection, literal chat-display sanitization, and POSIX shell-argument quoting helpers |
     | `plugin-sdk/request-url` | Private-local after July 2026; Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
@@ -505,6 +505,8 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/transport-ready-runtime` | Private-local after July 2026; Transport readiness wait helper |
     | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
+    | `plugin-sdk/collection-input-runtime` | Private-local bundled runtime; `isStringArray`, `ensureRecord`, and `normalizeOptionalTrimmedStringRecord` for collection admission and normalization; not a typed public SDK contract |
+    | `plugin-sdk/http-response-runtime` | Private-local bundled runtime; JSON charset, cache, framing, and header-commit policies with their established serialization timing; not a typed public SDK contract |
     | `plugin-sdk/diagnostic-flags` | `isDiagnosticFlagEnabled` for flag-only consumers without event, trace, or redaction initialization |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |

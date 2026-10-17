@@ -31,6 +31,7 @@ import {
   type StagedOlderHistoryPage,
 } from "./chat-history-request.ts";
 import {
+  applyChatHistoryRefill,
   commitCurrentChatHistorySnapshot,
   historySessionId,
   resolveChatHistoryPagination,
@@ -239,6 +240,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     const root = this.transcript.scrollElement;
+    // The transcript renderer owns the sentinel observed by this history owner.
     const sentinel = root?.querySelector<HTMLElement>(".chat-history-sentinel") ?? null;
     if (!root || !sentinel) {
       this.clearHistoryObserver();
@@ -501,9 +503,16 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             new Set(pendingRunIds.filter((runId) => !remaining.has(runId))),
           );
         }
-        const nextMessages = prependUniqueNativeMessages(messages, state.chatMessages);
-        const grew = nextMessages.length > state.chatMessages.length;
-        publishChatSessionProjectionMessages(state, nextMessages);
+        const previousCount = state.chatMessages.length;
+        if (requestedOffset === 0) {
+          applyChatHistoryRefill(state, result);
+        } else {
+          publishChatSessionProjectionMessages(
+            state,
+            prependUniqueNativeMessages(messages, state.chatMessages),
+          );
+        }
+        const grew = state.chatMessages.length > previousCount;
         state.chatHistoryPagination = exhausted
           ? {
               hasMore: false,

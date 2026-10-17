@@ -823,6 +823,84 @@ describe("startup recovery admission", () => {
     await (dirs.length > 1 ? withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, run) : run());
   });
 
+  it("bounds exhausted-target reads and continues after one target fails", async ({ signal }) => {
+    const targets: Awaited<ReturnType<typeof makeMainSessionFixture>>[] = [];
+    for (const name of ["first", "second"]) {
+      targets.push(
+        await makeMainSessionFixture({
+          sessionKey: `agent:main:${name}`,
+          sessionId: `${name}-session`,
+          mainRestartRecovery: {
+            cycleId: `cycle-exhaustion-${name}`,
+            revision: 1,
+            chargedAttempts: 2,
+          },
+          pendingFinalDelivery: makePendingFinalDelivery(),
+        }),
+      );
+    }
+    vi.mocked(callGateway).mockImplementation(async ({ method }) => {
+      if (method === "agent") {
+        throw new Error("final ambiguous dispatch failure");
+      }
+      return { status: "timeout" };
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const prepare = recoveryTargets.prepareExpectedRestartRecoveryCurrent;
+    let preparing = 0;
+    let peakPreparation = 0;
+    const preparedKeys: string[] = [];
+    const prepareSpy = vi
+      .spyOn(recoveryTargets, "prepareExpectedRestartRecoveryCurrent")
+      .mockImplementation(async (params) => {
+        preparedKeys.push(params.expected.sessionKey);
+        preparing++;
+        peakPreparation = Math.max(peakPreparation, preparing);
+        try {
+          if (params.expected.sessionKey === targets[0]!.sessionKey) {
+            entered.resolve();
+            await release.promise;
+            throw new Error("synthetic exhausted-target read failure");
+          }
+          return await prepare(params);
+        } finally {
+          preparing--;
+        }
+      });
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      getConfig: () => ({}),
+      delayMs: 0,
+      maxRetries: 1,
+      stateDir: tmpDir,
+      gatewayRuntime,
+    });
+    try {
+      await withinTest(entered.promise, signal);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      release.resolve();
+      await gatewayRuntime.expectFailedRecovery(4, recovery, signal, targets[1]!);
+      expect(peakPreparation).toBe(1);
+      expect(preparedKeys).toEqual(targets.map(({ sessionKey }) => sessionKey));
+      expect(loadSessionEntry(targets[0]!)).toMatchObject({
+        status: "interrupted",
+        mainRestartRecovery: { chargedAttempts: 3 },
+      });
+      expect(loadSessionEntry(targets[1]!)?.mainRestartRecovery?.tombstone).toBeDefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("synthetic exhausted-target read failure"),
+      );
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      release.resolve();
+      dispatchSettlement.resolve();
+      await recovery.stop();
+      prepareSpy.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   it("stops exhaustion reconciliation while its Gateway admission is suspended", async () => {
     const { storePath } = await makeMainSessionFixture({
       mainRestartRecovery: {

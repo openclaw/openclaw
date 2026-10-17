@@ -154,6 +154,7 @@ export function toCatalogSession(
   return {
     threadId,
     status: thread.status?.type ?? "notLoaded",
+    ...(thread.catalogError ? { catalogError: thread.catalogError } : {}),
     ...(activeFlags?.length ? { activeFlags } : {}),
     archived: false,
     ...(sessionId ? { sessionId } : {}),
@@ -374,6 +375,12 @@ function parseCatalogSession(value: unknown): CodexSessionCatalogSession {
     if (parsed !== undefined) {
       session[key] = parsed;
     }
+  }
+  if (value.catalogError !== undefined) {
+    if (value.catalogError !== "oversized-thread") {
+      throw new Error("Codex session catalog returned an invalid degraded marker");
+    }
+    session.catalogError = value.catalogError;
   }
   if (activeFlags?.length) {
     session.activeFlags = activeFlags;

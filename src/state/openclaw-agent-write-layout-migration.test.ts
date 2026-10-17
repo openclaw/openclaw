@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
+import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { createScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -73,6 +74,45 @@ describe("agent write layout migration", () => {
   it("retains the exact schema-27 admission contract", () => {
     expect(getOpenClawAgentMigrationSchema(27)).toBe(schemaV27);
   });
+
+  it.each([undefined, "full"] as const)(
+    "applies %s integrity policy to indexes outside the migration scope",
+    async (integrityCheck) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const pathname = state.path("write-layout-integrity.sqlite");
+        const source = new DatabaseSync(pathname);
+        seed(source);
+        source.exec(`
+          CREATE TABLE untouched_payloads (value TEXT);
+          CREATE INDEX idx_untouched_payload ON untouched_payloads(value);
+          INSERT INTO untouched_payloads VALUES ('retained');
+        `);
+        source.close();
+        corruptSqliteIndexKey(pathname, "idx_untouched_payload", "retained", "mismatch");
+        using database = new DatabaseSync(pathname);
+        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          const migrate = () =>
+            ensureOpenClawAgentDatabaseSchema(database, {
+              agentId: "main",
+              env: state.env,
+              path: pathname,
+              integrityCheck,
+            });
+          if (integrityCheck === "full") {
+            expect(migrate).toThrow(/integrity_check.*idx_untouched_payload/su);
+          } else {
+            expect(migrate).not.toThrow();
+          }
+        });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          integrityCheck === "full" ? 27 : OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(database.prepare("SELECT value FROM untouched_payloads NOT INDEXED").all()).toEqual([
+          { value: "retained" },
+        ]);
+      });
+    },
+  );
 
   it.each(["commit", "without-origins", "rollback"] as const)(
     "preserves rows, undeclared tables and atomic version publication (%s)",

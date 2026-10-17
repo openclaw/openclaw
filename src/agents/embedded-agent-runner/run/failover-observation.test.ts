@@ -161,12 +161,10 @@ describe("createFailoverDecisionLogger", () => {
     logDecision("rotate_profile");
 
     const observation = firstWarnDetails(warnSpy);
-    // Raw provider bodies stay in structured preview fields; console output
-    // must not dump HTML auth pages into user-visible retry diagnostics.
+    // Preserve classification without writing provider bodies to either log sink.
     expect(observation.providerRuntimeFailureKind).toBe("auth_html");
-    expect(observation.rawErrorPreview).toBe(
-      "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
-    );
+    expect(observation).not.toHaveProperty("rawErrorPreview");
+    expect(JSON.stringify(observation)).not.toContain("<html>");
     expect(observation.consoleMessage).not.toContain("rawError=");
     expect(observation.consoleMessage).not.toContain("<html>");
   });
@@ -195,7 +193,8 @@ describe("createFailoverDecisionLogger", () => {
     // blocks, not auth failures. Their raw HTML must stay out of console
     // failover diagnostics just like auth_html bodies.
     expect(observation.providerRuntimeFailureKind).toBe("upstream_html");
-    expect(observation.rawErrorPreview).toBe(cfChallengeHtml);
+    expect(observation).not.toHaveProperty("rawErrorPreview");
+    expect(JSON.stringify(observation)).not.toContain("<html>");
     expect(observation.consoleMessage).not.toContain("rawError=");
     expect(observation.consoleMessage).not.toContain("<html>");
   });

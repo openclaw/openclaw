@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { Transferable } from "node:worker_threads";
+import { constants as zlibConstants, inflateRawSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
@@ -119,14 +120,18 @@ it("borrows canonical writer proof without a native reader and still fences fore
   });
 });
 
-it.for([0, 1])(
-  "transfers bounded history JSON at offset %i without retaining the worker buffer",
-  async (offset) => {
+it.for([
+  { offset: 0, maxHistoryBytes: 1024, messageBytes: 200_000 },
+  { offset: 1, maxHistoryBytes: 1024, messageBytes: 200_000 },
+  { offset: 0, maxHistoryBytes: 256 * 1024, messageBytes: 64 * 1024 },
+])(
+  "transfers bounded history JSON at offset $offset (budget $maxHistoryBytes) without retaining worker buffers",
+  async ({ offset, maxHistoryBytes, messageBytes }) => {
     await withTranscriptDatabase("history-transfer", async ({ state, database, scope }) => {
       const { agentId, sessionKey, sessionId } = scope;
       const { path } = database;
       replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
-      for (const [index, length] of [64, 200_000].entries()) {
+      for (const [index, length] of [64, messageBytes].entries()) {
         appendTranscriptMessageSync(scope, {
           eventId: `message-${index}`,
           message: {
@@ -146,7 +151,7 @@ it.for([0, 1])(
         sessionAgentId: agentId,
         canonicalKey: sessionKey,
         max: 200,
-        maxHistoryBytes: 1024,
+        maxHistoryBytes,
         effectiveMaxChars: 300_000,
         offset,
         messageId: undefined,
@@ -155,7 +160,7 @@ it.for([0, 1])(
         const reply = await worker.read({
           kind: "history-page",
           database: { agentId, path },
-          request: { kind: "rpc", params: { ...params, encodeResponse } },
+          request: { kind: "rpc", params: { ...params, encodeResponse, deflateResponse: true } },
           target: {
             transcript: {
               agentId,
@@ -190,8 +195,20 @@ it.for([0, 1])(
         expect(page.encodedResponse?.totalMessages).toBe(2);
         expect(page.encodedResponse?.nextOffset).toBe(expected.nextOffset);
         expect(page.encodedResponse?.hasMore).toBe(expected.hasMore);
+        const deflated = page.encodedMessagesDeflate;
+        if (body.byteLength >= 4 * 1024) {
+          assert(deflated);
+          expect(inflateRawSync(deflated, { finishFlush: zlibConstants.Z_SYNC_FLUSH })).toEqual(
+            Buffer.from(body),
+          );
+        } else {
+          expect(deflated).toBeUndefined();
+        }
         const received = structuredClone(reply, { transfer: worker.transfers(reply) });
         expect(body.byteLength).toBe(0);
+        if (deflated) {
+          expect(deflated.byteLength).toBe(0);
+        }
         expect(received).toMatchObject({
           ok: true,
           value: {

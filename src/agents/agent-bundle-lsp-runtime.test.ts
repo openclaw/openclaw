@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as logger from "../logger.js";
 import * as bundleLspConfig from "../plugins/bundle-lsp.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -532,8 +533,9 @@ describe("bundle LSP runtime", () => {
     },
   );
 
-  it("keeps LSP framing aligned after multibyte messages in the same chunk", async () => {
+  it("keeps LSP framing aligned without logging server content", async () => {
     configureSingleLspServer();
+    const debug = vi.spyOn(logger, "logDebug");
     const prefix = encodeLspMessage({
       jsonrpc: "2.0",
       method: "window/logMessage",
@@ -543,8 +545,13 @@ describe("bundle LSP runtime", () => {
     spawnMock.mockReturnValue(child);
 
     const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+    child.stderr.write("synthetic-private-lsp-file-content\n");
 
     expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
+    expect(debug).toHaveBeenCalledWith("bundle-lsp:typescript: notification window/logMessage");
+    const logs = debug.mock.calls.flat().join(" ");
+    expect(logs).not.toContain("ready té");
+    expect(logs).not.toContain("synthetic-private-lsp-file-content");
     await runtime.dispose();
   });
 

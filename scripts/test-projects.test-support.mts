@@ -916,10 +916,6 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "extensions/google-meet/src/cli-artifact-commands.ts",
-    ["extensions/google-meet/src/cli-artifacts.test.ts"],
-  ],
-  [
     "extensions/google-meet/src/cli-export.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
@@ -927,11 +923,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "extensions/google-meet/src/cli-space-commands.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
-  [
-    "extensions/google-meet/src/cli-runtime-commands.ts",
-    ["extensions/google-meet/src/cli-runtime.test.ts"],
-  ],
-  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
   [
     "extensions/google-meet/src/cli-command-context.ts",
     [

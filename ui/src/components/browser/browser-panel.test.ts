@@ -164,7 +164,7 @@ describe("normalizeBrowserUrlDraft", () => {
         client: GatewayBrowserClient;
         browserPanelController: BrowserPanel;
         renderRoot: HTMLElement;
-        requestUpdate: () => void;
+        invalidate: () => void;
         updateComplete: Promise<unknown>;
       };
       panel.available = true;
@@ -177,7 +177,7 @@ describe("normalizeBrowserUrlDraft", () => {
 
       panel.browserPanelController.activeTargetId = "tab-a";
       panel.browserPanelController.view = retained ? createView("tab-a") : null;
-      panel.requestUpdate();
+      panel.invalidate();
       await panel.updateComplete;
       const preview = panel.renderRoot.querySelector(".bp-shot");
       const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input");
