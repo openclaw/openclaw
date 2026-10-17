@@ -30,16 +30,8 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import {
-  ensureCanonicalUserProfileForEmail,
-  setCanonicalUserProfileRole,
-} from "../../state/user-profile-writes.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-  GatewayClient,
-} from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   readMediaBuffer: vi.fn(),
@@ -87,15 +79,18 @@ import {
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { sessionRewindHandlers } from "./sessions-rewind.js";
+import {
+  sessionKey,
+  sourceSessionId,
+  messageCutContext as context,
+  invokeHandler as invoke,
+  restrictedOperator,
+  holdLifecycle,
+} from "./sessions-rewind.handler.test-support.js";
 
 // One teardown owns drainage and deletion so a failed drain retains the fixture root.
 const tempDirs = createTempDirTracker();
-const sessionKey = "agent:main:rewind-handler";
-const sourceSessionId = "rewind-handler-source";
 const sourceScope = { agentId: "main", sessionKey };
 const transcriptScope = { ...sourceScope, sessionId: sourceSessionId };
 const sessionLane = resolveEmbeddedSessionLane(sessionKey);
@@ -247,51 +242,6 @@ it("drains rewind fixture owners before closing handles and restoring selectors"
   });
 });
 
-function context(active = false): GatewayRequestContext {
-  return {
-    broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(
-      active ? [["active-run", { sessionId: sourceSessionId, sessionKey }]] : undefined,
-    ),
-    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
-    getSessionEventSubscriberConnIds: () => new Set(),
-  } as unknown as GatewayRequestContext;
-}
-
-type MessageCutMethod =
-  | "sessions.branches.list"
-  | "sessions.branches.switch"
-  | "sessions.fork"
-  | "sessions.rewind";
-
-async function invoke(
-  method: MessageCutMethod,
-  entryId?: string,
-  options: Partial<GatewayRequestHandlerOptions> = {},
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    sessionRewindHandlers[method],
-    `${method} handler`,
-  )({
-    req: { id: `${method}-request` } as never,
-    params: {
-      sessionKey,
-      ...(method === "sessions.branches.switch"
-        ? { leafEntryId: entryId }
-        : method === "sessions.branches.list"
-          ? {}
-          : { entryId }),
-    },
-    respond,
-    context: context(),
-    client: null,
-    isWebchatConnect: () => false,
-    ...options,
-  });
-  return respond;
-}
-
 type QueuedSessionWork = {
   command: Promise<string>;
   followup: FollowupRun;
@@ -362,45 +312,6 @@ async function archiveSourceSession(storePath?: string): Promise<void> {
     archivedAt: Date.now(),
   }));
   expectDefined(entry, "source session");
-}
-
-async function restrictedOperator(email: string, agentId: string, sandbox?: "required") {
-  const profile = await ensureCanonicalUserProfileForEmail(email);
-  await setCanonicalUserProfileRole(profile.id, "guest");
-  const client: GatewayClient = {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", version: "test", platform: "test", mode: "test" },
-      scopes: ["operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-  };
-  const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-    agents: { entries: { main: {} } },
-    gateway: {
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others: "view" },
-            agents: [agentId],
-            scopes: ["operator.read", "operator.write"],
-            ...(sandbox ? { sandbox } : {}),
-          },
-        },
-      },
-    },
-  });
-  return {
-    profile,
-    options: { client, context: { ...context(), getRuntimeConfig: runtimeConfig } },
-  };
 }
 
 describe("session message-cut methods", () => {
@@ -534,11 +445,13 @@ describe("session message-cut methods", () => {
   });
 
   it.each([
-    ["user-entry", "entry is not a branch tip"],
-    ["assistant-entry", "branch is already active"],
-  ])("rejects invalid branch switch target %s", async (entryId, message) => {
-    const respond = await invoke("sessions.branches.switch", entryId);
-    expectRejected(respond, expect.stringContaining(message));
+    ["sessions.branches.switch", "user-entry", "entry is not a branch tip"],
+    ["sessions.branches.switch", "assistant-entry", "branch is already active"],
+    ["sessions.rewind", "missing", "message entry not found"],
+    ["sessions.rewind", "assistant-entry", "entry is not a user message"],
+    ["sessions.rewind", "off-path-entry", "not on the active path"],
+  ] as const)("rejects invalid %s target %s", async (method, entryId, message) => {
+    expectRejected(await invoke(method, entryId), expect.stringContaining(message));
   });
 
   it.each(["sessions.rewind", "sessions.fork"] as const)(
@@ -571,12 +484,9 @@ describe("session message-cut methods", () => {
           editorAttachments: [{ mimeType: "image/png", data: storedImageData.toString("base64") }],
         }),
       );
-      expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(1);
-      expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
-        storedImageId,
-        "inbound",
-        expect.any(Number),
-      );
+      expect(mocks.readMediaBuffer.mock.calls).toEqual([
+        [storedImageId, "inbound", expect.any(Number)],
+      ]);
     },
   );
 
@@ -649,34 +559,19 @@ describe("session message-cut methods", () => {
 
   it("rechecks archived state after waiting for the session lifecycle lock", async () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const mutationEntered = createDeferredCore();
-    const releaseMutation = createDeferredCore();
-    const archiving = runExclusiveSessionLifecycleMutation("archive", {
-      scope: storePath,
-      identities: [sourceSessionId],
-      run: async () => {
-        mutationEntered.resolve();
-        await releaseMutation.promise;
-        await archiveSourceSession(storePath);
-      },
-    });
-    await mutationEntered.promise;
+    const { release, settled: archiving } = await holdLifecycle(
+      storePath,
+      sourceSessionId,
+      "archive",
+      () => archiveSourceSession(storePath),
+    );
 
     const rewinding = invoke("sessions.rewind", "user-entry");
-    releaseMutation.resolve();
+    release();
     await archiving;
 
     const respond = await rewinding;
     expectRejected(respond, "Rewind is unavailable for archived sessions.");
-  });
-
-  it.each([
-    ["missing", "message entry not found"],
-    ["assistant-entry", "entry is not a user message"],
-    ["off-path-entry", "not on the active path"],
-  ])("returns a typed validation error for %s", async (entryId, message) => {
-    const respond = await invoke("sessions.rewind", entryId);
-    expectRejected(respond, expect.stringContaining(message));
   });
 
   it.each([

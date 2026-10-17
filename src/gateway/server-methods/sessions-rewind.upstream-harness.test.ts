@@ -11,20 +11,19 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
-  ensureCanonicalUserProfileForEmail,
-  setCanonicalUserProfileRole,
-} from "../../state/user-profile-writes.js";
-import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { sessionRewindHandlers } from "./sessions-rewind.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import {
+  cfg,
+  installHarness,
+  invokeHandler as invoke,
+  restrictedOperator,
+  sessionKey,
+  sourceSessionId,
+} from "./sessions-rewind.handler.test-support.js";
 
 const mocks = { upstreamFork: vi.fn() };
-const sessionKey = "agent:main:rewind-handler";
-const sourceSessionId = "rewind-handler-source";
-const cfg = { agents: { entries: { main: {} } } };
 const forkFailure = {
   status: "failed",
   code: "upstream-unavailable",
@@ -49,43 +48,6 @@ afterEach(async () => {
   resetPluginRuntimeStateForTest();
 });
 
-async function invoke(
-  method:
-    | "sessions.branches.list"
-    | "sessions.branches.switch"
-    | "sessions.fork"
-    | "sessions.rewind",
-  entryId = "user-entry",
-  client: GatewayClient | null = null,
-  runtimeConfig?: GatewayRequestContext["getRuntimeConfig"],
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    sessionRewindHandlers[method],
-    `${method} handler`,
-  )({
-    req: { id: `${method}-request` } as never,
-    params: {
-      sessionKey,
-      ...(method === "sessions.branches.switch"
-        ? { leafEntryId: entryId }
-        : method === "sessions.branches.list"
-          ? {}
-          : { entryId }),
-    },
-    respond,
-    context: {
-      broadcastToConnIds: vi.fn(),
-      chatAbortControllers: new Map(),
-      getRuntimeConfig: runtimeConfig ?? (() => cfg),
-      getSessionEventSubscriberConnIds: () => new Set(),
-    } as unknown as GatewayRequestContext,
-    client,
-    isWebchatConnect: () => false,
-  });
-  return respond;
-}
-
 function linkToUpstreamConversation(): void {
   expect(
     upsertSessionUpstreamLink({
@@ -109,31 +71,19 @@ function installUpstreamForkHarness(
     upstreamKinds: ["codex-app-server" as const],
     fork: mocks.upstreamFork,
   };
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "test-harness",
-    source: "runtime",
-    harness: {
-      id: "test-harness",
-      label: "Test harness",
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      ...(contract !== "v2"
-        ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
-        : {}),
-      ...(contract !== "legacy"
-        ? {
-            sessionForkV2: {
-              ...(executionEnvironment ? { executionEnvironment } : {}),
-              ...sessionFork,
-            },
-          }
-        : {}),
-      supports: () => ({ supported: false }),
-    },
+  installHarness({
+    ...(contract !== "v2"
+      ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
+      : {}),
+    ...(contract !== "legacy"
+      ? {
+          sessionForkV2: {
+            ...(executionEnvironment ? { executionEnvironment } : {}),
+            ...sessionFork,
+          },
+        }
+      : {}),
   });
-  setActivePluginRegistry(registry);
 }
 
 function entries() {
@@ -231,40 +181,17 @@ describe("upstream session message-cut methods", () => {
   it.each(["dual", "legacy", "v2"] as const)(
     "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",
     async (contract) => {
-      const profile = await ensureCanonicalUserProfileForEmail(
+      const { options } = await restrictedOperator(
         `sandbox-required-${contract}-fork@example.com`,
+        "main",
+        "required",
+        false,
       );
-      await setCanonicalUserProfileRole(profile.id, "guest");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const client = {
-        connect: { scopes: ["operator.write"] },
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        },
-      } as GatewayClient;
-      const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-        agents: { entries: { main: {} } },
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: ["main"],
-                scopes: ["operator.read", "operator.write"],
-                sandbox: "required",
-              },
-            },
-          },
-        },
-      });
       installUpstreamForkHarness("host-only", contract);
       const fork = await withPluginRuntimeGatewayRequestScope(
-        { client, isWebchatConnect: () => false },
-        () => invoke("sessions.fork", undefined, client, runtimeConfig),
+        { client: options.client, isWebchatConnect: () => false },
+        () => invoke("sessions.fork", undefined, options),
       );
       expectFailure(fork, {
         details: expect.objectContaining({

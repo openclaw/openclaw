@@ -1,11 +1,10 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
-import * as sqlite from "../../infra/kysely-sync.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as sessionUtils from "../session-utils.js";
@@ -28,30 +27,31 @@ async function residentRows(
 ) {
   const context = requestContext(await seedSessions());
   const client = identifiedClient(email);
+  const list = (params: Parameters<typeof listSessions>[0]["request"] = request, reader = client) =>
+    listSessions({ context, client: reader, request: params });
   await listSessions({ context, client, request: initialRequest });
-  return { context, client, projection: getSessionRowProjection(context)! };
-}
-
-function invoke(
-  method: "list" | "describe",
-  context: ReturnType<typeof requestContext>,
-  client: ReturnType<typeof identifiedClient>,
-  params: Record<string, unknown>,
-  respond = vi.fn(),
-) {
-  const handler =
-    method === "list"
-      ? sessionReadHandlers["sessions.list"]!
-      : sessionByKeyReadHandlers["sessions.describe"]!;
-  const pending = handler({
-    req: { type: "req", id: "resident-row", method: `sessions.${method}` },
-    params,
-    context,
-    client,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return { pending, respond };
+  const projection = getSessionRowProjection(context)!;
+  const update = (patch: Partial<SessionEntry>) =>
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      { ...projection.describe({ agentId: "main", key })!.entry, ...patch },
+    );
+  const respond = vi.fn();
+  const invoke = (method: "list" | "describe") => {
+    const handler =
+      method === "list"
+        ? sessionReadHandlers["sessions.list"]!
+        : sessionByKeyReadHandlers["sessions.describe"]!;
+    return handler({
+      req: { type: "req", id: "resident-row", method: `sessions.${method}` },
+      params: method === "list" ? initialRequest : { key },
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+    });
+  };
+  return { list, update, respond, invoke, projection };
 }
 
 function expectSession(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
@@ -61,133 +61,91 @@ function expectSession(respond: ReturnType<typeof vi.fn>, fields: Record<string,
   );
 }
 
+function withRows(...options: Parameters<typeof residentRows>) {
+  return (run: (rows: Awaited<ReturnType<typeof residentRows>>) => Promise<void>) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => run(await residentRows(...options)));
+}
+
 describe("resident session rows", () => {
-  it.each([
-    { method: "list", transition: "a commit arrives as readiness resolves" },
-    { method: "describe", transition: "its row is dirtied before the request" },
-  ] as const)("keeps sessions.$method current when $transition", async ({ method }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { context, client, projection } = await residentRows("owner@example.com", {
-        archived: "all",
-      });
-      const entry = projection.describe({ agentId: "main", key })!.entry;
-      const respond = vi.fn();
-      const commit = () =>
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          { ...entry, label: "Current" },
+  it.each(["list", "describe"] as const)("keeps %s current at readiness", async (method) => {
+    await withRows("owner@example.com", { archived: "all" })(
+      async ({ update, invoke, projection, respond }) => {
+        const commit = () => update({ label: "Current" });
+        if (method === "describe") {
+          commit();
+          const prepare = projection.withPreparedExactRows.bind(projection);
+          vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
+            (queries, consume, options) =>
+              prepare(
+                queries,
+                (read) => {
+                  const result = consume(read);
+                  expect(respond).toHaveBeenCalledTimes(1);
+                  return result;
+                },
+                options,
+              ),
+          );
+        }
+        const pending = invoke(method);
+        if (method === "list") {
+          commit();
+        }
+        await expect(Promise.resolve(pending)).resolves.toBeUndefined();
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        const result = respond.mock.calls[0]?.[1];
+        const rows = method === "list" ? result.sessions : [result.session];
+        expect(rows).toEqual(
+          expect.arrayContaining([expect.objectContaining({ key, label: "Current" })]),
         );
-      if (method === "describe") {
-        commit();
-        const prepare = projection.withPreparedExactRows.bind(projection);
-        vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
-          (queries, consume, options) =>
-            prepare(
-              queries,
-              (read) => {
-                const result = consume(read);
-                expect(respond).toHaveBeenCalledTimes(1);
-                return result;
-              },
-              options,
-            ),
-        );
-      }
-      const { pending } = invoke(
-        method,
-        context,
-        client,
-        method === "list" ? { archived: "all" } : { key },
-        respond,
-      );
-      if (method === "list") {
-        commit();
-      }
-      await expect(Promise.resolve(pending)).resolves.toBeUndefined();
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      expect(respond.mock.calls[0]?.[1]).toMatchObject(
-        method === "list"
-          ? {
-              sessions: expect.arrayContaining([
-                expect.objectContaining({ key, label: "Current" }),
-              ]),
-            }
-          : { session: expect.objectContaining({ key, label: "Current" }) },
-      );
-    });
+      },
+    );
   });
 
   it("replies in the final authorized presentation before yielding its result promise", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { context, client, projection } = await residentRows("viewer@example.com", {});
-      const respond = vi.fn();
+    await withRows(
+      "viewer@example.com",
+      {},
+    )(async ({ update, invoke, respond }) => {
       const list = sessionUtils.listProjectedSessions;
       vi.spyOn(sessionUtils, "listProjectedSessions").mockImplementationOnce(async (params) => {
         const result = await list(params);
         expect(respond).toHaveBeenCalledWith(true, result);
         // The reply must precede a later microtask's access revocation.
-        const row = projection.describe({ key, agentId: "main" })!;
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: row.key },
-          { ...row.entry, visibility: "draft" },
-        );
+        update({ visibility: "draft" });
         return result;
       });
-      await invoke("list", context, client, {}, respond).pending;
+      await invoke("list");
       expect(respond).toHaveBeenCalledTimes(1);
     });
   });
 
   it("lists for different viewers, filters a person and describes without SQLite after initialization", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { context, client, projection } = await residentRows();
+    await withRows()(async ({ list, invoke, projection, respond }) => {
       const viewer = identifiedClient("viewer@example.com");
       expect(projection.dirtyRowCount).toBe(0);
-
-      // Native calls also cover prepared compiled queries and direct PRAGMA probes.
-      const sqlCalls = [
-        vi.spyOn(sqlite, "executeSqliteQuerySync"),
-        vi.spyOn(sqlite, "executeSqliteQueryTakeFirstSync"),
-        vi.spyOn(sqlite, "iterateSqliteQuerySync"),
-        vi.spyOn(DatabaseSync.prototype, "prepare"),
-      ];
-      const reads = observeMainThreadReads();
-      const person = await listSessions({
-        context,
-        client,
-        request: { archived: "all", involvingProfileId: "deadbeef" },
-      });
+      const sql = observeMainThreadSql();
+      const person = await list({ archived: "all", involvingProfileId: "deadbeef" });
       expect(person.sessions).toEqual([]);
-      const listed = await listSessions({ context, client: viewer, request });
-      const { pending, respond } = invoke("describe", context, client, { key });
-      await pending;
+      const listed = await list(request, viewer);
+      await invoke("describe");
 
       expect(listed.sessions.map((row) => row.key)).toContain("agent:main:active");
       expect(listed.sessions.map((row) => row.key)).not.toContain("agent:main:draft");
       expectSession(respond, { sessionId: "main-active" });
-      expect([...sqlCalls.map((spy) => spy.mock.calls.length), reads.count()]).toEqual([
-        0, 0, 0, 0, 0,
-      ]);
+      sql.expectIdle();
     });
   });
 
   it("refreshes only the invalidated identity through bounded keyed readers, then reuses it without SQL", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { context, client, projection } = await residentRows();
+    await withRows()(async ({ list, update, invoke, projection, respond }) => {
       const current = projection.describe({ agentId: "main", key })!;
       const untouched = projection.describe({ agentId: "work", key: "agent:work:active" })!;
       const before = projection.materializedCount;
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key },
-        { ...current.entry, label: "Committed label" },
-      );
+      update({ label: "Committed label" });
       // Complete commit receipts reuse their facts; missing facts require the keyed fallback.
-      sessionChanges.invalidate({
-        agentId: "main",
-        sessionKey: key,
-        scope: "session-entry",
-        factsInvalidated: true,
-      });
+      const invalidation = { agentId: "main", sessionKey: key, factsInvalidated: true };
+      sessionChanges.invalidate({ ...invalidation, scope: "session-entry" });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
       const workerKeys = vi.fn<(keys: readonly string[]) => void>();
       const readDatabases = historyWorker.withSessionHistoryWorkerDatabases;
@@ -206,34 +164,28 @@ describe("resident session rows", () => {
           ),
       );
       const hostSql = observeHostDataSql();
-      try {
-        sessionChanges.emit({
-          agentId: "main",
-          sessionKey: key,
-          storePath: current.storeTarget.storePath,
-          factsInvalidated: true,
-        });
-        const listed = await listSessions({ context, client, request });
-        expect(listed.sessions.find((row) => row.key === key)?.label).toBe("Committed label");
-        expect(projection.materializedCount - before).toBe(1);
-        expect(
-          projection.describe({ agentId: "work", key: "agent:work:active" })?.materialized,
-        ).toBe(untouched.materialized);
-        expect(workerKeys).toHaveBeenCalled();
-        for (const [keys] of workerKeys.mock.calls) {
-          expect(keys).toEqual([key]);
-        }
-        expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
-        workerKeys.mockClear();
-        await listSessions({ context, client, request });
-        const { pending, respond } = invoke("describe", context, client, { key });
-        await pending;
-        expectSession(respond, { label: "Committed label" });
-        expect(workerKeys).not.toHaveBeenCalled();
-        expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
-      } finally {
-        hostSql.restore();
+      using _ = { [Symbol.dispose]: hostSql.restore };
+      sessionChanges.emit({
+        ...invalidation,
+        storePath: current.storeTarget.storePath,
+      });
+      const listed = await list();
+      expect(listed.sessions.find((row) => row.key === key)?.label).toBe("Committed label");
+      expect(projection.materializedCount - before).toBe(1);
+      expect(projection.describe({ agentId: "work", key: "agent:work:active" })?.materialized).toBe(
+        untouched.materialized,
+      );
+      expect(workerKeys).toHaveBeenCalled();
+      for (const [keys] of workerKeys.mock.calls) {
+        expect(keys).toEqual([key]);
       }
+      expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+      workerKeys.mockClear();
+      await list();
+      await invoke("describe");
+      expectSession(respond, { label: "Committed label" });
+      expect(workerKeys).not.toHaveBeenCalled();
+      expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
     });
   });
 });

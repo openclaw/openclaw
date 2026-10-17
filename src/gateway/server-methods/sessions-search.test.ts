@@ -3,49 +3,41 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const fixedStorePath = path.resolve("/stores/shared/sessions.sqlite");
 const templateStorePath = path.resolve("/stores/{agentId}.json");
 
-const searchSessionTranscriptsMock = vi.fn();
-const readSessionEntrySummariesMock = vi.fn();
-const resolveExistingAgentSessionStoreTargetsAsyncMock = vi.fn();
+const searchMock = vi.fn();
+const summariesMock = vi.fn();
+const targetsMock = vi.fn();
 
 vi.mock("../../config/sessions/session-transcript-search.js", () => ({
-  searchSessionTranscripts: (...args: unknown[]) => searchSessionTranscriptsMock(...args),
+  searchSessionTranscripts: (...args: unknown[]) => searchMock(...args),
 }));
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
-  readSessionEntrySummariesInWorker: (...args: unknown[]) => readSessionEntrySummariesMock(...args),
+  readSessionEntrySummariesInWorker: (...args: unknown[]) => summariesMock(...args),
 }));
 vi.mock("../../config/sessions/targets-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/targets-runtime.js")>()),
-  resolveExistingAgentSessionStoreTargetsAsync: (...args: unknown[]) =>
-    resolveExistingAgentSessionStoreTargetsAsyncMock(...args),
+  resolveExistingAgentSessionStoreTargetsAsync: (...args: unknown[]) => targetsMock(...args),
 }));
 
 import { sessionReadHandlers } from "./sessions-read.js";
 
-function defaultConfig(): OpenClawConfig {
-  return {
-    agents: {
-      ownership: "explicit",
-      defaults: { systemAgent: { agentId: "main" } },
-      entries: { main: {}, work: {} },
-    },
-  };
-}
-
-let cfg = defaultConfig();
+let cfg: OpenClawConfig;
 
 function hit(sessionKey: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -69,16 +61,16 @@ function entry(sessionId: string, profileId: string) {
   };
 }
 
-function expectError(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-  expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
+function expectError(respond: Mock, message?: unknown, code = "INVALID_REQUEST") {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code, ...(message === undefined ? {} : { message }) }),
+  );
+  expect(searchMock).not.toHaveBeenCalled();
 }
 
-function expectResults(
-  respond: ReturnType<typeof vi.fn>,
-  results: Record<string, unknown>[],
-  extra = {},
-) {
+function expectResults(respond: Mock, results: Record<string, unknown>[], extra = {}) {
   expect(respond).toHaveBeenCalledWith(
     true,
     expect.objectContaining({
@@ -89,7 +81,7 @@ function expectResults(
 }
 
 function expectRequest(overrides: Record<string, unknown>) {
-  expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+  expect(searchMock).toHaveBeenCalledWith({
     agentId: "main",
     query: "needle",
     limit: undefined,
@@ -98,37 +90,23 @@ function expectRequest(overrides: Record<string, unknown>) {
   });
 }
 
-function searchAs(profileId: string, params: Record<string, unknown>) {
-  return callSearch(params, ["operator.read"], profileId);
-}
-
-async function callSearch(
-  params: Record<string, unknown>,
-  scopes?: string[],
-  profileId?: string,
-): Promise<ReturnType<typeof vi.fn>> {
+async function callSearch(params: Record<string, unknown>, profileId?: string): Promise<Mock> {
   const respond = vi.fn();
-  await expectDefined(
-    sessionReadHandlers["sessions.search"],
-    'sessionReadHandlers["sessions.search"] test invariant',
-  )({
+  const handler = expectDefined(sessionReadHandlers["sessions.search"], "search handler");
+  await handler({
     req: { id: "req-search" } as never,
-    params,
+    params: { query: "needle", ...params },
     respond: respond as unknown as RespondFn,
     context: { getRuntimeConfig: () => cfg } as unknown as GatewayRequestContext,
-    client: scopes
+    client: profileId
       ? ({
-          connect: { scopes },
-          ...(profileId
-            ? {
-                authenticatedUserProfile: {
-                  profileId,
-                  displayName: null,
-                  hasAvatar: false,
-                  updatedAt: 1,
-                },
-              }
-            : {}),
+          connect: { scopes: ["operator.read"] },
+          authenticatedUserProfile: {
+            profileId,
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
+          },
         } as never)
       : null,
     isWebchatConnect: () => false,
@@ -136,60 +114,65 @@ async function callSearch(
   return respond;
 }
 
-async function useRestrictedSearchMetadata(others: "none" | "view" = "none") {
-  const accessor = await vi.importActual<
-    typeof import("../../config/sessions/session-entry-read-runtime.js")
-  >("../../config/sessions/session-entry-read-runtime.js");
-  const sessions = await vi.importActual<typeof import("../../config/sessions/targets-runtime.js")>(
-    "../../config/sessions/targets-runtime.js",
-  );
-  readSessionEntrySummariesMock.mockImplementation(accessor.readSessionEntrySummariesInWorker);
-  resolveExistingAgentSessionStoreTargetsAsyncMock.mockImplementation(
-    sessions.resolveExistingAgentSessionStoreTargetsAsync,
-  );
-  searchSessionTranscriptsMock.mockImplementation((params: { sessionKeys?: string[] }) => ({
-    hits: (params.sessionKeys ?? []).map((sessionKey) => hit(sessionKey)),
-    indexing: false,
-  }));
-  cfg = {
-    agents: { ownership: "explicit", entries: { main: {} } },
-    gateway: {
-      roles: {
-        default: "restricted",
-        definitions: {
-          restricted: { sessions: { others }, agents: "*", scopes: ["operator.read"] },
+function withRestrictedState(
+  run: (viewer: string, other: string, state: OpenClawTestState) => Promise<void>,
+  others: "none" | "view" = "none",
+) {
+  return withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      const accessor = await vi.importActual<
+        typeof import("../../config/sessions/session-entry-read-runtime.js")
+      >("../../config/sessions/session-entry-read-runtime.js");
+      const sessions = await vi.importActual<
+        typeof import("../../config/sessions/targets-runtime.js")
+      >("../../config/sessions/targets-runtime.js");
+      summariesMock.mockImplementation(accessor.readSessionEntrySummariesInWorker);
+      targetsMock.mockImplementation(sessions.resolveExistingAgentSessionStoreTargetsAsync);
+      searchMock.mockImplementation((params: { sessionKeys?: string[] }) => ({
+        hits: (params.sessionKeys ?? []).map((sessionKey) => hit(sessionKey)),
+        indexing: false,
+      }));
+      cfg = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "restricted",
+            definitions: {
+              restricted: { sessions: { others }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
         },
-      },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const viewer = ensureProfileForEmail("search-viewer@example.test").id;
+      const other = ensureProfileForEmail("search-other@example.test").id;
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      await run(viewer, other, state);
     },
-  };
-  setRuntimeConfigSnapshot(cfg);
-  return {
-    viewer: ensureProfileForEmail("search-viewer@example.test"),
-    other: ensureProfileForEmail("search-other@example.test"),
-  };
+  );
 }
-
-const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 describe("sessions.search gateway method", () => {
   beforeEach(() => {
-    cfg = defaultConfig();
-    searchSessionTranscriptsMock.mockReset();
-    searchSessionTranscriptsMock.mockReturnValue({ hits: [], indexing: false });
-    readSessionEntrySummariesMock.mockReset();
-    readSessionEntrySummariesMock.mockResolvedValue([]);
-    resolveExistingAgentSessionStoreTargetsAsyncMock.mockReset();
-    resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([]);
+    cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, work: {} },
+      },
+    };
+    searchMock.mockReset().mockReturnValue({ hits: [], indexing: false });
+    summariesMock.mockReset().mockResolvedValue([]);
+    targetsMock.mockReset().mockResolvedValue([]);
   });
 
   it("finds visible rows in a cold retired main store without an explicit key filter", async () => {
-    await withOpenClawTestState(profileState, async () => {
-      const { viewer, other } = await useRestrictedSearchMetadata();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    await withRestrictedState(async (viewer, other) => {
       const visibleKey = "agent:main:retained";
       for (const [sessionKey, profileId] of [
-        [visibleKey, viewer.id],
-        ["agent:main:foreign", other.id],
+        [visibleKey, viewer],
+        ["agent:main:foreign", other],
       ] as const) {
         replaceSessionEntrySync({ agentId: "main", sessionKey }, entry(sessionKey, profileId));
       }
@@ -197,7 +180,7 @@ describe("sessions.search gateway method", () => {
       setRuntimeConfigSnapshot(cfg);
       closeOpenClawAgentDatabasesForTest();
 
-      const respond = await searchAs(viewer.id, { agentId: "main", query: "needle" });
+      const respond = await callSearch({ agentId: "main" }, viewer);
       expect(respond).toHaveBeenCalledWith(true, {
         results: [expect.objectContaining({ sessionKey: visibleKey })],
       });
@@ -205,9 +188,7 @@ describe("sessions.search gateway method", () => {
   });
 
   it("reports duplicate retired rows before searching either transcript store", async () => {
-    await withOpenClawTestState(profileState, async (state) => {
-      const { viewer } = await useRestrictedSearchMetadata();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    await withRestrictedState(async (viewer, _other, state) => {
       cfg = {
         ...cfg,
         session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.json") },
@@ -222,29 +203,24 @@ describe("sessions.search gateway method", () => {
           {
             sessionId: directory === "Retired Agent" ? "retired-first" : "retired-second",
             updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: viewer.id },
+            createdActor: { type: "human", source: "profile", id: viewer },
           },
         );
       }
 
-      const respond = await searchAs(viewer.id, { agentId: "retired-agent", query: "needle" });
-      expectError(respond, {
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("duplicate rows"),
-      });
+      const respond = await callSearch({ agentId: "retired-agent" }, viewer);
+      expectError(respond, expect.stringContaining("duplicate rows"), "UNAVAILABLE");
     });
   });
 
   it("hides a retired session whose visibility changes while its transcript is searched", async () => {
-    await withOpenClawTestState(profileState, async () => {
-      const { viewer, other } = await useRestrictedSearchMetadata("view");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    await withRestrictedState(async (viewer, other) => {
       const sessionKey = "agent:main:retained";
-      const retained = entry("retained-session", other.id);
+      const retained = entry("retained-session", other);
       replaceSessionEntrySync({ agentId: "main", sessionKey }, retained);
       cfg = { ...cfg, agents: { ownership: "explicit", entries: { research: {} } } };
       setRuntimeConfigSnapshot(cfg);
-      searchSessionTranscriptsMock.mockImplementationOnce(() => {
+      searchMock.mockImplementationOnce(() => {
         replaceSessionEntrySync(
           { agentId: "main", sessionKey },
           { ...retained, visibility: "draft" },
@@ -255,15 +231,23 @@ describe("sessions.search gateway method", () => {
         };
       });
 
-      const respond = await searchAs(viewer.id, { agentId: "main", query: "needle" });
+      const respond = await callSearch({ agentId: "main" }, viewer);
 
       expect(respond).toHaveBeenCalledWith(true, { results: [] });
-    });
+    }, "view");
   });
 
-  it("validates params and rejects whitespace-only queries", async () => {
-    expectError(await callSearch({ query: "needle", limit: 26 }), { code: "INVALID_REQUEST" });
-    expectError(await callSearch({ query: "   " }), { message: "query must not be empty" });
+  it.each<[string, Record<string, unknown>, unknown]>([
+    ["invalid limits", { limit: 26 }, undefined],
+    ["whitespace-only queries", { query: "   " }, "query must not be empty"],
+    [
+      "multiple agent stores",
+      { sessionKeys: ["agent:main:main", "agent:work:main"] },
+      expect.stringContaining("one agent per call"),
+    ],
+    ["agentId widening an unfiltered search", { agentId: "work" }, "agentId requires sessionKeys"],
+  ])("rejects %s before transcript lookup", async (_name, params, message) => {
+    expectError(await callSearch(params), message);
   });
 
   it.each([undefined, fixedStorePath, templateStorePath])(
@@ -272,7 +256,7 @@ describe("sessions.search gateway method", () => {
       if (storePath) {
         cfg = { ...cfg, session: { store: storePath } };
       }
-      searchSessionTranscriptsMock.mockReturnValue({
+      searchMock.mockReturnValue({
         hits: [hit("agent:work:main")],
         indexing: true,
         truncated: true,
@@ -306,38 +290,32 @@ describe("sessions.search gateway method", () => {
 
     const respond = await callSearch({
       agentId: "research",
-      query: "needle",
       sessionKeys: ["global"],
     });
 
-    expectError(respond, {
-      code: "INVALID_REQUEST",
-      message: 'agent "research" does not match session key agent "ops"',
-    });
+    expectError(respond, 'agent "research" does not match session key agent "ops"');
   });
 
   it("filters incognito candidates before applying a non-admin result limit", async () => {
     const incognitoKey = "agent:main:dashboard:incognito-newer";
     const durableKey = "agent:main:dashboard:durable";
     const candidates = [hit(incognitoKey, { score: 10 }), hit(durableKey)];
-    searchSessionTranscriptsMock.mockImplementation(
-      (params: { limit?: number; sessionKeys?: string[] }) => {
-        const selected = candidates.filter((candidate) =>
-          params.sessionKeys?.includes(candidate.sessionKey),
-        );
-        return {
-          hits: selected.slice(0, params.limit),
-          indexing: false,
-          truncated: selected.length > (params.limit ?? selected.length),
-        };
-      },
-    );
-    readSessionEntrySummariesMock.mockResolvedValue([
+    searchMock.mockImplementation((params: { limit?: number; sessionKeys?: string[] }) => {
+      const selected = candidates.filter((candidate) =>
+        params.sessionKeys?.includes(candidate.sessionKey),
+      );
+      return {
+        hits: selected.slice(0, params.limit),
+        indexing: false,
+        truncated: selected.length > (params.limit ?? selected.length),
+      };
+    });
+    summariesMock.mockResolvedValue([
       { sessionKey: incognitoKey, entry: { incognito: true } },
       { sessionKey: durableKey, entry: {} },
     ]);
 
-    const respond = await searchAs("viewer@example.com", { query: "needle", limit: 1 });
+    const respond = await callSearch({ limit: 1 }, "viewer@example.com");
 
     expectRequest({
       limit: 1,
@@ -346,20 +324,8 @@ describe("sessions.search gateway method", () => {
     expectResults(respond, [{ sessionKey: durableKey }]);
   });
 
-  it("rejects filters spanning multiple agent stores", async () => {
-    const respond = await callSearch({
-      query: "needle",
-      sessionKeys: ["agent:main:main", "agent:work:main"],
-    });
-
-    expectError(respond, {
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("one agent per call"),
-    });
-  });
-
   it("uses agentId to disambiguate an unscoped store key", async () => {
-    await callSearch({ agentId: "work", query: "needle", sessionKeys: ["main", "global"] });
+    await callSearch({ agentId: "work", sessionKeys: ["main", "global"] });
 
     expectRequest({
       agentId: "work",
@@ -367,19 +333,13 @@ describe("sessions.search gateway method", () => {
     });
   });
 
-  it("does not allow agentId to widen an unfiltered search", async () => {
-    const respond = await callSearch({ agentId: "work", query: "needle" });
-
-    expectError(respond, { code: "INVALID_REQUEST", message: "agentId requires sessionKeys" });
-  });
-
   it("searches only scoped keys in existing retired stores and deduplicates migrated hits", async () => {
-    resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([
+    targetsMock.mockResolvedValue([
       { agentId: "retired", storePath: "/stores/retired-a/sessions.json" },
       { agentId: "retired", storePath: "/stores/retired-b/sessions.json" },
     ]);
     const duplicate = hit("agent:retired:main", { messageId: "message-1", score: 3 });
-    searchSessionTranscriptsMock
+    searchMock
       .mockReturnValueOnce({
         hits: [duplicate, { ...duplicate, messageId: "message-2", score: 1 }],
         indexing: false,
@@ -393,14 +353,13 @@ describe("sessions.search gateway method", () => {
 
     const respond = await callSearch({
       agentId: "retired",
-      query: "needle",
       sessionKeys: ["main"],
       limit: 3,
     });
 
-    expect(searchSessionTranscriptsMock).toHaveBeenCalledTimes(2);
-    expect(resolveExistingAgentSessionStoreTargetsAsyncMock).toHaveBeenCalledOnce();
-    expect(searchSessionTranscriptsMock).toHaveBeenNthCalledWith(1, {
+    expect(searchMock).toHaveBeenCalledTimes(2);
+    expect(targetsMock).toHaveBeenCalledOnce();
+    expect(searchMock).toHaveBeenNthCalledWith(1, {
       agentId: "retired",
       query: "needle",
       limit: 25,
@@ -421,12 +380,10 @@ describe("sessions.search gateway method", () => {
         agents: { entries: { main: {} } },
         session: { store: fixedStorePath },
       };
-      resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([
-        { agentId: "retired", storePath: fixedStorePath },
-      ]);
-      await callSearch({ ...(agentId === "retired" ? { agentId } : {}), query: "needle" });
+      targetsMock.mockResolvedValue([{ agentId: "retired", storePath: fixedStorePath }]);
+      await callSearch(agentId === "retired" ? { agentId } : {});
 
-      expect(readSessionEntrySummariesMock).not.toHaveBeenCalled();
+      expect(summariesMock).not.toHaveBeenCalled();
       expectRequest({
         agentId,
         limit: agentId === "retired" ? 25 : undefined,

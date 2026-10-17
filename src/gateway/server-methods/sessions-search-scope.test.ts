@@ -1,7 +1,10 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test as baseTest, vi } from "vitest";
-import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionsListParams,
+  SessionsSearchResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
@@ -51,26 +54,27 @@ function test(name: string, run: () => Promise<void>) {
 function searchContext(email: string, cfg: OpenClawConfig = { agents: { entries: { main: {} } } }) {
   const owner = ensureProfileForEmail(email).id;
   setRuntimeConfigSnapshot(cfg);
-  return { owner, context: requestContext(cfg), client: identifiedClient(owner) };
-}
-
-function expectSearchKeys(result: Awaited<ReturnType<typeof search>>, keys: string[]) {
-  expect(result.ok, result.error?.message).toBe(true);
-  expect(result.payload).toMatchObject({
-    results: keys.map((sessionKey) => ({ sessionKey })),
-    sessions: keys.map((key) => ({ key })),
-  });
-}
-
-async function expectSearch(
-  context: GatewayRequestContext,
-  client: GatewayClient,
-  keys: string[],
-  params: Record<string, unknown> = { query: "needle", scope: {} },
-) {
-  const result = await search(context, client, params);
-  expectSearchKeys(result, keys);
-  return result;
+  const context = requestContext(cfg);
+  const client = identifiedClient(owner);
+  const find = (params = {}, asClient = client) =>
+    search(context, asClient, { query: "needle", scope: {}, ...params });
+  return {
+    owner,
+    context,
+    client,
+    find,
+    async expectKeys(keys: string[], params = {}, asClient = client) {
+      const result = await find(params, asClient);
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(result.payload).toMatchObject({
+        results: keys.map((sessionKey) => ({ sessionKey })),
+        sessions: keys.map((key) => ({ key })),
+      });
+      return result;
+    },
+    list: (request: SessionsListParams = {}, asClient = client) =>
+      listSessions({ context, client: asClient, request }),
+  };
 }
 
 async function search(
@@ -81,16 +85,9 @@ async function search(
   const releaseForeground = retainSessionListForegroundWork();
   try {
     await initializeSessionReadContext(context);
-    let response:
-      | { ok: boolean; payload?: SessionsSearchResult; error?: { message?: string } }
-      | undefined;
-    const respond: RespondFn = (ok, payload, error) => {
-      response = { ok, payload: payload as SessionsSearchResult, error };
-    };
-    await expectDefined(
-      sessionReadHandlers["sessions.search"],
-      "search handler",
-    )({
+    const respond = vi.fn<RespondFn>();
+    const handler = expectDefined(sessionReadHandlers["sessions.search"], "search handler");
+    await handler({
       req: { type: "req", id: "search-scope-test", method: "sessions.search" },
       params,
       context,
@@ -98,18 +95,19 @@ async function search(
       respond,
       isWebchatConnect: () => false,
     });
-    return expectDefined(response, "search response");
+    const [ok, payload, error] = expectDefined(respond.mock.calls.at(-1), "search response");
+    return { ok, payload: payload as SessionsSearchResult, error };
   } finally {
     releaseForeground();
   }
 }
 
 async function seed(
-  agentId: string,
   name: string,
   owner: string,
-  text?: string,
   extra: Parameters<typeof upsertSessionEntryCore>[1] = {},
+  text = "needle",
+  agentId = "main",
   storePath?: string,
 ) {
   const sessionKey = `agent:${agentId}:${name}`;
@@ -145,17 +143,20 @@ const paletteScope = {
   excludeSystem: true,
 };
 
-test("scope search reaches beyond 200 sessions and four agents with bounded matched snapshots", async () => {
-  const owner = ensureProfileForEmail("search-owner@example.test").id;
-  const agents = ["main", "second", "third", "fourth", "fifth"];
-  const cfg: OpenClawConfig = {
+function agentConfig(ids: string[]): OpenClawConfig {
+  return {
     agents: {
       ownership: "explicit",
-      entries: Object.fromEntries(agents.map((id) => [id, {}])),
+      entries: Object.fromEntries(ids.map((id) => [id, {}])),
       defaults: { sessionStore: { agentId: "main" } },
     },
   };
-  setRuntimeConfigSnapshot(cfg);
+}
+
+test("scope search reaches beyond 200 sessions and four agents with bounded matched snapshots", async () => {
+  const agents = ["main", "second", "third", "fourth", "fifth"];
+  const fixture = searchContext("search-owner@example.test", agentConfig(agents));
+  const owner = fixture.owner;
   // These nonmatching roster rows exercise search scope, not asynchronous mutation admission.
   for (let index = 0; index < 205; index++) {
     const agentId = expectDefined(agents[index % agents.length], "fixture agent");
@@ -171,129 +172,93 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
       },
     );
   }
-  const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
-    updatedAt: 1,
-  });
+  const key = await seed("old-target", owner, { updatedAt: 1 }, "distant uniqueneedle", "fifth");
   await Promise.all(
     agents.map((agentId) =>
       expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
     ),
   );
-  const result = await search(requestContext(cfg), identifiedClient(owner), {
+  const result = await fixture.expectKeys([key], {
     query: "uniqueneedle",
     limit: 1,
     scope: paletteScope,
   });
-  expectSearchKeys(result, [key]);
   expect(result.payload).not.toHaveProperty("indexing");
   expect(result.payload).not.toHaveProperty("truncated");
 });
 
 test("scope authorizes and applies membership before the hit limit, and empty scope never widens", async () => {
-  const { owner, context, client } = searchContext("search-viewer@example.test");
+  const fixture = searchContext("search-viewer@example.test");
+  const owner = fixture.owner;
   const groupedSpawn = {
     spawnedBy: "agent:main:parent",
     category: "Research",
     displayName: "Needle conversation",
   };
-  await seed("main", "hidden", "foreign", "needle", {
-    ...groupedSpawn,
-    visibility: "draft",
-  });
-  await seed("main", "system", owner, "needle", {
-    ...groupedSpawn,
-    createdActor: { type: "system", id: "probe" },
-  });
-  await seed("main", "cron:job", owner, "needle", groupedSpawn);
-  await seed("main", "subagent:child", owner, "needle", groupedSpawn);
-  await seed("main", "ungrouped-child", owner, "needle", {
-    ...groupedSpawn,
-    category: " ",
-  });
-  await seed("main", "archived", owner, "needle", { ...groupedSpawn, archivedAt: 1 });
-  await seed("main", "incognito-row", owner, "needle", { ...groupedSpawn, incognito: true });
-  await seed("main", "internal-session-effects:run", owner, "needle");
+  const excluded: Array<[string, string, Parameters<typeof upsertSessionEntryCore>[1]]> = [
+    ["hidden", "foreign", { visibility: "draft" }],
+    ["system", owner, { createdActor: { type: "system", id: "probe" } }],
+    ["cron:job", owner, {}],
+    ["subagent:child", owner, {}],
+    ["ungrouped-child", owner, { category: " " }],
+    ["archived", owner, { archivedAt: 1 }],
+    ["incognito-row", owner, { incognito: true }],
+  ];
+  for (const [name, creator, extra] of excluded) {
+    await seed(name, creator, { ...groupedSpawn, ...extra });
+  }
+  await seed("internal-session-effects:run", owner);
   const visible = await seed(
-    "main",
     "dashboard:visible",
     owner,
-    `needle ${"context ".repeat(30)}`,
     {
       ...groupedSpawn,
       createdVia: "spawn",
       createdActor: { type: "agent", id: "main" },
     },
+    `needle ${"context ".repeat(30)}`,
   );
-  const metadata = await listSessions({
-    context,
-    client,
-    request: { ...paletteScope, search: "needle", limit: 1 },
-  });
+  const metadata = await fixture.list({ ...paletteScope, search: "needle", limit: 1 });
   expect(metadata.sessions.map((row) => row.key)).toEqual([visible]);
   expect(metadata.totalCount).toBe(1);
-  const result = await search(context, client, {
-    query: "needle",
-    limit: 1,
-    scope: paletteScope,
-  });
-  expectSearchKeys(result, [visible]);
+  const result = await fixture.expectKeys([visible], { limit: 1, scope: paletteScope });
   expect(result.payload).not.toHaveProperty("truncated");
   // Visible dashboard sessions stay discoverable with or without a sidebar group.
-  for (const [category, expectedKeys] of [
-    [" ", [visible]],
-    ["Research", [visible]],
-  ] as const) {
+  for (const category of [" ", "Research"]) {
     await upsertSessionEntryCore({ agentId: "main", sessionKey: visible }, { category });
-    const refreshed = await search(context, client, { query: "needle", scope: paletteScope });
+    const refreshed = await fixture.find({ scope: paletteScope });
     expect(refreshed.ok, refreshed.error?.message).toBe(true);
-    expect(refreshed.payload?.results.map((hit) => hit.sessionKey)).toEqual(expectedKeys);
-    expect(
-      (
-        await listSessions({ context, client, request: { ...paletteScope, search: "needle" } })
-      ).sessions.map((row) => row.key),
-    ).toEqual(expectedKeys);
+    expect(refreshed.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
+    const listed = await fixture.list({ ...paletteScope, search: "needle" });
+    expect(listed.sessions.map((row) => row.key)).toEqual([visible]);
   }
-  await expectSearch(context, client, [], {
-    query: "needle",
+  await fixture.expectKeys([], {
     scope: { ...paletteScope, search: "no-such-roster-row" },
   });
   await upsertSessionEntryCore({ agentId: "main", sessionKey: visible }, { visibility: "draft" });
   const other = identifiedClient(ensureProfileForEmail("other-search-viewer@example.test").id);
-  await expectSearch(context, other, [], { query: "needle", scope: paletteScope });
-  expect(
-    await listSessions({
-      context,
-      client: other,
-      request: { ...paletteScope, search: "needle" },
-    }),
-  ).toMatchObject({ sessions: [], totalCount: 0 });
+  await fixture.expectKeys([], { scope: paletteScope }, other);
+  expect(await fixture.list({ ...paletteScope, search: "needle" }, other)).toMatchObject({
+    sessions: [],
+    totalCount: 0,
+  });
 });
 
 test("scope search preserves physical shared-store ownership, agent filters, and bounded hit rows", async () => {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("test state is required");
-  }
+  const stateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "test state is required");
   const storePath = path.join(stateDir, "shared-search.sqlite");
-  const owner = ensureProfileForEmail("shared-search@example.test").id;
   const cfg: OpenClawConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: { main: {}, work_team: {}, workxteam: {} },
-      defaults: { sessionStore: { agentId: "main" } },
-    },
+    ...agentConfig(["main", "work_team", "workxteam"]),
     session: { store: storePath },
   };
-  setRuntimeConfigSnapshot(cfg);
-  await seed("main", "physical-owner", owner, undefined, {}, storePath);
+  const fixture = searchContext("shared-search@example.test", cfg);
+  const owner = fixture.owner;
+  await seed("physical-owner", owner, {}, "", "main", storePath);
   for (let index = 0; index < 27; index++) {
-    await seed("work_team", `match-${index}`, owner, "needle", {}, storePath);
+    await seed(`match-${index}`, owner, {}, "needle", "work_team", storePath);
   }
-  await seed("workxteam", "foreign-namespace", owner, "needle", {}, storePath);
-  const context = requestContext(cfg);
-  const client = identifiedClient(owner);
-  const result = await search(context, client, {
-    query: "needle",
+  await seed("foreign-namespace", owner, {}, "needle", "workxteam", storePath);
+  const result = await fixture.find({
     limit: 25,
     scope: { agentId: "work_team" },
   });
@@ -309,11 +274,10 @@ test("scope search preserves physical shared-store ownership, agent filters, and
   expect(result.payload).toHaveProperty("truncated", true);
   expect(result.payload).not.toHaveProperty("indexing");
   const key = "agent:work_team:match-0";
-  await expectSearch(context, client, [key], { query: "needle", scope: { search: key } });
+  await fixture.expectKeys([key], { scope: { search: key } });
 });
 
 test("scope reports only authorized cold transcripts without restoring them", async () => {
-  const owner = ensureProfileForEmail("archive-search@example.test").id;
   const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },
@@ -322,49 +286,39 @@ test("scope reports only authorized cold transcripts without restoring them", as
       maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
     },
   };
-  setRuntimeConfigSnapshot(cfg);
+  const fixture = searchContext("archive-search@example.test", cfg);
+  const owner = fixture.owner;
   for (const [name, creator] of [
     ["visible", owner],
     ["hidden", "foreign"],
   ] as const) {
-    const sessionKey = await seed("main", name, creator, "cold needle", {
+    const sessionKey = await seed(name, creator, { visibility: "draft" }, "cold needle");
+    const target = { agentId: "main", sessionKey };
+    await replaceSessionEntry(target, {
+      sessionId: `current-${name}`,
+      updatedAt: Date.now(),
       visibility: "draft",
+      createdActor: { type: "human", source: "profile", id: creator },
     });
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: `current-${name}`,
-        updatedAt: Date.now(),
-        visibility: "draft",
-        createdActor: { type: "human", source: "profile", id: creator },
-      },
-    );
     // Replacing the generation clears visibility; apply the current draft policy afterward.
-    const current = await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { visibility: "draft" },
-    );
+    const current = await upsertSessionEntryCore(target, { visibility: "draft" });
     expect(current?.visibility).toBe("draft");
   }
   runOpenClawAgentWriteTransaction(
-    ({ db }) => {
+    ({ db }) =>
       executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<DB>(db)
           .updateTable("session_windows")
           .set({ updated_at: 1, transcript_updated_at: 1 })
           .where("session_id", "in", ["main-visible", "main-hidden"]),
-      );
-    },
+      ),
     { agentId: "main" },
   );
   await expect(runSessionColdStorageMaintenance({ config: cfg })).resolves.toMatchObject({
     archivedTranscripts: 2,
   });
-  const result = await search(requestContext(cfg), identifiedClient(owner), {
-    query: "needle",
-    scope: {},
-  });
+  const result = await fixture.find();
   expect(result).toMatchObject({
     ok: true,
     payload: { results: [], sessions: [], archivedTranscriptsExcluded: 1 },
@@ -381,23 +335,25 @@ test("scope reports only authorized cold transcripts without restoring them", as
 });
 
 test("scope rechecks sharing after readiness and reports FTS failure instead of empty results", async () => {
-  const { context, client } = searchContext("readiness-search@example.test");
-  const key = await seed("main", "revoked", "foreign", "needle");
+  const fixture = searchContext("readiness-search@example.test");
+  const context = fixture.context;
+  const key = await seed("revoked", "foreign");
   await initializeSessionReadContext(context);
   const projection = expectDefined(getSessionRowProjection(context), "search projection");
   const ensureMaterialized = projection.ensureMaterialized;
   vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: key },
-      { sessionId: "replacement-generation", updatedAt: Date.now() },
-    );
-    await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { visibility: "draft" });
+    const target = { agentId: "main", sessionKey: key };
+    await replaceSessionEntry(target, {
+      sessionId: "replacement-generation",
+      updatedAt: Date.now(),
+    });
+    await upsertSessionEntryCore(target, { visibility: "draft" });
     await ensureMaterialized();
   });
-  await expectSearch(context, client, []);
+  await fixture.expectKeys([]);
   await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { visibility: "shared" });
   // Current-node sharing also authorizes its retained pre-reset transcript windows.
-  expect(await search(context, client, { query: "needle", scope: {} })).toMatchObject({
+  expect(await fixture.find()).toMatchObject({
     ok: true,
     payload: {
       results: [{ sessionKey: key, sessionId: "main-revoked" }],
@@ -407,14 +363,14 @@ test("scope rechecks sharing after readiness and reports FTS failure instead of 
   vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementationOnce(() => {
     throw new Error("FTS query failed");
   });
-  expect(await search(context, client, { query: "needle", scope: {} })).toMatchObject({
+  expect(await fixture.find()).toMatchObject({
     ok: false,
     error: { code: "UNAVAILABLE", message: "FTS query failed" },
   });
 });
 
 test("search discards hits and page metadata when sharing is revoked during its worker read", async () => {
-  const { context, client } = searchContext("worker-search@example.test", {
+  const fixture = searchContext("worker-search@example.test", {
     agents: { entries: { main: {} } },
     gateway: {
       roles: {
@@ -427,7 +383,7 @@ test("search discards hits and page metadata when sharing is revoked during its 
   });
   const read = transcriptSearch.searchSessionTranscripts;
   for (const scoped of [true, false]) {
-    const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
+    const key = await seed(`worker-revoked-${scoped}`, "foreign");
     const spy = vi
       .spyOn(transcriptSearch, "searchSessionTranscripts")
       .mockImplementationOnce(async (...args) => {
@@ -437,10 +393,7 @@ test("search discards hits and page metadata when sharing is revoked during its 
         return { ...result, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
       });
     try {
-      const response = await search(context, client, {
-        query: "needle",
-        ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
-      });
+      const response = await fixture.find(scoped ? {} : { scope: undefined, sessionKeys: [key] });
       expect(response.ok).toBe(true);
       expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
     } finally {
@@ -450,12 +403,12 @@ test("search discards hits and page metadata when sharing is revoked during its 
 });
 
 test("search prepares the full scope and rechecks visibility while materializing archived hits", async () => {
-  const { owner: viewer, context, client } = searchContext("archived-search@example.test");
-  const key = await seed("main", "archived-hit", "foreign", "needle", { archivedAt: 1 });
-  const sibling = await seed("main", "non-hit", viewer, "different text", { archivedAt: 1 });
-  const params = { query: "needle", scope: { archived: "all" } };
-  await expectSearch(context, client, [key], params);
-  const projection = expectDefined(getSessionRowProjection(context), "search projection");
+  const fixture = searchContext("archived-search@example.test");
+  const key = await seed("archived-hit", "foreign", { archivedAt: 1 });
+  const sibling = await seed("non-hit", fixture.owner, { archivedAt: 1 }, "different text");
+  const params = { scope: { archived: "all" } };
+  await fixture.expectKeys([key], params);
+  const projection = expectDefined(getSessionRowProjection(fixture.context), "search projection");
   const prepare = projection.withPreparedExactRows.bind(projection);
   vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
     (queries, consume, options) =>
@@ -475,12 +428,12 @@ test("search prepares the full scope and rechecks visibility while materializing
         );
       }),
   );
-  await expectSearch(context, client, [key], params);
+  await fixture.expectKeys([key], params);
   vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
     async (queries, consume, options) => {
       await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { visibility: "draft" });
       return prepare(queries, consume, options);
     },
   );
-  await expectSearch(context, client, [], params);
+  await fixture.expectKeys([], params);
 });
