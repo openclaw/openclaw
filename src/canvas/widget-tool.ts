@@ -435,7 +435,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
                 resourcePath,
               ]),
             ),
-            promptGranted: false,
+            // Transient presentations never receive a dashboard host ticket, so
+            // state events have no receiver; user actions use the same
+            // user-activated prompt channel as HTML sendPrompt. Pinned boards
+            // compose from source with their own grant.
+            promptGranted: true,
           })
         : widgetCode;
       const wrappedDocument = isReport
