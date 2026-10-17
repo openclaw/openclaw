@@ -5,6 +5,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
@@ -23,6 +24,50 @@ const assistantReply =
   "The release notes are ready for review. The next step is checking the examples.";
 
 suite.define(() => {
+  it("loads saved agent and session pins alongside existing session rows", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const legacyKey = "agent:research:legacy-notes";
+        await page.addInitScript(
+          ({ key, legacySessionKey }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sidebarAgentsMode: "roster",
+                pinnedAgentIds: ["main"],
+                railShortcuts: [`session:${legacySessionKey}`],
+              }),
+            );
+          },
+          {
+            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            legacySessionKey: legacyKey,
+          },
+        );
+        await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          sessions: [
+            sessionRow("agent:main:main", "Harbor chat", 30),
+            sessionRow(legacyKey, "Legacy notes", 20),
+          ],
+          methodResponses: { "agents.list": agentsList },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await waitForControlUiRoute(page, { routeId: "chat" });
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await sidebar.locator('[data-pinned-agent="main"]').waitFor();
+        await sidebar.getByRole("link", { name: "Legacy notes", exact: true }).waitFor();
+        expect(await sidebar.locator('[data-agent-group="research"]').count()).toBe(1);
+
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        await waitForControlUiRoute(page, { routeId: "sessions" });
+        await page.locator(".session-data-row").filter({ hasText: "Legacy notes" }).waitFor();
+        expect(await sidebar.locator('[data-pinned-agent="main"]').count()).toBe(1);
+      },
+    );
+  });
+
   it.each([1440, 1366, 768, 390])(
     "keeps row actions and pinned cards accessible at %s px",
     async (width) => {
