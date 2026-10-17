@@ -1,4 +1,3 @@
-// Verifies shell selection, PATH lookup, and platform-specific shell helpers.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -36,6 +35,7 @@ const runtimeHints = [
   "NUSHELL_VERSION",
 ];
 beforeEach(() => {
+  vi.mocked(spawnSync).mockClear();
   envSnapshot = captureEnv([
     "SHELL",
     "PATH",
@@ -65,28 +65,19 @@ function writeCommand(root: string, relativePath: string, executable = false) {
 }
 
 describe("sanitizeBinaryOutput", () => {
-  it("removes ANSI wrappers while retaining printable output", () => {
-    expect(sanitizeBinaryOutput("\u001b[31mred\u001b[0m")).toBe("red");
-    expect(sanitizeBinaryOutput("\u009b31mred\u009b0m")).toBe("red");
-  });
-
-  it("preserves unterminated OSC and pending CSI text at chunk boundaries", () => {
-    expect(sanitizeBinaryOutput("\u001b]unterminated")).toBe("\\x1b]unterminated");
-    expect(sanitizeBinaryOutput("before\u009b31;")).toBe("before\\x9b31;");
-    expect(sanitizeBinaryOutput("\u001b[") + sanitizeBinaryOutput("Ksecret")).toBe("\\x1b[Ksecret");
-  });
-
-  it("applies caller control policy while CSI remains active", () => {
+  it.each([
+    [["\u001b[31mred\u001b[0m"], "red"],
+    [["\u009b31mred\u009b0m"], "red"],
+    [["\u001b]unterminated"], "\\x1b]unterminated"],
+    [["before\u009b31;"], "before\\x9b31;"],
+    [["\u001b[", "Ksecret"], "\\x1b[Ksecret"],
     // SOH executes independently, then "d" terminates CSI as its final byte.
-    expect(sanitizeBinaryOutput("\u009b\u0001done")).toBe("\\x01one");
-    expect(sanitizeBinaryOutput("\u009b31\u0018done")).toBe("done");
-    expect(sanitizeBinaryOutput("\u001b[31\u001adone")).toBe("done");
-  });
-
-  it("escapes residual C0, DEL, and C1 controls", () => {
-    expect(sanitizeBinaryOutput("a\u0000\u0007\u007f\u0080b\t\n")).toBe(
-      "a\\x00\\x07\\x7f\\x80b\t\n",
-    );
+    [["\u009b\u0001done"], "\\x01one"],
+    [["\u009b31\u0018done"], "done"],
+    [["\u001b[31\u001adone"], "done"],
+    [["a\u0000\u0007\u007f\u0080b\t\n"], "a\\x00\\x07\\x7f\\x80b\t\n"],
+  ] as const)("sanitizes controls independently across chunks %j", (chunks, expected) => {
+    expect(chunks.map((text) => sanitizeBinaryOutput(text)).join("")).toBe(expected);
   });
 
   it.each(["report-👩\u200d💻.json"])("preserves Unicode joiners in command output: %s", (text) => {
@@ -104,15 +95,10 @@ describe("sanitizeBinaryOutput", () => {
     expect(sanitizeBinaryOutput(text)).toBe(expected);
     expect(createStreamingBinaryOutputSanitizer()(text)).toBe(expected);
   });
-});
-
-describe("createStreamingBinaryOutputSanitizer", () => {
   it("carries ANSI state across process-output chunks", () => {
     const sanitize = createStreamingBinaryOutputSanitizer();
 
-    expect(sanitize("A\u001b]0;title")).toBe("A");
-    expect(sanitize("\u0007B\u001b[31")).toBe("B");
-    expect(sanitize("mC")).toBe("C");
+    expect(["A\u001b]0;title", "\u0007B\u001b[31", "mC"].map(sanitize)).toEqual(["A", "B", "C"]);
   });
 });
 
@@ -125,22 +111,12 @@ function createTempCommandDir(name: string): string {
 type ShellConfig = ReturnType<typeof getBashShellConfig>;
 
 describe("getShellConfig", () => {
-  beforeEach(() => {
-    if (!isWin) {
-      process.env.SHELL = "/usr/bin/fish";
-    }
-  });
-
   if (isWin) {
     it("uses PowerShell on Windows", () => {
-      const { shell, args } = getShellConfig();
-      const normalized = shell.toLowerCase();
-      if (normalized.includes("powershell")) {
-        expect(normalized).toContain("powershell");
-      } else {
-        expect(normalized).toContain("pwsh");
-      }
-      expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+      expect(getShellConfig()).toMatchObject({
+        shell: expect.stringMatching(/powershell|pwsh/i),
+        args: ["-NoProfile", "-NonInteractive", "-Command"],
+      });
     });
     return;
   }
@@ -204,11 +180,9 @@ describe.skipIf(isWin)("getBashShellConfig POSIX discovery", () => {
     vi.stubEnv("PATH", ":");
     vi.spyOn(process, "cwd").mockReturnValue(root);
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
-    const spawn = vi.mocked(spawnSync);
-    spawn.mockClear();
 
     expect(path.resolve(root, getBashShellConfig().shell)).toBe(path.resolve(root, expected));
-    expect(spawn).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("falls back to sh without spawning which when bash is unavailable", () => {
@@ -219,15 +193,13 @@ describe.skipIf(isWin)("getBashShellConfig POSIX discovery", () => {
     vi.spyOn(fs, "existsSync").mockImplementation((candidate) =>
       candidate === "/bin/bash" ? false : existsSync(candidate),
     );
-    const spawn = vi.mocked(spawnSync);
-    spawn.mockClear();
 
     expect(getBashShellConfig()).toEqual({
       shell: path.join(root, "sh"),
       args: ["-c"],
       commandTransport: "argv",
     });
-    expect(spawn).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 });
 
@@ -343,60 +315,53 @@ describe("getBashShellEnv", () => {
   });
 });
 
-describe("detectRuntimeShell", () => {
-  beforeEach(() => {
+it.runIf(!isWin)(
+  "detectRuntimeShell ignores non-interactive SHELL and falls through to runtime hints",
+  () => {
     for (const key of runtimeHints) {
       delete process.env[key];
     }
-  });
+    process.env.SHELL = "/usr/bin/false";
+    process.env.BASH_VERSION = "5.2.0";
 
-  it.runIf(!isWin)(
-    "ignores non-interactive SHELL placeholders and falls through to runtime hints",
-    () => {
-      process.env.SHELL = "/usr/bin/false";
-      process.env.BASH_VERSION = "5.2.0";
-
-      expect(detectRuntimeShell()).toBe("bash");
-    },
-  );
-});
+    expect(detectRuntimeShell()).toBe("bash");
+  },
+);
 
 describe("getShellConfig on Windows", () => {
+  let programFiles: string;
   beforeEach(() => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     delete process.env.ProgramW6432;
     delete process.env.SystemRoot;
     delete process.env.WINDIR;
+    programFiles = tempDirs.make("openclaw-pfiles-");
+    process.env.ProgramFiles = programFiles;
+    process.env.PATH = "";
   });
 
   it.each(["ProgramFiles", "ProgramW6432"] as const)("finds PowerShell 7 in %s", (installEnv) => {
-    const programFiles = tempDirs.make("openclaw-pfiles-");
     const programW6432 = tempDirs.make("openclaw-pw6432-");
     const pwsh7Path = writeCommand(
       installEnv === "ProgramFiles" ? programFiles : programW6432,
       "PowerShell/7/pwsh.exe",
     );
 
-    process.env.ProgramFiles = programFiles;
     process.env.ProgramW6432 = programW6432;
-    process.env.PATH = "";
 
     expect(getShellConfig().shell).toBe(pwsh7Path);
   });
 
   it("finds pwsh on PATH when not in standard install locations", () => {
-    const programFiles = tempDirs.make("openclaw-pfiles-");
     const binDir = createTempCommandDir("pwsh");
     const pwshPath = path.join(binDir, "pwsh");
 
-    process.env.ProgramFiles = programFiles;
     process.env.PATH = binDir;
 
     expect(getShellConfig().shell).toBe(pwshPath);
   });
 
   it("prefers a native pwsh.exe over earlier bare shims, batch wrappers, and PowerShell 5.1", () => {
-    const programFiles = tempDirs.make("openclaw-pfiles-");
     const shimDir = createTempCommandDir("pwsh");
     const binDir = createTempCommandDir("pwsh.exe");
     const systemRoot = tempDirs.make("openclaw-sysroot-");
@@ -404,7 +369,6 @@ describe("getShellConfig on Windows", () => {
     writeCommand(binDir, "pwsh.cmd", true);
     writeCommand(systemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
 
-    process.env.ProgramFiles = programFiles;
     process.env.SystemRoot = systemRoot;
     process.env.PATH = [shimDir, binDir].join(path.delimiter);
 
@@ -412,13 +376,10 @@ describe("getShellConfig on Windows", () => {
   });
 
   it("falls back to Windows PowerShell 5.1 path when pwsh is unavailable", () => {
-    const programFiles = tempDirs.make("openclaw-pfiles-");
     const sysRoot = tempDirs.make("openclaw-sysroot-");
     const ps51Path = writeCommand(sysRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
 
-    process.env.ProgramFiles = programFiles;
     process.env.SystemRoot = sysRoot;
-    process.env.PATH = "";
 
     expect(getShellConfig().shell).toBe(ps51Path);
   });
