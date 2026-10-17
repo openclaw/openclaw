@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
 import { isTelegramMiniAppOwner } from "./owner.js";
-import { resolveTelegramMiniAppUrls, TELEGRAM_MINIAPP_URL_ERROR } from "./url.js";
+import { describeTelegramMiniAppUrlError, resolveTelegramMiniAppUrls } from "./url.js";
 
 export function registerTelegramMiniAppCommand(
   api: OpenClawPluginApi,
@@ -36,8 +36,8 @@ export function registerTelegramMiniAppCommand(
       let pageUrl: URL;
       try {
         pageUrl = new URL((await resolveTelegramMiniAppUrls({ cfg })).pageUrl);
-      } catch {
-        return { text: TELEGRAM_MINIAPP_URL_ERROR };
+      } catch (err) {
+        return { text: describeTelegramMiniAppUrlError(err) };
       }
       pageUrl.searchParams.set("accountId", accountId);
       pageUrl.hash = new URLSearchParams({
