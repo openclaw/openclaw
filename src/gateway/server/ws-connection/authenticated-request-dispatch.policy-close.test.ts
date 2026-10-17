@@ -34,10 +34,33 @@ function createFixture() {
   const client = createOperatorWsClient({ socket: { close: socketClose } });
   client.usesSharedGatewayAuth = true;
   const harness = createDispatchTestHarness();
-  const dispatch = async (id: string, method = "secrets.reload") =>
-    await harness.dispatcher.dispatch({ type: "req", id, method, params: {} }, client);
-  return { client, harness, dispatch, socketClose, closed };
+  const dispatch = async (id: string, method = "secrets.reload", expectedProfileId?: string) =>
+    await harness.dispatcher.dispatch(
+      { type: "req", id, method, params: {}, ...(expectedProfileId ? { expectedProfileId } : {}) },
+      client,
+    );
+  const invalidate = () =>
+    disconnectStaleSharedGatewayAuthClients({
+      clients: [client],
+      expectedGeneration: null,
+    });
+  return { client, harness, dispatch, socketClose, closed, invalidate };
 }
+
+const profileBinding = (profile: { id: string; updatedAt: number }) => ({
+  profileId: profile.id,
+  displayName: null,
+  avatarRevision: "1",
+  hasAvatar: false,
+  updatedAt: profile.updatedAt,
+});
+const device = (id: string, publicKey: string) => ({
+  id,
+  publicKey,
+  signature: "signature",
+  signedAt: 1,
+  nonce: "nonce",
+});
 
 describe("policy writer response ownership", () => {
   beforeEach(() => {
@@ -60,20 +83,8 @@ describe("policy writer response ownership", () => {
       expect(approved?.status).toBe("approved");
       const client = createOperatorWsClient({ socket: { close: vi.fn() } });
       client.authenticatedUserId = "credential-admin@example.test";
-      client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        avatarRevision: "1",
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
-      client.connect.device = {
-        id: "administrator-device",
-        publicKey: "administrator-public-key",
-        signature: "signature",
-        signedAt: 1,
-        nonce: "nonce",
-      };
+      client.authenticatedUserProfile = profileBinding(profile);
+      client.connect.device = device("administrator-device", "administrator-public-key");
       client.isDeviceTokenAuth = true;
       const context = createDirectChatContext({
         getRuntimeConfig: () => ({}),
@@ -114,43 +125,24 @@ describe("policy writer response ownership", () => {
         .mockImplementationOnce(createBinding)
         .mockRejectedValueOnce(new Error("middle profile preparation failed"));
       const dispatched: Promise<void>[] = [];
-      try {
-        dispatched.push(
-          harness.dispatcher.dispatch(
-            {
-              type: "req",
-              id: "rotate-before-revoke",
-              method: "device.token.rotate",
-              params: { deviceId: targetDeviceId, role: "operator" },
-              expectedProfileId: profile.id,
-            },
-            client,
-          ),
+      const mutate = (id: string, method: string, expectedProfileId?: string) =>
+        harness.dispatcher.dispatch(
+          {
+            type: "req",
+            id,
+            method,
+            params: { deviceId: targetDeviceId, role: "operator" },
+            ...(expectedProfileId ? { expectedProfileId } : {}),
+          },
+          client,
         );
+      try {
+        dispatched.push(mutate("rotate-before-revoke", "device.token.rotate", profile.id));
         await preparationEntered.promise;
         await expect(
-          harness.dispatcher.dispatch(
-            {
-              type: "req",
-              id: "failed-middle-rotation",
-              method: "device.token.rotate",
-              params: { deviceId: targetDeviceId, role: "operator" },
-              expectedProfileId: profile.id,
-            },
-            client,
-          ),
+          mutate("failed-middle-rotation", "device.token.rotate", profile.id),
         ).rejects.toThrow("middle profile preparation failed");
-        dispatched.push(
-          harness.dispatcher.dispatch(
-            {
-              type: "req",
-              id: "final-revoke",
-              method: "device.token.revoke",
-              params: { deviceId: targetDeviceId, role: "operator" },
-            },
-            client,
-          ),
-        );
+        dispatched.push(mutate("final-revoke", "device.token.revoke"));
         await checkpoint.dispatcher.dispatch(
           { type: "req", id: "checkpoint", method: "test.credential-checkpoint", params: {} },
           client,
@@ -181,13 +173,7 @@ describe("policy writer response ownership", () => {
         const source = ensureProfileForEmail("policy-source@example.test");
         const target = ensureProfileForEmail("policy-target@example.test");
         const fixture = createFixture();
-        fixture.client.authenticatedUserProfile = {
-          profileId: source.id,
-          displayName: null,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        };
+        fixture.client.authenticatedUserProfile = profileBinding(source);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const receipt = { committed: true, accountData: "original-account-result" };
@@ -222,24 +208,12 @@ describe("policy writer response ownership", () => {
             },
           }),
         );
-        const request = fixture.harness.dispatcher.dispatch(
-          {
-            type: "req",
-            id: "bound-writer",
-            method: "config.patch",
-            params: {},
-            expectedProfileId: source.id,
-          },
-          fixture.client,
-        );
+        const request = fixture.dispatch("bound-writer", "config.patch", source.id);
         try {
           await Promise.race([entered.promise, request]);
           linkEmail("policy-source@example.test", target.id);
           // The accepted policy writer may bypass transport invalidation, never profile binding.
-          disconnectStaleSharedGatewayAuthClients({
-            clients: [fixture.client],
-            expectedGeneration: null,
-          });
+          fixture.invalidate();
           release.resolve();
           await request;
           expect(await fixture.harness.awaitResponseFrame("bound-writer")).toEqual({
@@ -268,10 +242,7 @@ describe("policy writer response ownership", () => {
       const release = createDeferredCore();
       const handlers = createSecretsHandlers({
         reloadSecrets: async () => {
-          disconnectStaleSharedGatewayAuthClients({
-            clients: [fixture.client],
-            expectedGeneration: null,
-          });
+          fixture.invalidate();
           published.resolve();
           await release.promise;
           if (failed) {
@@ -347,10 +318,7 @@ describe("policy writer response ownership", () => {
         dispatches.push(fixture.dispatch(writer.id, "config.patch"));
         await writer.started.promise;
       }
-      disconnectStaleSharedGatewayAuthClients({
-        clients: [fixture.client],
-        expectedGeneration: null,
-      });
+      fixture.invalidate();
       readRelease.resolve();
       await dispatches[0];
       expect(fixture.harness.send).not.toHaveBeenCalled();
@@ -375,13 +343,7 @@ describe("policy writer response ownership", () => {
     const fixture = createFixture();
     fixture.client.isDeviceTokenAuth = true;
     fixture.client.usesSharedGatewayAuth = false;
-    fixture.client.connect.device = {
-      id: "self",
-      publicKey: "public",
-      signature: "signature",
-      signedAt: 1,
-      nonce: "nonce",
-    };
+    fixture.client.connect.device = device("self", "public");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const closed = createDeferredCore();
@@ -449,10 +411,7 @@ describe("policy writer response ownership", () => {
     const fixture = createFixture();
     runtime.handler.mockImplementation(async ({ respond }) => {
       holdGatewayPolicyResponse(respond);
-      disconnectStaleSharedGatewayAuthClients({
-        clients: [fixture.client],
-        expectedGeneration: null,
-      });
+      fixture.invalidate();
     });
     await fixture.dispatch("writer", "config.apply");
     await fixture.closed.promise;

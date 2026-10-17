@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -43,6 +43,18 @@ const TRACEPARENTS = {
   first: "00-11111111111111111111111111111111-1111111111111111-01",
   second: "00-22222222222222222222222222222222-2222222222222222-00",
 } as const;
+type TraceObservation = {
+  before: DiagnosticTraceContext | undefined;
+  after?: DiagnosticTraceContext;
+};
+type Handler = NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>;
+const traceRequest = (id: string, traceparent?: string, method = "test.trace") => ({
+  type: "req",
+  id,
+  method,
+  params: {},
+  ...(traceparent ? { traceparent } : {}),
+});
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -66,10 +78,7 @@ function createTestAgentRuntimeIdentity(runId: string): AgentRuntimeIdentity {
   };
 }
 
-function createDispatcher(
-  handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>,
-  context: Record<string, unknown> = {},
-) {
+function createDispatcher(handler: Handler, context: Record<string, unknown> = {}) {
   return createDispatchTestHarness({
     connId: "conn-trace-test",
     extraHandlers: { "test.trace": handler },
@@ -84,16 +93,7 @@ async function dispatchInFreshMessageScope(
   traceparent?: string,
 ): Promise<void> {
   await runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-    dispatcher.dispatch(
-      {
-        type: "req",
-        id,
-        method: "test.trace",
-        params: {},
-        ...(traceparent ? { traceparent } : {}),
-      },
-      client,
-    ),
+    dispatcher.dispatch(traceRequest(id, traceparent), client),
   );
 }
 
@@ -101,10 +101,7 @@ async function warmDispatcher(
   harness: ReturnType<typeof createDispatchTestHarness>,
   client: GatewayWsClient,
 ): Promise<void> {
-  await harness.dispatcher.dispatch(
-    { type: "req", id: "warmup", method: "test.trace", params: {} },
-    client,
-  );
+  await harness.dispatcher.dispatch(traceRequest("warmup"), client);
   await harness.awaitResponseFrame("warmup");
 }
 
@@ -115,18 +112,7 @@ async function openAuthenticatedTraceSocket(params: {
 }): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${params.port}`);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const onOpen = () => {
-      ws.off("error", onError);
-      resolve();
-    };
-    const onError = (error: Error) => {
-      ws.off("open", onOpen);
-      reject(error);
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
+  await once(ws, "open");
   try {
     await connectOk(ws, {
       token: params.token,
@@ -143,21 +129,39 @@ async function sendTraceRequest(
   ws: WebSocket,
   id: string,
   traceparent?: string,
-): Promise<{ ok: boolean }> {
-  const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+  method = "test.trace",
+): Promise<{ ok: boolean; error?: unknown }> {
+  const response = onceMessage<{ type: "res"; id: string; ok: boolean; error?: unknown }>(
     ws,
     (value) => value.type === "res" && value.id === id,
   );
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method: "test.trace",
-      params: {},
-      ...(traceparent ? { traceparent } : {}),
+  ws.send(JSON.stringify(traceRequest(id, traceparent, method)));
+  return await response;
+}
+
+async function startTraceServer(method: string, handler: Handler) {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayHandlers[method] = handler;
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "request-dispatch-proof",
+      name: method,
+      handler,
     }),
   );
-  return await response;
+  setTestPluginRegistry(registry);
+  const token = "gateway-request-trace-test-token";
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  const server = await startTestGatewayServer(portClaim, {
+    auth: { mode: "token", token },
+    bind: "loopback",
+    controlUiEnabled: false,
+  });
+  return {
+    server,
+    connect: (connectTraceparent: string) =>
+      openAuthenticatedTraceSocket({ port: portClaim.port, token, connectTraceparent }),
+  };
 }
 
 describe("authenticated WebSocket request trace dispatch", () => {
@@ -401,15 +405,9 @@ describe("authenticated WebSocket request trace dispatch", () => {
   it("isolates concurrent request contexts on one connection", async () => {
     const requestBarrier = createDeferredCore();
     const bothObserved = createDeferredCore();
-    const observed = new Map<
-      string,
-      { before: DiagnosticTraceContext | undefined; after?: DiagnosticTraceContext }
-    >();
+    const observed = new Map<string, TraceObservation>();
     const { dispatcher } = createDispatcher(async ({ req }) => {
-      const observation: {
-        before: DiagnosticTraceContext | undefined;
-        after?: DiagnosticTraceContext;
-      } = { before: getActiveDiagnosticTraceContext() };
+      const observation: TraceObservation = { before: getActiveDiagnosticTraceContext() };
       observed.set(req.id, observation);
       if (observed.size === 2) {
         bothObserved.resolve();
@@ -446,18 +444,11 @@ describe("authenticated WebSocket request trace dispatch", () => {
   });
 
   it("preserves request isolation through a real authenticated WebSocket session", async () => {
-    const observed = new Map<
-      string,
-      { before: DiagnosticTraceContext | undefined; after?: DiagnosticTraceContext }
-    >();
+    const observed = new Map<string, TraceObservation>();
     const bothConcurrentObserved = createDeferredCore();
     let requestBarrier: Deferred | undefined;
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
-      const observation: {
-        before: DiagnosticTraceContext | undefined;
-        after?: DiagnosticTraceContext;
-      } = { before: getActiveDiagnosticTraceContext() };
+    const { server, connect } = await startTraceServer("test.trace", async ({ req, respond }) => {
+      const observation: TraceObservation = { before: getActiveDiagnosticTraceContext() };
       observed.set(req.id, observation);
       if (observed.has("concurrent-first") && observed.has("concurrent-second")) {
         bothConcurrentObserved.resolve();
@@ -465,30 +456,10 @@ describe("authenticated WebSocket request trace dispatch", () => {
       await requestBarrier?.promise;
       observation.after = getActiveDiagnosticTraceContext();
       respond(true, { traced: true });
-    };
-    registry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "request-dispatch-proof",
-        name: "test.trace",
-        handler: registry.gatewayHandlers["test.trace"],
-      }),
-    );
-    setTestPluginRegistry(registry);
-
-    const token = "gateway-request-trace-test-token";
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const server = await startTestGatewayServer(portClaim, {
-      auth: { mode: "token", token },
-      bind: "loopback",
-      controlUiEnabled: false,
     });
     let ws: WebSocket | undefined;
     try {
-      ws = await openAuthenticatedTraceSocket({
-        port: portClaim.port,
-        token,
-        connectTraceparent: TRACEPARENTS.first,
-      });
+      ws = await connect(TRACEPARENTS.first);
 
       await expect(sendTraceRequest(ws, "untraced-after-connect")).resolves.toMatchObject({
         ok: true,
@@ -543,8 +514,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
   it("returns a typed error when a handler response cannot be serialized", async () => {
     let invalidSerializationAttempts = 0;
     const healthySerializationAttempts = new Map<string, number>();
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.serialize"] = ({ req, respond }) => {
+    const { server, connect } = await startTraceServer("test.serialize", ({ req, respond }) => {
       const invalid = req.id === "invalid-payload";
       respond(true, {
         toJSON: () => {
@@ -560,44 +530,13 @@ describe("authenticated WebSocket request trace dispatch", () => {
           return { value: 1 };
         },
       });
-    };
-    registry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "request-dispatch-proof",
-        name: "test.serialize",
-        handler: registry.gatewayHandlers["test.serialize"],
-      }),
-    );
-    setTestPluginRegistry(registry);
-
-    const token = "gateway-response-serialization-test-token";
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const server = await startTestGatewayServer(portClaim, {
-      auth: { mode: "token", token },
-      bind: "loopback",
-      controlUiEnabled: false,
     });
     let ws: WebSocket | undefined;
     try {
-      ws = await openAuthenticatedTraceSocket({
-        port: portClaim.port,
-        token,
-        connectTraceparent: TRACEPARENTS.first,
-      });
-      const response = onceMessage<{ type: "res"; id: string; ok: boolean; error?: unknown }>(
-        ws,
-        (value) => value.type === "res" && value.id === "invalid-payload",
-      );
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "invalid-payload",
-          method: "test.serialize",
-          params: {},
-        }),
-      );
-
-      await expect(response).resolves.toMatchObject({
+      ws = await connect(TRACEPARENTS.first);
+      await expect(
+        sendTraceRequest(ws, "invalid-payload", undefined, "test.serialize"),
+      ).resolves.toMatchObject({
         ok: false,
         error: { code: "UNAVAILABLE", message: "response serialization failed" },
       });
@@ -606,40 +545,16 @@ describe("authenticated WebSocket request trace dispatch", () => {
         onceMessage(ws, (value) => value.type === "res" && value.id === "invalid-payload", 100),
       ).rejects.toThrow("timeout");
 
-      const healthyResponse = onceMessage<{ type: "res"; id: string; ok: boolean }>(
-        ws,
-        (value) => value.type === "res" && value.id === "healthy-after-error",
-      );
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "healthy-after-error",
-          method: "test.serialize",
-          params: {},
-        }),
-      );
-      await expect(healthyResponse).resolves.toMatchObject({ ok: true });
+      await expect(
+        sendTraceRequest(ws, "healthy-after-error", undefined, "test.serialize"),
+      ).resolves.toMatchObject({ ok: true });
       expect(healthySerializationAttempts.get("healthy-after-error")).toBe(1);
 
       ws.terminate();
-      ws = await openAuthenticatedTraceSocket({
-        port: portClaim.port,
-        token,
-        connectTraceparent: TRACEPARENTS.second,
-      });
-      const reconnectResponse = onceMessage<{ type: "res"; id: string; ok: boolean }>(
-        ws,
-        (value) => value.type === "res" && value.id === "healthy-after-reconnect",
-      );
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "healthy-after-reconnect",
-          method: "test.serialize",
-          params: {},
-        }),
-      );
-      await expect(reconnectResponse).resolves.toMatchObject({ ok: true });
+      ws = await connect(TRACEPARENTS.second);
+      await expect(
+        sendTraceRequest(ws, "healthy-after-reconnect", undefined, "test.serialize"),
+      ).resolves.toMatchObject({ ok: true });
       expect(healthySerializationAttempts.get("healthy-after-reconnect")).toBe(1);
     } finally {
       ws?.terminate();

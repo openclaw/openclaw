@@ -1,6 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 
+type Metadata = Parameters<typeof resolvePinnedClientMetadata>[0];
+function resolvePlatforms(
+  claimedPlatform: string,
+  pairedPlatform: string,
+  deviceFamily: string,
+  overrides: Metadata = {},
+) {
+  return resolvePinnedClientMetadata({
+    clientId: "node-host",
+    clientMode: "node",
+    claimedPlatform,
+    pairedPlatform,
+    claimedDeviceFamily: deviceFamily,
+    pairedDeviceFamily: deviceFamily,
+    ...overrides,
+  });
+}
+
+function expectPinned(
+  result: ReturnType<typeof resolvePinnedClientMetadata>,
+  pinnedPlatform: string,
+  pinnedDeviceFamily: string | undefined,
+  refreshPairedPlatform?: string,
+) {
+  expect(result).toEqual({
+    platformMismatch: false,
+    deviceFamilyMismatch: false,
+    pinnedPlatform,
+    pinnedDeviceFamily,
+    ...(refreshPairedPlatform ? { refreshPairedPlatform } : {}),
+  });
+}
+
 describe("resolvePinnedClientMetadata", () => {
   it.each([
     ["win32", "windows", "Windows"],
@@ -8,21 +41,15 @@ describe("resolvePinnedClientMetadata", () => {
   ])(
     "accepts equivalent runtime alias %s as %s regardless of client mode",
     (pairedPlatform, claimedPlatform, claimedDeviceFamily) => {
-      expect(
-        resolvePinnedClientMetadata({
+      expectPinned(
+        resolvePlatforms(claimedPlatform, pairedPlatform, claimedDeviceFamily, {
           clientId: "test",
           clientMode: "test",
-          claimedPlatform,
-          claimedDeviceFamily,
-          pairedPlatform,
           pairedDeviceFamily: undefined,
         }),
-      ).toEqual({
-        platformMismatch: false,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: claimedPlatform,
-        pinnedDeviceFamily: undefined,
-      });
+        claimedPlatform,
+        undefined,
+      );
     },
   );
 
@@ -34,12 +61,9 @@ describe("resolvePinnedClientMetadata", () => {
     "keeps non-equivalent runtime tuples approval-bound: %j",
     ({ pairedPlatform, claimedDeviceFamily }) => {
       expect(
-        resolvePinnedClientMetadata({
+        resolvePlatforms("windows", pairedPlatform, claimedDeviceFamily, {
           clientId: "test",
           clientMode: "test",
-          claimedPlatform: "windows",
-          claimedDeviceFamily,
-          pairedPlatform,
           pairedDeviceFamily: undefined,
         }),
       ).toMatchObject({
@@ -51,12 +75,9 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("does not replace a conflicting family pin during a runtime-alias upgrade", () => {
     expect(
-      resolvePinnedClientMetadata({
+      resolvePlatforms("windows", "win32", "Windows", {
         clientId: "openclaw-tui",
         clientMode: "ui",
-        claimedPlatform: "windows",
-        claimedDeviceFamily: "Windows",
-        pairedPlatform: "win32",
         pairedDeviceFamily: "Linux",
       }),
     ).toMatchObject({
@@ -72,21 +93,11 @@ describe("resolvePinnedClientMetadata", () => {
   ])(
     "normalizes exact legacy node-host platform %s to canonical %s",
     (legacyPlatform, canonicalPlatform, deviceFamily) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId: "node-host",
-          clientMode: "node",
-          claimedPlatform: legacyPlatform,
-          claimedDeviceFamily: deviceFamily,
-          pairedPlatform: legacyPlatform,
-          pairedDeviceFamily: deviceFamily,
-        }),
-      ).toEqual({
-        platformMismatch: false,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: canonicalPlatform,
-        pinnedDeviceFamily: deviceFamily,
-      });
+      expectPinned(
+        resolvePlatforms(legacyPlatform, legacyPlatform, deviceFamily),
+        canonicalPlatform,
+        deviceFamily,
+      );
     },
   );
 
@@ -99,70 +110,35 @@ describe("resolvePinnedClientMetadata", () => {
   ])(
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId,
-          clientMode: "node",
-          claimedPlatform,
-          claimedDeviceFamily: deviceFamily,
-          pairedPlatform,
-          pairedDeviceFamily: deviceFamily,
-        }),
-      ).toEqual({
-        platformMismatch: false,
-        deviceFamilyMismatch: false,
-        pinnedPlatform: claimedPlatform,
-        pinnedDeviceFamily: deviceFamily,
-        refreshPairedPlatform: claimedPlatform,
-      });
+      expectPinned(
+        resolvePlatforms(claimedPlatform, pairedPlatform, deviceFamily, { clientId }),
+        claimedPlatform,
+        deviceFamily,
+        claimedPlatform,
+      );
     },
   );
 
   it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId: "node-host",
-        clientMode: "node",
-        claimedPlatform: "macos",
-        claimedDeviceFamily: "Mac",
-        pairedPlatform: "macOS 26.5.2",
-        pairedDeviceFamily: "Mac",
-      }),
-    ).toEqual({
-      platformMismatch: false,
-      deviceFamilyMismatch: false,
-      pinnedPlatform: "macOS 26.5.2",
-      pinnedDeviceFamily: "Mac",
-    });
+    expectPinned(resolvePlatforms("macos", "macOS 26.5.2", "Mac"), "macOS 26.5.2", "Mac");
   });
 
   it("refreshes a shared node-host macOS pin from the native Mac app", () => {
-    expect(
-      resolvePinnedClientMetadata({
+    expectPinned(
+      resolvePlatforms("macOS 26.5.2", "macos", "Mac", {
         clientId: "openclaw-macos",
         clientMode: "ui",
-        claimedPlatform: "macOS 26.5.2",
-        claimedDeviceFamily: "Mac",
-        pairedPlatform: "macos",
-        pairedDeviceFamily: "Mac",
       }),
-    ).toEqual({
-      platformMismatch: false,
-      deviceFamilyMismatch: false,
-      pinnedPlatform: "macOS 26.5.2",
-      pinnedDeviceFamily: "Mac",
-      refreshPairedPlatform: "macOS 26.5.2",
-    });
+      "macOS 26.5.2",
+      "Mac",
+      "macOS 26.5.2",
+    );
   });
 
   it("still requires approval when an iOS device family changes", () => {
     expect(
-      resolvePinnedClientMetadata({
+      resolvePlatforms("iOS 26.5.0", "iOS 26.4.2", "iPad", {
         clientId: "openclaw-ios",
-        clientMode: "node",
-        claimedPlatform: "iOS 26.5.0",
-        claimedDeviceFamily: "iPad",
-        pairedPlatform: "iOS 26.4.2",
         pairedDeviceFamily: "iPhone",
       }),
     ).toEqual({
@@ -181,16 +157,7 @@ describe("resolvePinnedClientMetadata", () => {
   ])(
     "keeps non-version macOS platform changes approval-bound for %s",
     (clientId, claimed, paired) => {
-      expect(
-        resolvePinnedClientMetadata({
-          clientId,
-          clientMode: "node",
-          claimedPlatform: claimed,
-          claimedDeviceFamily: "Mac",
-          pairedPlatform: paired,
-          pairedDeviceFamily: "Mac",
-        }),
-      ).toMatchObject({
+      expect(resolvePlatforms(claimed, paired, "Mac", { clientId })).toMatchObject({
         platformMismatch: true,
         deviceFamilyMismatch: false,
         pinnedPlatform: undefined,

@@ -22,6 +22,7 @@ vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
 }));
 
 const activeRegistries = new Set<NodeRegistry>();
+const controlUi = { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI };
 
 afterEach(() => {
   for (const registry of activeRegistries) {
@@ -75,7 +76,42 @@ function createPairedNode() {
     } as GatewayWsClient,
     { pairingIdentity: "paired-node-identity" },
   );
-  return { registry, frames, waitForFrameCount };
+  const invoke = async (options: GatewayRequestOptions, withError = false) => {
+    const result = await registry.invoke({
+      nodeId: "paired-node",
+      command: "ollama.chat",
+      timeoutMs: 10_000,
+      signal: options.signal,
+    });
+    if (!withError) {
+      options.respond(result.ok, result.payload);
+      return;
+    }
+    options.respond(
+      result.ok,
+      result.payload,
+      result.error
+        ? {
+            code: result.error.code ?? "UNAVAILABLE",
+            message: result.error.message ?? "node invocation failed",
+          }
+        : undefined,
+    );
+  };
+  return { registry, frames, waitForFrameCount, invoke };
+}
+
+function nodeRequest(id: string) {
+  return {
+    type: "req",
+    id,
+    method: "node.invoke",
+    params: {
+      nodeId: "paired-node",
+      command: "ollama.chat",
+      idempotencyKey: id,
+    },
+  };
 }
 
 function createDispatcher(
@@ -108,10 +144,7 @@ describe("authenticated WebSocket request cancellation", () => {
     "binds request-owned $method work to disconnect (cancelled=$cancelled)",
     async ({ method, params, cancelled }) => {
       const socket = new EventEmitter();
-      const { client, dispatcher } = createDispatcher(socket, {
-        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.UI,
-      });
+      const { client, dispatcher } = createDispatcher(socket, controlUi);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let signal: AbortSignal | undefined;
@@ -121,12 +154,7 @@ describe("authenticated WebSocket request cancellation", () => {
         await release.promise;
       });
       const dispatch = dispatcher.dispatch(
-        {
-          type: "req",
-          id: "disconnect-work",
-          method,
-          params,
-        },
+        { type: "req", id: "disconnect-work", method, params },
         client,
       );
       try {
@@ -146,16 +174,10 @@ describe("authenticated WebSocket request cancellation", () => {
   );
 
   it("cancels only access-bound work after a grant ends, including after ordinary disconnect", async () => {
-    const { registry, frames, waitForFrameCount } = createPairedNode();
+    const { registry, frames, waitForFrameCount, invoke } = createPairedNode();
     const guestSocket = new EventEmitter();
-    const guest = createDispatcher(guestSocket, {
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-    });
-    const staff = createDispatcher(new EventEmitter(), {
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-    });
+    const guest = createDispatcher(guestSocket, controlUi);
+    const staff = createDispatcher(new EventEmitter(), controlUi);
     const profile = {
       profileId: "same-person",
       displayName: null,
@@ -172,15 +194,7 @@ describe("authenticated WebSocket request cancellation", () => {
         assertCurrent: () => grant.signal.throwIfAborted(),
       },
     };
-    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-      const result = await registry.invoke({
-        nodeId: "paired-node",
-        command: "ollama.chat",
-        timeoutMs: 10_000,
-        signal: options.signal,
-      });
-      options.respond(result.ok, result.payload);
-    });
+    handleGatewayRequest.mockImplementation((options: GatewayRequestOptions) => invoke(options));
     const request = (id: string) => ({
       type: "req",
       id,
@@ -220,40 +234,12 @@ describe("authenticated WebSocket request cancellation", () => {
 
   it("forwards CLI socket closure to the actual first-party node cancel event", async () => {
     const socket = new EventEmitter();
-    const { registry, frames, waitForFrameCount } = createPairedNode();
+    const { frames, waitForFrameCount, invoke } = createPairedNode();
     const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
-    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-      const result = await registry.invoke({
-        nodeId: "paired-node",
-        command: "ollama.chat",
-        timeoutMs: 10_000,
-        signal: options.signal,
-      });
-      options.respond(
-        result.ok,
-        result.payload,
-        result.error
-          ? {
-              code: result.error.code ?? "UNAVAILABLE",
-              message: result.error.message ?? "node invocation failed",
-            }
-          : undefined,
-      );
-    });
-
-    const dispatch = dispatcher.dispatch(
-      {
-        type: "req",
-        id: "paired-node-cli-inference",
-        method: "node.invoke",
-        params: {
-          nodeId: "paired-node",
-          command: "ollama.chat",
-          idempotencyKey: "paired-node-cli-inference",
-        },
-      },
-      client,
+    handleGatewayRequest.mockImplementation((options: GatewayRequestOptions) =>
+      invoke(options, true),
     );
+    const dispatch = dispatcher.dispatch(nodeRequest("paired-node-cli-inference"), client);
     try {
       await waitForFrameCount(1);
       expect(socket.listenerCount("close")).toBe(1);
@@ -272,60 +258,30 @@ describe("authenticated WebSocket request cancellation", () => {
     expect(socket.listenerCount("close")).toBe(0);
   });
 
-  it.each([
-    {
-      label: "control UI",
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-  ])(
-    "does not cancel an authenticated $label node invocation on socket close",
-    async (identity) => {
-      const socket = new EventEmitter();
-      const { registry, frames, waitForFrameCount } = createPairedNode();
-      const { client, dispatcher } = createDispatcher(socket, identity);
-      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-        const result = await registry.invoke({
+  it("does not cancel an authenticated control UI node invocation on socket close", async () => {
+    const socket = new EventEmitter();
+    const { registry, frames, waitForFrameCount, invoke } = createPairedNode();
+    const { client, dispatcher } = createDispatcher(socket, controlUi);
+    handleGatewayRequest.mockImplementation((options: GatewayRequestOptions) => invoke(options));
+    const dispatch = dispatcher.dispatch(nodeRequest("paired-node-ordinary-inference"), client);
+    try {
+      await waitForFrameCount(1);
+      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close", 1000, Buffer.alloc(0));
+      expect(frames).toHaveLength(1);
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      expect(
+        registry.handleInvokeResult({
+          id: request.payload?.id ?? "",
           nodeId: "paired-node",
-          command: "ollama.chat",
-          timeoutMs: 10_000,
-          signal: options.signal,
-        });
-        options.respond(result.ok, result.payload);
-      });
-
-      const dispatch = dispatcher.dispatch(
-        {
-          type: "req",
-          id: "paired-node-ordinary-inference",
-          method: "node.invoke",
-          params: {
-            nodeId: "paired-node",
-            command: "ollama.chat",
-            idempotencyKey: "paired-node-ordinary-inference",
-          },
-        },
-        client,
-      );
-      try {
-        await waitForFrameCount(1);
-        expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-        expect(socket.listenerCount("close")).toBe(0);
-        socket.emit("close", 1000, Buffer.alloc(0));
-        expect(frames).toHaveLength(1);
-        const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
-        expect(
-          registry.handleInvokeResult({
-            id: request.payload?.id ?? "",
-            nodeId: "paired-node",
-            connId: "paired-node-connection",
-            ok: true,
-          }),
-        ).toBe(true);
-      } finally {
-        registry.unregister("paired-node-connection");
-        await dispatch;
-      }
-    },
-  );
+          connId: "paired-node-connection",
+          ok: true,
+        }),
+      ).toBe(true);
+    } finally {
+      registry.unregister("paired-node-connection");
+      await dispatch;
+    }
+  });
 });
