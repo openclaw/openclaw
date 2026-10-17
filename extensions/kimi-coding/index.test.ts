@@ -34,7 +34,7 @@ describe("kimi provider plugin", () => {
     );
   });
 
-  it("uses binary thinking with thinking off by default and repairs replay signatures", async () => {
+  it("exposes K2.8 thinking levels with max by default and repairs replay signatures", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.buildReplayPolicy?.({ provider: "kimi" })).toEqual({
@@ -47,11 +47,8 @@ describe("kimi provider plugin", () => {
         reasoning: true,
       } as never),
     ).toEqual({
-      levels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "on" },
-      ],
-      defaultLevel: "off",
+      levels: [{ id: "off" }, { id: "low" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "max",
     });
   });
 
