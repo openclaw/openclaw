@@ -119,6 +119,8 @@ it("keeps a destination's live PTY beside its detached diagnostic view", async (
   const liveId = target.activeHostedTabId;
   const liveHost = createTerminal.mock.calls[2]![0].parent;
   source.activateTerminalHost();
+  await source.updateComplete;
+  expect(dockButton(source).disabled).toBe(false);
   dockButton(source).click();
   await vi.waitFor(() => expect(target.hostedTabs).toHaveLength(3));
   expect(target.contains(liveHost)).toBe(true);

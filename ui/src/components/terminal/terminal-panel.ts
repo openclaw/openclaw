@@ -14,18 +14,16 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
 import { createTerminalPanelSessions } from "./terminal-panel-session-controller.ts";
 import {
   reattachTerminalSessionHosts,
   updateTerminalSessionTheme,
 } from "./terminal-panel-session-rendering.ts";
-import type { TerminalRouteTarget } from "./terminal-panel-session-types.ts";
+import type { TerminalInputs } from "./terminal-panel-session-types.ts";
 import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { TerminalPanelViewState } from "./terminal-panel-view.tsx";
-import type { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { createTerminalSessionPicker } from "./terminal-session-picker.ts";
 
 // Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
@@ -35,23 +33,6 @@ type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 export const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 
-export type TerminalInputs = {
-  client: TerminalGatewayClient | null;
-  agentId: string | null;
-  sessionKey: string | null;
-  available: boolean;
-  suppressed: boolean;
-  themeMode: "dark" | "light";
-  basePath: string;
-  fullscreen: boolean;
-  embedded: boolean;
-  onClose: (() => void) | undefined;
-  tabsInHeader: boolean;
-  page: boolean;
-  routeTarget: TerminalRouteTarget;
-  createTerminalController: typeof createIsolatedGhosttyTerminal;
-  catalogReadyTimeoutMs: number;
-};
 export type TerminalPanelOwner = ReturnType<typeof createTerminalPanel>;
 export type TerminalPanelMethods = Pick<
   TerminalPanelOwner,
@@ -365,6 +346,8 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     },
     activateTerminalHost(): void {
       terminalSessions.activateHost();
+      // Another dock may have settled the shared queue while this view was inactive.
+      publish();
     },
     toggle(): void {
       if (!element.available) {

@@ -1,10 +1,10 @@
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import { TerminalPanel } from "./terminal-panel-component.tsx";
+import type { TerminalInputs } from "./terminal-panel-session-types.ts";
 import {
   CATALOG_TERMINAL_READY_TIMEOUT_MS,
   createTerminalPanel,
-  type TerminalInputs,
   type TerminalPanelOwner,
   type TerminalPanelMethods,
 } from "./terminal-panel.ts";

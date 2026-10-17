@@ -4,8 +4,8 @@ import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createInitializationContext } from "../../pages/chat/chat-pane.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -135,7 +135,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   });
   it("reacts to upload policy changes without intercepting text drops", async () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
-    const host = createApplicationContextProvider({ config } as ApplicationContext);
+    const host = createApplicationContextProvider({ ...createInitializationContext(), config });
     const panel = createUploadPanel();
     panel.embedded = true;
     panel.available = true;

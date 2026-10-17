@@ -49,7 +49,8 @@ export function defineTestTerminalPanelElement(
 ): string {
   factories.set(tagName, createGhosttyTerminalMock);
   if (tagName !== "openclaw-terminal-panel") {
-    customElements.define(tagName, class extends TerminalPanelHost.Element {});
+    const Element: CustomElementConstructor = TerminalPanelHost.Element;
+    customElements.define(tagName, class extends Element {});
   }
   return tagName;
 }

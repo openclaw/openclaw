@@ -2548,7 +2548,6 @@ ui/src/components/session-organizer.ts	5
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
-ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/i18n/lib/translate.ts	1
 ui/src/lib/agents/display.ts	5
