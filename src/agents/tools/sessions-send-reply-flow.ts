@@ -15,7 +15,11 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { createDeferredCore } from "../../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
+import {
+  isTerminalAgentWaitTimeout,
+  readCompleteAgentRunReply,
+  waitForAgentRunReply,
+} from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import {
@@ -389,5 +393,15 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  return sendReplyResult({ runId, sessionKey: replyContext.displayKey, ...watchField }, result);
+  const reply = await readCompleteAgentRunReply({
+    runId,
+    sessionKey: acceptedTargetSessionKey,
+    agentId: replyContext.targetAgentId,
+    replyText: result.replyText,
+    callGateway: replyContext.callGateway,
+  });
+  return sendReplyResult(
+    { runId, sessionKey: replyContext.displayKey, ...watchField },
+    { ...result, ...reply },
+  );
 }

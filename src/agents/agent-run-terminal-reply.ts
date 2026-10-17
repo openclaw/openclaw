@@ -7,6 +7,16 @@ import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 
 const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
+const AGENT_RUN_TERMINAL_REPLY_MARKER = "…";
+
+/** True when visible terminal evidence may have been cut at its bound. */
+export function isAgentRunTerminalReplyAtBound(text: string): boolean {
+  // Truncation trims trailing whitespace before the marker, so allow a short gap.
+  return (
+    text.endsWith(AGENT_RUN_TERMINAL_REPLY_MARKER) &&
+    text.length >= AGENT_RUN_TERMINAL_REPLY_MAX_CHARS - 64
+  );
+}
 
 function isMessageToolNotCalledTerminalReply(
   reply: AgentRunTerminalReplySnapshot | undefined,
@@ -18,7 +28,7 @@ function isMessageToolNotCalledTerminalReply(
 export function sanitizeAgentRunTerminalReply(rawText: string): AgentRunTerminalReplySnapshot {
   const visibleText = stripInternalMetadataForDisplay(rawText).trim();
   const text = truncateWithMarker(visibleText, AGENT_RUN_TERMINAL_REPLY_MAX_CHARS, {
-    marker: "…",
+    marker: AGENT_RUN_TERMINAL_REPLY_MARKER,
     reserve: 1,
     trimEnd: true,
   });

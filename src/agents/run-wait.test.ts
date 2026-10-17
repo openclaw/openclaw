@@ -18,7 +18,9 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 const callGatewayMock = vi.spyOn(gatewayCallRuntime, "callGateway");
 afterAll(() => callGatewayMock.mockRestore());
 
+import { sanitizeAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
 import {
+  readCompleteAgentRunReply,
   readLatestAssistantReply,
   waitForAgentRun,
   waitForAgentRunsToDrain,
@@ -630,5 +632,68 @@ describe("waitForAgentRunsToDrain", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("readCompleteAgentRunReply", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+  });
+
+  const fullReply = `${"Item: see https://example.com/notes for the checklist.\n".repeat(90)}END-MARKER`;
+  const bounded = () => {
+    const snapshot = sanitizeAgentRunTerminalReply(fullReply);
+    if (snapshot.disposition !== "visible") {
+      throw new Error("expected visible snapshot");
+    }
+    return snapshot.text;
+  };
+
+  it("returns the accepted run's stored reply when terminal evidence hit its bound", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        { ...textAssistant(fullReply), __openclaw: { runId: "run-accepted" } },
+        { ...textAssistant("later reply from another run"), __openclaw: { runId: "run-later" } },
+      ],
+    });
+
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      agentId: "helper",
+      replyText: bounded(),
+    });
+
+    expect(bounded().endsWith("END-MARKER")).toBe(false);
+    expect(result).toEqual({ replyText: fullReply });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:helper:main", agentId: "helper", limit: 50 },
+    });
+  });
+
+  it("marks the bounded reply as truncated when the full reply cannot be read", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [{ ...textAssistant("other"), __openclaw: { runId: "run-other" } }],
+    });
+
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: bounded(),
+    });
+
+    expect(result).toEqual({ replyText: bounded(), replyTruncated: true });
+  });
+
+  it("does not read history for replies below the bound", async () => {
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: "short reply…",
+    });
+
+    expect(result).toEqual({ replyText: "short reply…" });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });
