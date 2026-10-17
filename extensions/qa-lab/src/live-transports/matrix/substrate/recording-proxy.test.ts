@@ -1,5 +1,4 @@
-// Qa Lab Matrix tests cover redacted protocol recording and manifest derivation.
-import { createServer } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
 import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./recording-proxy.js";
@@ -12,118 +11,29 @@ afterEach(async () => {
   }
 });
 
-async function startRecordingTarget() {
-  let syncCount = 0;
-  let stateCount = 0;
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://matrix.test");
-    if (url.pathname.endsWith("/sync")) {
-      syncCount += 1;
-      const since = url.searchParams.get("since");
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          account_data: {
-            events: [
-              {
-                content: {
-                  encrypted: {
-                    SECRET_NESTED_STORAGE_KEY: { ciphertext: "secret-nested-ciphertext" },
-                  },
-                  unsigned: {
-                    "secret-custom-field-name": "secret-custom-field-value",
-                  },
-                  url: "mxc://matrix.test/secret-media",
-                  info: { mimetype: "image/png" },
-                },
-                type: "m.cross_signing.master",
-              },
-            ],
-          },
-          device_keys: {
-            "@secret-user:matrix.test": {
-              SECRET_DEVICE: {
-                keys: {
-                  "ed25519:SECRET_DEVICE": "secret-signing-key",
-                },
-              },
-            },
-          },
-          device_one_time_keys_count: { signed_curve25519: 12 },
-          device_unused_fallback_key_types: ["signed_curve25519"],
-          next_batch: since === "echoed-unknown" ? since : `secret-sync-${syncCount}`,
-          device_lists: { changed: ["secret-device"] },
-          rooms: {
-            join: {
-              "!secret-room:matrix.test": {
-                timeline: {
-                  events: [
-                    { type: "m.room.message" },
-                    { sender: "@secret-sender:matrix.test", type: "m.room.encrypted" },
-                  ],
-                },
-              },
-            },
-          },
-        }),
-      );
-      return;
-    }
-    if (url.pathname.includes("/room_keys/keys")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          rooms: {
-            "!secret-backup-room:matrix.test": {
-              sessions: {
-                "secret-backup-session": { first_message_index: 0 },
-              },
-            },
-          },
-        }),
-      );
-      return;
-    }
-    if (url.pathname.endsWith("/keys/upload")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ one_time_key_counts: {} }));
-      return;
-    }
-    if (url.pathname.endsWith("/keys/query")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          failures: {
-            "secret-server.example": { errcode: "M_UNAVAILABLE" },
-          },
-        }),
-      );
-      return;
-    }
-    if (url.pathname.includes("/account_data/")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({}));
-      return;
-    }
-    if (url.pathname.includes("/sendToDevice/")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({}));
-      return;
-    }
-    if (url.pathname.includes("/state/")) {
-      stateCount += 1;
-      const status = stateCount === 1 ? 401 : 200;
-      res.writeHead(status, { "content-type": "application/json" });
-      res.end(
-        status === 401
-          ? JSON.stringify({ errcode: "M_UNKNOWN_TOKEN", error: "secret-response" })
-          : JSON.stringify({ name: "secret-state-name" }),
-      );
-      return;
-    }
-    res.writeHead(401, { "content-type": "application/json" });
-    res.end(JSON.stringify({ errcode: "M_UNKNOWN_TOKEN", error: "secret-response" }));
+function jsonResponse(res: ServerResponse, body: unknown, status = 200) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function sendJson(
+  proxy: MatrixQaRecordingProxy,
+  path: string,
+  body: unknown,
+  method: "POST" | "PUT" = "POST",
+  token?: string,
+) {
+  return fetch(`${proxy.baseUrl}/_matrix/client/v3/${path}`, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
   });
+}
+
+async function listen(server: Server) {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -144,9 +54,113 @@ async function startRecordingTarget() {
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function startRecording(scenarioId: string) {
-  const targetBaseUrl = await startRecordingTarget();
-  const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
+async function startRecordingTarget() {
+  let syncCount = 0;
+  let stateCount = 0;
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://matrix.test");
+    if (url.pathname.endsWith("/sync")) {
+      syncCount += 1;
+      const since = url.searchParams.get("since");
+      jsonResponse(res, {
+        account_data: {
+          events: [
+            {
+              content: {
+                encrypted: {
+                  SECRET_NESTED_STORAGE_KEY: { ciphertext: "secret-nested-ciphertext" },
+                },
+                unsigned: {
+                  "secret-custom-field-name": "secret-custom-field-value",
+                },
+                url: "mxc://matrix.test/secret-media",
+                info: { mimetype: "image/png" },
+              },
+              type: "m.cross_signing.master",
+            },
+          ],
+        },
+        device_keys: {
+          "@secret-user:matrix.test": {
+            SECRET_DEVICE: {
+              keys: {
+                "ed25519:SECRET_DEVICE": "secret-signing-key",
+              },
+            },
+          },
+        },
+        device_one_time_keys_count: { signed_curve25519: 12 },
+        device_unused_fallback_key_types: ["signed_curve25519"],
+        next_batch: since === "echoed-unknown" ? since : `secret-sync-${syncCount}`,
+        device_lists: { changed: ["secret-device"] },
+        rooms: {
+          join: {
+            "!secret-room:matrix.test": {
+              timeline: {
+                events: [
+                  { type: "m.room.message" },
+                  { sender: "@secret-sender:matrix.test", type: "m.room.encrypted" },
+                ],
+              },
+            },
+          },
+        },
+      });
+      return;
+    }
+    if (url.pathname.includes("/room_keys/keys")) {
+      jsonResponse(res, {
+        rooms: {
+          "!secret-backup-room:matrix.test": {
+            sessions: {
+              "secret-backup-session": { first_message_index: 0 },
+            },
+          },
+        },
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/keys/upload")) {
+      jsonResponse(res, { one_time_key_counts: {} });
+      return;
+    }
+    if (url.pathname.endsWith("/keys/query")) {
+      jsonResponse(res, {
+        failures: {
+          "secret-server.example": { errcode: "M_UNAVAILABLE" },
+        },
+      });
+      return;
+    }
+    if (url.pathname.includes("/account_data/")) {
+      jsonResponse(res, {});
+      return;
+    }
+    if (url.pathname.includes("/sendToDevice/")) {
+      jsonResponse(res, {});
+      return;
+    }
+    if (url.pathname.includes("/state/")) {
+      stateCount += 1;
+      const status = stateCount === 1 ? 401 : 200;
+      jsonResponse(
+        res,
+        status === 401
+          ? { errcode: "M_UNKNOWN_TOKEN", error: "secret-response" }
+          : { name: "secret-state-name" },
+        status,
+      );
+      return;
+    }
+    jsonResponse(res, { errcode: "M_UNKNOWN_TOKEN", error: "secret-response" }, 401);
+  });
+  return await listen(server);
+}
+
+async function startRecording(scenarioId: string, targetBaseUrl?: string) {
+  const recording = await startMatrixQaRecordingProxy({
+    targetBaseUrl: targetBaseUrl ?? (await startRecordingTarget()),
+  });
   closeCallbacks.push(() => recording.stop());
   recording.setScenarioId(scenarioId);
   return recording;
@@ -173,27 +187,24 @@ describe("Matrix QA recording proxy", () => {
       `${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0&since=${encodeURIComponent(firstBody.next_batch)}`,
       { headers: { authorization: "Bearer secret-header" } },
     );
-    const postState = async () => {
-      await fetch(
-        `${proxy.baseUrl}/_matrix/client/v3/rooms/!secret:matrix.test/state/m.room.name`,
-        {
-          body: JSON.stringify({ password: "secret-password", body: "secret-message" }),
-          headers: {
-            authorization: "Bearer secret-header",
-            "content-type": "application/json",
-          },
-          method: "POST",
-        },
+    const postState = () =>
+      sendJson(
+        proxy,
+        "rooms/!secret:matrix.test/state/m.room.name",
+        { password: "secret-password", body: "secret-message" },
+        "POST",
+        "secret-header",
       );
-    };
     await postState();
     await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/keys`, {
       headers: {
         authorization: "Bearer secret-header",
       },
     });
-    await fetch(`${proxy.baseUrl}/_matrix/client/v3/keys/upload`, {
-      body: JSON.stringify({
+    await sendJson(
+      proxy,
+      "keys/upload",
+      {
         device_keys: {
           algorithms: ["m.olm.v1.curve25519-aes-sha2"],
           device_id: "SECRET_UPLOAD_DEVICE",
@@ -203,29 +214,20 @@ describe("Matrix QA recording proxy", () => {
         one_time_keys: {
           "signed_curve25519:SECRET_ONE_TIME": { key: "secret-one-time-key" },
         },
-      }),
-      headers: {
-        authorization: "Bearer secret-header",
-        "content-type": "application/json",
       },
-      method: "POST",
-    });
-    await fetch(`${proxy.baseUrl}/_matrix/client/v3/keys/query`, {
-      body: JSON.stringify({ device_keys: {} }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    });
-    await fetch(
-      `${proxy.baseUrl}/_matrix/client/v3/user/@secret-upload%3Amatrix.test/account_data/m.cross_signing.master`,
+      "POST",
+      "secret-header",
+    );
+    await sendJson(proxy, "keys/query", { device_keys: {} });
+    await sendJson(
+      proxy,
+      "user/@secret-upload%3Amatrix.test/account_data/m.cross_signing.master",
       {
-        body: JSON.stringify({
-          encrypted: {
-            SECRET_STORAGE_KEY: { ciphertext: "secret-ciphertext" },
-          },
-        }),
-        headers: { "content-type": "application/json" },
-        method: "PUT",
+        encrypted: {
+          SECRET_STORAGE_KEY: { ciphertext: "secret-ciphertext" },
+        },
       },
+      "PUT",
     );
     await fetch(
       `${proxy.baseUrl}/_matrix/client/v3/user/@secret-upload%3Amatrix.test/account_data/m.megolm_backup.v1`,
@@ -432,16 +434,11 @@ describe("Matrix QA recording proxy", () => {
   it("redacts signature upload device and cross-signing key identifiers", async () => {
     const recording = await startRecording("matrix-signatures-recording-test");
 
-    await fetch(`${recording.baseUrl}/_matrix/client/v3/keys/signatures/upload`, {
-      body: JSON.stringify({
-        "@secret-signing-user:matrix.test": {
-          SECRET_CROSS_SIGNING_KEY: { signatures: {} },
-        },
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
+    await sendJson(recording, "keys/signatures/upload", {
+      "@secret-signing-user:matrix.test": {
+        SECRET_CROSS_SIGNING_KEY: { signatures: {} },
+      },
     });
-
     const record = recording.records().at(-1);
     expect(record?.request.body).toEqual({
       kind: "json",
@@ -570,30 +567,7 @@ describe("Matrix QA recording proxy", () => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(status === 200 ? {} : { errcode: "M_UNAVAILABLE" }));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    closeCallbacks.push(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve();
-          });
-        }),
-    );
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("retry target did not bind");
-    }
-    const recording = await startMatrixQaRecordingProxy({
-      targetBaseUrl: `http://127.0.0.1:${address.port}`,
-    });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-repeated-retry-test");
+    const recording = await startRecording("matrix-repeated-retry-test", await listen(server));
     const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await fetch(endpoint, { method: "POST" });

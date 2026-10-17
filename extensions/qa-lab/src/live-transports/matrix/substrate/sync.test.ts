@@ -1,4 +1,4 @@
-// Qa Lab Matrix tests cover sync behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MatrixQaObservedEvent, MatrixQaRoomEvent } from "./events.js";
 import { mockMatrixQaHttp } from "./http.test-support.js";
@@ -27,6 +27,29 @@ function syncResponse(
     rooms: { join: { [roomId]: { timeline: { events } } } },
   });
 }
+
+function makeObserver(
+  fetchImpl: typeof fetch,
+  observedEvents: MatrixQaObservedEvent[] = [],
+  accessToken?: string,
+) {
+  mockMatrixQaHttp(fetchImpl);
+  return createMatrixQaRoomObserver({
+    baseUrl: "http://127.0.0.1:28008/",
+    observedEvents,
+    since: "start-batch",
+    accessToken,
+  });
+}
+
+function eventWait(eventId: string, roomId = "!room:matrix-qa.test", timeoutMs = 1_000) {
+  return {
+    predicate: (event: MatrixQaObservedEvent) => event.eventId === eventId,
+    roomId,
+    timeoutMs,
+  };
+}
+const missingEvent = { predicate: () => false, roomId: "!room:matrix-qa.test", timeoutMs: 1_000 };
 
 describe("matrix sync helpers", () => {
   afterEach(() => {
@@ -71,26 +94,11 @@ describe("matrix sync helpers", () => {
       ]);
     };
     const observedEvents: MatrixQaObservedEvent[] = [];
-    mockMatrixQaHttp(fetchImpl);
+    const observer = makeObserver(fetchImpl, observedEvents, "token");
 
-    const observer = createMatrixQaRoomObserver({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-      observedEvents,
-      since: "start-batch",
-    });
-
-    const preview = await observer.waitForRoomEvent({
-      predicate: (event) => event.eventId === "$preview",
-      roomId: "!room:matrix-qa.test",
-      timeoutMs: 1_000,
-    });
+    const preview = await observer.waitForRoomEvent(eventWait("$preview"));
     expect(observedEvents.map((event) => event.eventId)).toEqual(["$preview", "$final"]);
-    const finalized = await observer.waitForRoomEvent({
-      predicate: (event) => event.eventId === "$final",
-      roomId: "!room:matrix-qa.test",
-      timeoutMs: 1_000,
-    });
+    const finalized = await observer.waitForRoomEvent(eventWait("$final"));
 
     expect(preview.event.eventId).toBe("$preview");
     expect(finalized.event).toMatchObject({
@@ -113,14 +121,7 @@ describe("matrix sync helpers", () => {
       calls += 1;
       return syncResponse([message("$main-reply", "main reply")], "!main:matrix-qa.test");
     };
-    mockMatrixQaHttp(fetchImpl);
-
-    const observer = createMatrixQaRoomObserver({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-      observedEvents: [],
-      since: "start-batch",
-    });
+    const observer = makeObserver(fetchImpl, [], "token");
 
     const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1);
     try {
@@ -136,59 +137,34 @@ describe("matrix sync helpers", () => {
     }
 
     await expect(
-      observer.waitForRoomEvent({
-        predicate: (event) => event.eventId === "$main-reply",
-        roomId: "!main:matrix-qa.test",
-        timeoutMs: 1_000,
-      }),
+      observer.waitForRoomEvent(eventWait("$main-reply", "!main:matrix-qa.test")),
     ).resolves.toMatchObject({ event: { eventId: "$main-reply" } });
     expect(calls).toBe(1);
   });
 
   it("shares one in-flight /sync poll across concurrent waits", async () => {
     let calls = 0;
-    let markFetchStarted: () => void = () => {};
-    const fetchStarted = new Promise<void>((resolve) => {
-      markFetchStarted = resolve;
-    });
-    let releaseFetch: () => void = () => {};
-    const fetchCanComplete = new Promise<void>((resolve) => {
-      releaseFetch = resolve;
-    });
+    const fetchStarted = createDeferred<void>();
+    const fetchCanComplete = createDeferred<void>();
     const fetchImpl: typeof fetch = async () => {
       calls += 1;
-      markFetchStarted();
-      await fetchCanComplete;
+      fetchStarted.resolve();
+      await fetchCanComplete.promise;
       return syncResponse([
         message("$reply", "reply"),
         message("$notice", "notice", { msgtype: "m.notice" }),
       ]);
     };
-    mockMatrixQaHttp(fetchImpl);
-
-    const observer = createMatrixQaRoomObserver({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-      observedEvents: [],
-      since: "start-batch",
-    });
+    const observer = makeObserver(fetchImpl, [], "token");
 
     const waits = Promise.all([
-      observer.waitForRoomEvent({
-        predicate: (event) => event.eventId === "$reply",
-        roomId: "!room:matrix-qa.test",
-        timeoutMs: 1_000,
-      }),
-      observer.waitForOptionalRoomEvent({
-        predicate: (event) => event.eventId === "$notice",
-        roomId: "!room:matrix-qa.test",
-        timeoutMs: 1_000,
-      }),
+      observer.waitForRoomEvent(eventWait("$reply")),
+      observer.waitForOptionalRoomEvent(eventWait("$notice")),
     ]);
 
-    await fetchStarted;
+    await fetchStarted.promise;
     await Promise.resolve();
-    releaseFetch();
+    fetchCanComplete.resolve();
     const [reply, notice] = await waits;
 
     expect(reply.event.eventId).toBe("$reply");
@@ -198,13 +174,9 @@ describe("matrix sync helpers", () => {
         roomId: "!room:matrix-qa.test",
         eventId: "$notice",
         sender: "@sut:matrix-qa.test",
-        stateKey: undefined,
         type: "m.room.message",
-        originServerTs: undefined,
         body: "notice",
-        formattedBody: undefined,
         msgtype: "m.notice",
-        membership: undefined,
       },
       matched: true,
       since: "next-batch-2",
@@ -235,31 +207,18 @@ describe("matrix sync helpers", () => {
         "recovered-batch",
       );
     };
-    mockMatrixQaHttp(fetchImpl);
-
-    const observer = createMatrixQaRoomObserver({
-      baseUrl: "http://127.0.0.1:28008/",
-      observedEvents: [],
-      since: "start-batch",
-    });
+    const observer = makeObserver(fetchImpl);
 
     try {
       await expect(
-        observer.waitForOptionalRoomEvent({
-          predicate: (event) => event.eventId === "$missing",
-          roomId: "!room:matrix-qa.test",
-          timeoutMs: 1,
-        }),
+        observer.waitForOptionalRoomEvent(eventWait("$missing", "!room:matrix-qa.test", 1)),
       ).resolves.toEqual({ matched: false, since: "start-batch" });
 
       now = 2;
-      await expect(
-        observer.waitForRoomEvent({
-          predicate: (event) => event.eventId === "$recovered",
-          roomId: "!room:matrix-qa.test",
-          timeoutMs: 1_000,
-        }),
-      ).resolves.toMatchObject({ event: { eventId: "$recovered" }, since: "recovered-batch" });
+      await expect(observer.waitForRoomEvent(eventWait("$recovered"))).resolves.toMatchObject({
+        event: { eventId: "$recovered" },
+        since: "recovered-batch",
+      });
     } finally {
       nowSpy.mockRestore();
       timeoutSpy.mockRestore();
@@ -269,44 +228,26 @@ describe("matrix sync helpers", () => {
 
   it("preserves terminal sync failures, including unrelated TimeoutErrors", async () => {
     const timeoutError = new DOMException("upstream protocol timeout", "TimeoutError");
-    const http = mockMatrixQaHttp(async () => {
+    const observer = makeObserver(async () => {
       throw timeoutError;
     });
-    const observer = createMatrixQaRoomObserver({
-      baseUrl: "http://127.0.0.1:28008/",
-      observedEvents: [],
-      since: "start-batch",
-    });
 
-    await expect(
-      observer.waitForOptionalRoomEvent({
-        predicate: () => false,
-        roomId: "!room:matrix-qa.test",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toBe(timeoutError);
+    await expect(observer.waitForOptionalRoomEvent(missingEvent)).rejects.toBe(timeoutError);
 
-    http.request.mockRestore();
-    mockMatrixQaHttp(async () => Response.json({ error: "invalid access token" }, { status: 401 }));
-    const authObserver = createMatrixQaRoomObserver({
-      baseUrl: "http://127.0.0.1:28008/",
-      observedEvents: [],
-      since: "start-batch",
-    });
-    await expect(
-      authObserver.waitForOptionalRoomEvent({
-        predicate: () => false,
-        roomId: "!room:matrix-qa.test",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow("invalid access token");
+    vi.restoreAllMocks();
+    const authObserver = makeObserver(async () =>
+      Response.json({ error: "invalid access token" }, { status: 401 }),
+    );
+    await expect(authObserver.waitForOptionalRoomEvent(missingEvent)).rejects.toThrow(
+      "invalid access token",
+    );
   });
 
   it("preserves response-body failures raised after its long-poll deadline fires", async () => {
     const deadline = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
     const bodyError = new Error("late Matrix response body failure");
-    mockMatrixQaHttp(
+    const observer = makeObserver(
       async () =>
         new Response(
           new ReadableStream({
@@ -317,20 +258,9 @@ describe("matrix sync helpers", () => {
           }),
         ),
     );
-    const observer = createMatrixQaRoomObserver({
-      baseUrl: "http://127.0.0.1:28008/",
-      observedEvents: [],
-      since: "start-batch",
-    });
 
     try {
-      await expect(
-        observer.waitForOptionalRoomEvent({
-          predicate: () => false,
-          roomId: "!room:matrix-qa.test",
-          timeoutMs: 1_000,
-        }),
-      ).rejects.toBe(bodyError);
+      await expect(observer.waitForOptionalRoomEvent(missingEvent)).rejects.toBe(bodyError);
     } finally {
       timeoutSpy.mockRestore();
     }

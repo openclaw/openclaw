@@ -1,4 +1,3 @@
-// Qa Lab Matrix tests cover client behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixQaMessageContent,
@@ -23,6 +22,46 @@ function parseJsonRequestBody(init?: RequestInit) {
   }
   return JSON.parse(init.body) as Record<string, unknown>;
 }
+
+function makeClient(fetchImpl: typeof fetch) {
+  mockMatrixQaHttp(fetchImpl);
+  return createMatrixQaClient({
+    accessToken: "token",
+    baseUrl: "http://127.0.0.1:28008/",
+  });
+}
+
+const image = {
+  body: "@sut:matrix-qa.test Image understanding check",
+  buffer: Buffer.from("png-bytes"),
+  contentType: "image/png",
+  kind: "image" as const,
+  mentionUserIds: ["@sut:matrix-qa.test"],
+  roomId: "!room:matrix-qa.test",
+};
+const privateRoom = {
+  creation_content: { "m.federate": false },
+  initial_state: [
+    {
+      type: "m.room.history_visibility",
+      state_key: "",
+      content: { history_visibility: "joined" },
+    },
+  ],
+  preset: "private_chat",
+};
+const provisionParams = {
+  baseUrl: "http://127.0.0.1:28008/",
+  driverLocalpart: "qa-driver",
+  observerLocalpart: "qa-observer",
+  registrationToken: "reg-token",
+  sutLocalpart: "qa-sut",
+};
+const groupUserIds = [
+  "@qa-driver:matrix-qa.test",
+  "@qa-observer:matrix-qa.test",
+  "@qa-sut:matrix-qa.test",
+];
 
 describe("matrix driver client", () => {
   afterEach(() => {
@@ -66,12 +105,7 @@ describe("matrix driver client", () => {
       return Response.json({});
     };
 
-    mockMatrixQaHttp(fetchImpl);
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-    });
+    const client = makeClient(fetchImpl);
 
     await client.inviteUserToRoom({
       roomId: "!room:matrix-qa.test",
@@ -120,12 +154,7 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: "$reaction-1" });
     };
 
-    mockMatrixQaHttp(fetchImpl);
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-    });
+    const client = makeClient(fetchImpl);
 
     await expect(
       client.sendReaction({
@@ -147,12 +176,7 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: eventId });
     };
 
-    mockMatrixQaHttp(fetchImpl);
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-    });
+    const client = makeClient(fetchImpl);
 
     await expect(
       client.sendReplacementMessage({
@@ -212,22 +236,12 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: "$media-1" });
     };
 
-    mockMatrixQaHttp(fetchImpl);
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-    });
+    const client = makeClient(fetchImpl);
 
     await expect(
       client.sendMediaMessage({
-        body: "@sut:matrix-qa.test Image understanding check",
-        buffer: Buffer.from("png-bytes"),
-        contentType: "image/png",
+        ...image,
         fileName: "red-top-blue-bottom.png",
-        kind: "image",
-        mentionUserIds: ["@sut:matrix-qa.test"],
-        roomId: "!room:matrix-qa.test",
       }),
     ).resolves.toBe("$media-1");
 
@@ -244,13 +258,14 @@ describe("matrix driver client", () => {
     );
     const messageBody =
       typeof requests[1]?.body === "string" ? JSON.parse(requests[1].body) : requests[1]?.body;
-    expect(messageBody.body).toBe("@sut:matrix-qa.test Image understanding check");
-    expect(messageBody.msgtype).toBe("m.image");
-    expect(messageBody.filename).toBe("red-top-blue-bottom.png");
-    expect(messageBody.url).toBe("mxc://matrix-qa.test/red-top-blue-bottom");
-    expect(messageBody.info?.mimetype).toBe("image/png");
-    expect(messageBody.info?.size).toBe("png-bytes".length);
-    expect(messageBody["m.mentions"]?.user_ids).toEqual(["@sut:matrix-qa.test"]);
+    expect(messageBody).toMatchObject({
+      body: image.body,
+      msgtype: "m.image",
+      filename: "red-top-blue-bottom.png",
+      url: "mxc://matrix-qa.test/red-top-blue-bottom",
+      info: { mimetype: "image/png", size: "png-bytes".length },
+      "m.mentions": { user_ids: ["@sut:matrix-qa.test"] },
+    });
   });
 
   it("fails closed when the media upload response streams an over-cap body", async () => {
@@ -276,22 +291,12 @@ describe("matrix driver client", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       );
 
-    mockMatrixQaHttp(fetchImpl);
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-    });
+    const client = makeClient(fetchImpl);
 
     await expect(
       client.sendMediaMessage({
-        body: "@sut:matrix-qa.test Image understanding check",
-        buffer: Buffer.from("png-bytes"),
-        contentType: "image/png",
+        ...image,
         fileName: "huge.png",
-        kind: "image",
-        mentionUserIds: ["@sut:matrix-qa.test"],
-        roomId: "!room:matrix-qa.test",
       }),
     ).rejects.toThrow(/Matrix homeserver response exceeds 16777216 bytes/);
 
@@ -306,22 +311,12 @@ describe("matrix driver client", () => {
         headers: { "content-type": "application/json" },
       });
 
-    mockMatrixQaHttp(fetchImpl);
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-    });
+    const client = makeClient(fetchImpl);
 
     await expect(
       client.sendMediaMessage({
-        body: "@sut:matrix-qa.test Image understanding check",
-        buffer: Buffer.from("png-bytes"),
-        contentType: "image/png",
+        ...image,
         fileName: "bad.png",
-        kind: "image",
-        mentionUserIds: ["@sut:matrix-qa.test"],
-        roomId: "!room:matrix-qa.test",
       }),
     ).rejects.toThrow("Matrix media upload did not return content_uri.");
   });
@@ -334,12 +329,7 @@ describe("matrix driver client", () => {
       return Response.json({ room_id: "!encrypted:matrix-qa.test" });
     };
 
-    mockMatrixQaHttp(fetchImpl);
-
-    const client = createMatrixQaClient({
-      accessToken: "token",
-      baseUrl: "http://127.0.0.1:28008/",
-    });
+    const client = makeClient(fetchImpl);
 
     await expect(
       client.createPrivateRoom({
@@ -351,13 +341,9 @@ describe("matrix driver client", () => {
 
     expect(createRoomBodies).toStrictEqual([
       {
-        creation_content: { "m.federate": false },
+        ...privateRoom,
         initial_state: [
-          {
-            type: "m.room.history_visibility",
-            state_key: "",
-            content: { history_visibility: "joined" },
-          },
+          ...privateRoom.initial_state,
           {
             type: "m.room.encryption",
             state_key: "",
@@ -367,7 +353,6 @@ describe("matrix driver client", () => {
         invite: ["@sut:matrix-qa.test"],
         is_direct: false,
         name: "Encrypted QA Room",
-        preset: "private_chat",
       },
     ]);
   });
@@ -435,12 +420,8 @@ describe("matrix driver client", () => {
     mockMatrixQaHttp(fetchImpl);
 
     const result = await provisionMatrixQaRoom({
-      baseUrl: "http://127.0.0.1:28008/",
-      driverLocalpart: "qa-driver",
-      observerLocalpart: "qa-observer",
-      registrationToken: "reg-token",
+      ...provisionParams,
       roomName: "OpenClaw Matrix QA",
-      sutLocalpart: "qa-sut",
       topology: {
         defaultRoomKey: "main",
         rooms: [
@@ -465,11 +446,7 @@ describe("matrix driver client", () => {
           key: "main",
           kind: "group",
           memberRoles: ["driver", "observer", "sut"],
-          memberUserIds: [
-            "@qa-driver:matrix-qa.test",
-            "@qa-observer:matrix-qa.test",
-            "@qa-sut:matrix-qa.test",
-          ],
+          memberUserIds: groupUserIds,
           requireMention: true,
           roomId: "!room:matrix-qa.test",
           name: "OpenClaw Matrix QA",
@@ -480,18 +457,10 @@ describe("matrix driver client", () => {
     expect(result.observer.userId).toBe("@qa-observer:matrix-qa.test");
     expect(createRoomBodies).toEqual([
       {
-        creation_content: { "m.federate": false },
-        initial_state: [
-          {
-            type: "m.room.history_visibility",
-            state_key: "",
-            content: { history_visibility: "joined" },
-          },
-        ],
+        ...privateRoom,
         invite: ["@qa-observer:matrix-qa.test", "@qa-sut:matrix-qa.test"],
         is_direct: false,
         name: "OpenClaw Matrix QA",
-        preset: "private_chat",
       },
     ]);
   });
@@ -532,12 +501,8 @@ describe("matrix driver client", () => {
     mockMatrixQaHttp(fetchImpl);
 
     const result = await provisionMatrixQaRoom({
-      baseUrl: "http://127.0.0.1:28008/",
-      driverLocalpart: "qa-driver",
-      observerLocalpart: "qa-observer",
-      registrationToken: "reg-token",
+      ...provisionParams,
       roomName: "unused",
-      sutLocalpart: "qa-sut",
       topology: {
         defaultRoomKey: "group",
         rooms: [
@@ -564,11 +529,7 @@ describe("matrix driver client", () => {
         key: "group",
         kind: "group",
         memberRoles: ["driver", "observer", "sut"],
-        memberUserIds: [
-          "@qa-driver:matrix-qa.test",
-          "@qa-observer:matrix-qa.test",
-          "@qa-sut:matrix-qa.test",
-        ],
+        memberUserIds: groupUserIds,
         name: "Matrix Group",
         requireMention: true,
         roomId: "!group:matrix-qa.test",
@@ -586,32 +547,16 @@ describe("matrix driver client", () => {
     ]);
     expect(createRoomBodies).toEqual([
       {
-        creation_content: { "m.federate": false },
-        initial_state: [
-          {
-            type: "m.room.history_visibility",
-            state_key: "",
-            content: { history_visibility: "joined" },
-          },
-        ],
+        ...privateRoom,
         invite: ["@qa-observer:matrix-qa.test", "@qa-sut:matrix-qa.test"],
         is_direct: false,
         name: "Matrix Group",
-        preset: "private_chat",
       },
       {
-        creation_content: { "m.federate": false },
-        initial_state: [
-          {
-            type: "m.room.history_visibility",
-            state_key: "",
-            content: { history_visibility: "joined" },
-          },
-        ],
+        ...privateRoom,
         invite: ["@qa-sut:matrix-qa.test"],
         is_direct: true,
         name: "Matrix Driver/SUT DM",
-        preset: "private_chat",
       },
     ]);
   });
