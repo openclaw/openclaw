@@ -236,7 +236,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
               },
             );
           } else {
-            log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+            const message = redactSensitiveText(formatErrorMessage(err), { mode: "tools" });
+            log.warn(`memory sync failed (search-bootstrap): ${message}`);
           }
         }
         indexState = await readIndexState();
@@ -382,7 +383,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
-            log.warn(`memory sync failed (search): ${String(err)}`);
+            const message = redactSensitiveText(formatErrorMessage(err), { mode: "tools" });
+            log.warn(`memory sync failed (search): ${message}`);
           })
           .finally(() => {
             this.activeBackgroundSearchSyncs.delete(trackedSearchSync);
