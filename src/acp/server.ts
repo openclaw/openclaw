@@ -25,6 +25,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
@@ -97,6 +98,19 @@ function createStartupInputMonitor(input: ReadableStream<Uint8Array>): {
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   routeLogsToStderr();
   const cfg = getRuntimeConfig();
+  const requestedAgentId = normalizeOptionalString(opts.agentId);
+  if (opts.agentId !== undefined && !requestedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  const strictAgentId = requestedAgentId ? normalizeAgentIdStrict(requestedAgentId) : undefined;
+  if (strictAgentId && !strictAgentId.ok) {
+    // Reject unrepresentable explicit ids instead of silently selecting main,
+    // which would pass roster validation while targeting the wrong agent.
+    throw new Error(
+      `--agent "${requestedAgentId}" has no valid id characters. Use at least one letter a-z or digit.`,
+    );
+  }
+  const agentId = strictAgentId?.ok ? strictAgentId.value : undefined;
   const bootstrap = await resolveGatewayClientBootstrap({
     config: cfg,
     gatewayUrl: opts.gatewayUrl,
@@ -106,6 +120,15 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     },
     env: process.env,
   });
+  // URL overrides (CLI or environment) can target a different agent roster.
+  // Use bootstrap's resolved provenance so connection and ownership agree.
+  const skipAgentOwnerRosterValidation =
+    bootstrap.urlOverrideSource !== undefined || cfg.gateway?.mode === "remote";
+  const resolvedOpts: AcpServerOptions = {
+    ...opts,
+    ...(agentId ? { agentId } : {}),
+    ...(skipAgentOwnerRosterValidation ? { skipAgentOwnerRosterValidation: true } : {}),
+  };
 
   let agent: AcpGatewayAgent | null = null;
   let sessionStore: ReturnType<typeof createInMemorySessionStore> | null = null;
@@ -321,7 +344,8 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     connection = new AgentSideConnection(
       (conn: AgentSideConnection) => {
         agent = new AcpGatewayAgent(conn, gateway, {
-          ...opts,
+          ...resolvedOpts,
+          config: cfg,
           eventLedger,
           sessionStore: sessionStore ?? undefined,
         });
@@ -415,6 +439,11 @@ function parseArgs(args: string[]): AcpServerOptions | undefined {
       i += 1;
       continue;
     }
+    if (arg === "--agent") {
+      opts.agentId = args[i + 1];
+      i += 1;
+      continue;
+    }
     if (arg === "--require-existing") {
       opts.requireExistingSession = true;
       continue;
@@ -475,6 +504,7 @@ Options:
   --token-file <path>     Read gateway auth token from file
   --password <password>   Gateway auth password
   --password-file <path>  Read gateway auth password from file
+  --agent <id>            Agent owner for generated bridge sessions
   --session <key>         Default session key (e.g. "agent:main:main")
   --session-label <label> Default session label to resolve
   --require-existing      Fail if the session key/label does not exist

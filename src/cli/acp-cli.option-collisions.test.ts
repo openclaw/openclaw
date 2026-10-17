@@ -12,6 +12,7 @@ type AcpClientOptions = {
 };
 
 type AcpGatewayOptions = {
+  agentId?: string;
   gatewayPassword?: string;
   gatewayToken?: string;
   prefixCwd?: boolean;
@@ -122,6 +123,14 @@ describe("acp cli option collisions", () => {
     });
 
     expectCliError(expected);
+  });
+
+  it("forwards --agent to the ACP bridge", async () => {
+    await parseAcp(["--agent", "ops"]);
+
+    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
+    const gatewayOptions = mockCall(serveAcpGateway)[0] as { agentId?: string };
+    expect(gatewayOptions.agentId).toBe("ops");
   });
 
   it("warns when inline secret flags are used", async () => {

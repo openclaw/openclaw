@@ -48,7 +48,7 @@ Visible assistant text appears as append-only `agent_message_chunk` updates, inc
 
 - ACP v1 cannot retract or replace text already displayed. Repeated snapshots of the same item append only a suffix that extends the displayed text; incompatible rewrites are ignored rather than replayed as duplicated narration.
 - `loadSession` replays complete ACP event-ledger history only for bridge-created sessions. Older/no-ledger sessions use transcript fallback and do not reconstruct historic tool calls or system notices. Replay history is bounded by session, event, and retained-content limits; the default byte budget is 16 MiB of UTF-8 text plus row overhead. Truncated history also uses transcript fallback. See [ACP replay accounting](/reference/database-schemas#acp-replay-accounting).
-- If multiple ACP clients share the same Gateway session key, event and cancel routing are best-effort rather than strictly isolated per client. Prefer the default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local turns.
+- If multiple ACP clients share the same Gateway session key, event and cancel routing are best-effort rather than strictly isolated per client. Prefer generated, isolated bridge sessions when you need clean editor-local turns; see [Session mapping](/cli/acp#session-mapping) for key formats.
 - Gateway stop states translate into ACP stop reasons, but that mapping is less expressive than a fully ACP-native runtime.
 - Session controls surface a focused subset of Gateway knobs: thought level, tool verbosity, reasoning, usage detail, and elevated actions. Model selection and exec-host controls are not exposed as ACP config options.
 - `session_info_update` and `usage_update` derive from Gateway session snapshots, not live ACP-native runtime accounting. Usage is approximate, carries no cost data, and is only emitted when the Gateway marks total token data as fresh.
@@ -59,6 +59,9 @@ Visible assistant text appears as append-only `agent_message_chunk` updates, inc
 
 ```bash
 openclaw acp
+
+# Select the owner for newly generated bridge sessions
+openclaw acp --agent ops
 
 # Remote Gateway
 openclaw acp --url wss://gateway-host:18789 --token <token>
@@ -163,7 +166,17 @@ openclaw acp --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.tok
 
 ## Selecting agents
 
-ACP does not pick agents directly. It routes by the Gateway session key. Use agent-scoped session keys to target a specific agent:
+Use `--agent <id>` to select the owner for newly generated bridge sessions:
+
+```bash
+openclaw acp --agent design
+```
+
+For local Gateways with a fixed `session.store` and a recorded `agents.defaults.sessionStore.agentId`, omitting `--agent` preserves a bare generated key so the Gateway keeps the store's owner, even when a different system agent is configured. A retired store owner remains unavailable instead of falling back to another agent. Otherwise, omitting `--agent` selects the configured system agent or the only configured agent when that choice is unambiguous. In an explicit local multi-agent setup with no default owner, pass `--agent` or route to an existing agent-owned session key or label.
+
+For local Gateways, `--agent` is validated against the configured agent roster and an unknown id fails when a generated session needs an owner. For remote targets selected by `--url`, `OPENCLAW_GATEWAY_URL`, or `gateway.mode: "remote"`, the client's local roster and system-agent setting do not select the owner. An explicit `--agent` is embedded in the generated key and validated by the remote Gateway. Without it, the bridge sends a bare `acp-bridge:<uuid>` key for the remote Gateway to resolve. If that Gateway requires an explicit owner, pass `--agent <remote-agent-id>` or an existing agent-owned session key or label.
+
+Explicit session routing takes precedence over the generated-session owner. Use `--session` or `--session-label` when you want an existing Gateway session instead:
 
 ```bash
 openclaw acp --session agent:main:main
@@ -171,7 +184,7 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-Each ACP session maps to a single Gateway session key. One agent can have many sessions; ACP defaults to an isolated `acp-bridge:<uuid>` session unless you override the key or label.
+Each ACP session maps to a single Gateway session key. Generated sessions keep a distinct UUID per editor thread, with the owner prefix determined as described above.
 
 Per-session `mcpServers` are not supported in bridge mode. If an ACP client sends them during `newSession` or `loadSession`, the bridge returns a clear error instead of silently ignoring them.
 
@@ -269,7 +282,7 @@ In Zed, open the Agent panel and select "OpenClaw ACP" to start a thread.
 
 ## Session mapping
 
-By default, ACP bridge sessions get an isolated Gateway session key with an `acp-bridge:` prefix. These normal-model bridge sessions are synthetic and disposable: they are subject to stale-entry pruning and are not treated as protected human conversation surfaces. To reuse a known session, pass a session key or label:
+Generated ACP bridge sessions use `agent:<id>:acp-bridge:<uuid>` when an owner is selected locally or passed with `--agent`. Without `--agent`, remote sessions and local sessions with a recorded fixed-store owner use `acp-bridge:<uuid>` and leave owner resolution to the Gateway. These normal-model bridge sessions are synthetic and disposable: they are subject to stale-entry pruning and are not treated as protected human conversation surfaces. To reuse a known session, pass a session key or label:
 
 - `--session <key>`: use a specific Gateway session key.
 - `--session-label <label>`: resolve an existing session by label.
@@ -296,6 +309,7 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 - `--token-file <path>`: read Gateway auth token from file.
 - `--password <password>`: Gateway auth password.
 - `--password-file <path>`: read Gateway auth password from file.
+- `--agent <id>`: owner for newly generated bridge sessions. Validated against the local agent roster for local Gateways; ownership is enforced at the Gateway boundary for remote targets (`--url`, `OPENCLAW_GATEWAY_URL`, or `gateway.mode: "remote"`).
 - `--session <key>`: default session key.
 - `--session-label <label>`: default session label to resolve.
 - `--require-existing`: fail if the session key/label does not exist.

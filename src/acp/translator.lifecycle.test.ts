@@ -264,7 +264,7 @@ describe("acp translator stable lifecycle handlers", () => {
     await agentA.shutdown();
     await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
     expect(request.mock.calls.find(([method]) => method === "chat.abort")?.[1]).toEqual({
-      sessionKey: `acp-bridge:${sessionA.sessionId}`,
+      sessionKey: send?.[1]?.sessionKey,
       runId: send?.[1]?.idempotencyKey,
     });
     await expect(agentA.closeSession({ sessionId: sessionA.sessionId })).rejects.toThrow(
