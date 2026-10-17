@@ -21,6 +21,7 @@ export function createTranscriptIdentityInserter(
   sessionId: string,
   ignoreConflicts: boolean,
 ) {
+  // Each executor is used only with the chunk length that defines its bound indexes.
   const prepare = (count: number) =>
     prepareSqliteQuerySync<readonly TranscriptIdentityInsertRow[]>(database.db, (parameter) =>
       getSessionKysely(database.db)
@@ -28,13 +29,13 @@ export function createTranscriptIdentityInserter(
         .values(
           Array.from({ length: count }, (_, index) => ({
             session_id: sessionId,
-            event_id: parameter((rows) => rows[index].eventId),
-            seq: parameter((rows) => rows[index].seq),
-            event_type: parameter((rows) => rows[index].eventType),
-            parent_id: parameter((rows) => rows[index].parentId),
+            event_id: parameter((rows) => rows[index]!.eventId),
+            seq: parameter((rows) => rows[index]!.seq),
+            event_type: parameter((rows) => rows[index]!.eventType),
+            parent_id: parameter((rows) => rows[index]!.parentId),
             // An unowned key is SQL NULL, also the schema default when previously omitted.
-            message_idempotency_key: parameter((rows) => rows[index].messageIdempotencyKey),
-            created_at: parameter((rows) => rows[index].createdAt),
+            message_idempotency_key: parameter((rows) => rows[index]!.messageIdempotencyKey),
+            created_at: parameter((rows) => rows[index]!.createdAt),
           })),
         )
         .$if(ignoreConflicts, (query) =>
@@ -79,7 +80,9 @@ export function readTranscriptAppendIdentities(
           remainingKeys.delete(row.message_idempotency_key)
         ) {
           selected.set(row.event_id, row);
-          if (remainingKeys.size === 0) break;
+          if (remainingKeys.size === 0) {
+            break;
+          }
         }
       }
     }

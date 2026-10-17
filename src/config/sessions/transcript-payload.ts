@@ -90,24 +90,27 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
     "navigation_valid",
     "created_at",
   ] as const;
+  // Each executor is used only with the chunk length that defines its bound indexes.
   const createBatchInsert = (count: number) =>
     prepareSqliteQuerySync<readonly StoredRow[]>(database, (parameter) =>
       kysely.insertInto("transcript_events").values(
         Array.from({ length: count }, (_, index) => ({
           session_id: sessionId,
-          seq: parameter((rows) => rows[index].seq),
-          event_json: parameter((rows) => rows[index].event_json),
-          event_zstd: parameter((rows) => rows[index].event_zstd),
-          event_utf8_bytes: parameter((rows) => rows[index].event_utf8_bytes),
-          navigation_json: parameter((rows) => rows[index].navigation_json),
-          navigation_type: parameter((rows) => rows[index].navigation_type),
-          navigation_custom_type: parameter((rows) => rows[index].navigation_custom_type),
-          navigation_display: parameter((rows) => rows[index].navigation_display),
-          message_role: parameter((rows) => rows[index].message_role),
-          navigation_last_type: parameter((rows) => rows[index].navigation_last_type),
-          navigation_last_custom_type: parameter((rows) => rows[index].navigation_last_custom_type),
-          navigation_valid: parameter((rows) => rows[index].navigation_valid),
-          created_at: parameter((rows) => rows[index].created_at),
+          seq: parameter((rows) => rows[index]!.seq),
+          event_json: parameter((rows) => rows[index]!.event_json),
+          event_zstd: parameter((rows) => rows[index]!.event_zstd),
+          event_utf8_bytes: parameter((rows) => rows[index]!.event_utf8_bytes),
+          navigation_json: parameter((rows) => rows[index]!.navigation_json),
+          navigation_type: parameter((rows) => rows[index]!.navigation_type),
+          navigation_custom_type: parameter((rows) => rows[index]!.navigation_custom_type),
+          navigation_display: parameter((rows) => rows[index]!.navigation_display),
+          message_role: parameter((rows) => rows[index]!.message_role),
+          navigation_last_type: parameter((rows) => rows[index]!.navigation_last_type),
+          navigation_last_custom_type: parameter(
+            (rows) => rows[index]!.navigation_last_custom_type,
+          ),
+          navigation_valid: parameter((rows) => rows[index]!.navigation_valid),
+          created_at: parameter((rows) => rows[index]!.created_at),
         })),
       ),
     );

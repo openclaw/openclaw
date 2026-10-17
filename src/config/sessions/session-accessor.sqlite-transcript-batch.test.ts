@@ -39,9 +39,15 @@ it("batches bounded inserts while preserving order and subsequent identity rejec
       database.db,
       ["identities", "payloads", "active", "identityReads"],
       (sql) => {
-        if (/^insert into "transcript_event_identities"/i.test(sql)) return "identities";
-        if (/^insert into "transcript_events"/i.test(sql)) return "payloads";
-        if (/^insert into "session_transcript_active_events"/i.test(sql)) return "active";
+        if (/^insert into "transcript_event_identities"/i.test(sql)) {
+          return "identities";
+        }
+        if (/^insert into "transcript_events"/i.test(sql)) {
+          return "payloads";
+        }
+        if (/^insert into "session_transcript_active_events"/i.test(sql)) {
+          return "active";
+        }
         return /^select /i.test(sql) && sql.includes('from "transcript_event_identities"')
           ? "identityReads"
           : null;
@@ -98,12 +104,18 @@ it.each(
       const rows = Array.from({ length: 70 }, (_, index) =>
         message(`row-${index}`, null, index + 2),
       );
-      for (const index of [0, 1, 69]) rows[index]!.message.idempotencyKey = "shared";
-      for (const index of [2, 68]) rows[index]!.message.idempotencyKey = "seeded";
+      for (const index of [0, 1, 69]) {
+        rows[index]!.message.idempotencyKey = "shared";
+      }
+      for (const index of [2, 68]) {
+        rows[index]!.message.idempotencyKey = "seeded";
+      }
       // The source needs accurate feedback while the accepted prefix is still buffered.
       const accepted: boolean[] = [];
       function* streamRows(): Generator<ReturnType<typeof message>, void, boolean> {
-        for (const row of rows) accepted.push(yield row);
+        for (const row of rows) {
+          accepted.push(yield row);
+        }
       }
       write(() => {
         expect(

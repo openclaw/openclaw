@@ -29,11 +29,10 @@ import { getSessionKysely, type ResolvedTranscriptScope } from "./session-access
 import type {
   TranscriptAppendCursor,
   TranscriptAppendOptions,
-  TranscriptInsertRow,
 } from "./session-accessor.sqlite-transcript-append.types.js";
+import { createTranscriptAppendBatch } from "./session-accessor.sqlite-transcript-batch.js";
 import {
   createTranscriptIdentityInserter,
-  readTranscriptAppendIdentities,
   readIdempotencyKeyOwner,
   readTranscriptEventIdentity,
   readTranscriptMessageByIdentity,
@@ -72,7 +71,6 @@ import {
   shouldRebuildSessionTranscriptIndexSynchronously,
 } from "./session-transcript-index.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
-import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import {
   transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
@@ -86,49 +84,7 @@ import {
   prepareTranscriptPayloadForReuse,
   transcriptEventJsonSql,
   transcriptSerializedBytes,
-  TRANSCRIPT_INSERT_BATCH_SIZE,
 } from "./transcript-payload.js";
-
-/** Inserts exact transcript rows without mutating the forward-only projection. */
-export function insertTranscriptRowsWithoutProjectionInTransaction(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  rows: readonly TranscriptInsertRow[],
-  reservedMessageIdempotencyKeys: ReadonlySet<string> = new Set(),
-): void {
-  return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
-    const insertEvent = createTranscriptEventInserter(database.db, sessionId);
-    const insertIdentity = createTranscriptIdentityInserter(database, sessionId, false);
-    for (const row of rows) {
-      const event = withoutSqliteDatabaseWriteScope(database.db, () =>
-        canonicalizeTranscriptEventMedia(row.event),
-      );
-      if (row.storedEventSeq === undefined) {
-        insertEvent({
-          seq: row.seq,
-          eventJson: withoutSqliteDatabaseWriteScope(database.db, () => JSON.stringify(event)),
-          createdAt: row.createdAt,
-        });
-      } else {
-        copyRetainedTranscriptPayload(database, sessionId, row.storedEventSeq, row.seq);
-      }
-      const identity = readTranscriptEventIdentity(event);
-      if (!identity) {
-        continue;
-      }
-      if ("messageIdempotencyKey" in row) {
-        identity.messageIdempotencyKey = row.messageIdempotencyKey ?? null;
-      } else if (
-        identity.messageIdempotencyKey &&
-        (reservedMessageIdempotencyKeys.has(identity.messageIdempotencyKey) ||
-          readIdempotencyKeyOwner(database, sessionId, identity.messageIdempotencyKey))
-      ) {
-        identity.messageIdempotencyKey = null;
-      }
-      insertIdentity({ ...identity, seq: row.seq, createdAt: row.createdAt });
-    }
-  });
-}
 
 /** Returns the exact committed JSON, or false when an existing identity owns the event. */
 export function appendTranscriptEventInTransaction(
@@ -402,57 +358,7 @@ export function appendTranscriptEventsInTransaction(
 ): number {
   let appended = 0;
   let projectionNeedsRebuild = false;
-  // Prepared arrays and the import spool cannot mutate the destination between
-  // rows. Sequence and projection facts belong only to this synchronous batch.
-  const batch: NonNullable<TranscriptAppendCursor["batch"]> = {
-    events: [],
-    identities: new Map(),
-    knownEventIds: new Set(),
-    keyOwners: new Map(),
-    preparedArray: Array.isArray(events),
-    bytes: 0,
-  };
-  if (Array.isArray(events) && events.length > 0) {
-    const identities = events.flatMap((event) => {
-      const identity = readTranscriptEventIdentity(event);
-      return identity ? [identity] : [];
-    });
-    if (identities.length > 0) {
-      for (const row of readTranscriptAppendIdentities(
-        database,
-        scope.sessionId,
-        identities.map((identity) => identity.eventId),
-        identities.flatMap((identity) =>
-          identity.messageIdempotencyKey ? [identity.messageIdempotencyKey] : [],
-        ),
-      )) {
-        batch.knownEventIds.add(row.event_id);
-        if (row.message_idempotency_key) {
-          batch.keyOwners.set(row.message_idempotency_key, { eventId: row.event_id, seq: row.seq });
-        }
-      }
-    }
-  }
-  const cursor: TranscriptAppendCursor = { deferWrites: true, batch };
-  const flushRows = () =>
-    withSqliteDatabaseWriteScope(
-      database.db,
-      [scope.sessionKey, sqliteSessionIdWriteScope(scope.sessionId)],
-      () =>
-        preserveSessionEntryCacheAcrossWrite(database, () => {
-          // Immediate foreign keys require payloads before identities and active rows.
-          cursor.insertEvent?.batch(batch.events);
-          cursor.insertIdentity?.batch([...batch.identities.values()]);
-          cursor.appendToIndex?.flushRows();
-          batch.events.length = 0;
-          batch.identities.clear();
-          batch.bytes = 0;
-          if (!batch.preparedArray) {
-            batch.knownEventIds.clear();
-            batch.keyOwners.clear();
-          }
-        }),
-    );
+  const batch = createTranscriptAppendBatch(database, scope, events, options);
   let completed = false;
   const iterator = events[Symbol.iterator]();
   const appendOptions = {
@@ -469,14 +375,12 @@ export function appendTranscriptEventsInTransaction(
         scope,
         next.value,
         appendOptions,
-        cursor,
+        batch.cursor,
       );
       if (inserted) {
         appended += 1;
       }
-      if (batch.events.length >= TRANSCRIPT_INSERT_BATCH_SIZE || batch.bytes >= 1024 * 1024) {
-        flushRows();
-      }
+      batch.flushFullChunk();
       // Streaming imports acknowledge only inserted rows in their byte-dedupe
       // spool; ordinary array iterators ignore this feedback.
       next = iterator.next(inserted !== false);
@@ -490,30 +394,7 @@ export function appendTranscriptEventsInTransaction(
     }
     throw error;
   } finally {
-    // A caller may catch an iterator error and commit the accepted prefix.
-    // Settle its index and attempt recency without advancing the mutation fence.
-    preserveSessionEntryCacheAcrossWrite(database, () => {
-      flushRows();
-      cursor.appendToIndex?.flush();
-      if (completed && appended > 0 && options.touchMutation !== false) {
-        touchTranscriptMutationInTransaction(
-          database,
-          scope.sessionId,
-          cursor.windowUpdatedAt,
-          projectionNeedsRebuild ? undefined : cursor.rowTranscript,
-        );
-      } else if (cursor.windowUpdatedAt !== undefined) {
-        touchTranscriptWindowRecency(database, scope.sessionId, cursor.windowUpdatedAt, cursor);
-      }
-    });
-  }
-  if (appended > 0) {
-    scheduleTranscriptProjectionReconcile(
-      database,
-      scope.sessionId,
-      projectionNeedsRebuild,
-      options,
-    );
+    batch.settle(completed, appended, projectionNeedsRebuild);
   }
   return appended;
 }

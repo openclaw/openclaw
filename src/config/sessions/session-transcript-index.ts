@@ -252,6 +252,7 @@ function createWatermarkWriter(db: EngineConnection, sessionId: string, updateEx
 
 function createActiveEventInserter(db: EngineConnection, sessionId: string) {
   type ActiveRow = PreparedSessionTranscriptProjection["activeRows"][number];
+  // Each executor is used only with the chunk length that defines its bound indexes.
   const prepare = (count: number) =>
     prepareSqliteQuerySync<readonly ActiveRow[]>(db, (parameter) =>
       getIndexKysely(db)
@@ -259,10 +260,10 @@ function createActiveEventInserter(db: EngineConnection, sessionId: string) {
         .values(
           Array.from({ length: count }, (_, index) => ({
             session_id: sessionId,
-            active_position: parameter((rows) => rows[index].activePosition),
-            context_eligible: parameter((rows) => rows[index].contextEligible),
-            event_seq: parameter((rows) => rows[index].eventSeq),
-            message_position: parameter((rows) => rows[index].messagePosition),
+            active_position: parameter((rows) => rows[index]!.activePosition),
+            context_eligible: parameter((rows) => rows[index]!.contextEligible),
+            event_seq: parameter((rows) => rows[index]!.eventSeq),
+            message_position: parameter((rows) => rows[index]!.messagePosition),
           })),
         ),
     );

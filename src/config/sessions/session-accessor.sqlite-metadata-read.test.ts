@@ -202,6 +202,7 @@ it.each(["presence", "mutation"] as const)(
           expect(read(scope(id))).toEqual(expected[index]);
         }
       }
+      expect(compile).not.toHaveBeenCalled();
       runOpenClawAgentWriteTransaction(({ db }) => {
         db.exec(`
           DELETE FROM transcript_events WHERE session_id = 'hot';
@@ -213,6 +214,8 @@ it.each(["presence", "mutation"] as const)(
           insert({ seq: 0, eventJson: '{"type":"session"}', createdAt: 1 });
         }
       }, options);
+      // Lazy write compilation is independent of the warmed metadata readers.
+      compile.mockClear();
       if (kind === "presence") {
         expect(ids.map((id) => read(scope(id)))).toEqual([false, true, true, false]);
       } else {
