@@ -154,24 +154,19 @@ describe("applyJobPatch delivery merge", () => {
     },
   );
 
-  it.each<{
-    name: string;
-    delivery: NonNullable<CronJobPatch["delivery"]>;
-  }>([
-    { name: "announce mode", delivery: { mode: "announce" } },
-    {
-      name: "completion webhook",
-      delivery: {
-        completionDestination: { mode: "webhook", to: "https://example.com/completed" },
-      },
-    },
-  ])("rejects an authored $name on main instead of silently clearing it", ({ delivery }) => {
-    const job = makeMainJob();
+  it.each([
+    { mode: "announce" },
+    { completionDestination: { mode: "webhook", to: "https://example.com/completed" } },
+  ] satisfies NonNullable<CronJobPatch["delivery"]>[])(
+    "rejects authored main delivery %j",
+    (delivery) => {
+      const job = makeMainJob();
 
-    expect(() => applyJobPatch(job, { delivery })).toThrow(
-      'cron channel delivery config is only supported for sessionTarget="isolated"',
-    );
-  });
+      expect(() => applyJobPatch(job, { delivery })).toThrow(
+        'cron channel delivery config is only supported for sessionTarget="isolated"',
+      );
+    },
+  );
 
   it("clears inherited announce delivery when retargeting to main with bestEffort", () => {
     const job = makeJob();
@@ -198,25 +193,31 @@ describe("applyJobPatch delivery merge", () => {
     });
   });
 
-  it("clears nullable failure destination fields", () => {
-    const job = makeJob({
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "-1001234567890",
-        failureDestination: { mode: "announce", ...failureDefaults },
-      },
-    });
-    applyJobPatch(job, { delivery: { failureDestination: clearFailureDestination } });
+  it.each(["isolated", "main"] as const)(
+    "clears %s failure routes as global opt-outs",
+    (target) => {
+      const job =
+        target === "main"
+          ? makeMainJob()
+          : makeJob({
+              delivery: {
+                mode: "announce",
+                channel: "telegram",
+                to: "-1001234567890",
+                failureDestination: { mode: "announce", ...failureDefaults },
+              },
+            });
+      applyJobPatch(job, { delivery: { failureDestination: clearFailureDestination } });
 
-    const failureDestination = job.delivery?.failureDestination;
-    expect(failureDestination).toEqual(clearedFailureDestination);
-    expect(Object.hasOwn(failureDestination as object, "channel")).toBe(true);
-    expect(Object.hasOwn(failureDestination as object, "to")).toBe(true);
-    expect(Object.hasOwn(failureDestination as object, "accountId")).toBe(true);
-    expect(Object.hasOwn(failureDestination as object, "mode")).toBe(true);
-    expect(resolveFailureDestination(job, failureDefaults)).toBeNull();
-  });
+      const failureDestination = job.delivery?.failureDestination;
+      expect(failureDestination).toStrictEqual(clearedFailureDestination);
+      if (target === "main") {
+        expect(job.delivery?.mode).toBe("none");
+      }
+      const accountId = target === "main" ? "bot-a" : "bot-b";
+      expect(resolveFailureDestination(job, { ...failureDefaults, accountId })).toBeNull();
+    },
+  );
 
   it("keeps unspecified failure destination fields inheriting global defaults", () => {
     const job = makeJob();
@@ -233,55 +234,33 @@ describe("applyJobPatch delivery merge", () => {
       accountId: "bot-a",
     });
   });
-
-  it("preserves main-job clear-only failure destinations as global opt-outs", () => {
-    const job = makeMainJob();
-    applyJobPatch(job, { delivery: { failureDestination: clearFailureDestination } });
-
-    const failureDestination = job.delivery?.failureDestination;
-    expect(job.delivery?.mode).toBe("none");
-    expect(failureDestination).toEqual(clearedFailureDestination);
-    expect(resolveFailureDestination(job, { ...failureDefaults, accountId: "bot-a" })).toBeNull();
-  });
 });
 
 describe("applyJobPatch failure alert merge", () => {
   it("clears explicit fields, preserves omitted fields, and persists the result", () => {
+    const kept = { channel: "telegram", includeSkipped: true, mode: "announce" as const };
     const job = makeJob({
       failureAlert: {
+        ...kept,
         after: 2,
-        channel: "telegram",
         to: "123456",
         cooldownMs: 60_000,
-        includeSkipped: true,
-        mode: "announce",
         accountId: "bot-a",
       },
     });
 
     applyJobPatch(job, {
-      failureAlert: {
-        after: null,
-        to: null,
-        cooldownMs: null,
-        accountId: null,
-      },
+      failureAlert: { after: null, to: null, cooldownMs: null, accountId: null },
     });
 
     expect(job.failureAlert).toEqual({
+      ...kept,
       after: undefined,
-      channel: "telegram",
       to: undefined,
       cooldownMs: undefined,
-      includeSkipped: true,
-      mode: "announce",
       accountId: undefined,
     });
-    expect(projectCronJobThroughStorageCodec(job).failureAlert).toEqual({
-      channel: "telegram",
-      includeSkipped: true,
-      mode: "announce",
-    });
+    expect(projectCronJobThroughStorageCodec(job).failureAlert).toEqual(kept);
 
     applyJobPatch(job, {
       failureAlert: { channel: null, includeSkipped: null, mode: null },

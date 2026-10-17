@@ -1,37 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import type { CronJob } from "../types.js";
 import { resolveFailureAlert } from "./failure-alerts.js";
-import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
+import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
 
-function stripTestTargetPrefix(raw: string, prefixes: readonly string[]): string | undefined {
-  const target = raw
-    .trim()
-    .replace(new RegExp(`^(?:${prefixes.join("|")}):`, "i"), "")
-    .trim();
-  return target || undefined;
-}
-
-type RoutingDeps = Partial<Parameters<typeof createCronServiceState>[0]>;
+type RoutingDeps = Partial<Parameters<typeof createCronRegressionState>[0]>;
 function routingFixture(overrides: Partial<CronJob> = {}, deps: RoutingDeps = {}) {
-  const sendCronFailureAlert = vi.fn(async () => undefined);
-  const state = createCronServiceState({
-    scheduler: createTestGatewayScheduler(),
+  const send = vi.fn(async () => undefined);
+  const state = createCronRegressionState({
     storePath: "/tmp/openclaw-cron-failure-alert-account-routing.json",
-    cronEnabled: true,
     cronConfig: { failureAlert: { enabled: true, after: 1 } },
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    sendCronFailureAlert,
+    sendCronFailureAlert: send,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -48,7 +35,7 @@ function routingFixture(overrides: Partial<CronJob> = {}, deps: RoutingDeps = {}
   return {
     state,
     job,
-    sendCronFailureAlert,
+    send,
     deferredNotifications,
     apply: (result: Parameters<typeof applyJobResult>[2]) =>
       applyJobResult(state, job, result, { deferredNotifications }),
@@ -75,7 +62,10 @@ function testPlugin(id: string, aliases: string[], targetPrefixes: string[], out
       messaging: {
         targetPrefixes,
         normalizeTarget: (raw: string) => {
-          const target = stripTestTargetPrefix(raw, targetPrefixes);
+          const target = raw
+            .trim()
+            .replace(new RegExp(`^(?:${targetPrefixes.join("|")}):`, "i"), "")
+            .trim();
           return target ? `${outputPrefix}${target}` : undefined;
         },
       },
@@ -83,177 +73,175 @@ function testPlugin(id: string, aliases: string[], targetPrefixes: string[], out
   };
 }
 
-describe("cron failure alert account routing", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        testPlugin("telegram", [], ["telegram", "tg"], "telegram:"),
-        testPlugin("googlechat", ["gchat", "google-chat"], ["googlechat", "google-chat", "gchat"]),
-      ]),
-    );
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      testPlugin("telegram", [], ["telegram", "tg"], "telegram:"),
+      testPlugin("googlechat", ["gchat", "google-chat"], ["googlechat", "google-chat", "gchat"]),
+    ]),
+  );
+});
+
+afterEach(resetPluginRuntimeStateForTest);
+
+it.each([
+  {
+    name: "keeps numeric zero as a distinct primary thread",
+    jobAlert: undefined,
+    deliveryThreadId: 0,
+    failureDestination: { ...failureDestination, to: "tg:19098680" },
+    expected: { ...alternateRoute, to: "tg:19098680" },
+  },
+  {
+    name: "lets an explicit alert route override an unthreaded failure destination",
+    jobAlert: { to: "tg:19098680" },
+    failureDestination,
+    expected: {
+      ...failureDestination,
+      to: "tg:19098680",
+      threadId: 42,
+      alternateRoute: false,
+    },
+  },
+  {
+    name: "preserves an unthreaded failure destination when the alert only selects its mode",
+    jobAlert: { mode: "announce" as const },
+    failureDestination,
+    expected: alternateRoute,
+  },
+  {
+    name: "does not equate case-sensitive recipient identities across provider aliases",
+    deliveryChannel: "googlechat",
+    deliveryTo: "googlechat:RoomA",
+    jobAlert: { to: "gchat:rooma" },
+    expected: {
+      channel: "googlechat",
+      to: "gchat:rooma",
+      accountId: undefined,
+      threadId: undefined,
+    },
+  },
+  {
+    name: "does not inherit the primary account for another channel",
+    globalChannel: "slack",
+    jobAlert: undefined,
+    expected: { channel: "slack", to: undefined, accountId: undefined },
+  },
+])("$name", (testCase) => {
+  const { jobAlert, expected } = testCase;
+  const { state, job } = routingFixture(
+    {
+      delivery: {
+        ...primaryDelivery,
+        channel: "deliveryChannel" in testCase ? testCase.deliveryChannel : "telegram",
+        to: "deliveryTo" in testCase ? testCase.deliveryTo : "telegram:19098680",
+        threadId: "deliveryThreadId" in testCase ? testCase.deliveryThreadId : 42,
+        ...("failureDestination" in testCase
+          ? { failureDestination: testCase.failureDestination }
+          : {}),
+      },
+      ...(jobAlert ? { failureAlert: jobAlert } : {}),
+    },
+    {
+      defaultAgentId: "main",
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          ...("globalChannel" in testCase ? { channel: testCase.globalChannel } : {}),
+        },
+      },
+      sendCronFailureAlert: undefined,
+    },
+  );
+
+  expect(resolveFailureAlert(state, job)).toMatchObject(expected);
+});
+
+it("routes required delivery failure outside the failed topic", async () => {
+  const { send, apply, drain, deferredNotifications } = routingFixture(
+    {
+      delivery: {
+        ...primaryDelivery,
+        bestEffort: false,
+        failureDestination,
+      },
+    },
+    { storePath: "/tmp/openclaw-cron-unthreaded-failure-destination.json" },
+  );
+  apply({
+    status: "ok",
+    deliveryAttempted: true,
+    delivered: false,
+    deliveryError: "topic closed",
+    startedAt: 1_000,
+    endedAt: 2_000,
   });
 
-  afterEach(resetPluginRuntimeStateForTest);
-
-  it.each([
-    {
-      name: "keeps numeric zero as a distinct primary thread",
-      jobAlert: undefined,
-      deliveryThreadId: 0,
-      failureDestination: { ...failureDestination, to: "tg:19098680" },
-      expected: { ...alternateRoute, to: "tg:19098680" },
-    },
-    {
-      name: "lets an explicit alert route override an unthreaded failure destination",
-      jobAlert: { to: "tg:19098680" },
-      failureDestination,
-      expected: {
-        ...failureDestination,
-        to: "tg:19098680",
-        threadId: 42,
-        alternateRoute: false,
-      },
-    },
-    {
-      name: "preserves an unthreaded failure destination when the alert only selects its mode",
-      jobAlert: { mode: "announce" as const },
-      failureDestination,
-      expected: alternateRoute,
-    },
-    {
-      name: "does not equate case-sensitive recipient identities across provider aliases",
-      deliveryChannel: "googlechat",
-      deliveryTo: "googlechat:RoomA",
-      jobAlert: { to: "gchat:rooma" },
-      expected: {
-        channel: "googlechat",
-        to: "gchat:rooma",
-        accountId: undefined,
-        threadId: undefined,
-      },
-    },
-    {
-      name: "does not inherit the primary account for another channel",
-      globalChannel: "slack",
-      jobAlert: undefined,
-      expected: { channel: "slack", to: undefined, accountId: undefined },
-    },
-  ])("$name", (testCase) => {
-    const { jobAlert, expected } = testCase;
-    const { state, job } = routingFixture(
-      {
-        delivery: {
-          ...primaryDelivery,
-          channel: "deliveryChannel" in testCase ? testCase.deliveryChannel : "telegram",
-          to: "deliveryTo" in testCase ? testCase.deliveryTo : "telegram:19098680",
-          threadId: "deliveryThreadId" in testCase ? testCase.deliveryThreadId : 42,
-          ...("failureDestination" in testCase
-            ? { failureDestination: testCase.failureDestination }
-            : {}),
-        },
-        ...(jobAlert ? { failureAlert: jobAlert } : {}),
-      },
-      {
-        defaultAgentId: "main",
-        cronConfig: {
-          failureAlert: {
-            enabled: true,
-            after: 1,
-            ...("globalChannel" in testCase ? { channel: testCase.globalChannel } : {}),
-          },
-        },
-        sendCronFailureAlert: undefined,
-      },
-    );
-
-    expect(resolveFailureAlert(state, job)).toMatchObject(expected);
-  });
-
-  it("routes required delivery failure outside the failed topic", async () => {
-    const { sendCronFailureAlert, apply, drain, deferredNotifications } = routingFixture(
-      {
-        delivery: {
-          ...primaryDelivery,
-          bestEffort: false,
-          failureDestination,
-        },
-      },
-      { storePath: "/tmp/openclaw-cron-unthreaded-failure-destination.json" },
-    );
-    apply({
-      status: "ok",
-      deliveryAttempted: true,
-      delivered: false,
-      deliveryError: "topic closed",
-      startedAt: 1_000,
-      endedAt: 2_000,
-    });
-
-    expect(deferredNotifications).toHaveLength(1);
-    expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    await drain();
-    expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        ...failureDestination,
-        threadId: undefined,
-        inheritSessionThread: false,
-        payload: expect.objectContaining({
-          text: 'Automation "Topic-routed job" delivery failed\nCheck automation history for details.',
-        }),
+  expect(deferredNotifications).toHaveLength(1);
+  expect(send).not.toHaveBeenCalled();
+  await drain();
+  expect(send).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      ...failureDestination,
+      threadId: undefined,
+      inheritSessionThread: false,
+      payload: expect.objectContaining({
+        text: 'Automation "Topic-routed job" delivery failed\nCheck automation history for details.',
       }),
-    );
+    }),
+  );
+});
+
+it("carries run start time without using it for alert cooldown", async () => {
+  const runAtMs = Date.parse("2026-07-30T00:00:00.000Z");
+  const endedAt = runAtMs + 5 * 60_000;
+  const { job, send, apply, drain } = routingFixture(
+    {
+      id: "failed-run",
+      name: "Failed run",
+      createdAtMs: runAtMs,
+      updatedAtMs: runAtMs,
+      delivery: { mode: "announce", channel: "telegram", to: "telegram:19098680" },
+    },
+    {
+      storePath: "/tmp/openclaw-cron-failure-alert-run-time.json",
+      cronConfig: { failureAlert: { enabled: true, after: 1, cooldownMs: 60_000 } },
+      nowMs: () => endedAt,
+    },
+  );
+  apply({
+    status: "error",
+    error: "provider unavailable",
+    startedAt: runAtMs,
+    endedAt,
   });
 
-  it("carries run start time without using it for alert cooldown", async () => {
-    const runAtMs = Date.parse("2026-07-30T00:00:00.000Z");
-    const endedAt = runAtMs + 5 * 60_000;
-    const { job, sendCronFailureAlert, apply, drain } = routingFixture(
-      {
-        id: "failed-run",
-        name: "Failed run",
-        createdAtMs: runAtMs,
-        updatedAtMs: runAtMs,
-        delivery: { mode: "announce", channel: "telegram", to: "telegram:19098680" },
-      },
-      {
-        storePath: "/tmp/openclaw-cron-failure-alert-run-time.json",
-        cronConfig: { failureAlert: { enabled: true, after: 1, cooldownMs: 60_000 } },
-        nowMs: () => endedAt,
-      },
-    );
-    apply({
-      status: "error",
-      error: "provider unavailable",
-      startedAt: runAtMs,
-      endedAt,
-    });
+  expect(job.state.lastFailureAlertAtMs).toBe(endedAt);
+  expect(send).not.toHaveBeenCalled();
+  await drain();
+  expect(send).toHaveBeenCalledWith(expect.objectContaining({ runAtMs }));
+});
 
-    expect(job.state.lastFailureAlertAtMs).toBe(endedAt);
-    expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    await drain();
-    expect(sendCronFailureAlert).toHaveBeenCalledWith(expect.objectContaining({ runAtMs }));
+it("keeps the primary account and topic on provider-aliased failure alerts", async () => {
+  const { send, apply, drain } = routingFixture(
+    { failureAlert: { to: "tg:19098680" } },
+    { storePath: "/tmp/openclaw-cron-failure-alert-thread-routing.json" },
+  );
+  apply({
+    status: "error",
+    error: "provider unavailable",
+    startedAt: 1,
+    endedAt: 2,
   });
 
-  it("keeps the primary account and topic on provider-aliased failure alerts", async () => {
-    const { sendCronFailureAlert, apply, drain } = routingFixture(
-      { failureAlert: { to: "tg:19098680" } },
-      { storePath: "/tmp/openclaw-cron-failure-alert-thread-routing.json" },
-    );
-    apply({
-      status: "error",
-      error: "provider unavailable",
-      startedAt: 1,
-      endedAt: 2,
-    });
-
-    expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    await drain();
-    expect(sendCronFailureAlert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...failureDestination,
-        to: "tg:19098680",
-        threadId: 42,
-      }),
-    );
-  });
+  expect(send).not.toHaveBeenCalled();
+  await drain();
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ...failureDestination,
+      to: "tg:19098680",
+      threadId: 42,
+    }),
+  );
 });

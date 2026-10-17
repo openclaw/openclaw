@@ -153,12 +153,9 @@ it("finishes startup, state writes, and update history while cron host callbacks
     const fault = stallCronHostCallbacks();
     const now = 1_800_000_000_000;
     const storePath = fixture.statePath("cron", "jobs.json");
-    const deferred = createDueIsolatedJob({ id: "deferred-startup", nowMs: now, nextRunAtMs: now });
-    const immediate = createDueIsolatedJob({
-      id: "immediate-startup",
-      nowMs: now,
-      nextRunAtMs: now,
-    });
+    const dueJob = (id: string) => createDueIsolatedJob({ id, nowMs: now, nextRunAtMs: now });
+    const deferred = dueJob("deferred-startup");
+    const immediate = dueJob("immediate-startup");
     immediate.payload = { kind: "command", argv: ["echo", "synthetic"] };
     const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronRegressionState({
@@ -176,22 +173,13 @@ it("finishes startup, state writes, and update history while cron host callbacks
       const options = { env: fixture.env, busyTimeoutMs: 0 };
       const update = createUpdateRun({ trigger: "cli" }, options);
       const startup = runMissedJobs(state, { deferAgentWork: true });
-      settled = startup.then(
-        () => ({ ok: true }),
-        (error: unknown) => ({ ok: false, error }),
-      );
-      await withinTest(
-        awaitGateBeforeSettlement(fault.submitted, startup, "Startup skipped its worker mutation"),
-        signal,
-      );
-      await withinTest(
-        awaitGateBeforeSettlement(
-          fault.held,
-          startup,
-          "Startup completed without pausing its host",
-        ),
-        signal,
-      );
+      settled = Promise.allSettled([startup]);
+      for (const [gate, message] of [
+        [fault.submitted, "Startup skipped its worker mutation"],
+        [fault.held, "Startup completed without pausing its host"],
+      ] as const) {
+        await withinTest(awaitGateBeforeSettlement(gate, startup, message), signal);
+      }
       // A pending host response must never retain the writer needed by state and update history.
       runOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -208,24 +196,25 @@ it("finishes startup, state writes, and update history while cron host callbacks
         options,
       );
       fault.release();
-      expect(await withinTest(settled, signal)).toEqual({ ok: true });
+      expect(await withinTest(settled, signal)).toMatchObject([{ status: "fulfilled" }]);
       expect(runCommandJob).toHaveBeenCalledOnce();
       const jobs = (await loadCronStore(storePath)).jobs;
       expect(jobs.find(({ id }) => id === deferred.id)?.state.startupCatchupAtMs).toBeGreaterThan(
         now,
       );
       expect(jobs.find(({ id }) => id === immediate.id)?.state.lastRunStatus).toBe("ok");
+      const db = openOpenClawStateDatabase().db;
       expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        db
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
           .get("cron-independent-writer"),
       ).toEqual({ value_json: JSON.stringify("saved") });
       expect(getUpdateRun(update.runId, options)?.steps).toContainEqual(
         expect.objectContaining({ step: "cron-independent-history", status: "completed" }),
       );
       expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
+        db
+          .prepare("SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
           .all(cronStoreKey(storePath), immediate.id),
       ).toEqual([{ status: "ok" }]);
     } finally {
