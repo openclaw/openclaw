@@ -324,7 +324,7 @@ it.each(["session_status", "sessions_send"] as const)(
       await prepareProfiles({ env });
       const admin = {
         agents: ["main"],
-        scopes: ["operator.admin"],
+        scopes: ["operator.admin" as const],
         sessions: { others: "write" as const },
       };
       runtime.cfg = {

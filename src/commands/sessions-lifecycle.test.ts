@@ -220,7 +220,9 @@ describe("sessions lifecycle commands", () => {
       path: "/worktree",
       reason: "owner-mismatch",
     };
-    onTestFinished(() => mocks.callGateway.mockReset());
+    onTestFinished(() => {
+      mocks.callGateway.mockReset();
+    });
     mocks.callGateway
       .mockResolvedValueOnce(
         described("agent:main:archived", "session-1", { agentId: "main", archived: true }),
@@ -386,7 +388,9 @@ describe("sessions lifecycle commands", () => {
   });
 
   it("delete continues past rejected lookups and reports mixed results in order", async () => {
-    onTestFinished(() => mocks.callGateway.mockReset());
+    onTestFinished(() => {
+      mocks.callGateway.mockReset();
+    });
     mocks.callGateway
       .mockResolvedValueOnce(described("agent:main:first", "session-1"))
       .mockRejectedValueOnce(

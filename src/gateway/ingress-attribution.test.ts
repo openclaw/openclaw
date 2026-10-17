@@ -5,6 +5,7 @@ import {
   createGatewayUnattributableProxyReporter,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
+  type GatewayIngressAttribution,
 } from "./ingress-attribution.js";
 
 function request(params?: {
@@ -31,7 +32,9 @@ function request(params?: {
 
 afterEach(() => vi.useRealTimers());
 
-const unattributableSource = (index: number) => ({
+const unattributableSource = (
+  index: number,
+): Extract<GatewayIngressAttribution, { kind: "unattributable-proxy" }> => ({
   kind: "unattributable-proxy" as const,
   reason: "proxy_attribution_required" as const,
   guidance: PROXY_ATTRIBUTION_GUIDANCE,

@@ -83,6 +83,7 @@ it("keeps discovery tools when the Gateway source, config, or lifetime does not 
   const { runtime, target, localRecord, tool, adopt } = createAdoptionPair(config);
   runtime.tools.push(tool(["owner_tool"]));
   target.tools.push(tool(["owner_tool"]));
+  expect(adopt().tools[0]).toBe(runtime.tools[0]);
   expect(
     adopt({
       plugins: { entries: { owner: { config: { account: "other" } } } },
@@ -158,6 +159,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     api.registerTool(
       () => ({
         ...makeTool("owner_tool"),
+        label: "Owner",
         async execute() {
           return { content: [{ type: "text", text: store.getRuntime().call() }], details: {} };
         },

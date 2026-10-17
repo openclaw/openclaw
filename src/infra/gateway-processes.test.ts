@@ -26,14 +26,17 @@ vi.mock("node:fs", async () => {
   );
 });
 
+// mock-isolation: Inject listener census results without probing live host processes.
 vi.mock("./restart-stale-pids.js", () => ({
   findGatewayPidsOnPortSync: (...args: unknown[]) => listeners(...args),
 }));
 
+// mock-isolation: Inject lease ownership without reading host lease files.
 vi.mock("./gateway-owner-lease.js", () => ({
   readGatewayOwnerLease: readOwner,
 }));
 
+// mock-isolation: Keep synthetic process-safety cases independent of global logger state.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({ debug: vi.fn() })),
 }));

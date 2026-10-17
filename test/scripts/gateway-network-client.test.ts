@@ -94,7 +94,7 @@ it("rejects loose client timeout env values instead of parsing prefixes", () => 
     [timeoutKey, "100ms"],
     [fallbackKey, "1e3"],
     [timeoutKey, "0"],
-  ]) {
+  ] as const) {
     expect(() => readGatewayNetworkClientConnectTimeoutMs({ [key]: value })).toThrow(
       `invalid ${key}: ${value}`,
     );

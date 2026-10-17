@@ -480,7 +480,7 @@ it.each([
   [undefined, "Corrected", "message_end", "First block."],
 ] as const)(
   "replaces pending reply directives with authoritative checkpoint target %j",
-  async (replyToId, text, terminal, priorText = "") => {
+  async (replyToId, text, terminal, priorText) => {
     const { emit, subscription, onBlockReply } = blockReplyHarness({
       blockReplyBreak: terminal === "message_end" && !priorText ? "message_end" : "text_end",
       blockReplyChunking:

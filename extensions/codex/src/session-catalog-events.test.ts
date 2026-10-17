@@ -43,7 +43,9 @@ async function fixture(
     async client(repeat = 1, params?: Parameters<typeof createHarness>[0]) {
       const harness = createHarness(params);
       clients.push(harness);
-      disposers.push(() => harness.client.closeAndWait());
+      disposers.push(async () => {
+        await harness.client.closeAndWait();
+      });
       for (let i = 0; i < repeat; i++) {
         await observeCodexCatalogClient(harness.client, { startOptions: options });
       }

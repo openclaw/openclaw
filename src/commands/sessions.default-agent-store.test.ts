@@ -68,6 +68,13 @@ function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
 
 describe("sessionsCommand default store agent selection", () => {
   let runtime: ReturnType<typeof createTestRuntime>;
+  function readJsonOutput() {
+    const output = runtime.log.mock.calls[0]?.[0];
+    if (typeof output !== "string") {
+      throw new Error("Expected session JSON output to be a string");
+    }
+    return JSON.parse(output);
+  }
   beforeEach(() => {
     vi.clearAllMocks();
     runtime = createTestRuntime();
@@ -92,7 +99,7 @@ describe("sessionsCommand default store agent selection", () => {
 
     await sessionsCommand({ allAgents: true, json: true }, runtime);
 
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0] ?? "{}"));
+    const payload = readJsonOutput();
     expect(payload).toMatchObject({ count: 2, allAgents: true });
     expect(payload.stores).toEqual([
       { agentId: "main", path: "/tmp/shared-sessions.sqlite" },
@@ -122,7 +129,7 @@ describe("sessionsCommand default store agent selection", () => {
 
     await sessionsCommand({ allAgents: true, json: true, active: "2", limit: 2 }, runtime);
 
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0] ?? "{}"))).toMatchObject({
+    expect(readJsonOutput()).toMatchObject({
       count: 2,
       totalCount: 3,
       hasMore: true,

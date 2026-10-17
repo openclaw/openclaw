@@ -267,13 +267,13 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
     metadata: { hostOnly: () => undefined },
   });
   await seed(store, session);
-  const original: TranscriptUtterance = {
+  const original = {
     id: "first",
     text: "First speech",
     speaker: { id: "speaker", label: "Sam" },
     metadata: { language: "en", nested: [1, null, "🦞"] },
     final: true,
-  };
+  } satisfies TranscriptUtterance;
   const toJSON = vi.fn(() => structuredClone(original.metadata));
   const utterance = { ...original, speaker: { ...original.speaker }, metadata: { toJSON } };
   await withoutParentTranscriptSql(async () => {

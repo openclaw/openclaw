@@ -24,6 +24,7 @@ import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.j
 
 const readJsonBodyMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Drive body-read failures without loading hook config or dispatch state.
 vi.mock("./hooks.js", () => ({ readJsonBody: readJsonBodyMock }));
 
 beforeEach(() => {
@@ -31,9 +32,14 @@ beforeEach(() => {
   resetDiagnosticEventsForTest();
 });
 
-function expectJsonResponse(res: ServerResponse, statusCode: number, body: unknown) {
+function expectJsonResponse(
+  res: ServerResponse,
+  end: ReturnType<typeof makeMockHttpResponse>["end"],
+  statusCode: number,
+  body: unknown,
+) {
   expect(res.statusCode).toBe(statusCode);
-  expect(res.end).toHaveBeenCalledWith(JSON.stringify(body));
+  expect(end).toHaveBeenCalledWith(JSON.stringify(body));
 }
 
 function mockDisconnect(
@@ -64,9 +70,9 @@ it.each([
 });
 
 it("sendMissingScopeForbidden preserves the legacy response without a concrete scope", () => {
-  const { res } = makeMockHttpResponse();
+  const { res, end } = makeMockHttpResponse();
   sendMissingScopeForbidden(res, undefined);
-  expectJsonResponse(res, 403, {
+  expectJsonResponse(res, end, 403, {
     ok: false,
     error: { type: "forbidden", message: "missing scope: undefined" },
   });
@@ -81,10 +87,10 @@ it("sendMethodNotAllowed defaults the Allow header to POST and responds 405", ()
 });
 
 it("sendRateLimited responds with 429 and no Retry-After when retryAfterMs is omitted", () => {
-  const { res, setHeader } = makeMockHttpResponse();
+  const { res, setHeader, end } = makeMockHttpResponse();
   sendRateLimited(res);
   expect(setHeader.mock.calls.map(([name]) => name)).not.toContain("Retry-After");
-  expectJsonResponse(res, 429, {
+  expectJsonResponse(res, end, 429, {
     error: {
       message: "Too many failed authentication attempts. Please try again later.",
       type: "rate_limited",
@@ -144,10 +150,12 @@ describe("readJsonBodyOrError", () => {
 
   it("responds with 400 for other parse failures", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "bad json" });
-    const { res } = makeMockHttpResponse();
+    const { res, end } = makeMockHttpResponse();
     const destroy = vi.spyOn(res.req, "destroy");
     expect(await readJsonBodyOrError(res.req, res, 1024)).toBeUndefined();
-    expectJsonResponse(res, 400, { error: { message: "bad json", type: "invalid_request_error" } });
+    expectJsonResponse(res, end, 400, {
+      error: { message: "bad json", type: "invalid_request_error" },
+    });
     res.emit("finish");
     expect(destroy).not.toHaveBeenCalled();
   });
@@ -166,7 +174,7 @@ it.each([true, false])("setSseHeaders supports flushHeaders available: %s", (ava
   if (available) {
     Object.assign(res, { flushHeaders });
   } else {
-    expect(res.flushHeaders).toBeUndefined();
+    expect(res).not.toHaveProperty("flushHeaders");
   }
   setSseHeaders(res);
   expect(res.statusCode).toBe(200);

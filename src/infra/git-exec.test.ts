@@ -282,7 +282,7 @@ it("reports the applied 120-second Git timeout", async () => {
     code: 124,
   });
   const args = ["worktree", "add"];
-  const result = await executeGitCommand("/repo", args);
+  const result = await executeGitCommand("/repo", args, { timeoutMs: undefined });
   const label = `timed out after ${seconds} seconds`;
   const error = createGitCommandError("git worktree add", result);
   expect(error).toBeInstanceOf(GitCommandTimeoutError);
@@ -291,7 +291,7 @@ it("reports the applied 120-second Git timeout", async () => {
   expect(message).toContain(
     `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
   );
-  await expect(requireGitCommand("/repo", args)).rejects.toThrow(label);
+  await expect(requireGitCommand("/repo", args, { timeoutMs: undefined })).rejects.toThrow(label);
   expect(
     commandSpy.mock.calls.map(([, options]) =>
       typeof options === "number" ? options : options.timeoutMs,

@@ -36,6 +36,12 @@ vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () 
 }));
 const wake = recoveryMocks.scheduleMainSessionRecoveryPendingTarget;
 type Settlement = Parameters<typeof settlePendingFinalDelivery>;
+type PendingUpdate = Partial<
+  Pick<
+    NonNullable<InternalSessionEntry["pendingFinalDelivery"]>,
+    "context" | "deliveries" | "intentId"
+  >
+>;
 
 function observeActorCommands(
   hooks: { beforeCommand?: () => void; beforeCommit?: () => void } = {},
@@ -109,7 +115,7 @@ describe("pending-final delivery completion", () => {
   ) => expect(settle(state, from, options, target)).resolves.toEqual({ state: result });
 
   async function updatePending(
-    pending: Partial<NonNullable<InternalSessionEntry["pendingFinalDelivery"]>>,
+    pending: PendingUpdate,
     fields: Partial<InternalSessionEntry> = {},
     scope = { sessionKey, storePath },
   ) {
@@ -284,7 +290,7 @@ describe("pending-final delivery completion", () => {
   it("admits current custody in one command without a preparatory read", async () => {
     const original = read()!;
     const pending = original.pendingFinalDelivery!;
-    const changedPending = (fields: Partial<typeof pending>) => ({
+    const changedPending = (fields: PendingUpdate) => ({
       pendingFinalDelivery: { ...pending, ...fields },
     });
     const beforeCommand = vi.fn<() => void>();

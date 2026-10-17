@@ -23,6 +23,7 @@ vi.mock("./client.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Exercise button construction without interaction secret or callback registries.
 vi.mock("./interactions.js", () => ({ buildButtonProps }));
 
 type ResourceOptions = Parameters<typeof createMattermostMonitorResources>[0];

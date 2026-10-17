@@ -142,8 +142,8 @@ describe("startSshPortForward", () => {
     if (vi.isFakeTimers()) {
       vi.clearAllTimers();
     }
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     while (openServers.length > 0) {
       const server = openServers.pop();
       await new Promise<void>((resolve) => {

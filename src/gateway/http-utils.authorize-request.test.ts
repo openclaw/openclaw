@@ -11,7 +11,9 @@ const defaultConfig = vi.hoisted(() => ({
   gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
 }));
 
+// mock-isolation: Supply a fixed auth-policy snapshot without reading operator config.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => defaultConfig) }));
+// mock-isolation: Keep config I/O isolated from request-auth fixtures.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => defaultConfig) }));
 
 // Export every binding http-auth-utils.js imports from http-common.js so this
