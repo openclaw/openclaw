@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMessageToolTurnAuthority } from "../agents/tools/message-tool-turn-authority.js";
 import {
-  isTrustedMessageActionTurnIngress,
-  mintMessageActionTurnCapability,
-  resolveMessageActionTurnAuthorization,
-  resolveMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
+  isTrustedMessageActionTurnIngress as isTrustedIngress,
+  mintMessageActionTurnCapability as mintCapability,
+  resolveMessageActionTurnAuthorization as resolveAuthorization,
+  resolveMessageActionTurnCapability as resolveCapability,
+  revokeMessageActionTurnCapability as revokeCapability,
 } from "./message-action-turn-capability.js";
 
 describe("message action turn capability", () => {
@@ -17,17 +17,17 @@ describe("message action turn capability", () => {
     };
     const assertCurrent = vi.fn();
     const beforeAttempt = vi.fn(async () => {
-      revokeMessageActionTurnCapability(token);
+      revokeCapability(token);
     });
-    const token = mintMessageActionTurnCapability({
+    const token = mintCapability({
       ...identity,
       deliveryAttempt: { beforeAttempt, assertCurrent },
     });
     const lookup = { ...identity, token };
-    const authorization = resolveMessageActionTurnAuthorization(lookup);
+    const authorization = resolveAuthorization(lookup);
     const restriction = authorization?.deliveryAttempt;
     try {
-      expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty("deliveryAttempt");
+      expect(resolveCapability(lookup)).not.toHaveProperty("deliveryAttempt");
       expect(authorization?.scheduled).toBeUndefined();
       expect(authorization?.toolContext).toBeUndefined();
       expect(authorization?.requesterAccountId).toBeUndefined();
@@ -42,48 +42,49 @@ describe("message action turn capability", () => {
       expect(restriction!.assertCurrent).toThrow("turn capability is no longer active");
       expect(beforeAttempt).toHaveBeenCalledOnce();
     } finally {
-      revokeMessageActionTurnCapability(token);
+      revokeCapability(token);
     }
   });
 
   it("keeps dashboard permission private and rejects a retained grant after revocation", () => {
     const assertSourceCurrent = vi.fn();
     const identity = { agentId: "main", runId: "dashboard-run", sessionKey: "agent:main:main" };
-    const token = mintMessageActionTurnCapability({
+    const token = mintCapability({
       ...identity,
       assertDashboardReadCurrent: assertSourceCurrent,
     });
     const lookup = { ...identity, token };
-    const authorization = resolveMessageActionTurnAuthorization(lookup);
+    const authorization = resolveAuthorization(lookup);
     const assertCurrent = authorization?.assertDashboardReadCurrent;
-    expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
-      "assertDashboardReadCurrent",
-    );
+    expect(resolveCapability(lookup)).not.toHaveProperty("assertDashboardReadCurrent");
     expect(authorization?.toolContext).toBeUndefined();
     expect(authorization?.scheduled).toBeUndefined();
     expect(assertCurrent).toBeTypeOf("function");
     assertCurrent?.();
     expect(assertSourceCurrent).toHaveBeenCalledOnce();
-    revokeMessageActionTurnCapability(token);
+    revokeCapability(token);
     expect(assertCurrent).toThrow("turn capability is no longer active");
     expect(assertSourceCurrent).toHaveBeenCalledOnce();
   });
 
   it("admits channel ingress but rejects Gateway and internal run sources", () => {
-    expect(isTrustedMessageActionTurnIngress("whatsapp")).toBe(true);
-    expect(isTrustedMessageActionTurnIngress("matrix")).toBe(true);
-    expect(isTrustedMessageActionTurnIngress("webchat")).toBe(false);
-    expect(isTrustedMessageActionTurnIngress("cron")).toBe(false);
-    expect(isTrustedMessageActionTurnIngress(undefined)).toBe(false);
+    expect(isTrustedIngress("whatsapp")).toBe(true);
+    expect(isTrustedIngress("matrix")).toBe(true);
+    expect(isTrustedIngress("webchat")).toBe(false);
+    expect(isTrustedIngress("cron")).toBe(false);
+    expect(isTrustedIngress(undefined)).toBe(false);
   });
 
   it("resolves only for the exact admitted run identity", () => {
-    const token = mintMessageActionTurnCapability({
+    const identity = {
       agentId: "main",
       runId: "run-1",
       sessionKey: "agent:main:matrix:direct:room-1",
-      sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
+    };
+    const token = mintCapability({
+      ...identity,
+      sourceReplySessionKey: "agent:main:main",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",
       requesterSenderName: "Sender Name",
@@ -99,16 +100,8 @@ describe("message action turn capability", () => {
       ttlMs: 5000,
     });
 
-    expect(
-      resolveMessageActionTurnCapability({
-        token,
-        agentId: "main",
-        runId: "run-1",
-        sessionKey: "agent:main:matrix:direct:room-1",
-        sessionId: "session-1",
-        nowMs: 2000,
-      }),
-    ).toMatchObject({
+    const lookup = { ...identity, token, nowMs: 2000 };
+    expect(resolveCapability(lookup)).toMatchObject({
       expiresAtMs: 6000,
       sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
@@ -131,26 +124,20 @@ describe("message action turn capability", () => {
       { sessionKey: "agent:main:matrix:direct:room-2" },
       { sessionId: "session-2" },
     ]) {
-      expect(
-        resolveMessageActionTurnCapability({
-          token,
-          agentId: mismatch.agentId ?? "main",
-          runId: mismatch.runId ?? "run-1",
-          sessionKey: mismatch.sessionKey ?? "agent:main:matrix:direct:room-1",
-          sessionId: mismatch.sessionId ?? "session-1",
-          nowMs: 2000,
-        }),
-      ).toBeUndefined();
+      expect(resolveCapability({ ...lookup, ...mismatch })).toBeUndefined();
     }
   });
 
   it("preserves reply-to-first state across capability resolutions", () => {
     const hasRepliedRef = { value: false };
-    const token = mintMessageActionTurnCapability({
+    const identity = {
       agentId: "main",
       runId: "run-1",
       sessionKey: "agent:main:matrix:group:room",
       sessionId: "session-1",
+    };
+    const token = mintCapability({
+      ...identity,
       toolContext: {
         currentChannelProvider: "matrix",
         currentChannelId: "!room:example.org",
@@ -159,58 +146,34 @@ describe("message action turn capability", () => {
       },
     });
 
-    const first = resolveMessageActionTurnCapability({
-      token,
-      agentId: "main",
-      runId: "run-1",
-      sessionKey: "agent:main:matrix:group:room",
-      sessionId: "session-1",
-    });
+    const lookup = { ...identity, token };
+    const first = resolveCapability(lookup);
     expect(first?.toolContext?.hasRepliedRef).toBe(hasRepliedRef);
     first!.toolContext!.hasRepliedRef!.value = true;
 
-    const second = resolveMessageActionTurnCapability({
-      token,
-      agentId: "main",
-      runId: "run-1",
-      sessionKey: "agent:main:matrix:group:room",
-      sessionId: "session-1",
-    });
+    const second = resolveCapability(lookup);
     expect(second?.toolContext?.hasRepliedRef).toBe(hasRepliedRef);
     expect(second?.toolContext?.hasRepliedRef?.value).toBe(true);
   });
 
   it("expires and revokes capabilities fail closed", () => {
-    const token = mintMessageActionTurnCapability({
-      agentId: "main",
-      runId: "run-1",
-      sessionKey: "session-1",
+    const identity = { agentId: "main", runId: "run-1", sessionKey: "session-1" };
+    const token = mintCapability({
+      ...identity,
       nowMs: 1000,
       ttlMs: 1000,
     });
     expect(
-      resolveMessageActionTurnCapability({
+      resolveCapability({
+        ...identity,
         token,
-        agentId: "main",
-        runId: "run-1",
-        sessionKey: "session-1",
         nowMs: 2000,
       }),
     ).toBeUndefined();
 
-    const revoked = mintMessageActionTurnCapability({
-      agentId: "main",
-      runId: "run-2",
-      sessionKey: "session-2",
-    });
-    expect(revokeMessageActionTurnCapability(revoked)).toBe(true);
-    expect(
-      resolveMessageActionTurnCapability({
-        token: revoked,
-        agentId: "main",
-        runId: "run-2",
-        sessionKey: "session-2",
-      }),
-    ).toBeUndefined();
+    const nextIdentity = { ...identity, runId: "run-2", sessionKey: "session-2" };
+    const revoked = mintCapability(nextIdentity);
+    expect(revokeCapability(revoked)).toBe(true);
+    expect(resolveCapability({ ...nextIdentity, token: revoked })).toBeUndefined();
   });
 });

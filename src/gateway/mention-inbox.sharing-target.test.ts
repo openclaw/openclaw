@@ -17,6 +17,7 @@ import * as mentionWorker from "./mention-inbox-worker.js";
 import {
   SESSION_ID,
   SESSION_KEY,
+  expectMentionError,
   dismissMentionInbox,
   withMentionInbox,
   readMentionInbox,
@@ -84,9 +85,9 @@ it("recovers background views when a session is replaced during cold target prep
       },
     );
     await f.inbox.invalidateAsync();
-    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
+    expect(await f.items()).toEqual([]);
     await f.setSession({ sessionId: SESSION_ID });
-    expect((await readMentionInbox(f.inbox, f.bobClient)).items).toHaveLength(1);
+    expect(await f.items()).toHaveLength(1);
   });
 });
 
@@ -96,7 +97,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
     const cfg = {};
     await withMentionInbox(async (fixture) => {
       await fixture.post("presentation-publication");
-      const original = (await readMentionInbox(fixture.inbox, fixture.bobClient)).items[0]!;
+      const original = (await fixture.items())[0]!;
       const jobs: CronJob[] = [];
       if (publication === "automation") {
         registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
@@ -165,7 +166,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
         release.resolve();
         const result = await dismissal;
         if (changesAccess) {
-          expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+          expectMentionError(result, "UNAVAILABLE");
           expect(guardErrors).toContainEqual(new Error("Mention authority changed before commit"));
           await fixture.setSession({ visibility: "shared" });
         } else {
@@ -173,7 +174,7 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
           expect(result).toMatchObject({ ok: true, value: { items: [] } });
         }
         const reopened = fixture.openInbox("after-presentation-publication");
-        expect((await readMentionInbox(reopened, fixture.bobClient)).items).toEqual(
+        expect(await fixture.items(fixture.bobClient, reopened)).toEqual(
           changesAccess
             ? [expect.objectContaining({ id: original.id, messageId: original.messageId })]
             : [],
@@ -216,11 +217,9 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       );
       await f.post();
       for (const client of f.clients) {
-        expect((await readMentionInbox(f.inbox, client)).items).toHaveLength(1);
+        expect(await f.items(client)).toHaveLength(1);
       }
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
-        "Design review",
-      );
+      expect((await f.items())[0]?.sessionTitle).toBe("Design review");
       f.broadcast.mockClear();
       // This spy counts host SQL; invalidated targets are now prepared in the worker.
       let exactRowReads = 0;
@@ -263,7 +262,7 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       await emit();
       expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items).toEqual([]);
+      expect(await f.items()).toEqual([]);
 
       await f.setSession({ displayName: "Renamed conversation" });
       exactRowReads = 0;
@@ -272,9 +271,7 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       await invalidation.mock.results.at(-1)?.value;
       expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(50);
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
-        "Renamed conversation",
-      );
+      expect((await f.items())[0]?.sessionTitle).toBe("Renamed conversation");
 
       // Target reuse never retains the viewer's identity or authorization decision.
       f.clients[0]!.authenticatedUserProfile = f.carolClient.authenticatedUserProfile;
@@ -293,9 +290,7 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       await f.inbox.invalidateAsync();
       expect(exactRowReads).toBe(0);
       expect(f.broadcast).toHaveBeenCalledTimes(49);
-      expect((await readMentionInbox(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
-        "Alternate conversation",
-      );
+      expect((await f.items())[0]?.sessionTitle).toBe("Alternate conversation");
     },
     cfg,
     { notifications: false },

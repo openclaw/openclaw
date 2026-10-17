@@ -8,6 +8,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
@@ -31,6 +32,30 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 export const SESSION_KEY = "agent:main:dashboard:mention-test";
 export const SESSION_ID = "mention-test-session";
 const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
+
+export function expectMentionError(
+  result: unknown,
+  code: string,
+  details: Partial<ErrorShape> = {},
+) {
+  expect(result).toMatchObject({ ok: false, error: { code, ...details } });
+}
+
+export function mentionRoles(
+  definitions: Record<string, GatewayOperatorRoleDefinition> = {},
+): OpenClawConfig {
+  return {
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
+          ...definitions,
+        },
+      },
+    },
+  };
+}
 type InboxFixtureOptions = {
   notifications?: boolean;
   beforeInbox?: () => void;
@@ -147,6 +172,9 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     carolClient,
     clients,
     inbox,
+    async items(client: GatewayClient = bobClient, target = inbox) {
+      return (await readMentionInbox(target, client)).items;
+    },
     call,
     broadcast,
     push,

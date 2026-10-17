@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { validateUsersMentionableResult } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as userProfileReads from "../state/user-profile-reads.js";
 import {
@@ -13,9 +12,10 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   SESSION_KEY,
+  expectMentionError,
   SESSION_ID,
   withMentionInbox as withInbox,
-  readMentionInbox as read,
+  mentionRoles,
 } from "./mention-inbox.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { soloClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -81,10 +81,7 @@ describe("human mention directory", () => {
       }
       expect(frames).toHaveLength(1);
       expect(frames.some((frame) => frame.ok && frame.changed)).toBe(false);
-      expect(await f.call("users.mentionable", params)).toMatchObject({
-        ok: false,
-        error: { code: "FORBIDDEN" },
-      });
+      expectMentionError(await f.call("users.mentionable", params), "FORBIDDEN");
     });
   });
 
@@ -167,7 +164,7 @@ describe("human mention directory", () => {
           await f.inbox.dispose();
         }
         held.release();
-        expect(await pending).toMatchObject({ ok: false, error: { code } });
+        expectMentionError(await pending, code);
       } finally {
         held.release();
         await pending;
@@ -202,7 +199,7 @@ describe("human mention directory", () => {
         f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]),
       ).toEqual({ ok: true, value: [f.bob.id] });
       await f.post();
-      expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
+      expect(await f.items()).toHaveLength(1);
       syncGitHubIdentity({
         identity: { accountId: 42, login: "robert-new" },
         authenticationAlias: { kind: "email", email: "bob@mentions.example.test" },
@@ -277,26 +274,10 @@ describe("human mention directory", () => {
   ] as const)(
     "applies offline recipient policy across directory, admission, and delivery: $name",
     async ({ role, sessionKey, entry, visible, storedSources }) => {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "reader",
-            definitions: {
-              reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
-              "owner-only": {
-                agents: "*",
-                scopes: ["operator.read"],
-                sessions: { others: "none" },
-              },
-              administrator: {
-                agents: "*",
-                scopes: ["operator.admin"],
-                sessions: { others: "none" },
-              },
-            },
-          },
-        },
-      };
+      const cfg = mentionRoles({
+        "owner-only": { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
+        administrator: { agents: "*", scopes: ["operator.admin"], sessions: { others: "none" } },
+      });
       await withInbox(async (f) => {
         setUserProfileRole(f.alice.id, "administrator");
         invalidateOperatorRolePolicy(f.alice.id);
@@ -322,7 +303,7 @@ describe("human mention directory", () => {
         expect({
           users: directory.payload.users.map((user) => [user.profileId, user.online]),
           accepted: admission.ok,
-          inboxKeys: (await read(f.inbox, f.bobClient)).items.map((item) => item.sessionKey),
+          inboxKeys: (await f.items()).map((item) => item.sessionKey),
           pushedRecipients: f.push.mock.calls.map(([mention]) => mention.recipientProfileId),
           storedSources: openOpenClawStateDatabase()
             .db.prepare(
@@ -352,7 +333,7 @@ describe("human mention directory", () => {
           ok: true,
           value: [f.bob.id],
         });
-        expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
+        expect(await f.items()).toEqual([]);
       },
       {
         session: { scope: "global", store: "/synthetic/fixed-global.sqlite" },
@@ -393,10 +374,7 @@ describe("human mention directory", () => {
       ).toBe(false);
       await f.setSession({ visibility: "draft" });
       const hidden = await f.call("users.mentionable", { sessionKey: SESSION_KEY }, f.bobClient);
-      expect(hidden).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: "Session was not found." },
-      });
+      expectMentionError(hidden, "INVALID_REQUEST", { message: "Session was not found." });
       expect(
         (
           await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey: SESSION_KEY }, [

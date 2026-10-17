@@ -74,6 +74,44 @@ const credential: AuthProfileCredential = {
   token: "synthetic-private-account-token",
 };
 const authority = { assertCurrent() {} };
+const connectAccount = (
+  ownerProfileId: string,
+  overrides: Partial<Parameters<typeof connectUserModelAccountAsync>[0]> = {},
+) => connectUserModelAccountAsync({ ownerProfileId, credential, ...authority, ...overrides });
+
+function accountContext(
+  client: ReturnType<typeof createOperatorClient>,
+  getRuntimeConfig = (): OpenClawConfig => ({}),
+) {
+  const context = createContext();
+  context.getRuntimeConfig = getRuntimeConfig;
+  context.getClientConnIds = (filter) =>
+    new Set(client.connId && (!filter || filter(client)) ? [client.connId] : []);
+  return context;
+}
+
+async function callAccount(
+  client: ReturnType<typeof createOperatorClient>,
+  context: ReturnType<typeof createContext>,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const handler = usersAuthConnectHandlers[method];
+  if (!handler) {
+    throw new Error(`Missing account handler: ${method}`);
+  }
+  const respond = vi.fn<RespondFn>();
+  await handler({
+    req: { type: "req", id: "account-boundary", method, params },
+    params,
+    client,
+    context,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  expect(respond).toHaveBeenCalledTimes(1);
+  return respond;
+}
 
 it("prepares cold personal account policy with GitHub assignments and current role authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -99,10 +137,7 @@ it("prepares cold personal account policy with GitHub assignments and current ro
         },
       },
     };
-    const context = createContext();
-    context.getRuntimeConfig = () => cfg;
-    context.getClientConnIds = (filter) =>
-      new Set(client.connId && (!filter || filter(client)) ? [client.connId] : []);
+    const context = accountContext(client, () => cfg);
 
     expect(isUserProfileCatalogReady()).toBe(false);
     const action = await prepareUserModelAccountAction({ client, context });
@@ -124,11 +159,7 @@ it("prepares cold personal account policy with GitHub assignments and current ro
 it("prepares personal account ownership from the next foreign commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const owner = ensureProfileForEmail("pin-freshness@example.test").id;
-    const { authProfileId } = await connectUserModelAccountAsync({
-      ownerProfileId: owner,
-      credential,
-      ...authority,
-    });
+    const { authProfileId } = await connectAccount(owner);
     const input = {
       rawProfile: authProfileId,
       provider: credential.provider,
@@ -155,11 +186,7 @@ it("prepares and validates personal pins without caller SQL, retaining identity 
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const owner = ensureProfileForEmail("pin-owner@example.test").id;
     const successor = ensureProfileForEmail("pin-successor@example.test").id;
-    const { authProfileId } = await connectUserModelAccountAsync({
-      ownerProfileId: owner,
-      credential,
-      ...authority,
-    });
+    const { authProfileId } = await connectAccount(owner);
     const sql = observeHostDataSql();
     let selected: Awaited<ReturnType<typeof resolveProfileOverride>>;
     try {
@@ -204,11 +231,7 @@ it("rejects a pin whose identity changed before an awaited account read was acce
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const owner = ensureProfileForEmail("pin-read-owner@example.test").id;
     const successor = ensureProfileForEmail("pin-read-successor@example.test").id;
-    const { authProfileId } = await connectUserModelAccountAsync({
-      ownerProfileId: owner,
-      credential,
-      ...authority,
-    });
+    const { authProfileId } = await connectAccount(owner);
     const client = createOperatorClient({
       profileId: owner,
       scopes: ["operator.read", "operator.write", "operator.admin"],
@@ -303,21 +326,7 @@ it("serves personal account RPCs without caller-thread SQL or credentials", asyn
     });
     context.modelAccountConnectService = service;
     const rpc = async (method: string, params: Record<string, unknown> = {}) => {
-      const handler = usersAuthConnectHandlers[method];
-      if (!handler) {
-        throw new Error(`Missing account handler: ${method}`);
-      }
-      const respond = vi.fn<RespondFn>();
-      const input = { profileId: owner, ...params };
-      await handler({
-        req: { type: "req", id: "account-boundary", method, params: input },
-        params: input,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledTimes(1);
+      const respond = await callAccount(client, context, method, { profileId: owner, ...params });
       const [ok, payload, error] = respond.mock.calls[0] ?? [];
       expect(error).toBeUndefined();
       expect(ok).toBe(true);
@@ -418,22 +427,11 @@ it.each(["transaction", "commit"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const owner = ensureProfileForEmail("grant-role@example.test").id;
       setUserProfileRole(owner, "member");
-      const first = await connectUserModelAccountAsync({
-        ownerProfileId: owner,
-        credential,
-        ...authority,
-      });
-      const second = await connectUserModelAccountAsync({
-        ownerProfileId: owner,
-        credential,
-        ...authority,
-      });
+      const first = await connectAccount(owner);
+      const second = await connectAccount(owner);
       const client = createOperatorClient({ profileId: owner, scopes: ["operator.write"] });
       let cfg: OpenClawConfig = {};
-      const context = createContext();
-      context.getRuntimeConfig = () => cfg;
-      context.getClientConnIds = (filter) =>
-        new Set(client.connId && (!filter || filter(client)) ? [client.connId] : []);
+      const context = accountContext(client, () => cfg);
       const service = createModelAccountConnectService({ getConfig: () => cfg });
       context.modelAccountConnectService = service;
       const enabled: OpenClawConfig = {
@@ -490,21 +488,10 @@ it.each(["transaction", "commit"] as const)(
           calibration.close();
         }
         grantSql.length = 0;
-        const respond = vi.fn<RespondFn>();
-        const handler = usersAuthConnectHandlers["users.selectModelAccount"];
-        if (!handler) {
-          throw new Error("Missing account selection handler");
-        }
-        const params = { profileId: owner, authProfileId: first.authProfileId };
-        await handler({
-          req: { type: "req", id: "grant-role", method: "users.selectModelAccount", params },
-          params,
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
+        const respond = await callAccount(client, context, "users.selectModelAccount", {
+          profileId: owner,
+          authProfileId: first.authProfileId,
         });
-        expect(respond).toHaveBeenCalledTimes(1);
         // The real RPC mapper recognizes the authority error after worker transport.
         expect(respond).toHaveBeenCalledWith(
           false,
@@ -542,9 +529,7 @@ it.each(["transaction", "commit"] as const)(
       });
       try {
         await expect(
-          connectUserModelAccountAsync({
-            ownerProfileId: owner,
-            credential,
+          connectAccount(owner, {
             assertCurrent() {
               if (!live) {
                 throw new ModelAccountConnectAuthorityError();
@@ -569,18 +554,12 @@ it.each(["credential", "selection"] as const)(
   async (race) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const owner = ensureProfileForEmail("replacement-account@example.test").id;
-      const first = await connectUserModelAccountAsync({
-        ownerProfileId: owner,
-        credential,
-        ...authority,
-      });
+      const first = await connectAccount(owner);
       const order: string[] = [];
       const admission = observeAccountAdmission((stage) => order.push(stage));
       try {
-        const result = await connectUserModelAccountAsync({
-          ownerProfileId: owner,
+        const result = await connectAccount(owner, {
           credential: { ...credential, token: "synthetic-reconnected-token" },
-          ...authority,
           matchesCredential(current) {
             expect(current).toEqual(credential);
             order.push("compare");
