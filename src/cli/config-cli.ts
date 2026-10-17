@@ -54,16 +54,45 @@ const CONFIG_PATCH_DESCRIPTION = [
 type ConfigOperationParams = Parameters<
   typeof import("./config-cli-runner.js").runConfigOperations
 >[0];
+type ConfigMutationOwner = { method: string; target: string };
 
 async function runConfigMutation(
-  opts: { cliOptions: ConfigMutationOptions; runtime?: RuntimeEnv; throwOnError?: boolean },
+  opts: {
+    cliOptions: ConfigMutationOptions;
+    runtime?: RuntimeEnv;
+    throwOnError?: boolean;
+    localStateOwner?: ConfigMutationOwner;
+  },
   prepare: () => Promise<Omit<ConfigOperationParams, "runtime" | "options">>,
   jsonOutput = Boolean(opts.cliOptions.json),
 ) {
   const runtime = opts.runtime ?? defaultRuntime;
   const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
   try {
-    await runConfigOperations({ runtime, options: opts.cliOptions, ...(await prepare()) });
+    const prepared = await prepare();
+    const databaseOnly =
+      opts.localStateOwner !== undefined &&
+      prepared.operations.length > 0 &&
+      prepared.operations.every(({ setPath }) => setPath[0] === "database");
+    const runLocal = () =>
+      runConfigOperations({
+        runtime,
+        options: opts.cliOptions,
+        ...prepared,
+        ...(databaseOnly ? { databaseOnly: true } : {}),
+      });
+    if (!opts.localStateOwner || opts.cliOptions.dryRun) {
+      await runLocal();
+    } else {
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        ...opts.localStateOwner,
+        params: {},
+        onForeignOwner: "refuse",
+        ...(databaseOnly ? { databaseAccess: "none" } : {}),
+        runLocal,
+      });
+    }
   } catch (err) {
     if (opts.throwOnError) {
       throw err;
@@ -80,6 +109,7 @@ export async function runConfigSet(opts: {
   beforePersistentApply?: () => void;
   /** Embedded recovery needs the writer's typed postcommit/rollback outcome. */
   throwOnError?: boolean;
+  localStateOwner?: ConfigMutationOwner;
 }) {
   return runConfigMutation(
     opts,
@@ -108,6 +138,7 @@ export async function runConfigSet(opts: {
 export async function runConfigPatch(opts: {
   cliOptions: ConfigPatchOptions;
   runtime?: RuntimeEnv;
+  localStateOwner?: ConfigMutationOwner;
 }) {
   return runConfigMutation(opts, async () => {
     const { configPatchModeError, readConfigPatchOperations } =
@@ -203,6 +234,7 @@ export async function runConfigUnset(opts: {
   cliOptions?: ConfigUnsetOptions;
   runtime?: RuntimeEnv;
   beforePersistentApply?: () => void;
+  localStateOwner?: ConfigMutationOwner;
 }) {
   const cliOptions = opts.cliOptions ?? {};
   return runConfigMutation({ ...opts, cliOptions }, async () => {
@@ -437,17 +469,11 @@ export function registerConfigCli(program: Command) {
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
     .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
-      const runLocal = () => runConfigSet({ path, value, cliOptions: opts });
-      if (opts.dryRun) {
-        return runLocal();
-      }
-      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
-      await runWithLocalStateOwner({
-        method: "config set",
-        params: {},
-        target: path ?? "config",
-        onForeignOwner: "refuse",
-        runLocal,
+      await runConfigSet({
+        path,
+        value,
+        cliOptions: opts,
+        localStateOwner: { method: "config set", target: path ?? "config" },
       });
     });
 
@@ -474,17 +500,9 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts: ConfigPatchOptions) => {
-      const runLocal = () => runConfigPatch({ cliOptions: opts });
-      if (opts.dryRun) {
-        return runLocal();
-      }
-      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
-      await runWithLocalStateOwner({
-        method: "config patch",
-        params: {},
-        target: "config",
-        onForeignOwner: "refuse",
-        runLocal,
+      await runConfigPatch({
+        cliOptions: opts,
+        localStateOwner: { method: "config patch", target: "config" },
       });
     });
 
@@ -496,17 +514,10 @@ export function registerConfigCli(program: Command) {
     .option("--allow-exec", "allow exec SecretRef providers during --dry-run")
     .option("--json", "print dry-run result as JSON")
     .action(async (path: string, options: ConfigUnsetOptions) => {
-      const runLocal = () => runConfigUnset({ path, cliOptions: options });
-      if (options.dryRun) {
-        return runLocal();
-      }
-      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
-      await runWithLocalStateOwner({
-        method: "config unset",
-        params: {},
-        target: path,
-        onForeignOwner: "refuse",
-        runLocal,
+      await runConfigUnset({
+        path,
+        cliOptions: options,
+        localStateOwner: { method: "config unset", target: path },
       });
     });
 

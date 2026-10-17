@@ -55,6 +55,8 @@ export async function runWithLocalStateOwner<T>(params: {
   databasePortMaintenance?: true;
   /** Resolve configured engines only after offline custody, before runtime config can write state. */
   databaseEngine?: "configured";
+  /** Bounded config repairs keep offline custody while leaving every database untouched. */
+  databaseAccess?: "none";
   requiredCapabilities?: readonly string[];
   scopes?: readonly OperatorScope[];
   timeoutMs?: number;
@@ -258,13 +260,20 @@ export async function runWithLocalStateOwner<T>(params: {
       if (databasePortRecovery) {
         return refuse(new Error("Database port recovery requires exclusive offline ownership"));
       }
+      if (params.databaseAccess === "none") {
+        return refuse(new Error("Config-only repair requires exclusive offline ownership"));
+      }
       return await runLocal(hosted.assertCurrent);
     }
     const owner = databasePortRecovery ? undefined : await discover();
     if (owner) {
       return await route(owner);
     }
-    if (!getDatabaseEngineSelection() && !databasePortRecovery) {
+    if (
+      !getDatabaseEngineSelection() &&
+      !databasePortRecovery &&
+      params.databaseAccess !== "none"
+    ) {
       const { readConfigSnapshotForEngineSelection } =
         await import("../commands/config-preflight-snapshot.js");
       await readConfigSnapshotForEngineSelection(env);
@@ -278,6 +287,7 @@ export async function runWithLocalStateOwner<T>(params: {
         role: params.databasePortMaintenance ? "sqlite-maintenance" : "agent-embedded",
         allowInTests: true,
         databasePortRecovery,
+        databaseAccess: params.databaseAccess,
       });
     } catch (error) {
       if (!databasePortRecovery && isGatewayLifecycleContentionError(error)) {
@@ -293,7 +303,11 @@ export async function runWithLocalStateOwner<T>(params: {
     }
     let selection: DatabaseEngineSelection | undefined;
     try {
-      if (params.databaseEngine === "configured" && !getScopedDatabaseEngineSelection()) {
+      if (
+        params.databaseAccess !== "none" &&
+        params.databaseEngine === "configured" &&
+        !getScopedDatabaseEngineSelection()
+      ) {
         const [
           { createConfigIO },
           errors,
@@ -336,12 +350,13 @@ export async function runWithLocalStateOwner<T>(params: {
       throw error;
     }
     const runOwned = async () => {
-      const resources = params.databasePortMaintenance
-        ? undefined
-        : createOpenClawDatabaseMaintenanceScope({
-            assertOwnerCurrent: () => lock.assertCurrent(),
-            assertDatabaseAccess: lock.assertDatabaseAccess,
-          });
+      const resources =
+        params.databasePortMaintenance || params.databaseAccess === "none"
+          ? undefined
+          : createOpenClawDatabaseMaintenanceScope({
+              assertOwnerCurrent: () => lock.assertCurrent(),
+              assertDatabaseAccess: lock.assertDatabaseAccess,
+            });
       let uncertainCleanup = false;
       try {
         return await (resources ?? lock).run(() => runLocal(lock.assertCurrent));

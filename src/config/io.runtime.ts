@@ -384,13 +384,18 @@ export async function readConfigFileSnapshotForRuntimeTransaction(
 }
 
 export async function readConfigFileSnapshotForWrite(options?: {
+  pluginValidation?: ConfigSnapshotReadOptions["pluginValidation"];
   skipPluginValidation?: boolean;
   observe?: boolean;
   deferredPluginMigrations?: ConfigWriteOptions["deferredPluginMigrations"];
   preservedLegacyRootKeys?: readonly string[];
 }): Promise<ReadConfigFileSnapshotForWriteResult> {
   const readOptions = {
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    ...(options?.pluginValidation
+      ? { pluginValidation: options.pluginValidation }
+      : options?.skipPluginValidation
+        ? { pluginValidation: "skip" as const }
+        : {}),
     ...(options?.observe === false ? { observe: false } : {}),
     ...(options?.deferredPluginMigrations !== undefined
       ? { deferredPluginMigrations: options.deferredPluginMigrations }

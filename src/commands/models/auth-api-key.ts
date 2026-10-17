@@ -10,7 +10,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import {
   listCandidateAuthProfileStores,
-  loadCandidateAuthProfileStoreAsync,
+  prepareCandidateAuthProfileCredentialRead,
 } from "../../agents/auth-profiles/candidate-stores.js";
 import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
@@ -129,12 +129,13 @@ export async function saveModelProviderApiKey(params: {
           resolvePathViaExistingAncestorSync(resolveSharedAuthStorePath()),
       )
     : [];
-  const validateSharedBinding = async () => {
-    if (
-      (await Promise.all(localCandidates.map(loadCandidateAuthProfileStoreAsync))).some(
-        (candidate) => candidate?.profiles[profileId],
-      )
-    ) {
+  const readLocalCredentials = await Promise.all(
+    localCandidates.map((candidate) =>
+      prepareCandidateAuthProfileCredentialRead(candidate, profileId),
+    ),
+  );
+  const validateSharedBinding = () => {
+    if (readLocalCredentials.some((read) => read())) {
       throw new Error(
         "An agent already overrides this shared key. Remove that agent's override before replacing the shared key.",
       );
@@ -142,9 +143,9 @@ export async function saveModelProviderApiKey(params: {
   };
   const validateReplacement = (existing: AuthProfileCredential | undefined) => {
     params.assertCurrent?.();
+    validateSharedBinding();
     validateCurrentCredential(existing);
   };
-  await validateSharedBinding();
   validateReplacement(store.profiles[profileId]);
   await upsertAuthProfileWithLockOrThrow({
     profileId,
@@ -160,8 +161,8 @@ export async function saveModelProviderApiKey(params: {
   );
   let configChanged = false;
   await updateConfig(
-    async (current) => {
-      await validateSharedBinding();
+    (current) => {
+      validateSharedBinding();
       params.assertCurrent?.();
       const id = params.profileId ? undefined : configuredKey(current);
       if (

@@ -171,7 +171,7 @@ export async function ensureConfigReady(params: {
       : isManagedNodeRuntime || commandName === "status" || isRestartController
         ? ({ observe: false } as const)
         : undefined;
-  if (!preflightResult && !isManagedNodeRuntime) {
+  if (!preflightResult && !isManagedNodeRuntime && !params.validateConfigOnly) {
     const { readConfigSnapshotForEngineSelection } =
       await import("../../commands/config-preflight-snapshot.js");
     await readConfigSnapshotForEngineSelection();

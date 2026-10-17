@@ -2,6 +2,7 @@ import "../../commands/models/auth.js";
 import "../../commands/models/auth-list.js";
 import "../../commands/models/auth-order.js";
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { getEnvironmentData } from "node:worker_threads";
 import { Command } from "commander";
 import pg from "pg";
@@ -13,6 +14,7 @@ import {
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { ensureConfigReady } from "../../cli/program/config-guard.js";
 import { agentsDeleteCommand } from "../../commands/agents.commands.delete.js";
+import { saveModelProviderApiKey } from "../../commands/models/auth-api-key.js";
 import { runStartupConfigPreflight } from "../../commands/startup-config-preflight.js";
 import { captureConfigHealthStateStore } from "../../config/io.health-state.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
@@ -67,6 +69,15 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
             },
             gateway: { mode: "local" },
             agents: { entries: { main: { workspace: state.workspaceDir } } },
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "http://127.0.0.1:9/v1",
+                  models: [],
+                  apiKey: "openai:offline",
+                },
+              },
+            },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
           });
@@ -120,6 +131,12 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
               "main",
               "openai:offline",
             ]);
+            await mkdir(state.agentDir("reader"), { recursive: true });
+            await saveModelProviderApiKey({
+              provider: "openai",
+              apiKey: "sk-synthetic-offline-cli-replacement",
+              agentDir: state.agentDir(),
+            });
             const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
             const runtimeStore = await readCold(() =>
               loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
@@ -133,7 +150,7 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
             expect(store.profiles["openai:offline"]).toMatchObject({
               type: "api_key",
               provider: "openai",
-              key: "sk-synthetic-offline-cli-key",
+              key: "sk-synthetic-offline-cli-replacement",
             });
             expect(store.order?.openai).toEqual(["openai:offline"]);
             using health = captureConfigHealthStateStore(

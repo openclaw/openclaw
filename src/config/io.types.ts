@@ -39,6 +39,8 @@ export type ConfigWriteAuditOrigin =
   | "cli";
 
 export type ConfigWriteOptions = {
+  /** Offline database-config repair cannot inspect or record shared database state. */
+  databaseAccess?: "none";
   /** Doctor/update supplies inspected facts; ordinary writes do not query migration state. */
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */

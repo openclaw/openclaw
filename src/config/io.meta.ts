@@ -120,10 +120,10 @@ export async function resolveConfigWriteStateSelection(
 
 /** An unresolved state target never falls back to a native database during config repair. */
 export function withConfigWriteState<T>(
-  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>>,
+  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>> | undefined,
   run: () => T,
 ): T | null {
-  return selection.ok ? withDatabaseEngineSelection(selection.value, run) : null;
+  return selection?.ok ? withDatabaseEngineSelection(selection.value, run) : null;
 }
 
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */

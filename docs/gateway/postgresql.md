@@ -141,6 +141,11 @@ configured engine before the Gateway starts. Supply the same DSN SecretRef to
 these commands. With PostgreSQL selected, credentials are stored on the server;
 the local database path contains an anchor rather than SQLite application state.
 
+If the connection SecretRef is unavailable, `config set`, `config patch`, and
+`config unset` can still repair paths under `database` while the Gateway is
+stopped. These repairs leave database files untouched. A batch that also changes
+other settings requires the configured database connection as usual.
+
 TLS options are DSN query parameters handled by the PostgreSQL driver, not
 additional `database.postgres` config keys. For example, the **secret value**
 could have this shape (the password is a placeholder):
