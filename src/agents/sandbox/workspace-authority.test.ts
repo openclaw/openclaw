@@ -81,11 +81,9 @@ describe("resolveSandboxWorkspaceAuthority", () => {
   });
 
   it("preserves read-only authority", async () => {
-    const result = await prepareWorkspaceAuthority({
-      config: configWithSandbox({ mode: "all", workspaceAccess: "ro" }),
-      agentId: "main",
-      sessionKey: "agent:main:subagent:workboard-card",
-    });
+    const result = await prepareWorkspaceAuthority(
+      configWithSandbox({ mode: "all", workspaceAccess: "ro" }),
+    );
 
     expect(result).toEqual({ sandboxed: true, workspaceAccess: "ro" });
   });
@@ -196,10 +194,7 @@ describe("resolveSandboxWorkspaceAuthority", () => {
       "workboard_complete",
       "workboard_shell",
     ];
-    const result = await prepareWorkspaceAuthority({
-      config,
-      agentId: "main",
-      sessionKey: "agent:main:subagent:workboard-card",
+    const result = await prepareWorkspaceAuthority(config, {
       confinedToolNames: ["workboard_complete"],
     });
 

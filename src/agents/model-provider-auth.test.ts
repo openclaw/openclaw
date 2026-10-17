@@ -58,8 +58,11 @@ function managedConfig(apiKey: ModelProviderConfig["apiKey"]): OpenClawConfig {
   };
   return { models: { providers: { "managed-native": provider } } };
 }
-const prepare = (params: Parameters<typeof prepareAuth>[0]) =>
-  prepareAuth({ cfg: {}, env: {}, store: { version: 1, profiles: {} }, ...params });
+type PrepareAuthParams = Parameters<typeof prepareAuth>[0];
+const prepare = (
+  params: Omit<PrepareAuthParams, "cfg" | "env" | "store"> &
+    Partial<Pick<PrepareAuthParams, "cfg" | "env" | "store">>,
+) => prepareAuth({ cfg: {}, env: {}, store: { version: 1, profiles: {} }, ...params });
 
 describe("model auth checker", () => {
   afterEach(() => {

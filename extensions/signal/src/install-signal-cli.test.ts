@@ -23,6 +23,7 @@ const {
   tempDownloadPaths: [] as string[],
 }));
 
+// mock-isolation: Supply the controlled downloader without opening a real network request.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: fetchWithSsrFGuardMock }));
 
 vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => {

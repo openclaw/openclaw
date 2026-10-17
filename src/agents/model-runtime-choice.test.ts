@@ -476,7 +476,7 @@ describe("prepared model support admission", () => {
       models: {
         providers: {
           ...custom.models?.providers,
-          xai: { api: "openai-responses", baseUrl: xaiUrl, models: [descriptor] },
+          xai: { api: "openai-responses", baseUrl: xaiUrl, models: [modelDefinition("auto")] },
         },
       },
     };

@@ -38,6 +38,7 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
   return { ...actual, loadOutboundMediaFromUrl: mocks.loadOutboundMediaFromUrl };
 });
 
+// mock-isolation: Resolve only the synthetic active listeners owned by this delivery suite.
 vi.mock("./connection-controller-runtime-context.js", () => ({
   getWhatsAppConnectionController: (accountId: string) => mocks.controllers.get(accountId) ?? null,
 }));
@@ -53,7 +54,8 @@ const mediaFixture = (
 ) => ({ kind, fileName, contentType, buffer: Buffer.from(bytes) });
 
 function installChunkSender(prefix: string) {
-  const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>(async () =>
+  const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>();
+  sendMessage.mockImplementation(async () =>
     acceptedSend("text", `${prefix}-${sendMessage.mock.calls.length}`),
   );
   mocks.controllers.set(accountId, {

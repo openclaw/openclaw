@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -171,6 +172,13 @@ it("retires old accesses on catalog restriction while keeping the session availa
     name: "fixture",
     source: "openclaw",
     description: "Fixture tool",
+    tool: {
+      name: "fixture",
+      label: "Fixture",
+      description: "Fixture tool",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    },
   });
   restrictToolSearchCatalog({ catalogRef: owner.catalogRef, allowedToolNames: new Set() });
   await expect(old.load("retained")).rejects.toThrow("active session-bound run");

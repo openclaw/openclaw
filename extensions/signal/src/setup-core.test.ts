@@ -41,7 +41,9 @@ async function prepareInput(input: SetupInput, cfg: OpenClawConfig = {}) {
 }
 
 describe("signalSetupAdapter", () => {
-  beforeEach(() => detectSignalTransportMock.mockReset());
+  beforeEach(() => {
+    detectSignalTransportMock.mockReset();
+  });
 
   it("uses setup-time container detection for a bare HTTP URL", async () => {
     detectSignalTransportMock.mockResolvedValue({ kind: "container", url: "http://signal:8080" });
