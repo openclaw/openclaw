@@ -329,15 +329,29 @@ suite.define(() => {
             () =>
               new Promise<number>((resolve, reject) => {
                 const request = indexedDB.open("openclaw-control-ui");
-                request.onsuccess = () => {
-                  const database = request.result;
-                  const transaction = database.transaction("composerDrafts");
-                  const count = transaction.objectStore("composerDrafts").count();
-                  count.onsuccess = () => resolve(count.result);
-                  count.onerror = () => reject(count.error);
-                  transaction.oncomplete = () => database.close();
-                };
-                request.onerror = () => reject(request.error);
+                request.addEventListener(
+                  "success",
+                  () => {
+                    const database = request.result;
+                    const transaction = database.transaction("composerDrafts");
+                    const count = transaction.objectStore("composerDrafts").count();
+                    count.addEventListener("success", () => resolve(count.result), { once: true });
+                    count.addEventListener(
+                      "error",
+                      () => reject(count.error ?? new Error("Draft count failed")),
+                      { once: true },
+                    );
+                    transaction.addEventListener("complete", () => database.close(), {
+                      once: true,
+                    });
+                  },
+                  { once: true },
+                );
+                request.addEventListener(
+                  "error",
+                  () => reject(request.error ?? new Error("Draft database open failed")),
+                  { once: true },
+                );
               }),
           ),
         ).toBe(0);
