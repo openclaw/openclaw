@@ -26,7 +26,7 @@ export function buildStatusJsonPayload(params: {
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.surface.cfg.update?.channel ?? undefined,
+    updateConfigChannel: params.surface.cfg.update?.channel,
     update: params.surface.update,
   });
   const databaseFamilies = describeDatabaseEngineSelection(

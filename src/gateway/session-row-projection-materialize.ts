@@ -298,6 +298,7 @@ export function readResidentSessionRow(
         resolveGatewaySessionDisplayName(row.key, row.entry),
       ),
       lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
+      lastAssistantMessage: row.lastAssistantMessage,
     },
     skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
@@ -220,6 +221,11 @@ export function createAgentDatabaseExecution(
       pending.controller.signal.throwIfAborted();
       assertCallerCurrent();
     }
+    const nativeOpen = generation?.getPendingNativeOpen();
+    if (nativeOpen) {
+      await racePromiseWithAbortSignal(nativeOpen, signal, (aborted) => aborted.reason);
+      assertCallerCurrent();
+    }
     if (nativeClosing) {
       await nativeClosing;
       assertCallerCurrent();
@@ -244,7 +250,16 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ?? fileIdentity,
+        expectedIdentity ??
+          fileIdentity ??
+          (identity.key.startsWith("file:")
+            ? {
+                kind: "file",
+                physicalIdentity: identity.key.slice("file:".length),
+                birthtime: identity.birthtime,
+                nativeLocation: identity.canonicalPath,
+              }
+            : undefined),
         acceptFileIdentity,
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
@@ -360,9 +375,7 @@ export function createAgentDatabaseExecution(
     get creationIdentity() {
       return creationIdentity;
     },
-    getPendingPreparation() {
-      return generation?.getPendingPreparation();
-    },
+    getPendingPreparation: () => generation?.getPendingPreparation(),
     borrow(borrowedPath, expected, creating, requestedPath) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;

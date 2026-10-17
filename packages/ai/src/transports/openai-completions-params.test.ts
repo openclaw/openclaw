@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Context, Model, Tool } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   buildOpenAICompletionsParams,
   buildOpenAICompletionsRequest,
 } from "./openai-completions-params.js";
-import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { createAssistantOutput, makeCompletionsModel } from "./openai-completions.test-support.js";
 import { buildOpenAIResponsesParams } from "./openai-responses-params-internal.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
 
@@ -21,21 +21,67 @@ const proxy = makeCompletionsModel({
   contextWindow: 10_000,
   maxTokens: 10_000,
 });
+function objectSchema<T extends Record<string, unknown>>(
+  properties: T,
+  rest?: Record<string, unknown>,
+) {
+  return { type: "object", properties, ...rest };
+}
+
 function emptyContext(systemPrompt = "system"): Context {
   return { systemPrompt, messages: [], tools: [] };
 }
-function tool(parameters: Record<string, unknown> = { type: "object", properties: {} }): Tool {
+function tool(parameters: Record<string, unknown> = objectSchema({})): Tool {
   return { name: "lookup_weather", description: "Get forecast", parameters };
 }
 function toolContext(parameters?: Record<string, unknown>): Context {
   return { ...emptyContext(), tools: [tool(parameters)] };
 }
 function request(
-  model: Partial<CompletionsModel>,
+  model: Partial<ToolsModel>,
   options?: OpenAICompletionsOptions,
   context = emptyContext(),
 ) {
-  return buildOpenAICompletionsParams(makeCompletionsModel(model), context, options);
+  const { compat, ...fields } = model;
+  return buildOpenAICompletionsParams(
+    { ...makeCompletionsModel(fields), compat },
+    context,
+    options,
+  );
+}
+
+function requestMode(
+  mode: "direct" | "managed",
+  model: CompletionsModel,
+  options: OpenAICompletionsOptions | undefined,
+  context = emptyContext(),
+) {
+  return buildOpenAICompletionsRequest(
+    model,
+    context,
+    options,
+    mode === "direct"
+      ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
+      : { mode },
+  );
+}
+function expectField(params: Record<string, unknown>, field: string, expected: unknown) {
+  if (expected === undefined) {
+    expect(params).not.toHaveProperty(field);
+  } else {
+    expect(params[field]).toEqual(expected);
+  }
+}
+
+function expectBudget(
+  params: ReturnType<typeof buildOpenAICompletionsParams>,
+  expected: number | undefined,
+  field = "max_completion_tokens",
+) {
+  expectField(params, field, expected);
+  expect(params).not.toHaveProperty(
+    field === "max_tokens" ? "max_completion_tokens" : "max_tokens",
+  );
 }
 
 describe("OpenAI completions output budgets", () => {
@@ -89,80 +135,64 @@ describe("OpenAI completions output budgets", () => {
       baseUrl: "https://api.xiaomimimo.com/v1",
     });
     Reflect.deleteProperty(uncapped, "maxTokens");
-    const cases = [
-      [
-        request(
-          {
-            id: "kimi-k2.6",
-            provider: "dashscope",
-            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            maxTokens: 32_000,
-            params: { max_completion_tokens: 64_000 },
-          },
-          { maxTokens: 0 },
-        ),
-        "max_completion_tokens",
-        64_000,
-      ],
-      [
-        request(
-          {
-            id: "mimo-v2.5-pro",
-            provider: "xiaomi-token-plan",
-            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
-            maxTokens: 32_000,
-            params: { max_completion_tokens: 64_000 },
-          },
-          { maxTokens: 200_000 },
-        ),
-        "max_completion_tokens",
-        32_000,
-      ],
-      [request({ provider: "chutes", baseUrl: "", maxTokens: 65_536 }), "max_tokens", 65_536],
-      [
-        request(
-          {
-            ...proxy,
-            id: "kimi-k2.6",
-            provider: "dashscope",
-            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            contextWindow: 20_000,
-            contextTokens: 10_000,
-          },
-          undefined,
-          emptyContext("你好世界".repeat(1_000)),
-        ),
-        "max_completion_tokens",
-        4_999,
-      ],
-      [
-        request(proxy, undefined, {
-          messages: Array.from({ length: 4_000 }, () => ({
-            role: "user",
-            content: "x",
-            timestamp: 1,
-          })),
-          tools: [],
-        }),
-        "max_completion_tokens",
-        8_749,
-      ],
-      [
-        buildOpenAICompletionsParams(uncapped, emptyContext(), undefined),
-        "max_completion_tokens",
+    expectBudget(
+      request(
+        {
+          id: "kimi-k2.6",
+          provider: "dashscope",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          maxTokens: 32_000,
+          params: { max_completion_tokens: 64_000 },
+        },
+        { maxTokens: 0 },
+      ),
+      64_000,
+    );
+    expectBudget(
+      request(
+        {
+          id: "mimo-v2.5-pro",
+          provider: "xiaomi-token-plan",
+          baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+          maxTokens: 32_000,
+          params: { max_completion_tokens: 64_000 },
+        },
+        { maxTokens: 200_000 },
+      ),
+      32_000,
+    );
+    expectBudget(
+      request({ provider: "chutes", baseUrl: "", maxTokens: 65_536 }),
+      65_536,
+      "max_tokens",
+    );
+    expectBudget(
+      request(
+        {
+          ...proxy,
+          id: "kimi-k2.6",
+          provider: "dashscope",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          contextWindow: 20_000,
+          contextTokens: 10_000,
+        },
         undefined,
-      ],
-    ] as const;
-    for (const [params, field, expected] of cases) {
-      if (expected === undefined) {
-        expect(params).not.toHaveProperty(field);
-      } else {
-        expect(params[field]).toBe(expected);
-      }
-      expect(params).not.toHaveProperty(
-        field === "max_tokens" ? "max_completion_tokens" : "max_tokens",
-      );
-    }
+        emptyContext("你好世界".repeat(1_000)),
+      ),
+      4_999,
+    );
+    expectBudget(
+      request(proxy, undefined, {
+        messages: Array.from({ length: 4_000 }, () => ({
+          role: "user",
+          content: "x",
+          timestamp: 1,
+        })),
+        tools: [],
+      }),
+      8_749,
+    );
+    expectBudget(buildOpenAICompletionsParams(uncapped, emptyContext(), undefined), undefined);
   });
 
   it("estimates the final replay marker instead of the aborted assistant text", () => {
@@ -170,12 +200,8 @@ describe("OpenAI completions output budgets", () => {
       messages: [
         { role: "user", content: "ok", timestamp: 1 },
         {
-          role: "assistant",
+          ...createAssistantOutput(proxy),
           content: [{ type: "text", text: "x".repeat(20_000) }],
-          api: proxy.api,
-          provider: proxy.provider,
-          model: proxy.id,
-          usage: createZeroUsage(),
           stopReason: "aborted",
           timestamp: 2,
         },
@@ -205,14 +231,7 @@ describe("OpenAI completions reasoning", () => {
           baseUrl: "https://api.z.ai/api/paas/v4",
           compat: { ...compat, supportsReasoningEffort: true },
         });
-        const params = buildOpenAICompletionsRequest(
-          model,
-          emptyContext(),
-          { reasoningEffort: "off" },
-          mode === "direct"
-            ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
-            : { mode },
-        );
+        const params = requestMode(mode, model, { reasoningEffort: "off" });
         if (mode === "direct") {
           expect(params.thinking).toEqual(
             expected === "low" ? { type: "enabled", clear_thinking: false } : { type: "disabled" },
@@ -241,14 +260,7 @@ describe("OpenAI completions reasoning", () => {
             baseUrl,
             ...(explicit ? { compat: { thinkingFormat, supportsReasoningEffort: true } } : {}),
           });
-          const params = buildOpenAICompletionsRequest(
-            model,
-            emptyContext(),
-            { reasoningEffort: "off" },
-            mode === "direct"
-              ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
-              : { mode },
-          );
+          const params = requestMode(mode, model, { reasoningEffort: "off" });
           const hasOffContract = explicit || thinkingFormat !== "zai";
           if (hasOffContract && (mode === "direct" || thinkingFormat === "together")) {
             expect(params).toMatchObject(
@@ -280,12 +292,7 @@ describe("OpenAI completions reasoning", () => {
       compat: { thinkingFormat: "zai" },
       thinkingLevelMap: { off: null },
     });
-    const params = buildOpenAICompletionsRequest(
-      model,
-      emptyContext(),
-      { reasoningEffort: "off" },
-      { mode: "direct", compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" },
-    );
+    const params = requestMode("direct", model, { reasoningEffort: "off" });
     expect(params.thinking).toEqual({ type: "disabled" });
     expect(params).not.toHaveProperty("reasoning_effort");
   });
@@ -314,14 +321,7 @@ describe("OpenAI completions reasoning", () => {
       for (const baseUrl of ["http://localhost:8000/v1", "https://proxy.example.com/v1"]) {
         for (const [overrides, reasoningEffort, expected] of cases) {
           const model = makeCompletionsModel({ provider: "custom", baseUrl, ...overrides });
-          const params = buildOpenAICompletionsRequest(
-            model,
-            emptyContext(),
-            { reasoningEffort },
-            mode === "direct"
-              ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
-              : { mode },
-          );
+          const params = requestMode(mode, model, { reasoningEffort });
           expect(params.reasoning_effort, `${baseUrl} ${reasoningEffort}`).toBe(expected);
         }
       }
@@ -362,11 +362,7 @@ describe("OpenAI completions reasoning", () => {
     ];
     for (const [model, reasoning, expected] of cases) {
       const params = request(model, { reasoning });
-      if (expected === undefined) {
-        expect(params).not.toHaveProperty("reasoning_effort");
-      } else {
-        expect(params.reasoning_effort).toBe(expected);
-      }
+      expectField(params, "reasoning_effort", expected);
     }
   });
 
@@ -382,11 +378,7 @@ describe("OpenAI completions reasoning", () => {
   ])("applies the tool reasoning policy for $id", ({ expected, ...model }) => {
     const params = request(model, { reasoning: "medium" }, toolContext());
     expect(params.tools).toHaveLength(1);
-    if (expected === undefined) {
-      expect(params).not.toHaveProperty("reasoning_effort");
-    } else {
-      expect(params.reasoning_effort).toBe(expected);
-    }
+    expectField(params, "reasoning_effort", expected);
   });
 
   it("maps Qwen chat-template thinking without a scalar effort", () => {
@@ -468,10 +460,7 @@ describe("OpenAI request cache policy", () => {
       const params = build(
         { ...makeCompletionsModel({ id }), api },
         { messages: [] },
-        {
-          sessionId: "session-123",
-          cacheRetention: "long",
-        },
+        { sessionId: "session-123", cacheRetention: "long" },
       );
       expect(params.prompt_cache_key).toBe("session-123");
       expect(params.prompt_cache_retention).toBe(retention);
@@ -513,9 +502,6 @@ describe("OpenAI request cache policy", () => {
           compat: {
             supportsPromptCacheKey: true,
             supportsLongCacheRetention: false,
-            supportsStore: false,
-            supportsReasoningEffort: false,
-            maxTokensField: "max_tokens",
           },
         },
         { cacheRetention: "long" },
@@ -525,48 +511,31 @@ describe("OpenAI request cache policy", () => {
     ];
     for (const [model, options, key, retention] of cases) {
       const params = request(model, { sessionId: "session-123", ...options });
-      if (key === undefined) {
-        expect(params).not.toHaveProperty("prompt_cache_key");
-      } else {
-        expect(params.prompt_cache_key).toBe(key);
-      }
-      if (retention === undefined) {
-        expect(params).not.toHaveProperty("prompt_cache_retention");
-      } else {
-        expect(params.prompt_cache_retention).toBe(retention);
-      }
+      expectField(params, "prompt_cache_key", key);
+      expectField(params, "prompt_cache_retention", retention);
       expect(params).not.toHaveProperty("prompt_cache_options");
     }
   });
 });
 
 const nonReasoningNative = makeCompletionsModel({ id: "gpt-5.4", reasoning: false });
-const schema = {
-  type: "object",
-  properties: { reply: { type: "string" } },
-  required: ["reply"],
-  additionalProperties: false,
-};
+const schema = objectSchema(
+  { reply: { type: "string" } },
+  { required: ["reply"], additionalProperties: false },
+);
 
 describe("OpenAI completions sampling and response format", () => {
-  it("forwards temperature and top_p", () => {
-    const params = buildOpenAICompletionsParams(nonReasoningNative, emptyContext(), {
-      temperature: 0.4,
-      topP: 0.9,
-    });
-    expect(params.temperature).toBe(0.4);
-    expect(params.top_p).toBe(0.9);
-  });
-
-  it("forwards penalties and seed", () => {
-    const params = buildOpenAICompletionsParams(nonReasoningNative, emptyContext(), {
-      frequencyPenalty: -0.5,
-      presencePenalty: 1.25,
-      seed: 12345,
-    });
-    expect(params.frequency_penalty).toBe(-0.5);
-    expect(params.presence_penalty).toBe(1.25);
-    expect(params.seed).toBe(12345);
+  it.each([
+    [
+      { temperature: 0.4, topP: 0.9 },
+      { temperature: 0.4, top_p: 0.9 },
+    ],
+    [
+      { frequencyPenalty: -0.5, presencePenalty: 1.25, seed: 12345 },
+      { frequency_penalty: -0.5, presence_penalty: 1.25, seed: 12345 },
+    ],
+  ] as const)("forwards sampling controls %j", (options, expected) => {
+    expect(request(nonReasoningNative, options)).toMatchObject(expected);
   });
 
   it("infers JSON Schema support from model families and snapshot boundaries", () => {
@@ -626,23 +595,12 @@ function historyContext(): Context {
   return {
     messages: [
       {
-        role: "assistant",
-        api: toolsNative.api,
-        provider: toolsNative.provider,
-        model: toolsNative.id,
+        ...createAssistantOutput(toolsNative),
         content: [{ type: "toolCall", id: "call_1", name: "lookup_weather", arguments: {} }],
-        usage: createZeroUsage(),
         stopReason: "toolUse",
         timestamp: 1,
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "lookup_weather",
-        content: [{ type: "text", text: "sunny" }],
-        isError: false,
-        timestamp: 2,
-      },
+      makeTextToolResult("call_1", "lookup_weather", "sunny", false, 2),
     ],
   };
 }
@@ -655,27 +613,11 @@ const brokenTool: Tool = {
   },
 };
 
-function requestTools(
-  model: Partial<ToolsModel>,
-  context = emptyContext(),
-  options?: OpenAICompletionsOptions,
-) {
-  const { compat, ...fields } = model;
-  return buildOpenAICompletionsParams(
-    { ...makeCompletionsModel(fields), compat },
-    context,
-    options,
-  );
-}
-
 describe("OpenAI completions compatibility and tools", () => {
   it.each(["direct", "managed"] as const)(
     "types Moonshot union branches in outgoing tools without changing other providers (%s)",
     (mode) => {
-      const parameters = {
-        type: "object",
-        properties: { v: { anyOf: [{ enum: ["x", "y"] }, { minimum: 1 }] } },
-      };
+      const parameters = objectSchema({ v: { anyOf: [{ enum: ["x", "y"] }, { minimum: 1 }] } });
       for (const [provider, baseUrl, moonshot] of [
         ["moonshot", "https://api.moonshot.ai/v1", true],
         ["custom", "https://api.moonshot.cn/v1", true],
@@ -684,14 +626,7 @@ describe("OpenAI completions compatibility and tools", () => {
         ["openrouter", "https://openrouter.ai/api/v1", false],
       ] as const) {
         const model = makeCompletionsModel({ id: "kimi-k2.6", provider, baseUrl });
-        const payload = buildOpenAICompletionsRequest(
-          model,
-          toolContext(parameters),
-          undefined,
-          mode === "direct"
-            ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" }
-            : { mode },
-        );
+        const payload = requestMode(mode, model, undefined, toolContext(parameters));
         expect(payload.tools?.[0]?.function.parameters, provider).toHaveProperty("properties.v", {
           anyOf: moonshot
             ? [
@@ -706,69 +641,51 @@ describe("OpenAI completions compatibility and tools", () => {
   );
 
   it("infers only unambiguous branch types and leaves literal data and explicit types intact", () => {
+    const inferred = (branch: Record<string, unknown>, type: string, extra = {}) =>
+      [branch, { ...structuredClone(branch), type, ...extra }] as const;
+    const unchanged = (branch: Record<string, unknown>) =>
+      [branch, structuredClone(branch)] as const;
     const cases = [
-      [{ const: null }, { const: null, type: "null" }],
-      [{ const: false }, { const: false, type: "boolean" }],
-      [{ enum: [1, 2.5] }, { enum: [1, 2.5], type: "number" }],
-      [{ const: [] }, { const: [], type: "array", items: {} }],
-      [{ const: {} }, { const: {}, type: "object" }],
-      [
-        { maximum: 9, multipleOf: 0.5 },
-        { maximum: 9, multipleOf: 0.5, type: "number" },
-      ],
-      [
-        { minLength: 1, pattern: "x" },
-        { minLength: 1, pattern: "x", type: "string" },
-      ],
-      [
-        { properties: { anyOf: { enum: ["x"] } } },
-        { properties: { anyOf: { enum: ["x"] } }, type: "object" },
-      ],
-      [{ required: ["a"] }, { required: ["a"], type: "object" }],
-      [
-        { items: { anyOf: [{ const: "x" }] } },
-        { items: { anyOf: [{ const: "x", type: "string" }] }, type: "array" },
-      ],
-      [
-        { type: "integer", minimum: 1 },
-        { type: "integer", minimum: 1 },
-      ],
-      [{ description: "Unknown type" }, { description: "Unknown type" }],
-      [{ enum: ["x", 1] }, { enum: ["x", 1] }],
-      [
-        { properties: {}, items: {} },
-        { properties: {}, items: {} },
-      ],
-    ] as const;
+      inferred({ const: null }, "null"),
+      inferred({ const: false }, "boolean"),
+      inferred({ enum: [1, 2.5] }, "number"),
+      inferred({ const: [] }, "array", { items: {} }),
+      inferred({ const: {} }, "object"),
+      inferred({ maximum: 9, multipleOf: 0.5 }, "number"),
+      inferred({ minLength: 1, pattern: "x" }, "string"),
+      inferred({ properties: { anyOf: { enum: ["x"] } } }, "object"),
+      inferred({ required: ["a"] }, "object"),
+      inferred({ items: { anyOf: [{ const: "x" }] } }, "array", {
+        items: { anyOf: [{ const: "x", type: "string" }] },
+      }),
+      unchanged({ type: "integer", minimum: 1 }),
+      unchanged({ description: "Unknown type" }),
+      unchanged({ enum: ["x", 1] }),
+      unchanged({ properties: {}, items: {} }),
+    ];
     const literal = { anyOf: [{ enum: ["literal"] }] };
     for (const union of ["anyOf", "oneOf"] as const) {
       const payload = request(
         { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1", id: "kimi-k2.6" },
         undefined,
-        toolContext({
-          type: "object",
-          properties: { v: { [union]: cases.map(([branch]) => branch), default: literal } },
-        }),
+        toolContext(
+          objectSchema({ v: { [union]: cases.map(([branch]) => branch), default: literal } }),
+        ),
       );
-      expect(payload.tools?.[0]?.function.parameters).toEqual({
-        type: "object",
-        properties: {
-          v: {
-            [union]: cases.map(([, expected]) => expected),
-            default: literal,
-          },
-        },
-      });
+      expect(payload.tools?.[0]?.function.parameters).toEqual(
+        objectSchema({ v: { [union]: cases.map(([, expected]) => expected), default: literal } }),
+      );
     }
   });
 
   it("keeps implicit tool choice limited to proxy endpoints", () => {
-    const proxyParams = requestTools(
+    const proxyParams = request(
       { provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" },
+      undefined,
       toolContext(),
     );
     expect(proxyParams.tool_choice).toBe("auto");
-    const nativeParams = requestTools(toolsNative, toolContext());
+    const nativeParams = request(toolsNative, undefined, toolContext());
     expect(nativeParams.tools).toHaveLength(1);
     expect(nativeParams).not.toHaveProperty("tool_choice");
   });
@@ -776,7 +693,7 @@ describe("OpenAI completions compatibility and tools", () => {
   it("applies provider and native-host compatibility defaults", () => {
     const cases = [
       [
-        requestTools({
+        request({
           id: "kimi-k2.5",
           provider: "moonshot",
           baseUrl: "",
@@ -786,20 +703,20 @@ describe("OpenAI completions compatibility and tools", () => {
         ["stream_options"],
       ],
       [
-        requestTools(
+        request(
           {
             id: "mistral-small-latest",
             provider: "custom-mistral-host",
             baseUrl: "https://api.mistral.ai/v1",
           },
-          emptyContext(),
           { maxTokens: 2048, reasoningEffort: "high" },
+          emptyContext(),
         ),
         { max_tokens: 2048 },
         ["max_completion_tokens", "store", "reasoning_effort"],
       ],
       [
-        requestTools({ id: "glm-5", provider: "zai", baseUrl: "" }, toolContext()),
+        request({ id: "glm-5", provider: "zai", baseUrl: "" }, undefined, toolContext()),
         { "tools.0.function": expect.any(Object) },
         ["tools.0.function.strict"],
       ],
@@ -833,19 +750,23 @@ describe("OpenAI completions compatibility and tools", () => {
         { ...proxy, compat: { strictMessageKeys: true } },
         { ...historyContext(), tools: [] },
         [
-          { role: "assistant", content: null },
-          { role: "tool", content: "sunny" },
+          {
+            role: "assistant",
+            content:
+              "[tool call id=call_1 name=lookup_weather] {}\n[tool result id=call_1 name=lookup_weather] sunny",
+          },
         ],
       ],
     ];
     for (const [model, context, expected] of cases) {
-      expect(requestTools(model, context).messages).toEqual(expected);
+      expect(request(model, undefined, context).messages).toEqual(expected);
     }
   });
 
   it("keeps strict projected tools usable by required choice after quarantining bad schemas", () => {
-    const params = requestTools(
+    const params = request(
       toolsNative,
+      { toolChoice: "required" },
       {
         ...emptyContext(),
         tools: [
@@ -858,14 +779,13 @@ describe("OpenAI completions compatibility and tools", () => {
           tool({}),
         ],
       },
-      { toolChoice: "required" },
     );
     expect(params.tools?.map((entry) => entry.function)).toEqual([
       {
         name: "lookup_weather",
         description: "Get forecast",
         strict: true,
-        parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+        parameters: objectSchema({}, { required: [], additionalProperties: false }),
       },
     ]);
     expect(params.tool_choice).toBe("required");
@@ -874,64 +794,47 @@ describe("OpenAI completions compatibility and tools", () => {
   it("normalizes projected schemas according to strictness and compatibility", () => {
     const cases = [
       [
-        requestTools(
-          toolsNative,
-          toolContext({
-            type: "object",
-            additionalProperties: false,
-            properties: { path: { type: "string" } },
-            required: [],
-          }),
-        ),
+        toolsNative,
+        objectSchema({ path: { type: "string" } }, { additionalProperties: false, required: [] }),
         { strict: false },
       ],
       [
-        requestTools(
-          { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } },
-          toolContext({ type: "object", properties: { forbidden: { not: {} } } }),
-        ),
+        { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } },
+        objectSchema({ forbidden: { not: {} } }),
         { "parameters.properties.forbidden": {} },
       ],
       [
-        requestTools(
-          { ...proxy, compat: { omitEmptyArrayItems: true } },
-          toolContext({
-            type: "object",
-            properties: {
-              hints: { type: "array" },
-              typedHints: { type: "array", items: { type: "string" } },
-            },
-          }),
-        ),
+        { ...proxy, compat: { omitEmptyArrayItems: true } },
+        objectSchema({
+          hints: { type: "array" },
+          typedHints: { type: "array", items: { type: "string" } },
+        }),
         {
           "parameters.properties.hints": { type: "array" },
           "parameters.properties.typedHints": { type: "array", items: { type: "string" } },
         },
       ],
-    ] as const;
-    for (const [params, expected] of cases) {
+    ] satisfies [Partial<ToolsModel>, Record<string, unknown>, Record<string, unknown>][];
+    for (const [model, parameters, expected] of cases) {
+      const projected = request(model, undefined, toolContext(parameters)).tools?.[0]?.function;
       for (const [path, value] of Object.entries(expected)) {
-        expect(params.tools?.[0]?.function).toHaveProperty(path, value);
+        expect(projected).toHaveProperty(path, value);
       }
     }
   });
 
   it("fails required choice when every schema is quarantined", () => {
     expect(() =>
-      requestTools(
-        toolsNative,
-        { ...emptyContext(), tools: [brokenTool] },
-        { toolChoice: "required" },
-      ),
+      request(toolsNative, { toolChoice: "required" }, { ...emptyContext(), tools: [brokenTool] }),
     ).toThrow("no tools survived schema conversion");
   });
 
   it("preserves history markers only for native requests with supported tools", () => {
     const unsupported = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
     const cases = [
-      [requestTools(unsupported, { ...historyContext(), tools: [tool()] }), false],
-      [requestTools(toolsNative, { ...historyContext(), tools: [brokenTool] }), true],
-      [requestTools(proxy, historyContext()), false],
+      [request(unsupported, undefined, { ...historyContext(), tools: [tool()] }), false],
+      [request(toolsNative, undefined, { ...historyContext(), tools: [brokenTool] }), true],
+      [request(proxy, undefined, historyContext()), false],
     ] as const;
     for (const [params, marker] of cases) {
       if (marker) {

@@ -9,6 +9,51 @@ import { ChatModelPicker } from "./chat-model-picker.tsx";
 
 afterEach(() => document.body.replaceChildren());
 
+it("mounts model choices on first open and retains them across dismissal", async () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  const onModelSelect = vi.fn(async () => {});
+  mountSolid(
+    () => (
+      <ChatModelPicker
+        disabled={false}
+        modelSelectionLocked={false}
+        modelOptions={[
+          {
+            provider: "fixture",
+            value: "fixture/current",
+            commitValue: "fixture/current",
+            label: "Current",
+            isDefault: false,
+          },
+        ]}
+        selectedModelValue="fixture/current"
+        sessionModelPinned
+        sessionKey="main"
+        triggerModelLabel="Current"
+        onModelSelect={onModelSelect}
+      />
+    ),
+    { container },
+  );
+  flush();
+  expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+  const details = container.querySelector("details")!;
+  details.querySelector("summary")!.click();
+  flush();
+  await Promise.resolve();
+  const choice = container.querySelector<HTMLButtonElement>("[data-chat-model-option]")!;
+  expect(choice.hidden).toBe(false);
+  details.open = false;
+  details.dispatchEvent(new Event("toggle"));
+  flush();
+  details.querySelector("summary")!.click();
+  flush();
+  await Promise.resolve();
+  expect(container.querySelector("[data-chat-model-option]")).toBe(choice);
+  choice.click();
+  expect(onModelSelect).toHaveBeenCalledWith("fixture/current", "main", undefined);
+});
+
 it.each([false, true])(
   "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
   async (inherited) => {
@@ -237,6 +282,7 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
       <ChatModelPicker
         {...{
           disabled: false,
+          open: true,
           modelSelectionLocked: false,
           modelOptions: [
             option("anthropic", "claude-opus-4-8", "claude-cli"),

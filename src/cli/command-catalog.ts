@@ -585,7 +585,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["memory"],
-    policy: { loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+    // The action owns state admission; pre-action validation must not observe config health.
+    policy: { configGuard: "validate", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
   },
   {
     commandPath: ["memory", "search"],
@@ -597,7 +598,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       configGuard: ({ argv }) =>
-        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "run" : "skip",
+        hasFlag(argv, "--index") || hasFlag(argv, "--fix") ? "validate" : "skip",
     },
   },
   { commandPath: ["skills", "update"], exact: true },

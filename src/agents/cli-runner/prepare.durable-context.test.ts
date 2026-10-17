@@ -18,7 +18,7 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../cli-runner.test-helpers.js";
-import * as maintenance from "../embedded-agent-runner/context-engine-maintenance.js";
+import * as maintenance from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { executePreparedCliRun } from "./execute.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -329,22 +329,20 @@ describe("CLI durable session context", () => {
     });
     const history = await prepareOwnedHistory();
     const { sessionTarget } = fixture.session;
-    const wait = vi
-      .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
-      .mockImplementation(async () => {
-        history.appendTranscript({
-          id: "completed-maintenance-note",
-          parentId: null,
-          timestamp: new Date(1).toISOString(),
-          message: {
-            role: "custom",
-            customType: "openclaw.system-note",
-            content: "FACT_AFTER_MAINTENANCE",
-            display: false,
-            timestamp: 1,
-          },
-        });
+    const wait = vi.spyOn(maintenance, "waitForSessionMaintenance").mockImplementation(async () => {
+      history.appendTranscript({
+        id: "completed-maintenance-note",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "custom",
+          customType: "openclaw.system-note",
+          content: "FACT_AFTER_MAINTENANCE",
+          display: false,
+          timestamp: 1,
+        },
       });
+    });
     const context = await history.prepare({ sessionKey: sessionTarget.sessionKey });
     try {
       expect(wait).toHaveBeenCalledExactlyOnceWith(sessionTarget.sessionKey);

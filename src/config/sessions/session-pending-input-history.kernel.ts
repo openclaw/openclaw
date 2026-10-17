@@ -1,5 +1,6 @@
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { jsonPathValue } from "../../infra/database-engine/json-values.js";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -7,7 +8,10 @@ import {
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { hasPendingInputConsumptionColumn } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  hasPendingInputConsumptionColumn,
+  hasSessionPendingInputsSchema,
+} from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PendingInputHistoryQuery,
@@ -20,11 +24,11 @@ export function readPendingInputHistoryInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   query: PendingInputHistoryQuery,
 ): PendingInputHistorySnapshot {
-  const schema = getAdmittedSqliteSchemaFacts(database.db);
+  const schema = getPostgresPhysicalFacts(database.db) ?? getAdmittedSqliteSchemaFacts(database.db);
   if (!schema) {
     throw new Error("Pending input history requires admitted schema facts");
   }
-  if (!schema.tableSql.get("session_pending_inputs")) {
+  if (!hasSessionPendingInputsSchema(database.db)) {
     return { rows: [], total: 0 };
   }
   const hasConsumption = hasPendingInputConsumptionColumn(database.db);

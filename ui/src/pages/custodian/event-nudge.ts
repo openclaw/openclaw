@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { CustodianSessionVariant } from "./session-lifecycle.ts";
 
 export type CustodianEventNudge = {
   severity: 1 | 2 | 3;
@@ -10,6 +11,57 @@ export type CustodianEventNudge = {
 
 export type CustodianSendDelivery = "unsent" | "sent" | "received";
 export type CustodianSendOutcome = "sent" | "rejected" | "unknown";
+
+export type CustodianHealthNudgeSource = {
+  client: GatewayBrowserClient;
+  ownershipKey: string;
+  pending: boolean;
+};
+
+export function synchronizeCustodianHealthNudge(
+  owner: {
+    readonly activeVariant: CustodianSessionVariant;
+    readonly activeClient: GatewayBrowserClient | null;
+    eventNudge: CustodianEventNudge | null;
+    eventNudgeClosed: boolean;
+    healthNudgeSource: CustodianHealthNudgeSource | null;
+  },
+  ownershipKey: () => string,
+  notify: () => void,
+): void {
+  const client =
+    owner.activeVariant === "caretaker" && !owner.eventNudgeClosed ? owner.activeClient : null;
+  if (!client) {
+    owner.healthNudgeSource = null;
+    return;
+  }
+  const key = ownershipKey();
+  if (owner.healthNudgeSource?.client === client && owner.healthNudgeSource.ownershipKey === key) {
+    return;
+  }
+  const source = (owner.healthNudgeSource = { client, ownershipKey: key, pending: true });
+  // Hello omits health for the web UI; later events only report material changes.
+  void client
+    .request("health", {})
+    .then((payload) => {
+      if (
+        owner.healthNudgeSource !== source ||
+        !source.pending ||
+        owner.eventNudgeClosed ||
+        ownershipKey() !== key
+      ) {
+        return;
+      }
+      owner.eventNudge = classifyCustodianHealthNudge(payload);
+      notify();
+    })
+    .catch(() => {
+      // Retry on the next tick unless a live event or new connection superseded this read.
+      if (owner.healthNudgeSource === source && source.pending) {
+        owner.healthNudgeSource = null;
+      }
+    });
+}
 
 export async function sendCustodianEventNudge(
   owner: {

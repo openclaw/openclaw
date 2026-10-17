@@ -9,8 +9,8 @@ import {
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { ControlUiLinkReaderSection } from "../../shared/control-ui-link-reader.js";
+import { truncateOptionalText } from "../../shared/text-truncate.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
 import { withControlUiSessionGitHubRead } from "../control-ui-session-github-read.js";
 import type {
@@ -174,11 +174,6 @@ type SessionPreviewSource = {
 
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
 
-function boundedPreviewText(value: string | undefined, maxChars = SESSION_PREVIEW_TEXT_MAX_CHARS) {
-  const trimmed = value?.trim();
-  return trimmed ? truncateUtf16Safe(trimmed, maxChars) : undefined;
-}
-
 function parseSessionPreviewKey(params: unknown): string | null {
   if (!isRecord(params) || Object.keys(params).some((key) => key !== "sessionKey")) {
     return null;
@@ -191,11 +186,14 @@ function projectSessionPreview(source: SessionPreviewSource | null): ControlUiSe
   if (!source) {
     return { status: "unavailable" };
   }
-  const lastMessagePreview = boundedPreviewText(source.lastMessagePreview || undefined);
-  const title = boundedPreviewText(source.title);
-  const derivedTitle = boundedPreviewText(source.derivedTitle);
-  const kind = boundedPreviewText(source.kind, 64);
-  const channel = boundedPreviewText(source.channel, 80);
+  const lastMessagePreview = truncateOptionalText(
+    source.lastMessagePreview,
+    SESSION_PREVIEW_TEXT_MAX_CHARS,
+  );
+  const title = truncateOptionalText(source.title, SESSION_PREVIEW_TEXT_MAX_CHARS);
+  const derivedTitle = truncateOptionalText(source.derivedTitle, SESSION_PREVIEW_TEXT_MAX_CHARS);
+  const kind = truncateOptionalText(source.kind, 64);
+  const channel = truncateOptionalText(source.channel, 80);
   return {
     status: "ok",
     sessionKey: source.sessionKey,

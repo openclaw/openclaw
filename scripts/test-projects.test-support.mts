@@ -1335,7 +1335,7 @@ function createBoundedExtensionPlans(
   const chunks = createExtensionTestProcessTargetChunks(
     config,
     config === EXTENSION_DATABASE_WORKERS_VITEST_CONFIG && plan.includePatterns
-      ? plan.includePatterns
+      ? expandVitestIncludePatterns(plan.includePatterns, cwd)
       : roots,
     forwardedArgs,
     cwd,

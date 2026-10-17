@@ -6,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -299,10 +300,10 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (params.action === "inspect" || (edit && !editsMetadata)) {
     return present(before);
   }
-  const assertHead = (state: ReturnType<typeof pullRequestState>) => {
+  const assertHead = (state: ReturnType<typeof pullRequestState>, detail = "") => {
     if (state.headCommit !== params.expectedHeadCommit) {
       throw new Error(
-        "The GitHub PR head changed; inspect and review the new publication before retrying. A previous action may already have completed.",
+        `The GitHub PR head changed; inspect and review the new publication before retrying. A previous action may already have completed.${detail}`,
       );
     }
   };
@@ -372,8 +373,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   // The transport makes no write retry. Re-read the original target even after a lost response.
+  let commandResult: string;
   try {
-    await runPublicationCommand(
+    const result = await runPublicationCommand(
       githubPublicationApiArgs(
         params.action === "ready"
           ? "graphql"
@@ -410,17 +412,36 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         ),
       },
     );
-  } catch {
+    commandResult = [
+      `gh api ${result.code === null ? result.termination : `exit ${result.code}`}`,
+      result.stderr.toString("utf8").trim(),
+      result.stdout.toString("utf8").trim(),
+      result.error?.message,
+    ]
+      .filter(Boolean)
+      .join(": ");
+  } catch (error) {
     assertEffect();
+    commandResult = error instanceof Error ? error.message : String(error);
   }
-  const after = await read();
-  assertHead(after);
+  // Redact the complete diagnostic before truncating, so a cut cannot expose part of a secret.
+  const failureDetail = commandResult
+    ? ` Command result: ${redactToolDetail(commandResult).slice(0, 2000)}`
+    : "";
+  const after = await read().catch((error: unknown) => {
+    assertCurrent();
+    if (failureDetail && error instanceof Error) {
+      throw new Error(`${error.message}${failureDetail}`);
+    }
+    throw error;
+  });
+  assertHead(after, failureDetail);
   if (edit) {
     if (metadataMatches(after)) {
       return present(after);
     }
     throw new Error(
-      "GitHub has not confirmed the metadata edit; read the PR with edit before retrying. Saved work is unchanged.",
+      `GitHub has not confirmed the metadata edit; read the PR with edit before retrying. Saved work is unchanged.${failureDetail}`,
     );
   }
   if (
@@ -432,10 +453,10 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   }
   if (params.action === "close") {
     throw new Error(
-      "GitHub has not confirmed close; inspect the PR state and repository permissions before retrying. Saved work is unchanged.",
+      `GitHub has not confirmed close; inspect the PR state and repository permissions before retrying. Saved work is unchanged.${failureDetail}`,
     );
   }
   throw new Error(
-    `GitHub has not confirmed ${params.action}; inspect the PR's required reviews, checks, conflicts and repository permissions before retrying. Saved work is unchanged.`,
+    `GitHub has not confirmed ${params.action}; inspect the PR's required reviews, checks, conflicts and repository permissions before retrying. Saved work is unchanged.${failureDetail}`,
   );
 }

@@ -117,7 +117,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
 useDebugTestEnvironment();
 
 describe("DebugPageView", () => {
-  it("retains event payload DOM and only highlights changed diagnostics", () => {
+  it("retains event payload DOM and only highlights changed diagnostics", async () => {
     const container = document.createElement("div");
     const events = Array.from({ length: 250 }, (_, index) => ({
       ts: 1,
@@ -132,6 +132,7 @@ describe("DebugPageView", () => {
       assert(eventSection);
       const payloads = Array.from(eventSection.querySelectorAll("pre"));
       assert(payloads[0]);
+      await waitForSolid(() => expect(payloads[0]!.querySelector("span")).not.toBeNull());
       const firstToken = payloads[0].querySelector("span");
       assert(firstToken);
       highlight.mockClear();

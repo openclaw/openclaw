@@ -923,7 +923,7 @@ async function agentViaGatewayCommand(
           callGateway({
             method,
             params,
-            timeoutMs: requestOpts?.timeoutMs ?? undefined,
+            timeoutMs: requestOpts?.timeoutMs,
             expectFinal: requestOpts?.expectFinal,
             config: cfg,
             ...gatewayIdentity,

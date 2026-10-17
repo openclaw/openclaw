@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -66,10 +66,10 @@ vi.mock("./chrome-mcp-connect.js", async (importOriginal) => {
 
 function createSdkTimeoutCallTool() {
   return vi.fn(
-    async (_call: ToolCall, _resultSchema?: unknown, options?: { timeout?: number }) =>
+    async (_call: ToolCall, options?: { timeout?: number }) =>
       await new Promise<never>((_resolve, reject) => {
         setTimeout(
-          () => reject(new McpError(ErrorCode.RequestTimeout, "Request timed out")),
+          () => reject(new SdkError(SdkErrorCode.RequestTimeout, "Request timed out")),
           options?.timeout,
         );
       }),
@@ -1561,7 +1561,7 @@ describe("chrome MCP page parsing", () => {
       const session = createFakeSession();
       if (factoryCalls === 1) {
         session.client.callTool = vi.fn(
-          async (_call: ToolCall, _resultSchema?: unknown, options?: { signal?: AbortSignal }) =>
+          async (_call: ToolCall, options?: { signal?: AbortSignal }) =>
             await new Promise((_resolve, reject) => {
               const signal = options?.signal;
               forwardedSignal = signal;
@@ -1677,7 +1677,7 @@ describe("chrome MCP page parsing", () => {
     const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
     const navigateCall = callToolMock.mock.calls.find(([call]) => call.name === "navigate_page");
     expect(navigateCall?.[0].arguments?.timeout).toBe(120_000);
-    expect(navigateCall?.[2]?.timeout).toBe(125_000);
+    expect(navigateCall?.[1]?.timeout).toBe(125_000);
   });
 
   it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {
@@ -1688,16 +1688,14 @@ describe("chrome MCP page parsing", () => {
       const session = createFakeSession();
       if (factoryCalls === 1) {
         const timeoutCall = createSdkTimeoutCallTool();
-        session.client.callTool = vi.fn(
-          async (call: ToolCall, resultSchema?: unknown, options?: { timeout?: number }) => {
-            if (call.name === "list_pages") {
-              return fakeListPagesResult();
-            }
-            expect(call.arguments?.timeout).toBe(20_000);
-            expect(options?.timeout).toBe(25_000);
-            return await timeoutCall(call, resultSchema, options);
-          },
-        ) as typeof session.client.callTool;
+        session.client.callTool = vi.fn(async (call: ToolCall, options?: { timeout?: number }) => {
+          if (call.name === "list_pages") {
+            return fakeListPagesResult();
+          }
+          expect(call.arguments?.timeout).toBe(20_000);
+          expect(options?.timeout).toBe(25_000);
+          return await timeoutCall(call, options);
+        }) as typeof session.client.callTool;
       }
       return session;
     };

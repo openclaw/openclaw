@@ -65,6 +65,15 @@ duplicates. `context.isNew` is `true` if and only if this admission inserted the
 delivery. If retention previously pruned the row, a later admission may insert
 it again and report `isNew: true`.
 
+Pass an existing transport batch to `admitBatch(rawEvents)`. The core queue commits
+all inspected events in one worker request, with set-based inserts and durable
+deduplication; results preserve input order and the first payload for each event
+ID. Acknowledgments run after that commit, before the drain can claim the batch.
+If an acknowledgment fails, the committed rows remain recoverable and transport
+replays deduplicate normally. This does not add a buffering or coalescing window.
+Plugin-supplied queues can implement optional `enqueueBatch(events)` with the same
+atomic contract; queues exposing only `enqueue` retain individual admission.
+
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
 `onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
 errors, `onCancelled` for explicit pre-adoption cancellation that must preserve

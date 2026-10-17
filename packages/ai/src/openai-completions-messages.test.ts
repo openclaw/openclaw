@@ -96,6 +96,7 @@ describe("convertMessages assistant text replay", () => {
       const converted = convertMessages(
         model,
         {
+          tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
           messages: [assistant, makeTextToolResult("call_lookup", "lookup", "found", false, 3)],
         },
         { ...resolveOpenAICompletionsCompat(model), requiresThinkingAsText },
@@ -146,6 +147,7 @@ describe("convertMessages assistant text replay", () => {
       timestamp: 1,
     };
     const context: Context = {
+      tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
       messages: [
         assistant,
         {
@@ -228,6 +230,7 @@ describe("convertMessages parallel tool-result image ownership", () => {
       `${prefix}d`,
     ];
     const context: Context = {
+      tools: [{ name: toolName, description: "Image tool", parameters: { type: "object" } }],
       messages: [
         makeToolCallAssistant(
           callIds,
@@ -352,6 +355,7 @@ describe("convertMessages relocatable region", () => {
     };
     const context: Context = {
       systemPrompt: `Stable prefix${marked("Runtime facts")}`,
+      tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
       messages: [
         { role: "user", content: [], timestamp: 1 },
         assistant,
@@ -447,6 +451,7 @@ describe("convertMessages relocatable region", () => {
       // Moving Runtime to the last user turn used to rewrite the earlier cached prefix.
       const toolResult = "X".repeat(30000);
       const turn1: Context = {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
         systemPrompt: `Stable prefix${marked("Runtime: session=alpha")}`,
         messages: [{ role: "user", content: "user1", timestamp: 1 }],
       };

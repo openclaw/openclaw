@@ -32,20 +32,18 @@ export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;
 
 describe("extractGatewayEventNames", () => {
   it("collects literals and resolves identifiers", () => {
-    const names = extractGatewayEventNames(GATEWAY_LIST_FIXTURE, GATEWAY_CONSTANTS_FIXTURE);
+    const names = extractGatewayEventNames(GATEWAY_CONSTANTS_FIXTURE + GATEWAY_LIST_FIXTURE);
     expect(names).toContain("connect.challenge");
     expect(names).toContain("update.available");
     expect(names).toHaveLength(11);
   });
 
   it("fails loudly when the array is missing", () => {
-    expect(() => extractGatewayEventNames("export const OTHER = [];", "")).toThrow(
-      /GATEWAY_EVENTS/,
-    );
+    expect(() => extractGatewayEventNames("export const OTHER = [];")).toThrow(/GATEWAY_EVENTS/);
   });
 
   it("fails loudly on unresolved identifiers", () => {
-    expect(() => extractGatewayEventNames(GATEWAY_LIST_FIXTURE, "")).toThrow(
+    expect(() => extractGatewayEventNames(GATEWAY_LIST_FIXTURE)).toThrow(
       /GATEWAY_EVENT_UPDATE_AVAILABLE/,
     );
   });

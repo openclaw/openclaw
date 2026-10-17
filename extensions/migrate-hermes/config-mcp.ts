@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
@@ -22,7 +23,7 @@ function readToolFilterList(value: unknown): string[] | undefined {
   if (typeof value === "string") {
     return value.trim() ? [value.trim()] : [];
   }
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+  if (!isStringArray(value)) {
     return undefined;
   }
   return [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];

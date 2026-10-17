@@ -67,7 +67,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
-    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
@@ -107,9 +106,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "chat-transcript-styles";
   }
 
-  // The composer uses MarkdownIt for synchronous emoji completion, but only
-  // transcript rendering needs highlighting and sanitization.
-  if (moduleIdIncludesPackage(id, "highlight.js") || moduleIdIncludesPackage(id, "dompurify")) {
+  // Code highlighting is requested by the first completed code block; it must
+  // not share the parser/sanitizer chunk used by ordinary transcript prose.
+  if (moduleIdIncludesPackage(id, "highlight.js")) {
+    return "markdown-highlight-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "dompurify")) {
     return "markdown-runtime";
   }
 
@@ -117,7 +119,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "config-runtime";
   }
   if (moduleIdIncludesPackage(id, "json5")) {
-    // Zod validates boot snapshots; JSON5 loads only when a config consumer warms it.
+    // Config parsing loads only when a config consumer warms it.
     return "json5-runtime";
   }
 

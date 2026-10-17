@@ -80,7 +80,7 @@ export function collectAgentInternalEventMedia(events: AgentInternalEvent[] | un
       }),
     );
     for (const mediaUrl of [
-      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
+      ...(event.mediaUrls ?? []),
       ...mediaUrlsFromGeneratedAttachments(event.attachments),
     ]) {
       const normalized = normalizeOptionalString(mediaUrl);

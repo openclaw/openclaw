@@ -121,10 +121,7 @@ export type {
   EmbeddedAgentQueueMessageOutcome,
 } from "./run-state.js";
 
-export type EmbeddedRunTimeoutRecoveryMarker = {
-  sessionId: string;
-  recoveryToken: symbol;
-};
+export type EmbeddedRunTimeoutRecoveryMarker = AbandonedEmbeddedRun;
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -269,10 +266,8 @@ export function markEmbeddedRunRecoveringTimeout(params: {
   ) {
     return undefined;
   }
-  const recoveryToken = Symbol("openclaw.embeddedRunTimeoutRecovery");
   abandoned.reason = "recovering_timeout";
-  abandoned.recoveryToken = recoveryToken;
-  return { sessionId: abandoned.sessionId, recoveryToken };
+  return abandoned;
 }
 
 /** Restores terminal-timeout suppression when recovery cannot continue. */
@@ -280,15 +275,10 @@ export function restoreEmbeddedRunTimeoutAbandonment(
   marker: EmbeddedRunTimeoutRecoveryMarker,
 ): boolean {
   const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(marker.sessionId.trim());
-  if (
-    !abandoned ||
-    abandoned.reason !== "recovering_timeout" ||
-    abandoned.recoveryToken !== marker.recoveryToken
-  ) {
+  if (abandoned !== marker || abandoned.reason !== "recovering_timeout") {
     return false;
   }
   abandoned.reason = "timeout";
-  delete abandoned.recoveryToken;
   return true;
 }
 

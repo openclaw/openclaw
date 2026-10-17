@@ -228,6 +228,9 @@ it("retains transcript previews across metadata edits and consumes committed app
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
       await initial;
+      // A user-only transcript needs one bounded read to establish assistant absence.
+      await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(1));
+      await backfill.mock.results[0]?.value;
       backfill.mockClear();
       for (let edit = 0; edit < 10; edit++) {
         await sessions.patchSessionEntryCore(scope, () => ({

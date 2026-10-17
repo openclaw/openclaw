@@ -1,8 +1,8 @@
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import type {
@@ -46,7 +46,7 @@ export function readPendingInputSourceInDatabase(
       .where("session_key", "=", input.sessionKey)
       .where("session_id", "=", input.sessionId)
       .where("idempotency_key", "=", input.idempotencyKey);
-    const pending = getAdmittedSqliteSchemaFacts(database.db)?.tables.has("session_pending_inputs")
+    const pending = hasSessionPendingInputsSchema(database.db)
       ? executeSqliteQueryTakeFirstSync(
           database.db,
           pendingQuery.select((eb) => eb.fn<number>("octet_length", ["message_json"]).as("bytes")),

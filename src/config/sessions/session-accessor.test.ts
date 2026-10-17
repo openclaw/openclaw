@@ -69,7 +69,6 @@ import {
   updateSessionLastRoute,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-compaction.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.test-support.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -1926,73 +1925,6 @@ describe("session accessor seam", () => {
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
     expect(updates).toEqual([]);
-  });
-
-  it.each([
-    {
-      name: "rejects a manual compact when session metadata changes after its snapshot",
-      sessionId: "88888888-8888-4888-8888-888888888888",
-      conflict: "metadata",
-    },
-    {
-      name: "preserves rows written after the manual compact snapshot",
-      sessionId: "55555555-5555-4555-8555-555555555555",
-      conflict: "transcript",
-    },
-  ] as const)("$name", async ({ sessionId, conflict }) => {
-    const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
-    const records = createManualCompactRecords(sessionId);
-    await upsertSessionEntryCore(
-      scope,
-      conflict === "metadata"
-        ? { sessionId, totalTokens: 30, totalTokensFresh: true, updatedAt: 100 }
-        : { sessionId, updatedAt: 1 },
-    );
-    await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
-
-    const expectedError =
-      conflict === "metadata"
-        ? "SQLite session state changed while preparing session.transcript.manual-compact"
-        : `SQLite transcript changed while preparing rewrite for ${sessionId}`;
-    await expect(
-      trimTranscriptForManualCompact(
-        scope,
-        (lines) => {
-          if (conflict === "metadata") {
-            replaceSessionEntrySync(scope, {
-              label: "concurrent metadata",
-              sessionId,
-              totalTokens: 40,
-              totalTokensFresh: true,
-              updatedAt: 200,
-            });
-          } else {
-            appendTranscriptEventSync(scope, {
-              type: "custom",
-              id: "late-append",
-              timestamp: "2026-06-19T12:00:09.000Z",
-            });
-          }
-          return lines.slice(0, 1);
-        },
-        conflict === "metadata" ? { nowMs: 500 } : undefined,
-      ),
-    ).rejects.toThrow(expectedError);
-
-    const remaining = (await loadTranscriptEvents(scope)) as Array<Record<string, unknown>>;
-    if (conflict === "metadata") {
-      expect(remaining).toEqual(records);
-      expect(loadSessionEntry(scope)).toMatchObject({
-        label: "concurrent metadata",
-        totalTokens: 40,
-        totalTokensFresh: true,
-        updatedAt: 200,
-      });
-    } else {
-      expect(remaining).toHaveLength(6);
-      expect(remaining.slice(0, 5)).toEqual(records);
-      expect(remaining[5]).toMatchObject({ id: "late-append" });
-    }
   });
 
   it("repairs a retained compaction boundary when its first kept entry was trimmed", async () => {

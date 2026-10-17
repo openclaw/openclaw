@@ -38,7 +38,7 @@ describe("AppSidebar outbox attention badges", () => {
     expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
   });
 
-  it("resolves agent-main aliases to one attention badge count", async () => {
+  it("keeps agent-main aliases in one agent-only roster row", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -61,15 +61,8 @@ describe("AppSidebar outbox attention badges", () => {
     sidebar.connected = true;
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(sidebar);
-    const badges = sidebar.querySelectorAll(
-      '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--attention',
-    );
-    expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent).toContain("3");
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--draft[aria-label="Unsent draft"]',
-      ),
-    ).not.toBeNull();
+    expect(sidebar.querySelectorAll('[data-agent-group="main"]')).toHaveLength(1);
+    expect(sidebar.querySelector('[data-session-key="agent:main:main"]')).toBeNull();
+    expect(sidebar.querySelector('[data-agent-group="main"] .session-row-badge')).toBeNull();
   });
 });

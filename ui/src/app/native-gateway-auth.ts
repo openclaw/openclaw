@@ -7,7 +7,7 @@ import {
   normalizeGatewayClientId,
   normalizeGatewayClientMode,
 } from "@openclaw/gateway-protocol/client-info";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -81,8 +81,7 @@ function readAuthorization(
     !mode ||
     typeof client.version !== "string" ||
     typeof client.platform !== "string" ||
-    !Array.isArray(result.scopes) ||
-    !result.scopes.every((scope): scope is string => typeof scope === "string") ||
+    !isStringArray(result.scopes) ||
     typeof device.id !== "string" ||
     typeof device.publicKey !== "string" ||
     typeof device.signature !== "string" ||

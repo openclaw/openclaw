@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -126,18 +127,39 @@ describe("chat pane session discussion", () => {
     expect(updateSidebarLayout).not.toHaveBeenCalled();
   });
 
-  it("keeps the reported external URL with the discussion panel", async () => {
+  it("publishes discussion availability and its external URL while retaining the panel", async () => {
     const openUrl = "https://clack.example/channels/c1";
     const { pane, state } = createDiscussionPane({
       info: { state: "open", embedUrl: "https://clack.example/embed/c1", openUrl },
     });
 
+    const panel = pane.buildSessionDiscussionPanel(state, SESSION_KEY);
+    const view = mountSolid(() => {
+      const discussion = projectOwner(pane.sessionDiscussion, (owner) => owner.snapshot);
+      const frame = createMemo(() => {
+        discussion.read();
+        return {
+          action: pane.resolveSessionDiscussionAction(),
+          panel: pane.buildSessionDiscussionPanel(state, SESSION_KEY),
+        };
+      });
+      return (
+        <>
+          <span>{frame().action?.label}</span>
+          <a href={frame().panel?.openUrl ?? undefined}>Discussion</a>
+        </>
+      );
+    });
+    expect(view.container.querySelector("span")?.textContent).toBe("");
     await pane.probeSessionDiscussion(SESSION_KEY);
-    pane
-      .buildSessionDiscussionPanel(state, SESSION_KEY)
-      ?.onStateChange(SESSION_KEY, "open", openUrl);
+    flush();
+    expect(view.container.querySelector("span")?.textContent).toBe("Show discussion");
 
-    expect(pane.buildSessionDiscussionPanel(state, SESSION_KEY)?.openUrl).toBe(openUrl);
+    panel?.onStateChange(SESSION_KEY, "open", openUrl);
+    expect(pane.buildSessionDiscussionPanel(state, SESSION_KEY)).toBe(panel);
+    flush();
+    expect(view.container.querySelector("a")?.href).toBe(openUrl);
+    view.unmount();
   });
 
   it("does not reload discussion info when the pane renders unchanged config twice", async () => {

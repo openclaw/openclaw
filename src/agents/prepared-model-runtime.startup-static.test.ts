@@ -82,6 +82,7 @@ const mocks = await vi.hoisted(async () => {
     getOAuthProviders: vi.fn(() => []),
   };
   const modelRegistry = {
+    getProviderMetadataOwners: () => undefined,
     fork: vi.fn((nextAuthStorage: unknown) => ({ authStorage: nextAuthStorage })),
     getAll: vi.fn(() => []),
     find: vi.fn<ModelRegistry["find"]>(() => undefined),

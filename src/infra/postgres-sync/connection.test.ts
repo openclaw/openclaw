@@ -40,7 +40,7 @@ function transportFixture(
   Object.assign(db, {
     port: port1,
     control,
-    worker: { terminate },
+    worker: { terminate, off: vi.fn() },
     requestId: 1,
     anchor,
     isOpen: true,

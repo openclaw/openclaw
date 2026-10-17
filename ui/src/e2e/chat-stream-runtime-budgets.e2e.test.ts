@@ -185,7 +185,6 @@ async function installRenderProbe(page: ChatFlowPage) {
       "create-chat-pane",
       "chat-page",
       "chat-page-retained-sessions",
-      "subscriptions-controller",
     ]);
     const classifyCaller = (frame: string): string => {
       const location = frame.match(/\/([^/\s?#]+)\.(js|ts)(?:\?[^\s]*)?:(\d{1,7}):(\d{1,7})\)?$/);

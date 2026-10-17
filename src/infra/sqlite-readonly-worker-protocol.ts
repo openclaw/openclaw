@@ -1,5 +1,6 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type {
@@ -125,10 +126,7 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true && "generation" in value && typeof value.generation === "string") ||
-    (value.ok === true &&
-      "warnings" in value &&
-      Array.isArray(value.warnings) &&
-      value.warnings.every((warning) => typeof warning === "string")) ||
+    (value.ok === true && "warnings" in value && isStringArray(value.warnings)) ||
     (value.ok === false && "message" in value && typeof value.message === "string")
   );
 }

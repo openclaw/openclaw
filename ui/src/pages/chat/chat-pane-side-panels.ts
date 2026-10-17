@@ -38,9 +38,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   protected subagentsShowRequest?: () => string | null | undefined;
   /** The control a background panel was opened from in a narrow pane; the region takes it once. */
   protected sideFocusOrigin?: () => HTMLElement | null;
-  protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
-    this.invalidate();
-  });
+  readonly sessionCompanionThreads = new ChatSessionCompanionThreads();
   protected readonly setSessionObserverVisibility = (visible: boolean) => {
     const state = this.state;
     if (state?.connected && state.client) {

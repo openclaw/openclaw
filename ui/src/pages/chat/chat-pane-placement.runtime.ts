@@ -25,7 +25,6 @@ export async function reclaimChatPanePlacement(params: {
   onReclaimingChange: (reclaimingKey: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
-  requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
   const action = resolveCloudWorkerStopAction(params.row.placement);
@@ -88,6 +87,5 @@ export async function reclaimChatPanePlacement(params: {
     }
   } finally {
     params.onReclaimingChange(null);
-    params.requestUpdate();
   }
 }

@@ -16,6 +16,10 @@ export type ChannelIngressMonitorLifecycle = ChannelIngressDispatchLifecycle & {
 
 export type ChannelIngressMonitorDeliveryResult = ChannelIngressDrainDispatchResult;
 
+export type ChannelIngressMonitorAdmissionResult<TResult> =
+  | { readonly kind: "ignored"; readonly queueResult?: undefined }
+  | { readonly kind: "durable"; readonly queueResult: TResult };
+
 type ChannelIngressMonitorInspectionContext =
   | { phase: "admission" }
   | { phase: "claim"; claimedId: string; claimedLaneKey: string | undefined };

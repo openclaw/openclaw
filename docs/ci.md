@@ -43,8 +43,11 @@ import graph.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
-Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
-[conformance job](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
+Storage-engine PRs, scheduled main runs, and manual CI validations include two hosted PostgreSQL 17
+[conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
+The infrastructure/state and integration groups run in parallel with separate
+databases and 30-minute budgets. Their combined inventory matches the local full
+suite; a failure in either shard leaves the other running and fails the aggregate gate.
 
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 

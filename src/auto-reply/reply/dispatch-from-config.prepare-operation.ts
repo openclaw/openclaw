@@ -173,6 +173,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           fastAbort.stoppedSubagents,
           fastAbort.rejectionReason,
           fastAbort.failedSubagents,
+          fastAbort.localModelMayStillBeFinishing,
         ),
       },
       reason: "fast_abort",

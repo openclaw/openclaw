@@ -46,7 +46,7 @@ it("preserves the direct read request, signal, and projected result", async () =
   await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
 });
 
-it.each(["archives", "corpus", "targets", "exact entries"] as const)(
+it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const)(
   "serializes Windows storage environments for %s requests",
   async (inventory) => {
     const stateDir = path.resolve("synthetic-state");
@@ -69,6 +69,9 @@ it.each(["archives", "corpus", "targets", "exact entries"] as const)(
             OPENCLAW_SUPERVISOR_MODE: "external",
           };
           switch (request.kind) {
+            case "session-row-facts":
+              expect(request.env).toEqual(expectedEnv);
+              return { kind: request.kind, rows: [] };
             case "session-exact-entries":
               expect(request.env).toEqual(expectedEnv);
               return { kind: request.kind, entries: [], lifecycleTimestamps: {} };
@@ -87,30 +90,39 @@ it.each(["archives", "corpus", "targets", "exact entries"] as const)(
         }),
       );
       const result =
-        inventory === "exact entries"
-          ? readers.readExactEntries({ env, sessionKeys: ["agent:main:main"] })
-          : inventory === "archives"
-            ? readers.readArchiveInventory({ agentId: "main", storePath, env, sessionIds: ["one"] })
-            : inventory === "targets"
-              ? readers.readMemorySessionTargets({
-                  params: { agentId: "main", storePath, env, sessionIds: ["one"] },
+        inventory === "row facts"
+          ? readers.readRowFacts({ env, sessionKeys: ["agent:main:main"] })
+          : inventory === "exact entries"
+            ? readers.readExactEntries({ env, sessionKeys: ["agent:main:main"] })
+            : inventory === "archives"
+              ? readers.readArchiveInventory({
+                  agentId: "main",
+                  storePath,
+                  env,
+                  sessionIds: ["one"],
                 })
-              : readers.readCorpusInventory({
-                  scope: {
-                    cfg: {},
-                    normalizedAgentId: "main",
-                    storePath,
-                    env,
-                    artifactDirs: [],
-                    isSharedFixedStore: false,
-                  },
-                  options: {},
-                  artifacts: [],
-                });
+              : inventory === "targets"
+                ? readers.readMemorySessionTargets({
+                    params: { agentId: "main", storePath, env, sessionIds: ["one"] },
+                  })
+                : readers.readCorpusInventory({
+                    scope: {
+                      cfg: {},
+                      normalizedAgentId: "main",
+                      storePath,
+                      env,
+                      artifactDirs: [],
+                      isSharedFixedStore: false,
+                    },
+                    options: {},
+                    artifacts: [],
+                  });
       await expect(result).resolves.toEqual(
-        inventory === "exact entries"
-          ? { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} }
-          : [],
+        inventory === "row facts"
+          ? { kind: "session-row-facts", rows: [] }
+          : inventory === "exact entries"
+            ? { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} }
+            : [],
       );
     } finally {
       Object.defineProperty(process, "platform", { value: platform });

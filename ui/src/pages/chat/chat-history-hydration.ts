@@ -50,6 +50,7 @@ import {
 } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { readChatHistoryCursor } from "./session-message-cache.ts";
 import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 import {
   hasVisibleStreamParts,
@@ -73,7 +74,6 @@ export async function hydrateChatHistory(
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
-  deltaCursor: string | undefined,
   inputRunIds: string[],
   requestKeyPrefix: string,
 ): Promise<ObservedChatHistoryResult | undefined> {
@@ -100,11 +100,18 @@ export async function hydrateChatHistory(
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  const request = (cursor?: string) =>
-    requestSharedHistory(
+  const requests = chatHistoryRequests(state);
+  const request = (cursor?: string) => {
+    const key = `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}`;
+    const load = requests.historyLoad;
+    // Keep pane-level coalescing aligned with the cursor actually sent.
+    if (load.phase === "in-flight") {
+      load.key = key;
+    }
+    return requestSharedHistory(
       sessions,
       client,
-      `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}`,
+      key,
       method,
       sessionKey,
       requestAgentId,
@@ -121,8 +128,8 @@ export async function hydrateChatHistory(
       cursor,
       inputRunIds,
     );
+  };
   try {
-    const requests = chatHistoryRequests(state);
     let admission = requests.subscriptionReady;
     while (admission) {
       const ready = await admission;
@@ -151,7 +158,8 @@ export async function hydrateChatHistory(
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
     setChatError(state, null);
-    let response = await request(deltaCursor);
+    // The cached transcript can finish hydrating while stream admission is pending.
+    let response = await request(readChatHistoryCursor(state));
     if (!isCurrent()) {
       return undefined;
     }

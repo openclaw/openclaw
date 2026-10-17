@@ -174,6 +174,7 @@ export function sessionPullRequestsForGateway(
   const pruneUnwatched = () => {
     const watched = new Set(watchedKeys());
     const requested = new Set(requestedKeys());
+    let removed = false;
     for (const [key, timer] of automaticRefreshTimers) {
       if (!requested.has(key)) {
         clearTimeout(timer);
@@ -193,7 +194,11 @@ export function sessionPullRequestsForGateway(
     for (const key of snapshots.keys()) {
       if (!watched.has(key)) {
         snapshots.delete(key);
+        removed = true;
       }
+    }
+    if (removed) {
+      notify();
     }
   };
 

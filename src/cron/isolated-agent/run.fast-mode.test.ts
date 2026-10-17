@@ -76,7 +76,7 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
 
   it("releases current invocation context without clearing an existing physical context", async () => {
     const sessionKey = "agent:default:cron:test";
-    const initialSessionEntry = { retained: true };
+    const initialSessionEntry = h.makeCronSessionEntry({ retained: true });
     const cronSession = h.makeCronSession({
       store: { [sessionKey]: initialSessionEntry },
       initialSessionEntry,

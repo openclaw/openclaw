@@ -49,7 +49,6 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
           accessToken: context.observerAccessToken,
           baseUrl: context.baseUrl,
           endpoint: `${roomPath}/${suffix}`,
-          fetchImpl: fetch,
           method: "GET",
         })
       ).body,

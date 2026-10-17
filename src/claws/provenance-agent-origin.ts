@@ -1,4 +1,5 @@
 /** Versioned ownership payload for agent state that predates Claw enrollment. */
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 
 export const CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION = "openclaw.clawInstallRecord.v3" as const;
 
@@ -16,11 +17,7 @@ function isAdoptedAgentPaths(value: unknown): value is AdoptedAgentPaths {
   if (!("origin" in value) || !("paths" in value)) {
     return false;
   }
-  return (
-    value.origin === "adopted" &&
-    Array.isArray(value.paths) &&
-    value.paths.every((path) => typeof path === "string")
-  );
+  return value.origin === "adopted" && isStringArray(value.paths);
 }
 
 export function decodeClawAgentOwnership(
@@ -43,7 +40,7 @@ export function decodeClawAgentOwnership(
   ) {
     throw new Error(`Unsupported Claw install record schema ${JSON.stringify(schemaVersion)}.`);
   }
-  if (!Array.isArray(parsed) || !parsed.every((path) => typeof path === "string")) {
+  if (!isStringArray(parsed)) {
     throw new Error("Created Claw install record has invalid agent ownership data.");
   }
   return { origin: "created", paths: parsed };

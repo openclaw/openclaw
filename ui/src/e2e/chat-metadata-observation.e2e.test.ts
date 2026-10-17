@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ModelCatalogEntry } from "../api/types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -42,13 +43,19 @@ function sessionsResponse() {
 }
 
 async function expectCatalog(pane: Locator, name: string) {
+  // Opening the picker applies cached data and could conceal a missed publication.
   await expect
     .poll(() =>
-      pane
-        .locator('[data-chat-model-option="example/model"]:not([data-chat-model-runtime])')
-        .textContent(),
+      pane.evaluate(
+        (element) =>
+          (
+            element as HTMLElement & { state: { chatModelCatalog: ModelCatalogEntry[] } }
+          ).state.chatModelCatalog.find(
+            (entry) => entry.provider === "example" && entry.id === "model",
+          )?.name,
+      ),
     )
-    .toContain(name);
+    .toBe(name);
 }
 
 async function requestCounts(gateway: MockGatewayControls) {

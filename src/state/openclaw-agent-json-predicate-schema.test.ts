@@ -237,6 +237,7 @@ describe("agent JSON predicate migration", () => {
               [
                 "schema_meta",
                 "session_nodes",
+                "session_reactions",
                 "session_windows",
                 "transcript_events",
                 "context_engine_turn_outbox",

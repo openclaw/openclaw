@@ -12,6 +12,7 @@ import { subscribePluginSessionsChanged } from "../plugins/services.test-support
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
@@ -141,14 +142,20 @@ async function invokeSessionMutation({
   await expectDefined(
     sessionsHandlers[method],
     "sessionsHandlers[method] test invariant",
-  )({
-    req: {} as never,
-    params,
-    respond,
-    context: requestContext,
-    client: null,
-    isWebchatConnect: () => false,
-  });
+  )(
+    bindInProcessRequestMutationAuthority(
+      {
+        req: { type: "req", id: method, method, params },
+        params,
+        respond,
+        context: requestContext,
+        client: null,
+        isWebchatConnect: () => false,
+      },
+      undefined,
+      undefined,
+    ),
+  );
   await flushPendingSessionsChangedEvents(requestContext);
   return {
     broadcastToConnIds,

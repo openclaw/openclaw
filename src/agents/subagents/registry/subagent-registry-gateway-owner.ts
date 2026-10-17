@@ -143,6 +143,7 @@ async function restoreSubagentCompletionSource(
           })
         ) {
           deferredCompletionSources.delete(runtimeKey);
+          return;
         }
       }
     }
@@ -187,6 +188,8 @@ async function restoreSubagentCompletionSource(
     continuation = await withPluginRuntimeGatewayRequestScope(
       {
         client: createSyntheticPluginRuntimeClient({
+          // Retried private inputs retain the sender fields included in their accepted hash.
+          authenticatedUserProfile: restored.authenticatedUserProfile,
           operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
           operatorRunAuthority: restored.authority,
           scopes: [...restored.authority.scopes],

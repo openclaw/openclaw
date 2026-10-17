@@ -431,7 +431,7 @@ function SessionDiffContent(props: SessionDiffProps) {
           >
             {([direction, label]) => (
               <button
-                class={direction === "all" ? "session-diff__gap-count" : undefined}
+                class={{ "session-diff__gap-count": direction === "all" }}
                 type="button"
                 aria-label={t(`chat.sessionDiff.${label}`, {
                   count: String(direction === "all" ? gap()!.count : chunkCount()),

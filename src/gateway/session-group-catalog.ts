@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -23,8 +23,7 @@ import type {
 function isCatalogAdmission(value: unknown): value is SessionGroupCatalogAdmission {
   return (
     isRecord(value) &&
-    Array.isArray(value.names) &&
-    value.names.every((name) => typeof name === "string") &&
+    isStringArray(value.names) &&
     (value.groups === undefined ||
       (Array.isArray(value.groups) &&
         value.groups.every(

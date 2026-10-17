@@ -1,18 +1,21 @@
 import type { Selectable } from "kysely";
-import { jsonArrayFrom } from "kysely/helpers/sqlite";
+import { jsonArrayFrom } from "../../infra/database-engine/json-values.js";
+import {
+  getPostgresPhysicalFacts,
+  type PostgresPhysicalFacts,
+} from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { parseSqliteTableDefinition } from "../../infra/sqlite-schema-contract-assembly.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { readTableColumns, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
 import { workerPlacementMoveFromRow } from "./placement-move-intent.js";
@@ -63,23 +66,22 @@ type ProjectionSchema = {
   moves?: { machineClass: boolean; os: boolean; abandonSource: boolean };
 };
 
-const projectionSchemas = new WeakMap<SqliteSchemaFacts, ProjectionSchema>();
+const projectionSchemas = new WeakMap<
+  SqliteSchemaFacts | PostgresPhysicalFacts,
+  ProjectionSchema
+>();
 const PROJECTION_BATCH_SIZE = 250;
 
 function readProjectionSchema(db: EngineConnection): ProjectionSchema {
-  const schema = getAdmittedSqliteSchemaFacts(db);
+  const schema = getPostgresPhysicalFacts(db) ?? getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Worker placement projection requires admitted schema facts");
   }
   let projectionSchema = projectionSchemas.get(schema);
   if (!projectionSchema) {
-    const pendingColumns = parseSqliteTableDefinition(
-      schema.tableSql.get("worker_workspace_pending_results") ?? null,
-      "worker_workspace_pending_results",
-    ).columns;
-    const moveSql = schema.tableSql.get("worker_session_placement_moves");
-    const moveColumns = moveSql
-      ? parseSqliteTableDefinition(moveSql, "worker_session_placement_moves").columns
+    const pendingColumns = readTableColumns(db, "worker_workspace_pending_results");
+    const moveColumns = tableExists(db, "worker_session_placement_moves")
+      ? readTableColumns(db, "worker_session_placement_moves")
       : undefined;
     projectionSchema = {
       repositoryWorkspace: pendingColumns.has("repository_workspace_id"),
@@ -212,11 +214,13 @@ function readProjectionRows(
   return executeSqliteQuerySync(
     db,
     query.selectNoFrom((eb) => [
-      jsonArrayFrom(placements).$castTo<string>().as("placements"),
-      jsonArrayFrom(pendingResults).$castTo<string>().as("pendingResults"),
-      jsonArrayFrom(journals).$castTo<string>().as("journals"),
-      schema.moves ? jsonArrayFrom(moves).$castTo<string>().as("moves") : eb.val("[]").as("moves"),
-      jsonArrayFrom(environments).$castTo<string>().as("environments"),
+      jsonArrayFrom(db, placements, []).$castTo<string>().as("placements"),
+      jsonArrayFrom(db, pendingResults, []).$castTo<string>().as("pendingResults"),
+      jsonArrayFrom(db, journals, []).$castTo<string>().as("journals"),
+      schema.moves
+        ? jsonArrayFrom(db, moves, []).$castTo<string>().as("moves")
+        : eb.val("[]").as("moves"),
+      jsonArrayFrom(db, environments, []).$castTo<string>().as("environments"),
     ]),
   ).rows[0]!;
 }

@@ -24,6 +24,7 @@ type TestSessionEntry = {
 };
 
 type EmbeddedAgentArgs = {
+  config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
@@ -800,7 +801,11 @@ describe("generateVoiceResponse", () => {
     expect(sessionStore).toEqual({});
   });
 
-  it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
+  it.each([
+    { policy: "finite allowlist", tools: { allow: ["web_search"] } },
+    { policy: "empty configured allowlist", tools: { allow: [] } },
+    { policy: "allowlist with a deny", tools: { allow: ["web_search", "read"], deny: ["read"] } },
+  ])("keeps the routed agent's $policy in conversation config across turns", async ({ tools }) => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([
       { text: '{"spoken":"No tools needed."}' },
     ]);
@@ -808,13 +813,13 @@ describe("generateVoiceResponse", () => {
       agents: {
         entries: {
           voice: {
-            tools: { allow: [] },
+            tools,
           },
         },
       },
-    } as OpenClawConfig;
+    } satisfies OpenClawConfig;
 
-    const result = await generateVoiceResponse({
+    const params = {
       voiceConfig: normalizeVoiceCallConfig({
         agentId: "main",
         responseModel: "ollama/qwen2.5:1.5b",
@@ -828,12 +833,20 @@ describe("generateVoiceResponse", () => {
       senderIsOwner: undefined,
       transcript: [],
       userMessage: "hello there",
-    });
+    } satisfies Parameters<typeof generateVoiceResponse>[0];
 
-    expect(result.text).toBe("No tools needed.");
-    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
-    expect(args.agentId).toBe("voice");
-    expect(args.toolsAllow).toStrictEqual([]);
-    expect(args.sessionKey).toBe("agent:voice:voice:15550001111");
+    for (const userMessage of ["hello there", "continue"]) {
+      const result = await generateVoiceResponse({ ...params, userMessage });
+      expect(result.text).toBe("No tools needed.");
+    }
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    for (const [args] of runEmbeddedAgent.mock.calls) {
+      expect(args.agentId).toBe("voice");
+      expect(args.config).toBe(coreConfig);
+      // Runtime toolsAllow has turn lifetime, even when copied from persistent config.
+      expect(args.toolsAllow).toBeUndefined();
+      expect(args.sessionKey).toBe("agent:voice:voice:15550001111");
+    }
   });
 });

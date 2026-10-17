@@ -102,6 +102,17 @@ subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
 
+Worker admission checks current authority after lease cleanup and before opening
+the native agent database. A refusal at that boundary releases its unopened lease
+without revoking an earlier clean-close seal. Once native opening begins, failed
+or uncertain cleanup still invalidates proof. Shutdown cancellation alone is not
+evidence that a previously sealed database needs another full scan.
+
+Existing-file integrity and schema preparation may be shared by current callers.
+Every preparation effect still requires a live caller; cancellation cannot leave
+authority behind after its last caller departs. A successor joins any pending
+initial native open before reusing preparation or replacing a refused worker.
+
 A matching seal supplies the previously admitted facts without copying or
 inspecting the database again for startup state snapshots, readiness, schema
 preflight, or integrity verification. It also avoids a post-ready verification
@@ -143,7 +154,15 @@ After an agent schema migration, the schema owner registers the database while
 its verified connection is still open. Later opens in the same Doctor process
 can reuse that admission instead of repeating its full integrity scan. Migration
 integrity coverage follows the policy below; recovery backups and restart seal
-requirements remain unchanged.
+requirements remain unchanged. Standalone Doctor's version prelude revokes prior agent proof
+before checking the live source, then preserves that receipt through its
+committed version and additive schema phases. Only a full source verification
+can satisfy a later runtime full-integrity gate; a quick migration still needs
+that full check. Updater backups verify private images and do not supply a live
+source receipt; inline quick migrations also retain the later full-check requirement.
+A separate Doctor invocation continues to inspect current bytes. These are
+candidate-side changes; the installed updater still runs first
+under its own version's behavior.
 
 | When                                                   | Check                                                                                                                                                                                      |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -160,6 +179,13 @@ An index/table mismatch outside the declared migration scope therefore needs
 migration through the whole-database quick check, and a quick result never
 publishes full-verification facts. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
+
+Canonical index repair checks each rebuilt table and its indexes once after
+DDL, instead of scanning the whole database again. Its source integrity check
+still follows the policy above, including a full scan when requested, and the
+migration finalizer keeps its data and foreign-key checks. This changes
+candidate-side Doctor and schema preparation; the installed updater still runs
+first under its own version's behavior.
 
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
@@ -182,6 +208,11 @@ clean-close seal requirements are unchanged; a deferred store is never
 admitted for writes merely because the foreground wait expired.
 Chat metadata and model listings refresh when an agent finishes admission, so
 they include newly recovered stores.
+The shared HTTP error handler maps pending agent admission to `503 Service Unavailable`
+with `Retry-After: 1` and `Cache-Control: no-store`, rather than an internal-error
+response. Retry the request after that delay; the Gateway does not replay it or
+hold it open while inspection finishes. Database inspection failures and ownership
+mismatches remain failures requiring operator attention.
 Update canaries retain foreground inspection and strict database readiness because
 they do not activate background agent preparation.
 
@@ -210,6 +241,12 @@ runtime proof. A later last writer can certify that verification after a complet
 checkpoint and native close; failed close or uncertain storage errors revoke both.
 The first open in a new process still requires matching clean-close metadata or
 the admission gate. Idle close within the same process preserves admitted facts.
+Opening an existing agent file and its initial integrity and schema preparation
+belong to the physical owner. Concurrent callers join that preparation;
+cancelling one caller ends only its wait. Each caller must still pass its own
+authority checks before using the prepared database. First-use creation retains
+its caller's creation claim, and native worker loss still invalidates the old
+generation's authority.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
@@ -371,13 +408,22 @@ It does not discard committed WAL pages, repair the source, or change plan ident
 Snapshot debug telemetry reports operation and owner,
 main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
-Verified snapshot publication hashes the private staged image once after validation
-and verifies the published file again after transfer. Source and output integrity
-checks, durable backup publication, and recovery ownership remain unchanged.
+Verified snapshot publication retains the original image digest through an owned
+same-file transfer and verifies the final published bytes. Distinct physical copies
+also receive their own byte comparison before publication. Moving a verified
+snapshot into the original capture's payload directory preserves its digest without
+rehashing the rename. Source and output integrity checks, durable backup publication,
+and recovery ownership remain unchanged.
 Doctor's legacy transcript-label inspection uses stored navigation metadata to skip
 expanding compressed events outside user and assistant messages. A detected repair
 still reads the complete exact transcript and revalidates it before writing;
 plaintext and older transcript stores retain their existing inspection behavior.
+
+Standalone Doctor's original-state capture reuses the maintenance owner's exclusive
+SQLite source custody instead of hashing live write generations before, after, and
+at sealing. The captured image retains WAL recovery, integrity, and digest checks.
+This manual recovery evidence never authorizes automatic rollback. Generic updater
+rollback backups and PostgreSQL stores retain their source-generation checks.
 
 Update validation reuses the prepared rehearsal databases for read-only checks.
 The complete updater isolation markers and physical containment of the database
@@ -448,6 +494,12 @@ Doctor also shares one private shared-state snapshot across a synchronous
 workspace-alias check. The next check reads fresh state, so committed repairs are
 visible without taking a separate snapshot for every configured workspace.
 
+Destructive Doctor session migrations refuse when the shared-state database is
+missing but its SQLite sidecars remain. Restore the matching database before
+retrying; keep those sidecars intact. This refusal happens before importing or
+archiving legacy session sources, including stores with canonical agent paths
+that need no registry lookup.
+
 Memory search and maintenance managers retain the per-agent publication worker
 and its admitted schema, physical identity, and index facts. Acquisition does not
 open a second main-thread reader. Worker lifetime and accepted writes drain with
@@ -489,9 +541,34 @@ Native first-run state receives an empty deletion journal when the shared
 catalog contains only native bootstrap tables and no existing agent history.
 If an older installation omitted that journal, Doctor can migrate configured
 agent stores whose integrity, ownership, and contents prove they contain only
-initial schema and index metadata. Stores with user data, unknown contents, or
-previous recovery holds remain held until their deletion history is resolved.
-Doctor reports failure when a held store prevents a required agent from starting.
+initial schema and index metadata.
+
+`doctor --fix` also automatically restores configured populated stores from the
+published missing-journal regression. This requires a receipt that the whole
+journal table was absent at reconstruction, plus the agent database's original
+producer stamp: matching owner, equal positive creation/update timestamps, and
+matching SQLite and metadata schema versions for these affected builds:
+
+- Agent schema 24: `2026.9.7`, `2026.9.8`, `2026.9.9`, `2026.9.33`,
+  `2026.10.1-beta.1`, `2026.10.1-beta.2`, and `2026.10.1`–`2026.10.4`.
+- Agent schema 25: `2026.10.5-beta.1`–`2026.10.5-beta.4`.
+- Agent schema 27: `2026.10.10-beta.1`.
+
+This includes holds recorded by an earlier Doctor. Before restoration, Doctor
+saves and verifies full SQLite backups of shared state (including reconstruction
+receipts and run reports) and the selected agent databases, including their WAL
+contents. Its warning names each restored store and backup path. The existing
+agent restoration owner revalidates the selected configured paths before
+releasing their holds; normal migrations then prepare them for Gateway startup.
+Repeating Doctor after successful restoration does not restore or back up these stores again.
+
+This policy accepts the small risk of resurrecting data from a lost pending
+deletion when the entire journal disappeared. A missing-table observation is
+not proof that no journal ever existed. Present-but-incomplete journals,
+unrecognized versions, rewritten producer stamps, unconfigured stores, and
+stores with current deletion records retain their holds and explicit recovery
+guidance. Doctor reports failure when a remaining hold prevents a required agent
+from starting.
 
 Native integrity-worker errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while integrity checks distinguish proven corruption from transient failures. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
 
@@ -667,15 +744,25 @@ in-place writes; SQLite's integrity checks still apply.
 Doctor reports existing btrfs stores without NOCOW. Explicit `openclaw doctor --fix`
 can rewrite them under its stopped-Gateway maintenance owner. The repair needs
 `lsattr`, `chattr`, `fuser`, `getfacl`, `setfacl`, GNU `mv` with `--exchange` and `--no-copy`, and
-free space of at least twice the uncompressed store directory size. It takes
-verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
-preserves ownership, modes, and access/default ACLs, checks copy size and
-`PRAGMA quick_check`, then atomically exchanges directories.
-Before inventory or copying, Doctor checks `fuser` against a known open file and
-tries a scratch directory exchange in the store's parent, once per filesystem.
-The kernel and filesystem must support `RENAME_EXCHANGE`; unsupported hosts
-leave stores in place with a warning. Doctor checks for open store files again
-immediately before the real exchange.
+free space of at least twice the SQLite file size. It sets NOCOW on the existing
+directory for future files, takes verified WAL-aware SQLite backups, then streams
+byte-identical copies of only the selected database and its `-wal`, `-shm`, and
+`-journal` files into a private NOCOW staging directory. Ownership, modes, and
+access ACLs are preserved in a batch. The directory's default ACLs and unrelated
+files or subdirectories, including harness homes and migration backups, stay in
+place. Copy hashes are checked before atomic file exchanges.
+
+Before copying, Doctor checks `fuser` against a known open file and tries a scratch
+file exchange in the store's parent, once per filesystem. The kernel and
+filesystem must support `RENAME_EXCHANGE`; unsupported hosts leave stores in
+place with a warning. Doctor checks for open SQLite files again immediately
+before exchanging them. Byte-identical copies preserve a valid database family
+even if the repair stops between file exchanges.
+
+Doctor reports backup, copy, and exchange progress. On the next repair, it removes
+uninstalled copies from its identity-marked staging directories, retains any
+exchanged originals, and skips files that already have NOCOW. Unmarked backups
+from older or unknown operations are never deleted automatically.
 
 The official Debian bookworm Docker image cannot perform this optional repair:
 its coreutils 9.1 `mv` lacks `--exchange`/`--no-copy`, and it does not include
@@ -684,14 +771,12 @@ A derived image needs those tools and an exchange-capable GNU `mv`, as well as
 kernel/filesystem support on the mounted state volume. Updates still proceed
 with the existing stores.
 
-After publication, Doctor re-records the relocated identity of any recorded migration recovery
-original and destination database it rewrites, so `update cleanup` eligibility
-survives the rewrite; a copy that no longer matches the recorded content keeps
-its original record and stays protected.
-Symbolic links retain their exact link text and ownership without following targets (including dangling links), and empty regular files are preserved.
-The report names the retained original directory and the standalone backups.
-Keep them until the updated Gateway has been verified; do not overwrite newer
-runtime state with an old copy.
+After publication, Doctor re-records the identity of each destination database
+it rewrites so `update cleanup` eligibility survives the rewrite. Recorded
+migration recovery originals are untouched. The report names the directory
+holding the original SQLite files and standalone WAL-aware snapshots. Keep it
+until the updated Gateway has been verified; do not overwrite newer runtime
+state with an old copy.
 
 During a managed update (`OPENCLAW_UPDATE_IN_PROGRESS` is truthy), Doctor still
 reports stores without NOCOW, but `--fix`/`--repair` defers the rewrite unless the

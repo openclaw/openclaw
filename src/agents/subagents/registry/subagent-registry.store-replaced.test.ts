@@ -590,7 +590,7 @@ it.each([false, true])(
       }
       recoveryWarn.mockClear();
       await restart();
-      expect(recoveryWarn).toHaveBeenCalledTimes(entries.length);
+      expect(recoveryWarn).toHaveBeenCalledTimes(failWrite ? 1 : 0);
       if (failWrite) {
         const unsettled = [...loadSubagentRegistryFromSqlite().values()].filter(
           (entry) => !entry.suppressCompletionDelivery,

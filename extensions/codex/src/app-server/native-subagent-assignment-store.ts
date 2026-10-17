@@ -9,6 +9,7 @@ import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-r
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
+  CodexAppServerThreadBinding,
   CodexBindingAuthority,
 } from "./session-binding.js";
 
@@ -29,6 +30,7 @@ export function createNativeSubagentSessionAuthority(
 
 export function createNativeSubagentAssignmentStore(params: {
   bindingStore: CodexAppServerBindingStore;
+  readBinding: () => CodexAppServerThreadBinding | undefined;
   identity: CodexAppServerBindingIdentity;
   owner: CodexNativeSubagentHistoryOwner;
   assertLifecycleCurrent?: () => void;
@@ -38,7 +40,7 @@ export function createNativeSubagentAssignmentStore(params: {
   const { bindingStore, identity, owner } = params;
   const assertCurrent = () => {
     params.assertLifecycleCurrent?.();
-    const binding = bindingStore.read(identity);
+    const binding = params.readBinding();
     if (!binding || !matchesCodexNativeSubagentSubmissionBinding(binding, owner)) {
       throw new Error("Native assignment binding is no longer current.");
     }
@@ -61,14 +63,15 @@ export function createNativeSubagentAssignmentStore(params: {
         identity,
         { kind: "record-native-subagent-assignment", owner, assignment },
         () => {
-          assertCurrent();
+          // The binding mutation compares its own row; this guard owns source custody only.
+          params.assertLifecycleCurrent?.();
           assertSourceCurrent();
         },
         params.authority,
       ),
     consume: async (assignment, assertSourceCurrent, undelivered) => {
       const assertRetirementCurrent = () => {
-        assertCurrent();
+        params.assertLifecycleCurrent?.();
         assertSourceCurrent();
       };
       const applied = await bindingStore.mutate(
@@ -130,6 +133,7 @@ export function createNativeSubagentAssignmentStore(params: {
 
 export function createNativeSubagentSubmissionStore(params: {
   bindingStore: CodexAppServerBindingStore;
+  readBinding: () => CodexAppServerThreadBinding | undefined;
   identity: CodexAppServerBindingIdentity;
   owner: CodexNativeSubagentHistoryOwner;
   assertLifecycleCurrentAsync: () => Promise<void>;
@@ -137,7 +141,7 @@ export function createNativeSubagentSubmissionStore(params: {
 }): CodexNativeSubagentSubmissionStore {
   const { bindingStore, identity, owner } = params;
   const assertCurrent = () => {
-    const current = bindingStore.read(identity);
+    const current = params.readBinding();
     if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, owner)) {
       throw new Error("Native submission binding is no longer current.");
     }

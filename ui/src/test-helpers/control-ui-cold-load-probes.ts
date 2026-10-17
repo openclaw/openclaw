@@ -310,8 +310,8 @@ function installColdLoadProbes(
         owner.hostElement === host &&
         "isConnected" in owner &&
         typeof owner.isConnected === "boolean" &&
-        "requestUpdate" in owner &&
-        typeof owner.requestUpdate === "function" &&
+        "invalidate" in owner &&
+        typeof owner.invalidate === "function" &&
         "prepareRender" in owner &&
         typeof owner.prepareRender === "function" &&
         "commitRender" in owner &&
@@ -545,12 +545,12 @@ function installColdLoadProbes(
       }
       if (solidSidebarOwner) {
         const owner = solidSidebarOwner;
-        for (const method of ["requestUpdate", "prepareRender", "commitRender"] as const) {
+        for (const method of ["invalidate", "prepareRender", "commitRender"] as const) {
           const original = owner[method];
           sidebarLifecycleOriginals.set(method, original);
           owner[method] = function (this: ProbeInit.SolidSidebarProbeOwner) {
             const connected = this.isConnected;
-            if (method === "requestUpdate" && connected) {
+            if (method === "invalidate" && connected) {
               const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
               const key = `${liveKind} :: ${stack}`;
               if (sidebarOwnerStacks.has(key) || sidebarOwnerStacks.size < 100) {

@@ -1,7 +1,7 @@
 .sidebar-community {
   flex: none;
   border-block-start: 1px solid var(--border);
-  padding: 0 var(--space-2) var(--space-1);
+  padding: var(--space-1) var(--space-2);
 }
 
 .sidebar-community__entry {

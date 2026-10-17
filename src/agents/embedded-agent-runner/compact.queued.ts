@@ -43,10 +43,12 @@ import {
   projectQueuedCompactionSessionTarget,
   executeQueuedContextEngineCompaction,
   runPrimaryNativeCompactionInLanes,
-  type QueuedCompactionHostOptions,
   withQueuedCompactionCancellationResult,
 } from "./compact.queued-execution.js";
-import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionParams,
+  QueuedCompactionHostOptions,
+} from "./compact.types.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionContextTokenBudget,
@@ -149,20 +151,24 @@ export async function compactEmbeddedAgentSession(
     const contextEngineSessionKey =
       normalizeOptionalString(params.sessionKey) ??
       normalizeOptionalString(params.sessionTarget?.sessionKey);
-    const runtimeTarget = await resolveAgentRunSessionTarget({
-      ...params,
-      missingSessionKey: "resolve-existing",
-    });
+    const runtimeTarget =
+      host.preparedSession?.sessionTarget ??
+      (await resolveAgentRunSessionTarget({
+        ...params,
+        missingSessionKey: "resolve-existing",
+      }));
     const releaseForeground =
       params.trigger === "manual"
         ? await beginForegroundSessionMaintenance(runtimeTarget.sessionKey)
         : undefined;
     try {
       // Resolve the storage address first, then freeze its owner before runtime/plugin awaits.
-      const entry = await readSessionEntryReadOnlyInWorker(
-        { ...runtimeTarget, readConsistency: "latest" },
-        () => assertQueuedCompactionPreparationActive(params, host),
-      );
+      const entry =
+        host.preparedSession?.entry ??
+        (await readSessionEntryReadOnlyInWorker(
+          { ...runtimeTarget, readConsistency: "latest" },
+          () => assertQueuedCompactionPreparationActive(params, host),
+        ));
       assertQueuedCompactionPreparationActive(params, host);
       const expectedEntry = {
         sessionId: runtimeTarget.sessionId,

@@ -1,12 +1,9 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import {
-  SessionsGoalClearParamsSchema,
-  SessionsGoalUpdateParamsSchema,
-  type SessionsGoalClearParams,
-  type SessionsGoalMutationResult,
-  type SessionsGoalUpdateParams,
+import type {
+  SessionsGoalClearParams,
+  SessionsGoalMutationResult,
+  SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,6 +15,10 @@ import {
   goalOperationStorageGeneration,
 } from "../../lib/chat/goal-operation-storage.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import {
+  isSessionsGoalClearParams,
+  isSessionsGoalUpdateParams,
+} from "../../lib/protocol-validators.generated/session-input.js";
 import {
   scopedAgentIdForSession,
   scopedAgentListParamsForSession,
@@ -109,15 +110,15 @@ function goalOperationTarget(host: ChatHost) {
       } catch {
         saved = "invalid";
       }
-      const schema =
+      const validate =
         isRecord(saved) && "action" in saved
-          ? SessionsGoalUpdateParamsSchema
-          : SessionsGoalClearParamsSchema;
+          ? isSessionsGoalUpdateParams
+          : isSessionsGoalClearParams;
       operation =
         saved === "expired"
           ? { retired: "expired", pending: false }
           : isRecord(saved) &&
-              Value.Check(schema, saved) &&
+              validate(saved) &&
               saved.sessionKey === sessionKey &&
               saved.agentId === agentId &&
               saved.sessionId === sessionId
@@ -385,9 +386,9 @@ async function runGoalOperation(
             : { ...identity, action: action.action },
       pending: false,
     };
-    const schema =
-      action.action === "clear" ? SessionsGoalClearParamsSchema : SessionsGoalUpdateParamsSchema;
-    if (!Value.Check(schema, operation.params)) {
+    const validate =
+      action.action === "clear" ? isSessionsGoalClearParams : isSessionsGoalUpdateParams;
+    if (!validate(operation.params)) {
       return rejectGoalOperation(host, t("chat.goals.invalidRequest"));
     }
     try {

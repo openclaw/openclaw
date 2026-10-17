@@ -309,11 +309,11 @@ describe("Git runtime promotion", () => {
       if (phase === "prepare") {
         await fs.rename(path.join(root, "packages"), outside);
         await fs.symlink(outside, path.join(root, "packages"), "junction");
-        const before = await fs.readdir(outside, { recursive: true });
+        const before = (await fs.readdir(outside, { recursive: true })).toSorted();
         await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
           "symbolic link",
         );
-        expect(await fs.readdir(outside, { recursive: true })).toEqual(before);
+        expect((await fs.readdir(outside, { recursive: true })).toSorted()).toEqual(before);
         // Restore the fixture's physical depth before resolving its relative dependency links.
         await fs.unlink(path.join(root, "packages"));
         await fs.rename(outside, path.join(root, "packages"));

@@ -78,9 +78,7 @@ export async function prepareSessionsSendCommunication(params: {
 }) {
   const message = params.message;
   const dispatchMessage = params.dispatchMessage ?? message;
-  const inputProvenance = params.inputProvenance
-    ? structuredClone(params.inputProvenance)
-    : undefined;
+  const inputProvenance = params.inputProvenance;
   const targetAgentId = params.target.agentId;
   const targetSessionKey = params.target.sessionKey;
   const targetsThread = Boolean(resolveSessionThreadInfo(targetSessionKey).threadId);
@@ -503,8 +501,10 @@ export async function prepareSessionsSendCommunication(params: {
         throw new Error("Communication approval cannot be redirected to another session.");
       }
 
+      const runId = request.params.idempotencyKey;
+      const hasRunId = typeof runId === "string";
       const resume = readInProcessSubagentResume(request);
-      if (ownedTask && resume && typeof request.params.idempotencyKey === "string") {
+      if (ownedTask && resume && hasRunId) {
         if (
           resume.childSessionKey !== targetSessionKey ||
           resume.childSessionId !== target[0]!.entry?.sessionId ||
@@ -513,7 +513,7 @@ export async function prepareSessionsSendCommunication(params: {
         ) {
           throw new Error("Task resume differs from the captured communication owner.");
         }
-        resumedTask = { resume, runId: request.params.idempotencyKey };
+        resumedTask = { resume, runId };
       }
       const endpoint = target[0]!;
       if (
@@ -528,12 +528,12 @@ export async function prepareSessionsSendCommunication(params: {
         expectedExistingSessionId: endpoint.entry.sessionId,
         expectedExistingSessionLifecycleRevision: endpoint.entry.lifecycleRevision ?? null,
       };
-      if (context && typeof request.params.idempotencyKey === "string") {
+      if (context && hasRunId) {
         input = bindInProcessSessionRun(input, {
           sessionKey: targetSessionKey,
           sessionId: endpoint.entry.sessionId,
           lifecycleRevision: endpoint.entry.lifecycleRevision ?? null,
-          runId: request.params.idempotencyKey,
+          runId,
         });
       }
       const expectedInput = structuredClone(input);
@@ -571,14 +571,14 @@ export async function prepareSessionsSendCommunication(params: {
         !ownedTask &&
         !resume &&
         sender.entry &&
-        typeof request.params.idempotencyKey === "string" &&
+        hasRunId &&
         inputProvenance?.sourceTool === "sessions_send"
       ) {
         return withSessionSendDelivery(
           {
             delivery: {
               version: 1,
-              runId: request.params.idempotencyKey,
+              runId,
               source: {
                 agentId: sender.agentId,
                 sessionKey: sender.sessionKey,

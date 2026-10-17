@@ -155,7 +155,7 @@ export type SessionsSendStart =
       steeredRunId?: string;
       a2aSessionKey?: string;
     }
-  | { ok: false; result: ReturnType<typeof jsonResult> };
+  | { ok: false; result: ReturnType<typeof jsonResult<Record<string, unknown>>> };
 
 /** Decide steering before preparing custody for a new turn. */
 export async function trySessionsSendActiveRunDelivery(

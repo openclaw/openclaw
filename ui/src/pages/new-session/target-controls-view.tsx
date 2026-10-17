@@ -321,26 +321,41 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
           ) : (
             <WhereChip params={whereParams()} />
           )}
-          {props.params.place.hostedEnvironment ? (
-            <span
-              class="new-session-page__select new-session-page__hosted-workspace"
-              title={t("newSession.hostedHint")}
-            >
-              {t("newSession.hostedWorkspace")}
-            </span>
-          ) : view().nativeTerminal && props.params.place.terminalOnNode ? (
-            <label class="new-session-page__select new-session-page__menu-field">
-              <span>{t("newSession.terminalNodeFolder")}</span>
-              <input
-                aria-label={t("newSession.terminalNodeFolder")}
-                ref={folderValue}
-                disabled={props.params.submitting}
-                onInput={(event) => props.params.place.applyFolder(event.currentTarget.value)}
-              />
-            </label>
-          ) : (
-            <ProjectChip params={projectParams()} focus={view().browser.projectFocus} />
-          )}
+          <div
+            class={[
+              "new-session-page__workspace",
+              {
+                "new-session-page__workspace--checkout":
+                  props.params.place.checkoutVisible &&
+                  !(view().nativeTerminal && props.params.place.terminalOnNode),
+              },
+            ]}
+          >
+            {props.params.place.hostedEnvironment ? (
+              <span
+                class="new-session-page__select new-session-page__hosted-workspace"
+                title={t("newSession.hostedHint")}
+              >
+                {t("newSession.hostedWorkspace")}
+              </span>
+            ) : view().nativeTerminal && props.params.place.terminalOnNode ? (
+              <label class="new-session-page__select new-session-page__menu-field">
+                <span>{t("newSession.terminalNodeFolder")}</span>
+                <input
+                  aria-label={t("newSession.terminalNodeFolder")}
+                  ref={folderValue}
+                  disabled={props.params.submitting}
+                  onInput={(event) => props.params.place.applyFolder(event.currentTarget.value)}
+                />
+              </label>
+            ) : (
+              <ProjectChip params={projectParams()} focus={view().browser.projectFocus} />
+            )}
+            {props.params.place.checkoutVisible &&
+            !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
+              <CheckoutChip params={checkoutParams()} />
+            ) : undefined}
+          </div>
           {props.params.place.deviceFolder ? (
             <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">
               <span>{t("newSession.deviceFolderPath")}</span>
@@ -358,10 +373,6 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
                   t("newSession.deviceFolderDescription")}
               </span>
             </label>
-          ) : undefined}
-          {props.params.place.checkoutVisible &&
-          !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-            <CheckoutChip params={checkoutParams()} />
           ) : undefined}
         </>
       )}{" "}

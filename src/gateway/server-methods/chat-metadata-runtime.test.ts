@@ -188,7 +188,10 @@ describe("gateway chat metadata runtime", () => {
           expect.objectContaining({ id: "first", provider: "test" }),
         ]);
         expect(first?.defaultModelCatalog).toBe(first?.sessionModelCatalog);
-        expect(first?.metadata?.models).toEqual(first?.sessionModelCatalog);
+        expect(first?.metadata).toEqual({
+          commands: [{ name: "command-1-1" }],
+          swarmEnabled: true,
+        });
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
       expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);
@@ -197,7 +200,7 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("reads settled history catalogs without projecting public model metadata", async () => {
+  test("reads settled history and startup catalogs without serializing the model picker", async () => {
     const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     await harness.runtime.read({ agentId: "main" });
@@ -217,8 +220,9 @@ describe("gateway chat metadata runtime", () => {
 
     expect(harness.readProjection).not.toHaveBeenCalled();
     const startup = await harness.runtime.readStartup({ agentId: "main" });
-    expect(startup?.metadata?.models).toEqual(startup?.sessionModelCatalog);
-    expect(harness.readProjection).toHaveBeenCalledOnce();
+    expect(startup?.metadata).toMatchObject({ commands: [{ name: "command-1-1" }] });
+    expect(startup?.metadata).not.toHaveProperty("models");
+    expect(harness.readProjection).not.toHaveBeenCalled();
   });
 
   test("ready reads never prepare or await a cold or pending exact profile", async () => {
@@ -484,9 +488,8 @@ describe("gateway chat metadata runtime", () => {
       authProfileOverride: "openai:missing-lock",
       authProfileOverrideSource: "user" as const,
     };
-    const startup = await harness.startup({ sessionEntry });
+    await harness.startup({ sessionEntry });
     const scoped = await harness.read({ sessionEntry });
-    expect(scoped).toEqual(startup?.metadata);
     expect(scoped.models).toEqual([
       expect.objectContaining({ available: false, unavailableReason: "auth-failed" }),
     ]);
@@ -600,7 +603,7 @@ describe("gateway chat metadata runtime", () => {
       swarmEnabled: true,
     });
     await expect(overriddenStartup).resolves.toMatchObject({
-      metadata: { models: [{ id: "replacement" }], swarmEnabled: true },
+      metadata: { commands: [{ name: "command-1-1" }], swarmEnabled: true },
       sessionModelCatalog: [{ id: "replacement" }],
     });
     expect(await draftRead).toEqual(draft.error);

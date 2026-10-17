@@ -1,54 +1,51 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
+  cleanupAdmission,
+  sessionRuntime,
+  useReclaimFixtures,
+} from "./server-worker-placement-reclaim.test-support.js";
+import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
 } from "./server-worker-placement.test-harness.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
-const roots: string[] = [];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-function resolveFixtureTarget(storePath: string): typeof resolveGatewaySessionStoreTargetInWorker {
-  return (params) =>
-    resolveGatewaySessionStoreTargetInWorker({
-      ...params,
-      cfg: { ...params.cfg, session: { ...params.cfg.session, store: storePath } },
-    });
+const fixtures = useReclaimFixtures();
+function expectAdmissions(report: Awaited<ReturnType<typeof scenario>>) {
+  expect(report.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
+  expect(report).toMatchObject({
+    preexistingAdmissionAccepted: false,
+    explicitNewAdmissionAccepted: true,
+  });
 }
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
+function expectPartial(events: unknown[], text: string, runId: string) {
+  expect(events).toEqual([
+    expect.objectContaining({
+      message: expect.objectContaining({
+        role: "assistant",
+        content: [expect.objectContaining({ type: "text", text })],
+        openclawAbort: { aborted: true, origin: "rpc", runId },
+      }),
+    }),
+  ]);
+}
 
 async function scenario(
   name: string,
@@ -63,15 +60,7 @@ async function scenario(
     pendingMove = false,
   } = {},
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-"));
-  roots.push(root);
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
-  const readProjection = placements.readProjection.bind(placements);
-  const projectionReads = pendingMove ? vi.spyOn(placements, "readProjection") : undefined;
-  const storePath = path.join(root, "sessions.sqlite");
-  const cfg = { session: { store: storePath } };
-  setRuntimeConfigSnapshot(cfg);
+  const root = fixtures.makeRoot("worker-stop-");
   const worktreePath = path.join(root, "workspace");
   await fs.mkdir(worktreePath);
   // Recovery reads real result refs, so this managed-worktree fixture owns its Git root.
@@ -79,21 +68,17 @@ async function scenario(
     timeoutMs: 10_000,
   });
   expect(initialized.code).toBe(0);
-  const entry = {
-    sessionId: REQUEST.sessionId,
-    worktree: { id: "task-worktree", branch: "test", repoRoot: worktreePath },
-    updatedAt: Date.now(),
-  };
-  await replaceSessionEntry(
-    { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
-    entry,
-  );
+  const { database, placements, storePath, entry } = await fixtures.createSession(root, {
+    worktreePath,
+    now: () => 1000,
+  });
+  const readProjection = placements.readProjection.bind(placements);
+  const projectionReads = pendingMove ? vi.spyOn(placements, "readProjection") : undefined;
   const barrierEntered = createDeferred();
   const releaseBarrier = createDeferred();
   const context = createWorkerStopChatContext();
   const cancelApprovals = vi.fn();
   context.cancelRunBoundApprovals = cancelApprovals;
-  const revocations: unknown[] = [];
   const cancellationLoad = createDeferred();
   const cancellationEntered = createDeferred();
   let cancellationLoadEntered = false;
@@ -101,20 +86,7 @@ async function scenario(
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
     placements,
     loadSessionRuntime: async () =>
-      ({
-        managedWorktrees: {
-          findLiveByOwner: async () =>
-            failedRetry
-              ? undefined
-              : {
-                  id: "task-worktree",
-                  ownerId: REQUEST.sessionKey,
-                  path: worktreePath,
-                },
-        },
-        resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
-        resolveCanonicalSessionEntryFromStoreKeys,
-      }) as never,
+      sessionRuntime(storePath, failedRetry ? undefined : worktreePath),
     cancelSessionWork: async (request) => {
       cancellationEntered.resolve();
       if (pendingMove) {
@@ -126,17 +98,13 @@ async function scenario(
         await cancelGatewayWorkerSessionWork(context, request);
       }
     },
-    revokeSessionAuthority: (request) => {
-      revocations.push(request);
-    },
+    revokeSessionAuthority: vi.fn(),
   });
   let reconciliations = 0;
   const harness = await createHarness(database, placements, {
     workspacePath: worktreePath,
     ...(failedRetry ? { failAt: "sync" as const } : {}),
-    runReclaimPreparation: barriers.runReclaimPreparation,
-    runReclaimBarrier: barriers.runReclaimBarrier,
-    runFailedReclaimBarrier: barriers.runFailedReclaimBarrier,
+    ...barriers,
     ...(destroyFailure
       ? { destroyFailureCount: 1, destroyFailureState: "destroying" as const }
       : {}),
@@ -192,20 +160,7 @@ async function scenario(
   const coordinated = coordinateWorkerPlacementDispatch(
     harness.service,
     pendingMove
-      ? createGatewayWorkerDispatchAdmission(
-          async () =>
-            ({
-              managedWorktrees: {
-                findLiveByOwner: async () => ({
-                  id: "task-worktree",
-                  ownerId: REQUEST.sessionKey,
-                  path: worktreePath,
-                }),
-              },
-              resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
-              resolveCanonicalSessionEntryFromStoreKeys,
-            }) as never,
-        )
+      ? createGatewayWorkerDispatchAdmission(async () => sessionRuntime(storePath, worktreePath))
       : (_request, run) => run(),
   );
   const provisionEntered = createDeferred();
@@ -238,15 +193,7 @@ async function scenario(
     }
   }
   const admit = (runId: string) =>
-    admitWorkerStopChat({
-      context,
-      storePath,
-      entry,
-      sessionKey: REQUEST.sessionKey,
-      sessionId: REQUEST.sessionId,
-      agentId: REQUEST.agentId,
-      runId,
-    });
+    admitWorkerStopChat({ context, storePath, entry, ...REQUEST, runId });
   const oldRunId = name + "-before-stop-complete";
   const running = blockedInspection ? await (await admit(name + "-running")).promise : undefined;
   const activeController = context.chatAbortControllers.get(name + "-running");
@@ -340,9 +287,7 @@ async function scenario(
   };
   const stop = async () => {
     const reclaim = coordinated.reclaim(REQUEST).then(
-      (value) => {
-        return { ok: true, state: value.state };
-      },
+      (value) => ({ ok: true, state: value.state }),
       (error: unknown) => {
         if (!(error instanceof Error)) {
           throw error;
@@ -435,45 +380,26 @@ async function scenario(
   const environment = harness.environments.get(active.environmentId!);
   expect(environment?.state).toBe("destroyed");
   expect(harness.environments.destroy).toHaveBeenCalledTimes(destroyFailure ? 2 : 1);
-  if (oldResult.ok) {
-    oldResult.value.cleanupAdmittedRun();
-    clearAgentRunContext(oldRunId, oldResult.value.lifecycleGeneration);
-  }
+  cleanupAdmission(oldRunId, oldResult);
   const freshRunId = name + "-explicit-after-stop";
   const fresh = await admit(freshRunId);
   const freshResult = await fresh.promise;
-  if (freshResult.ok) {
-    freshResult.value.cleanupAdmittedRun();
-    clearAgentRunContext(freshRunId, freshResult.value.lifecycleGeneration);
-  }
+  cleanupAdmission(freshRunId, freshResult);
   const persistedPartials = pendingMove
-    ? (
-        await loadTranscriptEvents({
-          storePath,
-          sessionKey: REQUEST.sessionKey,
-          sessionId: REQUEST.sessionId,
-          agentId: REQUEST.agentId,
-        })
-      ).filter(
+    ? (await loadTranscriptEvents({ storePath, ...REQUEST })).filter(
         (event) =>
           (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
           name + "-running:assistant",
       )
     : [];
   const report = {
-    name,
-    destroyFailure,
-    beforeStop,
-    staged,
     reclaimResult,
     finalPlacementState: finalPlacement?.state,
     environmentState: environment?.state,
     providerDestroyAttempts: vi.mocked(harness.environments.destroy).mock.calls.length,
     pendingWorkspaceResults: (await placements.listPendingWorkspaceResultsAsync()).length,
     preexistingAdmissionAccepted: oldResult.ok,
-    preexistingResponses: old.respond.mock.calls,
     explicitNewAdmissionAccepted: freshResult.ok,
-    approvalAttachRevocationCount: revocations.length,
     abortedDuringInspection,
     abortReasonDuringInspection,
     cancellationLoadEntered,
@@ -483,13 +409,9 @@ async function scenario(
     moveResult: await moving,
     moveSettledDuringInspection,
     destroyedDuringInspection,
-    harnessOrder: [...harness.log],
   };
   context.chatRunState.clear();
-  if (running?.ok) {
-    running.value.cleanupAdmittedRun();
-    clearAgentRunContext(name + "-running", running.value.lifecycleGeneration);
-  }
+  cleanupAdmission(name + "-running", running);
   return report;
 }
 
@@ -502,24 +424,18 @@ it.each([false, true])(
     });
     expect(r.abortedDuringInspection).toBe(true);
     expect(r.destroyedDuringInspection).toBe(false);
-    expect(r.preexistingAdmissionAccepted).toBe(false);
-    expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-    expect(r.explicitNewAdmissionAccepted).toBe(true);
+    expectAdmissions(r);
   },
 );
 
 it("Stop fences ingress during provisioning without cancelling its dispatch producer", async () => {
   const r = await scenario("pending-dispatch", { pendingDispatch: true });
-  expect(r.preexistingAdmissionAccepted).toBe(false);
-  expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
+  expectAdmissions(r);
 });
 
 it("a reservation preceding Stop cannot revive a successfully reclaimed worker", async () => {
   const r = await scenario("pre-stop-reservation", { beforeStop: true });
-  expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(r.preexistingAdmissionAccepted).toBe(false);
+  expectAdmissions(r);
 });
 it("accepted staged reclaim recovers provider cleanup but must reject pre-Stop ingress", async () => {
   const r = await scenario("accepted-staged-stop-recovery", {
@@ -530,8 +446,10 @@ it("accepted staged reclaim recovers provider cleanup but must reject pre-Stop i
   expect(r.reclaimResult).toEqual({ ok: false, message: "destroy pending" });
   expect(r.finalPlacementState).toBe("reclaimed");
   expect(r.pendingWorkspaceResults).toBe(0);
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(r.preexistingAdmissionAccepted).toBe(false);
+  expect(r).toMatchObject({
+    explicitNewAdmissionAccepted: true,
+    preexistingAdmissionAccepted: false,
+  });
 });
 
 it.each([false, true])(
@@ -554,7 +472,7 @@ it.each([false, true])(
 );
 
 it("an idempotent failed-cleanup result does not cancel work already on the local placement", async () => {
-  const storePath = path.join(tempDirs.make("failed-already-local-"), "sessions.sqlite");
+  const storePath = path.join(fixtures.makeRoot("failed-already-local-"), "sessions.sqlite");
   setRuntimeConfigSnapshot({ session: { store: storePath } });
   const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
   await replaceSessionEntry({ ...REQUEST, storePath }, entry);
@@ -566,12 +484,7 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
       getAsync: async () => local as never,
       waitForTurnClaimRelease: vi.fn(),
     },
-    loadSessionRuntime: async () =>
-      ({
-        managedWorktrees: { findLiveByOwner: async () => undefined },
-        resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
-        resolveCanonicalSessionEntryFromStoreKeys,
-      }) as never,
+    loadSessionRuntime: async () => sessionRuntime(storePath),
     cancelSessionWork: cancel,
     revokeSessionAuthority: vi.fn(),
   });
@@ -593,37 +506,25 @@ it("Stop preserves RPC cancellation and buffered output while Move waits behind 
   expect(r.destroyedDuringInspection).toBe(false);
   expect(r.moveResult).toMatchObject({ ok: false });
   expect(r.moveSettledDuringInspection).toBe(true);
-  expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-  expect(r.preexistingAdmissionAccepted).toBe(false);
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(r.persistedPartials).toEqual([
-    expect.objectContaining({
-      message: expect.objectContaining({
-        role: "assistant",
-        content: [
-          expect.objectContaining({ type: "text", text: "partial before queued Move Stop" }),
-        ],
-        openclawAbort: { aborted: true, origin: "rpc", runId: "queued-move-partial-running" },
-      }),
-    }),
-  ]);
+  expectAdmissions(r);
+  expectPartial(
+    r.persistedPartials,
+    "partial before queued Move Stop",
+    "queued-move-partial-running",
+  );
 });
 
 it.each(["missing", "local"] as const)(
   "Stop records RPC cancellation for local chat before unrelated inspection completes (%s placement)",
   async (state) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-local-"));
-    roots.push(root);
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const storePath = path.join(root, "sessions.sqlite");
-    const cfg = { session: { store: storePath } };
-    setRuntimeConfigSnapshot(cfg);
-    const entry = { sessionId: REQUEST.sessionId, updatedAt: Date.now() };
-    await replaceSessionEntry(
-      { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
+    const root = fixtures.makeRoot("worker-stop-local-");
+    const {
+      database,
+      placements,
+      storePath,
       entry,
-    );
+      runtime: localRuntime,
+    } = await fixtures.createSession(root);
     if (state === "local") {
       await placements.releaseTurn(
         await placements.claimTurn({
@@ -634,11 +535,6 @@ it.each(["missing", "local"] as const)(
         }),
       );
     }
-    const sessionRuntime = {
-      managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetInWorker: resolveFixtureTarget(storePath),
-      resolveCanonicalSessionEntryFromStoreKeys,
-    };
     const context = createWorkerStopChatContext();
     const cancelApprovals = vi.fn();
     context.cancelRunBoundApprovals = cancelApprovals;
@@ -652,19 +548,17 @@ it.each(["missing", "local"] as const)(
     });
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
-      loadSessionRuntime: async () => sessionRuntime,
+      loadSessionRuntime: async () => localRuntime,
       cancelSessionWork: cancel,
       revokeSessionAuthority: vi.fn(),
     });
     const harness = await createHarness(database, placements, {
       workspacePath: root,
-      runReclaimPreparation: barriers.runReclaimPreparation,
-      runReclaimBarrier: barriers.runReclaimBarrier,
-      runFailedReclaimBarrier: barriers.runFailedReclaimBarrier,
+      ...barriers,
     });
     const coordinated = coordinateWorkerPlacementDispatch(
       harness.service,
-      createGatewayWorkerDispatchAdmission(async () => sessionRuntime),
+      createGatewayWorkerDispatchAdmission(async () => localRuntime),
     );
     const runId = `queued-local-${state}`;
     const admitted = await (
@@ -728,24 +622,17 @@ it.each(["missing", "local"] as const)(
       cancellationLoad.resolve();
       release.resolve();
       await Promise.all([sweep, dispatch, stopping]);
-      admitted.value.cleanupAdmittedRun();
-      clearAgentRunContext(runId, admitted.value.lifecycleGeneration);
+      cleanupAdmission(runId, admitted);
     }
     expect(await dispatch).toBe("cancelled");
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     const transcript = await loadTranscriptEvents({ storePath, ...REQUEST });
-    expect(transcript.filter((event) => asRecord(event)?.type === "message")).toEqual([
-      expect.objectContaining({
-        message: expect.objectContaining({
-          role: "assistant",
-          content: [
-            expect.objectContaining({ type: "text", text: "partial before queued dispatch Stop" }),
-          ],
-          openclawAbort: { aborted: true, origin: "rpc", runId },
-        }),
-      }),
-    ]);
+    expectPartial(
+      transcript.filter((event) => asRecord(event)?.type === "message"),
+      "partial before queued dispatch Stop",
+      runId,
+    );
     context.chatRunState.clear();
   },
 );

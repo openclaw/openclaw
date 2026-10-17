@@ -94,6 +94,8 @@ const logNames = [
   "post-update-validate.json",
   "post-update-validate.err",
   "doctor.log",
+  "doctor-lint.json",
+  "doctor-lint.err",
   "formerly-bundled-doctor.log",
   "volume-doctor-budget.json",
   "baseline-doctor.log",

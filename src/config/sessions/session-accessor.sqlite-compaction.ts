@@ -1,40 +1,24 @@
 import type {
-  CommittedCompactionAppend,
+  CommittedCompactionBoundary,
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
-  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import type {
-  SessionTranscriptAccessScope,
-  TranscriptEvent,
-} from "./session-accessor.sqlite-contract.js";
-import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import {
-  readSessionEntryRow,
-  readSessionEntrySelectionSnapshot,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
+import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   ensureSessionEntryInTransaction,
   ensureSessionEntrySync,
 } from "./session-accessor.sqlite-initial-entry.js";
-import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { requireTranscriptEventAppendSnapshot } from "./session-accessor.sqlite-transcript-append-result.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
-import {
-  assertLockedTranscriptWriteAllowed,
-  resolveTranscriptAppendRefusal,
-} from "./session-accessor.sqlite-transcript-write-guard.js";
+import { assertLockedTranscriptWriteAllowed } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeTarget,
@@ -45,11 +29,8 @@ import type {
   CompactionBoundaryOperations,
   InitialSessionEntryCommit,
 } from "./session-manager-write-contract.js";
-import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
-import type { PreparedSessionSourceAuthority } from "./session-source-authority.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
-  assertOwnedTranscriptWriteCommit,
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
@@ -63,7 +44,8 @@ type CompactionScope = SessionTranscriptRuntimeTarget &
   >;
 type CompactionParams = {
   prepared: PreparedCompactionAppend;
-  transcriptByteCompactionLatch: NonNullable<InternalSessionEntry["transcriptByteCompactionLatch"]>;
+  transcriptByteCompactionLatch: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
+  tokensAfter?: number;
 };
 
 type CompactionWorkerContext = {
@@ -75,7 +57,7 @@ type CompactionWorkerContext = {
 export function persistCompactionBoundaryWithSessionEntrySync(
   scope: CompactionScope,
   params: CompactionParams,
-): CommittedCompactionAppend {
+): CommittedCompactionBoundary {
   return persistCompactionBoundary(scope, params).committed;
 }
 
@@ -112,8 +94,6 @@ function persistCompactionBoundary(
         throw new Error("Session compaction lost its borrowed canonical connection");
       }
       worker?.admit("transaction");
-      assertOwnedTranscriptWriteCommit(fencedScope);
-      assertOwnedTranscriptWriteCommit(preparedScope);
       let initialEntry: InitialSessionEntryCommit | undefined;
       if (params.prepared.initializeEntry) {
         const entry = { sessionId: resolved.sessionId, updatedAt: Date.now() };
@@ -136,7 +116,6 @@ function persistCompactionBoundary(
         getOwnedSessionTranscriptInitialWriter({ sessionTarget: preparedScope })?.assertActive();
       }
       assertLockedTranscriptWriteAllowed(database, resolved, fencedScope);
-      assertLockedTranscriptWriteAllowed(database, resolved, preparedScope);
       const event = {
         ...params.prepared.event,
         parentId: resolveTranscriptMessageAppendParent(database, resolved.sessionId, {
@@ -162,27 +141,24 @@ function persistCompactionBoundary(
         appended,
         `Session transcript entry was not persisted: ${event.id}`,
       );
-      assertOwnedTranscriptWriteCommit(fencedScope);
-      assertOwnedTranscriptWriteCommit(preparedScope);
+      // The append can publish degraded-summary and CLI-boundary metadata in this transaction.
       const fresh = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-      const refusal = resolveTranscriptAppendRefusal(fresh, resolved, fencedScope);
-      if (refusal) {
-        throw new SessionTranscriptWriterClaimReboundError(refusal);
-      }
       const entry = projectCanonicalSessionEntryShape({
         ...fresh!,
         ...projectCompactionAccountingPatch(fresh!, {
           compactionKind: "context-engine",
+          tokensAfter: params.tokensAfter,
           transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
         }),
       });
-      writeSessionEntry(database, resolved.sessionKey, entry, {
+      const committedEntry = writeSessionEntry(database, resolved.sessionKey, entry, {
         previousEntry: fresh,
         canonicalPreviousEntry: fresh,
       });
       worker?.admit("commit");
       return {
         committed: {
+          entry: committedEntry,
           result: event,
           before: committed.before,
           after: committed.after,
@@ -193,80 +169,5 @@ function persistCompactionBoundary(
     },
     toDatabaseOptions(resolved),
     { operationLabel: "session.compaction-boundary" },
-  );
-}
-
-export async function trimTranscriptForManualCompact(
-  scope: SessionTranscriptAccessScope,
-  selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
-  options: {
-    nowMs?: number;
-    preparation?: {
-      snapshot?: SqliteLifecycleTargetSnapshot;
-      source?: PreparedSessionSourceAuthority;
-      assertEntryCurrent: (
-        entry: SqliteLifecycleTargetSnapshot[number]["entry"] | undefined,
-      ) => void;
-      restore: () => Promise<void>;
-      assertCurrent: () => void;
-      assertCommitCurrent: () => void;
-    };
-  } = {},
-): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  if (options.preparation) {
-    options.preparation.assertCurrent();
-    await options.preparation.restore();
-    options.preparation.assertCurrent();
-  } else {
-    const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-    await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
-  }
-  return await runExclusiveSqliteSessionWrite(
-    resolved,
-    async () => {
-      options.preparation?.assertCurrent();
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-      const snapshotRows = readTranscriptEventRows(database, resolved.sessionId);
-      const sessionSnapshot =
-        options.preparation?.snapshot ??
-        readSessionEntrySelectionSnapshot(database, resolved.sessionKey, true);
-      options.preparation?.assertEntryCurrent(sessionSnapshot[0]?.entry);
-      const lines = snapshotRows.map((row) => row.eventJson);
-      const retainedLines = selectRetainedLines(lines);
-      if (!retainedLines) {
-        return { trimmed: false };
-      }
-      if (sessionSnapshot[0]?.entry.sessionId !== resolved.sessionId) {
-        throw new Error(
-          `Cannot compact SQLite transcript ${resolved.sessionId} without its current session entry`,
-        );
-      }
-      // SAFETY: Retained lines are canonical transcript rows selected by the compaction owner.
-      const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
-      const publish = runOpenClawAgentWriteTransaction(
-        (writeDatabase) => {
-          options.preparation?.assertCommitCurrent();
-          const identity = applyManualCompactInTransaction(writeDatabase, resolved, {
-            rows: snapshotRows,
-            entries: sessionSnapshot,
-            events: retainedEvents,
-            nowMs: options.nowMs,
-          });
-          options.preparation?.assertCommitCurrent();
-          return prepareSessionIdentityPublication(
-            writeDatabase,
-            resolved.agentId,
-            identity.previous,
-            identity.current,
-          );
-        },
-        toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.manual-compact" },
-      );
-      publish();
-      return { kept: retainedLines.length, trimmed: true };
-    },
-    "session.transcript.compact",
   );
 }

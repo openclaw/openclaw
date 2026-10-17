@@ -158,7 +158,7 @@ export function createPluginSourceFacts(
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
     captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
       source: capture(),
-      files: structuredClone(files),
+      files,
     }),
   };
 }

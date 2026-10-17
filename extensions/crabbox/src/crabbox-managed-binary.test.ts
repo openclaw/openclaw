@@ -84,7 +84,11 @@ async function fixture(version = "0.66.0") {
     checksums,
     fetch,
     options: { binary: candidate, env, runCommand },
-    installed: { binary, version: CRABBOX_MIN_VERSION },
+    installed: {
+      binary,
+      version: CRABBOX_MIN_VERSION,
+      rejected: expect.stringContaining("outdated"),
+    },
   };
 }
 
@@ -194,6 +198,7 @@ describe("managed Crabbox", () => {
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
       binary: test.binary,
       version: "0.78.0",
+      rejected: expect.stringContaining("outdated"),
     });
     expect(test.fetch).toHaveBeenCalledTimes(2);
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([
@@ -204,7 +209,10 @@ describe("managed Crabbox", () => {
   it("installs when the selected executable is missing", async () => {
     const test = await fixture();
     await fs.rm(test.candidate);
-    await expect(ensureManagedCrabboxBinary(test.options)).resolves.toEqual(test.installed);
+    await expect(ensureManagedCrabboxBinary(test.options)).resolves.toEqual({
+      ...test.installed,
+      rejected: expect.stringContaining("indeterminate"),
+    });
   });
 
   it.each(["EACCES", "EIO"])(
@@ -393,6 +401,7 @@ describe("managed Crabbox", () => {
     await expect(ensureManagedCrabboxBinary(test.options)).resolves.toEqual({
       binary: test.binary,
       version: CRABBOX_MIN_VERSION,
+      rejected: expect.stringContaining("outdated"),
     });
     expect(
       await fs.readFile(path.join(path.dirname(test.binary), "companion-helper"), "utf8"),

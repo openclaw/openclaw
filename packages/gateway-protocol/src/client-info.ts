@@ -76,6 +76,7 @@ export const GATEWAY_CLIENT_CAPS = {
   APPROVALS: "approvals",
   CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
   EXEC_APPROVALS: "exec-approvals",
+  HELLO_HEALTH_ON_DEMAND: "hello-health-on-demand",
   INLINE_WIDGETS: "inline-widgets",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   MODEL_SELECTION_POLICY: "model-selection-policy",

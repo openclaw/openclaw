@@ -214,7 +214,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       cwd: params.setup.effectiveCwd,
       moduleUrl: import.meta.url,
     }));
-  const providerPromptContext = Object.freeze({
+  const providerPromptContext = {
     config: attempt.config,
     agentDir: attempt.agentDir,
     workspaceDir: params.setup.effectiveWorkspace,
@@ -224,7 +224,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeChannel,
     runtimeCapabilities,
     agentId: params.setup.sessionAgentId,
-  });
+  };
   const promptContributionContext = { ...providerPromptContext, trigger: attempt.trigger };
   const promptContribution =
     attempt.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??

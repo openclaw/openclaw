@@ -17,7 +17,7 @@ import {
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
 } from "./compact.hooks.harness.js";
-import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
+import type { QueuedCompactionHostOptions } from "./compact.types.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 
 const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness();

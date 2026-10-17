@@ -6,7 +6,8 @@ import type {
 } from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 28;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 29;
+export const AGENT_INDEX_RETIREMENT_SCHEMA_VERSION = 29;
 export const AGENT_WRITE_LAYOUT_SCHEMA_VERSION = 28;
 export const AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION = 27;
 export const AGENT_JSON_PREDICATE_SCHEMA_VERSION = 26;

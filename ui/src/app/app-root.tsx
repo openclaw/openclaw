@@ -14,7 +14,7 @@ import {
   runWithOwner,
   untrack,
 } from "solid-js";
-import "../components/gateway-url-confirmation.ts";
+import "../components/solid/gateway-url-confirmation.tsx";
 import "../components/link-reader-hovercard-registration.ts";
 import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";

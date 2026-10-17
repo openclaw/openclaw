@@ -382,7 +382,9 @@ export async function prepareSessionLifecycleDrain(
       terminalWork,
     ]);
     if (!drains.every(Boolean)) {
-      throw new Error("Session work is still active after the lifecycle drain");
+      throw new Error(
+        `Session work is still active after the lifecycle drain for ${params.sessionKey}. Wait for active work to end, then retry; session storage has been preserved.`,
+      );
     }
     // Failed placements keep cleanup custody without delaying archive visibility.
     // Other placements and destructive deletion still require safe reclaim.

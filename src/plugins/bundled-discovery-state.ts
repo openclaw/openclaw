@@ -154,20 +154,10 @@ export async function prepareBundledDiscoveryMode(
     // The read worker retains these snapshot bytes; derivation consumes its result locally.
     let value = existing?.value;
     if (!existing) {
-      try {
-        const row = readPreparedRow
-          ? await readPreparedRow(key)
-          : await readPluginMetadataStateRow("bundled-discovery", options);
-        value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
-      } catch (error) {
-        if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
-          throw new PluginCacheFactInvalidatedError(
-            "Plugin discovery read admission changed during preparation; retry the operation.",
-            { cause: error },
-          );
-        }
-        throw error;
-      }
+      const row = readPreparedRow
+        ? await readPreparedRow(key)
+        : await readPluginMetadataStateRow("bundled-discovery", options);
+      value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
     const activate = () => {
       discoveryState.snapshotModes.set(snapshot, { value });

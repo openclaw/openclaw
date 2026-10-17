@@ -2442,6 +2442,7 @@ describe("codex command", () => {
         ...testCodexAppServerBindingStore,
         read: readBinding,
         readAsync: async () => readBinding(),
+        prepareRead: async () => ({ read: readBinding, release() {} }),
       },
       safeCodexControlRequest,
     });

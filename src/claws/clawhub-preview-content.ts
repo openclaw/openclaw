@@ -26,9 +26,10 @@ export async function readClawHubCatalogPreview(input: {
     if (!instruction) {
       return undefined;
     }
-    const source = verified.snapshot.workspaceSources.find(
-      (file) => file.sourcePath === instruction.source,
-    );
+    const source =
+      verified.packageBootstrap?.sourcePath === instruction.source
+        ? verified.packageBootstrap
+        : verified.snapshot.workspaceSources.find((file) => file.sourcePath === instruction.source);
     if (instruction.source !== "CLAW.md#body" && !source) {
       throw new ClawHubSourceError(
         "clawhub_preview_unavailable",

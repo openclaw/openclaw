@@ -292,8 +292,8 @@ it("pages large history without reading off-page payloads or changing completion
       const insert = db.prepare(
         "INSERT INTO task_runs (task_id, runtime, owner_key, scope_kind, task, delivery_status, notify_policy, source_id, created_at, started_at, ended_at, status, detail_json) VALUES (?, 'cron', '', 'system', 'job', 'not_applicable', 'silent', ?, ?, ?, ?, 'succeeded', ?)",
       );
-      // Cross a reader batch boundary with ties, and with released timestamps whose
-      // normalization differs from the raw indexed created_at used by the cursor.
+      // Cover a large history with ties and released timestamps whose
+      // normalization differs from the raw indexed created_at.
       for (let index = 0; index < 520; index += 1) {
         const id = String(index).padStart(3, "0");
         insert.run(
@@ -345,7 +345,9 @@ it("pages large history without reading off-page payloads or changing completion
         for (const [overrides, expected, total] of cases) {
           const options = { storeKey, jobId: "job", limit: 2, ...overrides };
           const beforeCandidates = reads.textBytes.history;
+          const beforeCandidateReads = reads.counts.history;
           const candidates = readCronRunHistoryCandidatesInDatabase(db, storeKey, options.jobId);
+          expect(reads.counts.history - beforeCandidateReads).toBe(1);
           expect(reads.textBytes.history - beforeCandidates).toBeLessThan(256 * 1024);
           const selected = selectCronRunHistoryPage(candidates.records, options);
           expect(selected.page.entries.map((entry) => entry.runId)).toEqual(expected);
@@ -378,12 +380,14 @@ it("pages large history without reading off-page payloads or changing completion
             );
           }
         }
+        const beforeSearchReads = reads.counts.history;
         const search = readCronRunHistoryCandidatesInDatabase(
           db,
           storeKey,
           "job",
           "diagnostic-only-needle",
         );
+        expect(reads.counts.history - beforeSearchReads).toBe(1);
         expect(JSON.stringify(search.records)).not.toContain("diagnostic-payload:");
         const matching = selectCronRunHistoryPage(search.records, {
           storeKey,

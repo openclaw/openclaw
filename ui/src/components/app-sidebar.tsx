@@ -11,6 +11,7 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
@@ -27,6 +28,7 @@ import {
 import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople } from "./sidebar-people.ts";
 
@@ -54,6 +56,7 @@ function disconnectSidebarOwner(host: HTMLElement): void {
   if (owner) {
     sidebarOwners.delete(host);
     owner.detach();
+    owner.disposeMenus();
   }
 }
 
@@ -62,6 +65,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const context = useApplication();
   const catalog = createSidebarNavigationCatalog(context, () => props.navigationView, host);
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, props, context, host);
+  sidebarOwners.set(host, owner);
   owner.navigationCatalog = catalog;
   owner.bindInputs(props, context);
   owner.attention = createSessionAttention(
@@ -71,15 +75,34 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     () => props.navigationVisible,
   );
   const scroll = createSidebarScroll(owner);
+  const contextual = createMemo(() => {
+    const router = props.router;
+    return router
+      ? projectSource(router, {
+          read: (current) => selectSidebarContext(current.getState()),
+          subscribe: (current, notify) =>
+            current.subscribeSelector(selectSidebarContext, notify, equalSidebarContext),
+          equality: equalSidebarContext,
+        })
+      : undefined;
+  });
+  owner.readContextualSidebar = createMemo(() => contextual()?.read(), {
+    equals: equalSidebarContext,
+  });
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => {
       current.catalogRendererImport.schedule();
       const stops = [
         current.subscribe(notify),
+        context.chatSubmissions.subscribeCreate(notify),
+        context.theme.subscribe(notify),
+        context.config.subscribe(notify),
+        context.agentIdentity.subscribe(current.sessionData.requestSessionDataUpdate),
+        context.plugins.subscribe(current.sessionData.requestSessionDataUpdate),
         listen(window, SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT, () => {
           current.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
-          current.requestUpdate();
+          current.invalidate();
         }),
         listen(window, "openclaw:native-gateways-changed", () => {
           if (current.isConnected) {
@@ -107,6 +130,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       snapshotPending();
       snapshotModel();
       Object.values(props);
+      void owner.contextualSidebar;
       // Snapshot capture keeps observing Pages after its navigation view closes.
       void catalog.dashboards;
       // Arm presence deadlines before preparation can project a row.
@@ -121,7 +145,9 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     { equals: false },
   );
   createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared, () =>
-    context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
+    owner.sidebarAgentsMode === "roster"
+      ? rosterActivityStore(context).snapshot
+      : context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
   );
   const narrationEnabled = createMemo(() => {
     // Preparation reads narration while synchronizing the session projection.
@@ -151,6 +177,8 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       Object.values(props);
       snapshotPending();
       snapshotModel();
+      // Router context can reveal parked rows without an owner publication.
+      void owner.contextualSidebar;
       return projection.revision();
     },
     () => props.navigationVisible,
@@ -170,8 +198,10 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     return proxy;
   };
   const hostView = observe(owner);
-  owner.sidebarMenus.catalogMenuView = owner.sidebarMenus.catalogMenu.createView(hostView);
-  [owner.sidebarMenus, owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
+  onCleanup(
+    owner.sidebarMenus.bindCatalogMenuView(owner.sidebarMenus.catalogMenu.createView(hostView)),
+  );
+  [owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
     getPresented: () => props.navigationVisible,
@@ -240,7 +270,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
           const timer = globalThis.setTimeout(
             () => {
               owner.sessionProjection.invalidate();
-              owner.requestUpdate();
+              owner.invalidate();
             },
             Math.max(0, deadline - Date.now()),
           );
@@ -250,7 +280,6 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       }),
   );
   onSettled(() => {
-    sidebarOwners.set(host, owner);
     if (host.isConnected && !owner.isConnected) {
       owner.attach();
     } else {

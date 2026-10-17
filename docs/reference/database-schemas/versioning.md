@@ -114,6 +114,13 @@ keys. Their SQLite rebuilds and PostgreSQL forward steps advance schema metadata
 atomically. These versions are bundled for one upgrade; older binaries require
 the verified pre-upgrade backup for rollback.
 
+Agent [schema 29](/reference/database-schemas/agent-schema-history#agent-schema-29)
+and shared-state [schema 27](/reference/database-schemas/state-schema-history#state-schema-27)
+retire four unused or redundant indexes and narrow the shared lease-owner index.
+The bundle preserves every table's columns, keys, and retained rows. Index DDL
+and version publication remain atomic on both engines; verified backups retain
+the predecessor index definitions for rollback.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports
