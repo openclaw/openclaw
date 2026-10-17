@@ -1,3 +1,4 @@
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import {
   projectPlainTextToolCallBlocks,
@@ -394,12 +395,61 @@ function createAssistantTraceProjector() {
   );
 }
 
+const plainToolCallActivationTokens = ["{", "<parameter=", "<function=", "to="] as const;
+const plainToolCallTransform = (text: string) =>
+  stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
+
+function createAppendCodeRegionResolver() {
+  let source = "";
+  let regions: ReturnType<typeof findCodeRegions> | undefined;
+  let openFence = false;
+  return (text: string) => {
+    if (regions && text.startsWith(source)) {
+      const appended = text.slice(source.length);
+      const boundaryContext = source.slice(-3) + appended;
+      if (!/[`~\t]| {4}/u.test(boundaryContext)) {
+        if (openFence && regions.length > 0) {
+          const last = regions[regions.length - 1];
+          if (last?.block && last.end === source.length) {
+            regions = [...regions.slice(0, -1), { ...last, end: text.length }];
+          }
+        }
+        source = text;
+        return regions;
+      }
+    }
+    source = text;
+    regions = findCodeRegions(text);
+    openFence = Boolean(scanFenceSpans(text).state.open);
+    return regions;
+  };
+}
+
+function createPlainToolCallTextProjector() {
+  const resolveProtectedRanges = createAppendCodeRegionResolver();
+  const checkpoint = (text: string, settleBefore: number) =>
+    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges, settleBefore });
+  const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
+  const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
+  let active = false;
+  let tail = "";
+  return createConditionalTextProjector(
+    plainToolCallTransform,
+    (input) => {
+      if (!active) {
+        const appended = tail + (input.delta ?? input.text);
+        active = activation.test(appended);
+        tail = !active && overlap ? appended.slice(-overlap) : "";
+      }
+      return active;
+    },
+    checkpoint,
+  );
+}
+
 export const plainToolCallTextFilter: TextFilter = {
-  transform: (text) =>
-    stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
-  checkpoint: (text, settleBefore) =>
-    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions, settleBefore }),
-  activationTokens: ["{", "<parameter=", "<function=", "to="],
+  transform: plainToolCallTransform,
+  create: createPlainToolCallTextProjector,
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(
