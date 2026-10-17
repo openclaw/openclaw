@@ -23,6 +23,7 @@ import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { markPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -38,6 +39,7 @@ import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js"
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { loadPreparedInboundPluginRegistry } from "./prepared-model-runtime.inbound-registry.js";
 import {
   acquireAgentRuntimePluginRegistry,
@@ -117,16 +119,7 @@ function createChannelOwner(
   const send = vi.fn(async () => ({ channel: pluginId, messageId: marker }));
   api.registerChannel({
     plugin: {
-      id: pluginId,
-      meta: {
-        id: pluginId,
-        label: pluginId,
-        selectionLabel: pluginId,
-        docsPath: "/channels/fixture",
-        blurb: "Owned channel fixture",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
+      ...createChannelTestPluginBase({ id: pluginId, docsPath: "/channels/fixture" }),
       outbound: { deliveryMode: "direct", sendText: send },
     },
   });
@@ -181,6 +174,36 @@ function prepareOwners() {
   return { gateway, live, selected, input };
 }
 
+function inspection(selected: ReturnType<typeof createChannelOwner>) {
+  const resources = new PluginRegistryInspectionResources(async () => {
+    await selected.instance.dispose();
+  });
+  resources.attach(selected.registry);
+  return { registry: selected.registry, release: () => resources.release() };
+}
+
+async function acquire(owners: ReturnType<typeof prepareOwners>) {
+  const acquired = await withPluginRuntimeRegistryScope(owners.live.registry, () =>
+    acquireAgentRuntimePluginRegistry(owners.input),
+  );
+  if (!("resources" in acquired)) {
+    throw new Error("Expected an acquired inspection");
+  }
+  releases.push(async () => {
+    await acquired.releaseRegistry();
+    acquired.releaseWork();
+  });
+  return acquired;
+}
+
+function expectTransport(registry: PluginRegistry, messageId: string) {
+  return expect(
+    registry.channels[0]!.plugin.outbound!.sendText!(sendParams),
+  ).resolves.toMatchObject({
+    messageId,
+  });
+}
+
 describe("prepared channel runtime ownership", () => {
   it.each([
     { path: "inbound", close: "consumer" },
@@ -217,33 +240,14 @@ describe("prepared channel runtime ownership", () => {
     expect(() => send(sendParams)).toThrow("consumer is closed");
     expect(() => grant?.()).toThrow("consumer is closed");
     expect(() => resolveRuntime?.()).toThrow("consumer is closed");
-    await expect(
-      live.registry.channels[0]!.plugin.outbound!.sendText!(sendParams),
-    ).resolves.toMatchObject({
-      messageId: "live transport",
-    });
+    await expectTransport(live.registry, "live transport");
   });
 
   it("holds the donor through acquired inspection and closes only its scoped callbacks", async () => {
-    const { live, selected, input } = prepareOwners();
-    const resources = new PluginRegistryInspectionResources(async () => {
-      await selected.instance.dispose();
-    });
-    resources.attach(selected.registry);
-    loaders.acquirePluginRegistryForInspection.mockResolvedValue({
-      registry: selected.registry,
-      release: () => resources.release(),
-    });
-    const acquired = await withPluginRuntimeRegistryScope(live.registry, () =>
-      acquireAgentRuntimePluginRegistry(input),
-    );
-    if (!("resources" in acquired)) {
-      throw new Error("Expected an acquired inspection");
-    }
-    releases.push(async () => {
-      await acquired.releaseRegistry();
-      acquired.releaseWork();
-    });
+    const owners = prepareOwners();
+    const { live, selected } = owners;
+    loaders.acquirePluginRegistryForInspection.mockResolvedValue(inspection(selected));
+    const acquired = await acquire(owners);
     const scope = acquired.resources.createInvocationScope(acquired.registry);
     releases.push(() => scope.release());
     const entry = acquired.registry.channels[0]!;
@@ -261,30 +265,17 @@ describe("prepared channel runtime ownership", () => {
   it.each(["retired", "replaced"] as const)(
     "refuses a donor %s while registry preparation awaits",
     async (change) => {
-      const { gateway, live, selected, input } = prepareOwners();
+      const owners = prepareOwners();
+      const { gateway, live, selected } = owners;
       const entered = createDeferredCore();
       const resume = createDeferredCore();
-      const resources = new PluginRegistryInspectionResources(async () => {
-        await selected.instance.dispose();
-      });
-      resources.attach(selected.registry);
+      const inspected = inspection(selected);
       loaders.acquirePluginRegistryForInspection.mockImplementation(async () => {
         entered.resolve();
         await resume.promise;
-        return { registry: selected.registry, release: () => resources.release() };
+        return inspected;
       });
-      const preparing = withPluginRuntimeRegistryScope(live.registry, () =>
-        acquireAgentRuntimePluginRegistry(input),
-      ).then((acquired) => {
-        if ("releaseRegistry" in acquired) {
-          releases.push(async () => {
-            await acquired.releaseRegistry();
-            acquired.releaseWork();
-          });
-        }
-        return acquired;
-      });
-      const outcome = expect(preparing).rejects.toThrow("Channel runtime owner changed");
+      const outcome = expect(acquire(owners)).rejects.toThrow("Channel runtime owner changed");
       await entered.promise;
       if (change === "retired") {
         markPluginRegistryRetired(live.registry);
@@ -340,11 +331,7 @@ describe("prepared channel runtime ownership", () => {
             preferBuiltPluginArtifacts: true,
           }),
       );
-      await expect(
-        registry.channels[0]!.plugin.outbound!.sendText!(sendParams),
-      ).resolves.toMatchObject({
-        messageId: "discovery transport",
-      });
+      await expectTransport(registry, "discovery transport");
       expect(live.send).not.toHaveBeenCalled();
     },
   );

@@ -27,95 +27,95 @@ function resolveAgentRunSessionTarget(
 describe("agent run session target", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-run-session-target-");
   let tempDir: string;
+  let storePath: string;
 
   beforeEach(() => {
     tempDir = sessionDirs.make();
+    storePath = path.join(tempDir, "sessions.json");
   });
 
-  it("uses the session id as the compatibility key when callers omit sessionKey", async () => {
-    const storePath = path.join(tempDir, "fallback", "sessions.json");
+  function resolveStoredTarget(params: ResolveTargetParams, mode?: "create") {
+    return resolveAgentRunSessionTarget(
+      { ...params, config: { ...params.config, session: { store: storePath } } },
+      mode,
+    );
+  }
 
-    await expect(
-      resolveAgentRunSessionTarget(
-        {
-          config: { session: { store: storePath } } as OpenClawConfig,
-          sessionId: "compat-session",
-        },
-        "create",
-      ),
-    ).resolves.toEqual({
+  function marker() {
+    return formatSqliteSessionFileMarker({
       agentId: "main",
-      sessionId: "compat-session",
-      sessionKey: "agent:main:compat-session",
+      sessionId: "legacy-session",
+      storePath,
+    });
+  }
+
+  function seed(sessionId: string, sessionKey: string, agentId = "main", updatedAt = 1) {
+    return seedSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt });
+  }
+
+  function expectKeyedTarget(params: ResolveTargetParams, sessionKey: string, agentId?: string) {
+    return expect(resolveStoredTarget(params)).resolves.toMatchObject({
+      sessionId: params.sessionId,
+      sessionKey,
+      storePath,
+      ...(agentId ? { agentId } : {}),
+    });
+  }
+
+  function fixedOwnerConfig(
+    entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+  ): OpenClawConfig {
+    return {
+      agents: { ownership: "explicit", defaults: { sessionStore: { agentId: "ops" } }, entries },
+    };
+  }
+
+  const missingTarget = {
+    code: "session-key-missing",
+    name: "AgentRunSessionTargetResolutionError",
+  };
+  const compatTarget = {
+    agentId: "main",
+    sessionId: "compat-session",
+    sessionKey: "agent:main:compat-session",
+  };
+
+  it("uses the session id as the compatibility key when callers omit sessionKey", async () => {
+    await expect(resolveStoredTarget({ sessionId: "compat-session" }, "create")).resolves.toEqual({
+      ...compatTarget,
       storePath,
     });
   });
 
   it("resolves an existing keyed row before creating a session-id compatibility key", async () => {
-    const storePath = path.join(tempDir, "existing", "sessions.json");
     const sessionId = "2fb701ef-6425-4c48-9b6f-5a170aa2477e";
     const sessionKey = "agent:main:telegram:direct:reporter";
-    await seedSessionEntry({ agentId: "main", sessionKey, storePath }, { sessionId, updatedAt: 1 });
+    await seed(sessionId, sessionKey);
 
-    await expect(
-      resolveAgentRunSessionTarget({
-        agentId: "main",
-        config: { session: { store: storePath } } as OpenClawConfig,
-        sessionId,
-      }),
-    ).resolves.toMatchObject({ sessionId, sessionKey, storePath });
+    await expectKeyedTarget({ agentId: "main", sessionId }, sessionKey);
   });
 
   it("resolves an existing bare row through its persisted fixed-store owner", async () => {
-    const storePath = path.join(tempDir, "fixed-owner", "sessions.json");
     const sessionId = "fixed-owner-session";
-    await seedSessionEntry(
-      { agentId: "ops", sessionKey: "global", storePath },
-      { sessionId, updatedAt: 1 },
-    );
+    await seed(sessionId, "global", "ops");
 
-    await expect(
-      resolveAgentRunSessionTarget({
-        config: {
-          session: { store: storePath },
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { ops: {}, research: {} },
-          },
-        },
-        sessionId,
-      }),
-    ).resolves.toMatchObject({
-      agentId: "ops",
-      sessionId,
-      sessionKey: "global",
-      storePath,
-    });
+    await expectKeyedTarget(
+      { config: fixedOwnerConfig({ ops: {}, research: {} }), sessionId },
+      "global",
+      "ops",
+    );
   });
 
   it("keeps a scoped live row available when the fixed-store owner is retired", async () => {
-    const storePath = path.join(tempDir, "retired-owner", "sessions.json");
     const sessionId = "research-session";
     const sessionKey = "agent:research:work";
-    await seedSessionEntry(
-      { agentId: "research", sessionKey, storePath },
-      { sessionId, updatedAt: 1 },
-    );
+    await seed(sessionId, sessionKey, "research");
 
-    await expect(
-      resolveAgentRunSessionTarget({
-        config: {
-          session: { store: storePath },
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { research: {}, support: {} },
-          },
-        },
-        sessionId,
-      }),
-    ).resolves.toMatchObject({ agentId: "research", sessionId, sessionKey, storePath });
+    await expectKeyedTarget(
+      { config: fixedOwnerConfig({ research: {}, support: {} }), sessionId },
+      sessionKey,
+      "research",
+    );
   });
 
   it("finds an agent-scoped row by id in an ownerless explicit fleet", async () => {
@@ -142,10 +142,9 @@ describe("agent run session target", () => {
   });
 
   it("uses the active runtime store when compatibility projection omits config", async () => {
-    const storePath = path.join(tempDir, "runtime-config", "sessions.json");
     const sessionId = "7ef14ab2-4801-40e1-9c56-83f9250c1706";
     const sessionKey = "agent:main:discord:direct:reporter";
-    await seedSessionEntry({ agentId: "main", sessionKey, storePath }, { sessionId, updatedAt: 1 });
+    await seed(sessionId, sessionKey);
     setRuntimeConfigSnapshot({ session: { store: storePath } });
     try {
       await expect(
@@ -157,27 +156,15 @@ describe("agent run session target", () => {
   });
 
   it("returns a typed failure when existing-transcript resolution has no keyed row", async () => {
-    const storePath = path.join(tempDir, "missing", "sessions.json");
-
     await expect(
-      resolveAgentRunSessionTarget({
-        agentId: "main",
-        config: { session: { store: storePath } } as OpenClawConfig,
-        sessionId: "missing-session",
-      }),
-    ).rejects.toMatchObject({
-      code: "session-key-missing",
-      name: "AgentRunSessionTargetResolutionError",
-    });
+      resolveStoredTarget({ agentId: "main", sessionId: "missing-session" }),
+    ).rejects.toMatchObject(missingTarget);
   });
 
   it("does not create a key for an unknown session id during cross-agent lookup", async () => {
-    const storePath = path.join(tempDir, "missing-cross-agent", "sessions.json");
-
     await expect(
-      resolveAgentRunSessionTarget({
+      resolveStoredTarget({
         config: {
-          session: { store: storePath },
           agents: {
             ownership: "explicit",
             entries: { ops: {}, research: {} },
@@ -185,83 +172,43 @@ describe("agent run session target", () => {
         },
         sessionId: "unknown-cross-agent-session",
       }),
-    ).rejects.toMatchObject({
-      code: "session-key-missing",
-      name: "AgentRunSessionTargetResolutionError",
-    });
+    ).rejects.toMatchObject(missingTarget);
   });
 
   it("round-trips a plain compatibility key through sessionFile", async () => {
-    const storePath = path.join(tempDir, "fallback", "sessions.json");
-
     await expect(
-      resolveAgentRunSessionTarget(
-        {
-          config: { session: { store: storePath } } as OpenClawConfig,
-          sessionId: "compat-session",
-          sessionFile: "compat-session",
-        },
-        "create",
-      ),
-    ).resolves.toEqual({
-      agentId: "main",
-      sessionId: "compat-session",
-      sessionKey: "agent:main:compat-session",
-      storePath,
-    });
+      resolveStoredTarget({ sessionId: "compat-session", sessionFile: "compat-session" }, "create"),
+    ).resolves.toEqual({ ...compatTarget, storePath });
   });
 
   it("matches a partial typed target key against its compatibility token", async () => {
-    const storePath = path.join(tempDir, "fallback", "sessions.json");
-
-    await expect(
-      resolveAgentRunSessionTarget({
-        config: { session: { store: storePath } } as OpenClawConfig,
+    await expectKeyedTarget(
+      {
         sessionId: "compat-session",
         sessionFile: "custom-key",
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "compat-session",
-          sessionKey: "custom-key",
-        },
-      }),
-    ).resolves.toMatchObject({ sessionKey: "agent:main:custom-key", storePath });
+        sessionTarget: { agentId: "main", sessionId: "compat-session", sessionKey: "custom-key" },
+      },
+      "agent:main:custom-key",
+    );
   });
 
   it("recovers the persisted owner from a legacy SQLite marker", async () => {
-    const storePath = path.join(tempDir, "legacy", "sessions.json");
     const sessionKey = "agent:main:dashboard:legacy-session";
-    await seedSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "legacy-session", updatedAt: 1 },
-    );
-    await seedSessionEntry(
-      { agentId: "main", sessionKey: "agent:main:legacy-session", storePath },
-      { sessionId: "legacy-session", updatedAt: 2 },
-    );
+    await seed("legacy-session", sessionKey);
+    await seed("legacy-session", "agent:main:legacy-session", "main", 2);
 
     await expect(
-      resolveAgentRunSessionTarget({
-        config: { session: { store: storePath } },
+      resolveStoredTarget({
         sessionId: "legacy-session",
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "legacy-session",
-          storePath,
-        }),
+        sessionFile: marker(),
       }),
     ).resolves.toMatchObject({ sessionKey: "agent:main:legacy-session", storePath });
 
     await expect(
-      resolveAgentRunSessionTarget({
-        config: { session: { store: storePath } },
+      resolveStoredTarget({
         sessionId: "legacy-session",
         sessionKey,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "legacy-session",
-          storePath,
-        }),
+        sessionFile: marker(),
       }),
     ).resolves.toMatchObject({ sessionKey: "agent:main:legacy-session", storePath });
   });
@@ -271,11 +218,7 @@ describe("agent run session target", () => {
       resolveAgentRunSessionTarget({
         config: {},
         sessionId: "legacy-session",
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "legacy-session",
-          storePath: path.join(tempDir, "legacy.json"),
-        }),
+        sessionFile: marker(),
         sessionTarget: {
           sessionId: "legacy-session",
           sessionKey: "agent:worker:legacy-session",
@@ -311,19 +254,13 @@ describe("agent run session target", () => {
       resolveAgentRunSessionTarget({
         config: {},
         sessionId: "legacy-session",
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "legacy-session",
-          storePath: path.join(tempDir, "legacy.json"),
-        }),
+        sessionFile: marker(),
         sessionTarget: { agentId: "worker", sessionId: "legacy-session" },
       }),
     ).rejects.toThrow("Legacy SQLite transcript marker conflicts");
   });
 
   it("ignores a stale legacy marker when a complete typed target is present", async () => {
-    const storePath = path.join(tempDir, "target", "sessions.json");
-
     await expect(
       resolveAgentRunSessionTarget({
         config: {},

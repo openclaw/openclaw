@@ -1,7 +1,3 @@
-/**
- * Regression coverage for gateway-backed agent run waiting.
- * Exercises timeout normalization, run-owned replies, and dynamic drain loops.
- */
 import {
   addTimerTimeoutGraceMs,
   MAX_DATE_TIMESTAMP_MS,
@@ -17,6 +13,7 @@ import {
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 const callGatewayMock = vi.spyOn(gatewayCallRuntime, "callGateway");
 afterAll(() => callGatewayMock.mockRestore());
+beforeEach(() => callGatewayMock.mockReset());
 
 import {
   readLatestAssistantReply,
@@ -43,28 +40,12 @@ function expectNumber(value: unknown, label: string): number {
   return value;
 }
 
-function gatewayWaitRequests(): AgentWaitGatewayRequest[] {
-  return callGatewayMock.mock.calls.map(([request]) => request as AgentWaitGatewayRequest);
-}
-
-function requireRequestAt(
-  requests: readonly AgentWaitGatewayRequest[],
-  index: number,
-): AgentWaitGatewayRequest {
-  const request = requests.at(index);
+function expectAgentWaitRequest(index: number, runId: string, maxParamTimeoutMs: number): void {
+  const request = callGatewayMock.mock.calls[index]?.[0] as AgentWaitGatewayRequest | undefined;
+  expect(request).toMatchObject({ method: "agent.wait", params: { runId } });
   if (!request) {
     throw new Error(`expected gateway request at index ${index}`);
   }
-  return request;
-}
-
-function expectAgentWaitRequest(
-  request: AgentWaitGatewayRequest,
-  runId: string,
-  maxParamTimeoutMs: number,
-): void {
-  expect(request.method).toBe("agent.wait");
-  expect(request.params?.runId).toBe(runId);
 
   const paramTimeoutMs = expectNumber(request.params?.timeoutMs, `${runId} param timeoutMs`);
   const requestTimeoutMs = expectNumber(request.timeoutMs, `${runId} request timeoutMs`);
@@ -76,23 +57,44 @@ function expectAgentWaitRequest(
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
 
-describe("readLatestAssistantReply", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
+function assistant(text: string, extra = {}) {
+  return { role: "assistant", content: [{ type: "text", text }], ...extra };
+}
 
+const cappedMessage = {
+  ...textAssistant("Report head\n...(truncated)..."),
+  __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
+};
+
+function expectLatestReply(messages: unknown[], expected: string, sessionKey = "agent:main:child") {
+  callGatewayMock.mockResolvedValue({ messages });
+  return expect(readLatestAssistantReply({ sessionKey })).resolves.toBe(expected);
+}
+
+function waitReply(runId: string, untilTerminal?: true) {
+  return waitForAgentRunReply({ runId, timeoutMs: 1_000, untilTerminal });
+}
+
+async function withClock(at: number | string, run: () => Promise<void>) {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(at));
+  try {
+    await run();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe("readLatestAssistantReply", () => {
   it("returns the most recent assistant message when compaction markers trail history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
+    await expectLatestReply(
+      [
         textAssistant("All checks passed and changes were pushed."),
         { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("All checks passed and changes were pushed.");
+      "All checks passed and changes were pushed.",
+    );
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "chat.history",
       params: { sessionKey: "agent:main:child", limit: 50 },
@@ -100,136 +102,90 @@ describe("readLatestAssistantReply", () => {
   });
 
   it("falls back to older assistant text when latest assistant has no text", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "older output" }] },
+    await expectLatestReply(
+      [
+        assistant("older output"),
         { role: "assistant", content: [] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("older output");
+      "older output",
+    );
   });
 
   it("skips trailing transcript-only OpenClaw assistant mirrors for normal latest-reply reads", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "real worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "already delivered through message tool" }],
+    await expectLatestReply(
+      [
+        assistant("real worker reply", { timestamp: 10 }),
+        assistant("already delivered through message tool", {
           openclawMessageToolMirror: {
             toolName: "message",
             toolCallId: "call-message-send",
           },
           timestamp: 11,
-        },
-        {
-          role: "assistant",
+        }),
+        assistant("gateway notice", {
           provider: "openclaw",
           model: "gateway-injected",
-          content: [{ type: "text", text: "gateway notice" }],
           timestamp: 12,
-        },
+        }),
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("real worker reply");
+      "real worker reply",
+    );
   });
 
-  it.each([
-    {
-      name: "cron run prompt",
-      provenance: {
-        kind: "internal_system",
-        sourceTool: "cron",
-        jobId: "job-1",
-        runId: "run-1",
-        sourceSessionKey: "agent:main:cron:job-1:run:run-1",
-      },
-    },
-  ])("skips a trailing projected $name for latest-reply reads", async ({ provenance }) => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "older worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "forwarded input text" }],
-          provenance,
-          timestamp: 11,
-        },
+  it("skips a trailing projected cron run prompt for latest-reply reads", async () => {
+    const provenance = {
+      kind: "internal_system",
+      sourceTool: "cron",
+      jobId: "job-1",
+      runId: "run-1",
+      sourceSessionKey: "agent:main:cron:job-1:run:run-1",
+    };
+    await expectLatestReply(
+      [
+        assistant("older worker reply", { timestamp: 10 }),
+        assistant("forwarded input text", { provenance, timestamp: 11 }),
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:target" });
-
-    expect(result).toBe("older worker reply");
+      "older worker reply",
+      "agent:main:target",
+    );
   });
 
   it("preserves spaces across split final_answer history blocks", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
+    const block = (text: string, id: string, phase: string) => ({
+      type: "text",
+      text,
+      textSignature: JSON.stringify({ v: 1, id, phase }),
+    });
+    await expectLatestReply(
+      [
         {
           role: "assistant",
           content: [
-            {
-              type: "text",
-              text: "Need fix line quoting properly.",
-              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Hi ",
-              textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
-            },
-            {
-              type: "text",
-              text: "there",
-              textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
-            },
+            block("Need fix line quoting properly.", "commentary", "commentary"),
+            block("Hi ", "final_1", "final_answer"),
+            block("there", "final_2", "final_answer"),
           ],
         },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("Hi there");
+      "Hi there",
+    );
   });
 
   it("reads the full message when history returns a display-capped preview", async () => {
     callGatewayMock.mockImplementation(async (request) => {
       if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
+        return { messages: [cappedMessage] };
       }
       return { ok: true, message: textAssistant("Report head and the full remainder.") };
     });
 
-    const result = await readLatestAssistantReply({
-      sessionKey: "agent:main:child",
-      agentId: "main",
-    });
-
-    expect(result).toBe("Report head and the full remainder.");
+    await expect(
+      readLatestAssistantReply({
+        sessionKey: "agent:main:child",
+        agentId: "main",
+      }),
+    ).resolves.toBe("Report head and the full remainder.");
     expect(callGatewayMock).toHaveBeenLastCalledWith({
       method: "chat.message.get",
       params: { sessionKey: "agent:main:child", agentId: "main", messageId: "msg-1" },
@@ -239,14 +195,7 @@ describe("readLatestAssistantReply", () => {
   it("returns no reply when the full-message lookup is rejected", async () => {
     callGatewayMock.mockImplementation(async (request) => {
       if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
+        return { messages: [cappedMessage] };
       }
       throw new Error("session changed while reading history; reload the conversation");
     });
@@ -258,10 +207,6 @@ describe("readLatestAssistantReply", () => {
 });
 
 describe("waitForAgentRun", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
   it("preserves pending error diagnostics on wait timeouts", async () => {
     callGatewayMock.mockResolvedValue({
       status: "timeout",
@@ -269,9 +214,7 @@ describe("waitForAgentRun", () => {
       pendingError: true,
     });
 
-    const result = await waitForAgentRun({ runId: "run-pending-error", timeoutMs: 500 });
-
-    expect(result).toEqual({
+    await expect(waitForAgentRun({ runId: "run-pending-error", timeoutMs: 500 })).resolves.toEqual({
       status: "timeout",
       error: "429 RESOURCE_EXHAUSTED",
       pendingError: true,
@@ -354,9 +297,7 @@ describe("waitForAgentRun", () => {
       error: "Context overflow: prompt too large for the model.",
     });
 
-    const result = await waitForAgentRun({ runId: "run-blocked", timeoutMs: 500 });
-
-    expect(result).toEqual({
+    await expect(waitForAgentRun({ runId: "run-blocked", timeoutMs: 500 })).resolves.toEqual({
       status: "error",
       error: "Context overflow: prompt too large for the model.",
       startedAt: 100,
@@ -373,9 +314,7 @@ describe("waitForAgentRun", () => {
       stopReason: "aborted",
     });
 
-    const result = await waitForAgentRun({ runId: "run-aborted", timeoutMs: 500 });
-
-    expect(result).toEqual({
+    await expect(waitForAgentRun({ runId: "run-aborted", timeoutMs: 500 })).resolves.toEqual({
       status: "error",
       error: "agent run aborted",
       startedAt: 100,
@@ -386,10 +325,6 @@ describe("waitForAgentRun", () => {
 });
 
 describe("waitForAgentRunReply", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
   it("returns the run's reply and metadata without consulting unrelated session history", async () => {
     callGatewayMock.mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {
@@ -406,12 +341,7 @@ describe("waitForAgentRunReply", () => {
       };
     });
 
-    const result = await waitForAgentRunReply({
-      runId: "run-visible-terminal-reply",
-      timeoutMs: 1_000,
-    });
-
-    expect(result).toEqual({
+    await expect(waitReply("run-visible-terminal-reply")).resolves.toEqual({
       status: "ok",
       startedAt: 100,
       endedAt: 200,
@@ -435,7 +365,7 @@ describe("waitForAgentRunReply", () => {
       return { status: "ok", terminalReply };
     });
 
-    const result = await waitForAgentRunReply({ runId: "run-no-reply", timeoutMs: 1_000 });
+    const result = await waitReply("run-no-reply");
 
     expect(result).toEqual({ status: "ok", terminalReply });
     expect(result.replyText).toBeUndefined();
@@ -448,11 +378,7 @@ describe("waitForAgentRunReply", () => {
   ])("ends completion observation for $status / $stopReason", async (terminal) => {
     callGatewayMock.mockResolvedValue(terminal);
 
-    const result = await waitForAgentRunReply({
-      runId: "run-ended",
-      timeoutMs: 1_000,
-      untilTerminal: true,
-    });
+    const result = await waitReply("run-ended", true);
 
     expect(result).toMatchObject(terminal);
     expect(result.replyText).toBeUndefined();
@@ -464,11 +390,7 @@ describe("waitForAgentRunReply", () => {
     async (message) => {
       callGatewayMock.mockRejectedValue(new Error(message));
 
-      const result = await waitForAgentRunReply({
-        runId: "run-disconnected",
-        timeoutMs: 1_000,
-        untilTerminal: true,
-      });
+      const result = await waitReply("run-disconnected", true);
 
       expect(result.error).toBe(message);
       expect(result.replyText).toBeUndefined();
@@ -481,13 +403,7 @@ describe("waitForAgentRunReply", () => {
     async (owner) => {
       const work = new AsyncWorkScope();
       callGatewayMock.mockResolvedValue({ status: "pending", timeoutPhase: "queue" });
-      const observation = work.run(() =>
-        waitForAgentRunReply({
-          runId: "run-queued",
-          timeoutMs: 1_000,
-          untilTerminal: true,
-        }),
-      );
+      const observation = work.run(() => waitReply("run-queued", true));
       const rejection = expect(observation).rejects.toThrow();
       try {
         await vi.waitFor(() => expect(callGatewayMock).toHaveBeenCalledOnce());
@@ -508,32 +424,25 @@ describe("waitForAgentRunReply", () => {
 });
 
 describe("waitForAgentRunsToDrain", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
+  it("lets completion callbacks drain runs after immediate ok responses", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+    let activeRunIds = ["run-1"];
+    const completion = setTimeout(() => {
+      activeRunIds = [];
+    }, 0);
+    try {
+      const result = await waitForAgentRunsToDrain({
+        timeoutMs: 200,
+        getPendingRunIds: async () => activeRunIds,
+      });
+
+      expect(result.timedOut).toBe(false);
+      expect(result.pendingRunIds).toEqual([]);
+      expect(callGatewayMock.mock.calls.length).toBeLessThanOrEqual(4);
+    } finally {
+      clearTimeout(completion);
+    }
   });
-
-  it.each(["ok"])(
-    "lets completion callbacks drain runs after immediate %s responses",
-    async (status) => {
-      callGatewayMock.mockResolvedValue({ status });
-      let activeRunIds = ["run-1"];
-      const completion = setTimeout(() => {
-        activeRunIds = [];
-      }, 0);
-      try {
-        const result = await waitForAgentRunsToDrain({
-          timeoutMs: 200,
-          getPendingRunIds: async () => activeRunIds,
-        });
-
-        expect(result.timedOut).toBe(false);
-        expect(result.pendingRunIds).toEqual([]);
-        expect(callGatewayMock.mock.calls.length).toBeLessThanOrEqual(4);
-      } finally {
-        clearTimeout(completion);
-      }
-    },
-  );
 
   it("bounds retries of unchanged runs by the drain deadline", async () => {
     callGatewayMock.mockResolvedValue({ status: "pending" });
@@ -546,7 +455,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     expect(result).toEqual({ timedOut: true, pendingRunIds: ["run-1"], deadlineAtMs });
     expect(callGatewayMock.mock.calls.length).toBeLessThanOrEqual(4);
-    expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 150);
+    expectAgentWaitRequest(0, "run-1", 150);
   });
 
   it("keeps the initial pending run ids before refreshing", async () => {
@@ -564,19 +473,16 @@ describe("waitForAgentRunsToDrain", () => {
     });
 
     expect(result.timedOut).toBe(false);
-    const requests = gatewayWaitRequests();
-    expect(requests).toHaveLength(2);
-    expectAgentWaitRequest(requireRequestAt(requests, 0), "run-1", 1_000);
-    expectAgentWaitRequest(requireRequestAt(requests, 1), "run-2", 1_000);
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expectAgentWaitRequest(0, "run-1", 1_000);
+    expectAgentWaitRequest(1, "run-2", 1_000);
   });
 
-  it("defaults non-finite drain timeouts before computing the deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-30T00:00:00Z"));
-    callGatewayMock.mockResolvedValue({ status: "ok" });
-    let activeRunIds = ["run-1"];
+  it("defaults non-finite drain timeouts before computing the deadline", () =>
+    withClock("2026-05-30T00:00:00Z", async () => {
+      callGatewayMock.mockResolvedValue({ status: "ok" });
+      let activeRunIds = ["run-1"];
 
-    try {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: Number.NaN,
         getPendingRunIds: async () => {
@@ -588,16 +494,11 @@ describe("waitForAgentRunsToDrain", () => {
 
       expect(result.timedOut).toBe(false);
       expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
-      expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      expectAgentWaitRequest(0, "run-1", 1);
+    }));
 
-  it("times out immediately when the computed drain deadline exceeds the Date range", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
-    try {
+  it("times out immediately when the computed drain deadline exceeds the Date range", () =>
+    withClock(MAX_DATE_TIMESTAMP_MS, async () => {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: 1,
         getPendingRunIds: async () => ["run-1"],
@@ -609,15 +510,10 @@ describe("waitForAgentRunsToDrain", () => {
         deadlineAtMs: MAX_DATE_TIMESTAMP_MS,
       });
       expect(callGatewayMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }));
 
-  it("ignores invalid caller-supplied drain deadlines", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-30T00:00:00Z"));
-    try {
+  it("ignores invalid caller-supplied drain deadlines", () =>
+    withClock("2026-05-30T00:00:00Z", async () => {
       const result = await waitForAgentRunsToDrain({
         deadlineAtMs: Number.POSITIVE_INFINITY,
         getPendingRunIds: async () => ["run-1"],
@@ -627,8 +523,5 @@ describe("waitForAgentRunsToDrain", () => {
       expect(result.pendingRunIds).toStrictEqual(["run-1"]);
       expect(result.deadlineAtMs).toBe(Date.now());
       expect(callGatewayMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }));
 });
