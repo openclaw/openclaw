@@ -20,17 +20,18 @@ const retryingCompactionEnd = () =>
 
 function createBlockReplyHarness(
   blockReplyBreak: "message_end" | "text_end",
-  options: {
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    hasDeliveredMessageToolOnlySourceReply?: () => boolean;
-    onDeliveredMessageToolOnlySourceReply?: () => void;
-    reasoningMode?: "off" | "on" | "stream";
-    onReasoningEnd?: () => void;
-    onReasoningStream?: (payload: { text?: string }) => void;
-  } = {},
+  options: Partial<
+    Pick<
+      Parameters<typeof subscribeEmbeddedAgentSession>[0],
+      | "sourceReplyDeliveryMode"
+      | "hasDeliveredMessageToolOnlySourceReply"
+      | "onDeliveredMessageToolOnlySourceReply"
+      | "reasoningMode"
+      | "onReasoningEnd"
+      | "onReasoningStream"
+    >
+  > = {},
 ) {
-  // Harness exposes both emitted block replies and subscription state so tests
-  // can distinguish suppression from missing delivery tracking.
   const { session, emit: rawEmit } = createStubSessionHarness();
   const sessionManager = session.sessionManager;
   const emit = (evt: unknown) => {
@@ -45,9 +46,7 @@ function createBlockReplyHarness(
       recordEmbeddedToolReceipt(
         sessionManager,
         event.toolCallId,
-        {
-          messageDelivery: details.messageDelivery,
-        },
+        { messageDelivery: details.messageDelivery },
         true,
       );
     }
@@ -62,62 +61,56 @@ function createBlockReplyHarness(
     onBlockReply,
     onPartialReply,
     onAgentEvent,
-    onReasoningEnd: options.onReasoningEnd,
-    onReasoningStream: options.onReasoningStream,
     blockReplyBreak,
-    reasoningMode: options.reasoningMode,
-    sourceReplyDeliveryMode: options.sourceReplyDeliveryMode,
-    hasDeliveredMessageToolOnlySourceReply: options.hasDeliveredMessageToolOnlySourceReply,
-    onDeliveredMessageToolOnlySourceReply: options.onDeliveredMessageToolOnlySourceReply,
+    ...options,
   });
   return { emit, onAgentEvent, onBlockReply, onPartialReply, subscription };
 }
 
-async function emitMessageToolLifecycle(params: {
-  emit: (evt: unknown) => void;
-  toolCallId: string;
-  message: string;
-  media?: string;
-  to?: string | null;
-  action?: string;
-  channelId?: string;
-  threadId?: string;
-  result: unknown;
-}) {
+async function emitMessageToolLifecycle(
+  emit: (evt: unknown) => void,
+  message: string,
+  params: {
+    toolCallId?: string;
+    media?: string;
+    to?: string | null;
+    action?: string;
+    channelId?: string;
+    threadId?: string;
+    result?: unknown;
+  } = {},
+) {
   // Tool start preserves invocation context; completion records confirmed delivery.
-  params.emit({
+  emit({
     type: "tool_execution_start",
     toolName: "message",
-    toolCallId: params.toolCallId,
+    toolCallId: params.toolCallId ?? "tool-message-1",
     args: {
       action: params.action ?? "send",
       ...(params.to === null ? {} : { to: params.to ?? "+1555" }),
       ...(params.channelId ? { channelId: params.channelId } : {}),
       ...(params.threadId ? { threadId: params.threadId } : {}),
-      message: params.message,
+      message,
       media: params.media,
     },
   });
   // Wait for async handler to complete.
   await Promise.resolve();
-  params.emit({
+  emit({
     type: "tool_execution_end",
     toolName: "message",
-    toolCallId: params.toolCallId,
+    toolCallId: params.toolCallId ?? "tool-message-1",
     isError: false,
-    result: attachCoreMessageDeliveryFact(params.result),
+    result: attachCoreMessageDeliveryFact(params.result ?? { details: { deliveryStatus: "sent" } }),
   });
 }
 
 function attachCoreMessageDeliveryFact(result: unknown): unknown {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
+  const record = asOptionalRecord(result);
+  if (!record) {
     return result;
   }
-  const record = result as Record<string, unknown>;
-  const details =
-    record.details && typeof record.details === "object" && !Array.isArray(record.details)
-      ? (record.details as Record<string, unknown>)
-      : undefined;
+  const details = asOptionalRecord(record.details);
   const deliveryStatus = details?.deliveryStatus;
   const status =
     deliveryStatus === "sent"
@@ -162,12 +155,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 
     const messageText = "This is the answer.";
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-1",
-      message: messageText,
-      result: { details: { deliveryStatus: "sent" } },
-    });
+    await emitMessageToolLifecycle(emit, messageText);
     emitAssistantMessageEnd(emit, messageText);
     await Promise.resolve();
 
@@ -179,13 +167,10 @@ describe("subscribeEmbeddedAgentSession", () => {
       sourceReplyDeliveryMode: "automatic",
     });
 
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-current-thread",
+    await emitMessageToolLifecycle(emit, "QA-THREAD-RECEIPT-TOOL-OK", {
       action: "thread-reply",
       channelId: "qa-room",
       threadId: "thread-1",
-      message: "QA-THREAD-RECEIPT-TOOL-OK",
       to: null,
       result: {
         details: {
@@ -207,13 +192,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-text-end-continue",
-      message: "Starting the requested work.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
+    await emitMessageToolLifecycle(emit, "Starting the requested work.", { to: null });
     emitAssistantTextEndBlock(emit, "Done.");
     await Promise.resolve();
     await Promise.resolve();
@@ -251,10 +230,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-internal-before-compaction",
-      message: "Visible terminal answer.",
+    await emitMessageToolLifecycle(emit, "Visible terminal answer.", {
       result: {
         details: {
           status: "ok",
@@ -289,13 +265,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
     expect(onReasoningStream).toHaveBeenCalledTimes(1);
 
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-after-reasoning",
-      message: "Starting the requested work.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
+    await emitMessageToolLifecycle(emit, "Starting the requested work.", { to: null });
     emitAssistantMessageEnd(emit, "Private final output.");
     await Promise.resolve();
 
@@ -308,10 +278,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       hasDeliveredMessageToolOnlySourceReply: () => true,
     });
 
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-rewritten-result",
-      message: "Starting the requested work.",
+    await emitMessageToolLifecycle(emit, "Starting the requested work.", {
       to: null,
       result: { details: { rewritten: true } },
     });
@@ -324,12 +291,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("tracks media-only message tool sends as messaging delivery", async () => {
     const { emit, subscription } = createBlockReplyHarness("message_end");
     try {
-      await emitMessageToolLifecycle({
-        emit,
-        toolCallId: "tool-message-media",
-        message: "",
+      await emitMessageToolLifecycle(emit, "", {
         media: "file:///tmp/render.mp4",
-        result: { details: { deliveryStatus: "sent" } },
       });
       await subscription.waitForPendingEvents();
 
@@ -337,10 +300,8 @@ describe("subscribeEmbeddedAgentSession", () => {
       expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
 
       const expectedUrls = Array.from({ length: 200 }, (_, index) => `file:///img-${index}.jpg`);
-      await emitMessageToolLifecycle({
-        emit,
+      await emitMessageToolLifecycle(emit, "", {
         toolCallId: "tool-message-media-cap",
-        message: "",
         result: { details: { deliveryStatus: "sent", mediaUrls: [...expectedUrls] } },
       });
       await subscription.waitForPendingEvents();
@@ -469,72 +430,53 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
-  it.each([{ name: "a partial progress send", batch: ["partial"], endsWithProgress: false }])(
-    "reports whether the last tool batch was source progress after $name",
-    async ({ batch, endsWithProgress }) => {
-      const { session, emit } = createStubSessionHarness();
-      const sessionManager = session.sessionManager;
-      const subscription = subscribeEmbeddedAgentSession({
-        session,
-        runId: "trailing-progress",
-        sourceReplyDeliveryMode: "message_tool_only",
-      });
-      const runToolBatch = async (tools: string[]) => {
-        emitAssistantMessageEnd(emit, "", {
-          stopReason: "toolUse",
-          content: tools.map((tool) => ({ type: "toolCall", id: tool, name: tool, arguments: {} })),
-        });
-        for (const tool of tools) {
-          const partial = tool === "partial";
-          const messageTool = tool === "progress" || tool === "reaction" || partial;
-          const toolName = messageTool ? "message" : tool;
-          emit({
-            type: "tool_execution_start",
-            toolName,
-            toolCallId: tool,
-            args:
-              tool === "progress" || partial
-                ? { action: "send", final: false, target: "channel:source", message: "Working." }
-                : tool === "reaction"
-                  ? { action: "react", final: false, target: "channel:source", emoji: "👀" }
-                  : { path: "notes.txt" },
-          });
-          await Promise.resolve();
-          if (messageTool) {
-            recordEmbeddedToolReceipt(
-              sessionManager,
-              tool,
-              {
-                messageDelivery: {
-                  status: "settled",
-                  partialDelivery: partial,
-                  createdThreadIds: [],
-                  sourceReplyDelivered: true,
-                },
-              },
-              true,
-            );
-          }
-          emit({
-            type: "tool_execution_end",
-            toolName,
-            toolCallId: tool,
-            isError: partial,
-            result: { content: [{ type: "text", text: "ok" }], details: {} },
-          });
-          await Promise.resolve();
-        }
-      };
+  it("does not count a partial progress send as a completed source-progress batch", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const sessionManager = session.sessionManager;
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "trailing-progress",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    emitAssistantMessageEnd(emit, "", {
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "partial", name: "partial", arguments: {} }],
+    });
+    emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "partial",
+      args: { action: "send", final: false, target: "channel:source", message: "Working." },
+    });
+    await Promise.resolve();
+    recordEmbeddedToolReceipt(
+      sessionManager,
+      "partial",
+      {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: true,
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
+      },
+      true,
+    );
+    emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "partial",
+      isError: true,
+      result: { content: [{ type: "text", text: "ok" }], details: {} },
+    });
+    await Promise.resolve();
+    emitAssistantMessageEnd(emit, "", { stopReason: "stop" });
+    await subscription.waitForPendingEvents();
 
-      await runToolBatch(batch);
-      emitAssistantMessageEnd(emit, "", { stopReason: "stop" });
-      await subscription.waitForPendingEvents();
-
-      expect(subscription.endsWithSourceProgress()).toBe(endsWithProgress);
-      expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
-      subscription.unsubscribe();
-    },
-  );
+    expect(subscription.endsWithSourceProgress()).toBe(false);
+    expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
+    subscription.unsubscribe();
+  });
 
   it("suppresses text-only tool summaries after message-tool-only delivery", async () => {
     const onToolResult = vi.fn();
@@ -545,10 +487,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       onToolResult,
     });
 
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-final",
-      message: "Final answer sent through the message tool.",
+    await emitMessageToolLifecycle(emit, "Final answer sent through the message tool.", {
       result: { details: { status: "sent" } },
     });
     onToolResult.mockClear();

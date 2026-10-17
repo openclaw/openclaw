@@ -40,6 +40,7 @@ function harness(params: Omit<Params, "session" | "runId"> = {}) {
   onTestFinished(() => h.subscription.unsubscribe());
   return {
     ...h,
+    drain: () => h.subscription.waitForPendingEvents(),
     start(
       toolName: string,
       toolCallId: string,
@@ -58,6 +59,23 @@ function harness(params: Omit<Params, "session" | "runId"> = {}) {
     },
   };
 }
+
+function eventRecorder(implementation?: NonNullable<Params["onAgentEvent"]>) {
+  const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>(implementation);
+  const events = (stream: string) =>
+    onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === stream);
+  return { onAgentEvent, events };
+}
+
+const textResult = (text: string) => ({ content: [{ type: "text", text }] });
+const recordedCall = (name: string, toolCallId: string, args: Record<string, unknown>) => [
+  "tool.call",
+  { toolCallId, name, args },
+];
+const recordedResult = (name: string, toolCallId: string, success: boolean, result: unknown) => [
+  "tool.result",
+  { toolCallId, name, success, result },
+];
 
 describe("tool result ordering", () => {
   it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
@@ -161,7 +179,7 @@ describe("tool result ordering", () => {
   it.each(["execution-failed", "overlapping", "reused-active", "routine-child", "active-child"])(
     "preserves the %s wrapper outcome",
     async (outcome) => {
-      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+      const { onAgentEvent, events } = eventRecorder();
       const h = harness({ onAgentEvent });
       // A completed wrapper stays the operation when its only call is routine or still active.
       const routine = outcome === "routine-child";
@@ -172,35 +190,30 @@ describe("tool result ordering", () => {
       }
       if (routine) {
         h.start("progress_card", "child", { plan: [] }, "outer");
-        h.end("progress_card", "child", { content: [{ type: "text", text: "Updated" }] });
+        h.end("progress_card", "child", textResult("Updated"));
       } else {
         h.start("read", "child", { path: "missing.txt" }, "outer");
         if (!active) {
-          h.end("read", "child", { content: [{ type: "text", text: "Missing file" }] }, true);
+          h.end("read", "child", textResult("Missing file"), true);
         }
       }
       h.end("exec", "outer", {
-        content: [{ type: "text", text: "Finished" }],
+        ...textResult("Finished"),
         ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
       });
       if (outcome === "reused-active") {
         h.start("exec", "outer");
       }
-      await h.subscription.waitForPendingEvents();
+      await h.drain();
       const counters = h.subscription.getItemLifecycle();
       await h.finish("Observed the child outcome.");
-      const events = onAgentEvent.mock.calls.map(([event]) => event);
-      const outer = events.findLast(
-        (event) => event.stream === "item" && event.data.toolCallId === "outer",
-      );
+      const items = events("item");
+      const outer = items.findLast((event) => event.data.toolCallId === "outer");
       expect(outer?.data.hideFromChannelProgress === true).toBe(false);
       if (outcome === "execution-failed") {
         expect(outer?.data.status).toBe("failed");
       }
-      expect(
-        events.findLast((event) => event.stream === "item" && event.data.toolCallId === "child")
-          ?.data,
-      ).toMatchObject(
+      expect(items.findLast((event) => event.data.toolCallId === "child")?.data).toMatchObject(
         routine
           ? { status: "completed", hideFromChannelProgress: true }
           : { status: active ? "running" : "failed" },
@@ -222,65 +235,39 @@ describe("tool result ordering", () => {
       onBlockReplyFlush,
     });
     const apiKey = "sk-1234567890abcdefXYZ";
+    const firstArgs = { command: "printf fixture", apiKey };
+    const secondArgs = { path: "/tmp/missing-trajectory-fixture" };
+    const missing = { details: { status: "error", error: "Fixture does not exist" } };
     try {
-      h.start("exec", "first-call", { command: "printf fixture", apiKey });
-      expect(recordEvent).toHaveBeenCalledExactlyOnceWith("tool.call", {
-        toolCallId: "first-call",
-        name: "exec",
-        args: { command: "printf fixture", apiKey },
-      });
+      h.start("exec", "first-call", structuredClone(firstArgs));
+      expect(recordEvent.mock.calls).toEqual([recordedCall("exec", "first-call", firstArgs)]);
       expect(JSON.stringify(recordEvent.mock.calls)).toContain(apiKey);
       await entered.promise;
       h.end("exec", "first-call", {
         content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
         details: { status: "completed", aggregated: "x".repeat(9_000) },
       });
-      h.start("read", "second-call", { path: "/tmp/missing-trajectory-fixture" });
-      h.end("read", "second-call", {
-        details: { status: "error", error: "Fixture does not exist" },
-      });
+      h.start("read", "second-call", structuredClone(secondArgs));
+      h.end("read", "second-call", structuredClone(missing));
       expect(onBlockReplyFlush).toHaveBeenCalledOnce();
       expect(recordEvent.mock.calls).toEqual([
         ["tool.call", expect.objectContaining({ toolCallId: "first-call", name: "exec" })],
-        [
-          "tool.result",
-          {
-            toolCallId: "first-call",
-            name: "exec",
-            success: true,
-            result: {
-              content: [{ type: "image", mimeType: "image/png", bytes: 5, omitted: true }],
-              details: {
-                status: "completed",
-                aggregated: `${"x".repeat(8_000)}\n...(live output truncated)...`,
-              },
-            },
+        recordedResult("exec", "first-call", true, {
+          content: [{ type: "image", mimeType: "image/png", bytes: 5, omitted: true }],
+          details: {
+            status: "completed",
+            aggregated: `${"x".repeat(8_000)}\n...(live output truncated)...`,
           },
-        ],
-        [
-          "tool.call",
-          {
-            toolCallId: "second-call",
-            name: "read",
-            args: { path: "/tmp/missing-trajectory-fixture" },
-          },
-        ],
-        [
-          "tool.result",
-          {
-            toolCallId: "second-call",
-            name: "read",
-            success: false,
-            result: { details: { status: "error", error: "Fixture does not exist" } },
-          },
-        ],
+        }),
+        recordedCall("read", "second-call", secondArgs),
+        recordedResult("read", "second-call", false, missing),
       ]);
       pending.resolve();
-      await h.subscription.waitForPendingEvents();
+      await h.drain();
       expect(recordEvent).toHaveBeenCalledTimes(4);
     } finally {
       pending.resolve();
-      await h.subscription.waitForPendingEvents();
+      await h.drain();
     }
   });
 
@@ -290,16 +277,14 @@ describe("tool result ordering", () => {
       order.push(type);
       throw new Error("Trajectory storage failed");
     });
-    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
-    const h = harness({
-      trajectoryRecorder: { recordEvent, flush: async () => {} },
-      onAgentEvent,
-    });
+    const { onAgentEvent, events } = eventRecorder();
+    const h = harness({ trajectoryRecorder: { recordEvent, flush: async () => {} }, onAgentEvent });
+    const args = { path: "/tmp/nested-trajectory-fixture", parentToolCallId: "argument-value" };
     const toolError = new Error("Nested fixture failed");
     const execution = h.subscription.runToolLifecycle({
       toolName: "read",
       toolCallId: "nested-call",
-      args: { path: "/tmp/nested-trajectory-fixture", parentToolCallId: "argument-value" },
+      args: structuredClone(args),
       execute: async (started) => {
         started();
         order.push("execute");
@@ -308,23 +293,20 @@ describe("tool result ordering", () => {
           toolName: "read",
           toolCallId: "nested-call",
           args: {},
-          partialResult: { content: [{ type: "text", text: "Reading fixture" }] },
+          partialResult: textResult("Reading fixture"),
         });
-        await h.subscription.waitForPendingEvents();
+        await h.drain();
         throw toolError;
       },
     });
     await expect(execution).rejects.toBe(toolError);
     expect(order).toEqual(["tool.call", "execute", "tool.result"]);
     expect(
-      onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter((event) => event.stream === "tool")
-        .map(({ data }) => ({
-          phase: data.phase,
-          toolCallId: data.toolCallId,
-          parentToolCallId: data.parentToolCallId,
-        })),
+      events("tool").map(({ data }) => ({
+        phase: data.phase,
+        toolCallId: data.toolCallId,
+        parentToolCallId: data.parentToolCallId,
+      })),
     ).toEqual(
       ["start", "update", "result"].map((phase) => ({
         phase,
@@ -333,14 +315,7 @@ describe("tool result ordering", () => {
       })),
     );
     expect(recordEvent.mock.calls).toEqual([
-      [
-        "tool.call",
-        {
-          toolCallId: "nested-call",
-          name: "read",
-          args: { path: "/tmp/nested-trajectory-fixture", parentToolCallId: "argument-value" },
-        },
-      ],
+      recordedCall("read", "nested-call", args),
       [
         "tool.result",
         expect.objectContaining({ toolCallId: "nested-call", name: "read", success: false }),
@@ -374,7 +349,7 @@ describe("tool result ordering", () => {
         order.push("block");
       });
       const onBlockReplyFlush = vi.fn(async () => {});
-      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>(({ stream, data }) => {
+      const { onAgentEvent, events } = eventRecorder(({ stream, data }) => {
         if (stream === "lifecycle" && data.phase === "end") {
           order.push("terminal");
         }
@@ -416,9 +391,7 @@ describe("tool result ordering", () => {
         await setImmediate();
         expect([...order]).toEqual(["notice entered"]);
         expect(h.subscription.assistantTexts).toEqual([]);
-        expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual(
-          [],
-        );
+        expect(events("assistant")).toEqual([]);
         expect(onBlockReplyFlush).not.toHaveBeenCalled();
         expect(h.subscription.didSendDeterministicApprovalPrompt()).toBe(false);
         if (delivery === "reject") {
@@ -474,7 +447,7 @@ describe("tool result ordering", () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
     const onPartialReply = vi.fn();
-    const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+    const { onAgentEvent, events } = eventRecorder();
     const h = harness({
       onToolResult,
       onBlockReply,
@@ -537,6 +510,6 @@ describe("tool result ordering", () => {
     await h.subscription.waitForPendingEvents();
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual([]);
+    expect(events("assistant")).toEqual([]);
   });
 });

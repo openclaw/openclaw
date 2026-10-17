@@ -56,6 +56,18 @@ function makeUsage(
   return usage;
 }
 
+function expectedUsage(input: number, output: number, cost = 0, billed = false) {
+  return {
+    input,
+    output,
+    total: input + output,
+    cost: { total: cost, ...(billed ? { totalOrigin: "provider-billed" } : {}) },
+  };
+}
+
+const usageEvents = (mock: ReturnType<typeof vi.fn>) =>
+  mock.mock.calls.map(([event]) => event).filter((event) => event.stream === "usage");
+
 async function runUsageCalls(
   { emit, subscription }: ReturnType<typeof createSubscribedSessionHarness>,
   calls: UsageCall[],
@@ -278,7 +290,6 @@ describe("subscribeEmbeddedAgentSession model state", () => {
   );
 
   it("accounts queued message_end delivery across a retry", async () => {
-    const blockReplyBreak = "message_end";
     const deliveryStarted = createDeferred();
     const releaseDelivery = createDeferred();
     const secondCompleted = createDeferred();
@@ -291,10 +302,10 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       return releaseDelivery.promise;
     });
     const harness = createSubscribedSessionHarness({
-      runId: "queued-usage-" + blockReplyBreak,
+      runId: "queued-usage-message_end",
       lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
       sessionPersistence: "detached",
-      blockReplyBreak,
+      blockReplyBreak: "message_end",
       onBlockReply,
       onBlockReplyFlush,
       onAgentEvent,
@@ -346,22 +357,9 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         ],
         [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }, { turnId: "second-runtime-turn" }],
       ]);
-      expect(subscription.getUsageTotals()).toMatchObject({
-        input: 300,
-        output: 20,
-        total: 320,
-        cost: { total: 0.625 },
-      });
-      expect(subscription.getLastAssistantUsage()).toMatchObject({
-        input: 200,
-        output: 8,
-        total: 208,
-        cost: { total: 0.5, totalOrigin: "provider-billed" },
-      });
-      const usageEvents = onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter((event) => event.stream === "usage");
-      expect(usageEvents).toEqual([
+      expect(subscription.getUsageTotals()).toMatchObject(expectedUsage(300, 20, 0.625));
+      expect(subscription.getLastAssistantUsage()).toMatchObject(expectedUsage(200, 8, 0.5, true));
+      expect(usageEvents(onAgentEvent)).toEqual([
         { stream: "usage", data: { outputTokens: 12 } },
         { stream: "usage", data: { outputTokens: 20 } },
       ]);
@@ -384,12 +382,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         streamedUsage: makeUsage({ input: 7, output: 5, cost: 0, billed: true }),
         usage: makeUsage({ input: 11, output: 3, cost: 0.5 }),
       },
-      expected: {
-        input: 11,
-        output: 3,
-        total: 14,
-        cost: { total: 0, totalOrigin: "provider-billed" },
-      },
+      expected: expectedUsage(11, 3, 0, true),
       contextTokens: 11,
     },
     {
@@ -401,11 +394,8 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         }),
       },
       expected: {
-        input: 0,
-        output: 0,
-        total: 0,
+        ...expectedUsage(0, 0),
         usageReport: { state: "available" },
-        cost: { total: 0 },
       },
       contextTokens: 0,
     },
@@ -415,12 +405,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         streamedUsage: makeUsage({ input: 7, output: 5, cost: 0.1 }),
         usage: makeUsage({ cost: 0, billed: true }),
       },
-      expected: {
-        input: 7,
-        output: 5,
-        total: 12,
-        cost: { total: 0, totalOrigin: "provider-billed" },
-      },
+      expected: expectedUsage(7, 5, 0, true),
       contextTokens: 7,
     },
     {
@@ -439,13 +424,11 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         stopReason: "error" as const,
       },
       expected: {
-        input: 7,
-        output: 5,
+        ...expectedUsage(7, 5, 0.125, true),
         cacheWrite: 4,
         cacheWrite1h: 3,
         reasoningTokens: 2,
         total: 16,
-        cost: { total: 0.125, totalOrigin: "provider-billed" },
       },
       contextTokens: 11,
     },
@@ -453,11 +436,8 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       name: "explicitly unknown context",
       call: { usage: makeUsage({ contextUsage: { state: "unavailable" } }) },
       expected: {
-        input: 0,
-        output: 0,
-        total: 0,
+        ...expectedUsage(0, 0),
         contextUsage: { state: "unavailable" },
-        cost: { total: 0 },
       },
       contextTokens: undefined,
     },
@@ -503,9 +483,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
           ? [[{ kind: "model", contextTokens, successful: true }]]
           : []),
       ]);
-      expect(
-        onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === "usage"),
-      ).toEqual(
+      expect(usageEvents(onAgentEvent)).toEqual(
         expected.output || call.usage.usageReport?.state === "available"
           ? [{ stream: "usage", data: { outputTokens: expected.output } }]
           : [],
@@ -535,9 +513,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       { usage: makeUsage({ input: 100, output: 20, cost: priorCost }) },
       { usage },
     ]);
-    expect(subscription.getUsageTotals()?.cost).toEqual({
-      total: priorCost + costTotal,
-    });
+    expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal });
     const lastCallUsage = subscription.getLastAssistantUsage();
     expect(lastCallUsage).toMatchObject({ input: 100, output: 20, total: 120 });
     expect(completed.at(-1)?.usage.cost).toMatchObject({
@@ -552,9 +528,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       cost: { total: priorCost + costTotal * 2 + 0.05 },
     });
     expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
-    expect(
-      onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === "usage"),
-    ).toEqual([
+    expect(usageEvents(onAgentEvent)).toEqual([
       { stream: "usage", data: { outputTokens: 20 } },
       { stream: "usage", data: { outputTokens: 22 } },
     ]);

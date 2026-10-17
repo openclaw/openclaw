@@ -39,12 +39,39 @@ function createDelivery(params: Omit<SubscribeEmbeddedAgentSessionParams, "sessi
   });
 }
 
+type Subscription = ReturnType<typeof createSubscribedSessionHarness>["subscription"];
+const rawDrain = (subscription: Subscription) =>
+  subscription.waitForPendingEvents({ includePartialReplies: false });
+function emitDeltas(emit: (event: unknown) => void, deltas = ["First", " second", " third"]) {
+  for (const delta of deltas) {
+    emitAssistantTextDelta({ emit, delta });
+  }
+}
+async function closeSession(
+  subscription: Subscription,
+  ...pending: Array<{ resolve: () => void }>
+) {
+  for (const task of pending) {
+    task.resolve();
+  }
+  subscription.unsubscribe();
+  await subscription.waitForPendingEvents();
+}
+function append(
+  delivery: ReturnType<typeof createReplyDelivery>,
+  text: string,
+  delta: string,
+  phase?: "final_answer",
+) {
+  delivery.emitAssistantStreamData(
+    { text, delta, ...(phase ? { phase } : {}) },
+    { emitPartialReply: true },
+  );
+}
+const fragments = (...pairs: [string, string][]) => pairs.map(([text, delta]) => ({ text, delta }));
+
 function emitPartialThenProviderFailure(emit: (event: unknown) => void): void {
-  emit({
-    type: "message_update",
-    message: { role: "assistant" },
-    assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
-  });
+  emitAssistantTextDelta({ emit, delta: "partial answer" });
   const failedAssistant = {
     role: "assistant",
     content: [{ type: "text", text: "partial answer" }],
@@ -72,17 +99,14 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       },
     });
     try {
-      delivery.emitAssistantStreamData({ text: "A", delta: "A" }, { emitPartialReply: true });
+      append(delivery, "A", "A");
       clock.mockReturnValue(1_010);
-      delivery.emitAssistantStreamData({ text: "AB", delta: "B" }, { emitPartialReply: true });
-      expect(partials).toEqual([{ text: "A", delta: "A" }]);
+      append(delivery, "AB", "B");
+      expect(partials).toEqual(fragments(["A", "A"]));
       clock.mockReturnValue(1_080);
-      delivery.emitAssistantStreamData({ text: "ABC", delta: "C" }, { emitPartialReply: true });
-      expect(partials).toEqual([
-        { text: "A", delta: "A" },
-        { text: "ABC", delta: "BC" },
-      ]);
-      delivery.emitAssistantStreamData({ text: "ABCD", delta: "D" }, { emitPartialReply: true });
+      append(delivery, "ABC", "C");
+      expect(partials).toEqual(fragments(["A", "A"], ["ABC", "BC"]));
+      append(delivery, "ABCD", "D");
       await delivery.waitForPendingEvents();
       expect(partials.at(-1)).toEqual({ text: "ABCD", delta: "D" });
     } finally {
@@ -124,16 +148,11 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       onPartialReply,
     });
 
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
-    });
+    emitAssistantTextDelta({ emit, delta: "partial answer" });
 
     await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce());
-    emitAssistantTextDelta({ emit, delta: " queued" });
-    emitAssistantTextDelta({ emit, delta: " tail" });
-    await subscription.waitForPendingEvents({ includePartialReplies: false });
+    emitDeltas(emit, [" queued", " tail"]);
+    await rawDrain(subscription);
     expect(onPartialReply).toHaveBeenCalledOnce();
     subscription.unsubscribe();
     partial.reject(callbackError);
@@ -155,24 +174,21 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       onAgentEvent,
     });
     try {
-      for (const delta of ["First", " second", " third"]) {
-        emitAssistantTextDelta({ emit, delta });
-      }
+      emitDeltas(emit);
       let broadDrained = false;
       const broadDrain = subscription.waitForPendingEvents().then(() => {
         broadDrained = true;
       });
       // Timeout salvage joins only handlers that mutate the raw text buffer.
-      await subscription.waitForPendingEvents({ includePartialReplies: false });
+      await rawDrain(subscription);
       expect(broadDrained).toBe(false);
       expect(onPartialReply).toHaveBeenCalledOnce();
       expect(onPartialReply).toHaveBeenLastCalledWith(
         expect.objectContaining({ text: "First", delta: "First" }),
       );
-      const assistantEvents = onAgentEvent.mock.calls.filter(
-        ([event]) => event.stream === "assistant",
-      );
-      expect(assistantEvents).toHaveLength(3);
+      expect(
+        onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant"),
+      ).toHaveLength(3);
 
       first.resolve();
       await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledTimes(2));
@@ -184,10 +200,7 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       await broadDrain;
       expect(broadDrained).toBe(true);
     } finally {
-      first.resolve();
-      latest.resolve();
-      subscription.unsubscribe();
-      await subscription.waitForPendingEvents();
+      await closeSession(subscription, first, latest);
     }
   });
 
@@ -207,32 +220,25 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       },
     });
     try {
-      for (const delta of ["First", " second", " third"]) {
-        emitAssistantTextDelta({ emit, delta });
-      }
-      await subscription.waitForPendingEvents({ includePartialReplies: false });
+      emitDeltas(emit);
+      await rawDrain(subscription);
       expect(starts).toEqual(["partial:First"]);
-      const tool = {
+      await subscription.runToolLifecycle({
         toolName: "read",
         toolCallId: "read-after-text",
         args: { path: "/tmp/input" },
-      };
-      await subscription.runToolLifecycle({
-        ...tool,
         execute: async (onStart) => {
           onStart();
           return { content: [{ type: "text", text: "Read complete." }] };
         },
       });
-      await subscription.waitForPendingEvents({ includePartialReplies: false });
+      await rawDrain(subscription);
       expect(starts).toEqual(["partial:First", "partial:First second third", "tool"]);
       emitAssistantTextDelta({ emit, delta: " fourth" });
-      await subscription.waitForPendingEvents({ includePartialReplies: false });
+      await rawDrain(subscription);
       expect(starts.at(-1)).toBe("partial:First second third fourth");
     } finally {
-      pending.resolve();
-      subscription.unsubscribe();
-      await subscription.waitForPendingEvents();
+      await closeSession(subscription, pending);
     }
   });
 
@@ -254,28 +260,18 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
           return first.promise;
         }
         if (payload.text === "AB" && canReenter) {
-          delivery.emitAssistantStreamData(
-            { text: "ABCD", delta: "D", phase: "final_answer" },
-            { emitPartialReply: true },
-          );
+          append(delivery, "ABCD", "D", "final_answer");
         }
         return undefined;
       },
     });
     try {
-      delivery.emitAssistantStreamData({ text: "A", delta: "A" }, { emitPartialReply: true });
-      delivery.emitAssistantStreamData({ text: "AB", delta: "B" }, { emitPartialReply: true });
-      expect(partials).toEqual([{ text: "A", delta: "A" }]);
+      append(delivery, "A", "A");
+      append(delivery, "AB", "B");
+      expect(partials).toEqual(fragments(["A", "A"]));
       canReenter = true;
-      delivery.emitAssistantStreamData(
-        { text: "ABC", delta: "C", phase: "final_answer" },
-        { emitPartialReply: true },
-      );
-      expect(partials).toEqual([
-        { text: "A", delta: "A" },
-        { text: "AB", delta: "B" },
-        { text: "ABCD", delta: "CD" },
-      ]);
+      append(delivery, "ABC", "C", "final_answer");
+      expect(partials).toEqual(fragments(["A", "A"], ["AB", "B"], ["ABCD", "CD"]));
       expect(bus).toEqual(partials);
     } finally {
       first.resolve();
@@ -317,19 +313,11 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     try {
       emit({ type: "message_start", message: { role: "assistant", content: [] } });
       emitThinking("A", "A");
-      for (const delta of ["a", "b", "<think>AB"]) {
-        emitAssistantTextDelta({ emit, delta });
-      }
+      emitDeltas(emit, ["a", "b", "<think>AB"]);
       expect(calls).toBe(2);
-      expect(bus).toEqual([
-        { text: "A", delta: "A" },
-        { text: "AX", delta: "X" },
-        { text: "AB", delta: "AB" },
-      ]);
+      expect(bus).toEqual(fragments(["A", "A"], ["AX", "X"], ["AB", "AB"]));
     } finally {
-      pending.resolve();
-      subscription.unsubscribe();
-      await subscription.waitForPendingEvents();
+      await closeSession(subscription, pending);
       off();
     }
   });
@@ -350,72 +338,64 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
         starts.push(`block:${payload.text}`);
       },
     });
-    delivery.emitAssistantStreamData({ text: "First", delta: "First" }, { emitPartialReply: true });
+    append(delivery, "First", "First");
     await delivery.waitForPendingEvents();
     expect(starts).toEqual(["partial:First", "block:Block."]);
   });
 
-  it.each([{ name: "sanitized empty", text: "<think>hidden reasoning</think>", preambles: 0 }])(
-    "retires pending partials at a $name generic commentary boundary",
-    async ({ text, preambles }) => {
-      const pending = createDeferred();
-      const partials: Array<{ text?: string; delta?: string }> = [];
-      const onAgentEvent = vi.fn();
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-commentary-boundary-${preambles}-${text.length}`,
-        onAgentEvent,
-        onPartialReply: (payload) => {
-          partials.push({ text: payload.text, delta: payload.delta });
-          return pending.promise;
+  it("retires pending partials at a sanitized empty generic commentary boundary", async () => {
+    const pending = createDeferred();
+    const partials: Array<{ text?: string; delta?: string }> = [];
+    const onAgentEvent = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-commentary-boundary",
+      onAgentEvent,
+      onPartialReply: (payload) => {
+        partials.push({ text: payload.text, delta: payload.delta });
+        return pending.promise;
+      },
+    });
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<think>hidden reasoning</think>",
+          textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
         },
-      });
-      const message = {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text,
-            textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-          },
-        ],
-      };
-      const commentary = {
-        type: "message_update",
-        message,
-        assistantMessageEvent: { type: "text_delta", delta: "", partial: message },
-      };
-      try {
-        emit(commentary);
-        for (const delta of ["First", " second", " third"]) {
-          emitAssistantTextDelta({ emit, delta });
-        }
-        await subscription.waitForPendingEvents({ includePartialReplies: false });
-        expect(partials).toEqual([{ text: "First", delta: "First" }]);
+      ],
+    };
+    const commentary = {
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", delta: "", partial: message },
+    };
+    try {
+      emit(commentary);
+      emitDeltas(emit);
+      await rawDrain(subscription);
+      expect(partials).toEqual(fragments(["First", "First"]));
 
-        // Phase changes retire the old partial even if no new preamble is visible.
-        emit(commentary);
-        await subscription.waitForPendingEvents({ includePartialReplies: false });
-        expect(partials).toEqual([
-          { text: "First", delta: "First" },
-          { text: "First second third", delta: " second third" },
-        ]);
-        emitAssistantTextDelta({ emit, delta: " fourth" });
-        await subscription.waitForPendingEvents({ includePartialReplies: false });
-        expect(partials.at(-1)).toEqual({
-          text: "First second third fourth",
-          delta: " fourth",
-        });
-        const preambleEvents = onAgentEvent.mock.calls.filter(
-          ([event]) => event.stream === "item" && event.data.kind === "preamble",
-        );
-        expect(preambleEvents).toHaveLength(preambles);
-      } finally {
-        pending.resolve();
-        subscription.unsubscribe();
-        await subscription.waitForPendingEvents();
-      }
-    },
-  );
+      // Phase changes retire the old partial even if no new preamble is visible.
+      emit(commentary);
+      await rawDrain(subscription);
+      expect(partials).toEqual(
+        fragments(["First", "First"], ["First second third", " second third"]),
+      );
+      emitAssistantTextDelta({ emit, delta: " fourth" });
+      await rawDrain(subscription);
+      expect(partials.at(-1)).toEqual({
+        text: "First second third fourth",
+        delta: " fourth",
+      });
+      const preambleEvents = onAgentEvent.mock.calls.filter(
+        ([event]) => event.stream === "item" && event.data.kind === "preamble",
+      );
+      expect(preambleEvents).toHaveLength(0);
+    } finally {
+      await closeSession(subscription, pending);
+    }
+  });
 });
 
 describe("native reasoning projection", () => {

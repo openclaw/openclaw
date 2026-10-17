@@ -84,9 +84,7 @@ describe("embedded lifecycle", () => {
       },
     );
     await handleAgentEnd(ctx);
-    expect(warnMeta(ctx)).toMatchObject({
-      providerRuntimeFailureKind: "auth_html",
-    });
+    expect(warnMeta(ctx)).toMatchObject({ providerRuntimeFailureKind: "auth_html" });
     expect(warnMeta(ctx).consoleMessage).not.toContain("rawError=");
     expect(warnMeta(ctx).consoleMessage).not.toContain("<html>");
     expectEvent(onAgentEvent, {
@@ -189,7 +187,6 @@ describe("embedded lifecycle", () => {
     stopReason?: string;
     content?: unknown[];
     state: Partial<EmbeddedAgentSubscribeContext["state"]>;
-    params?: Partial<EmbeddedAgentSubscribeContext["params"]>;
     expected: Record<string, unknown>;
   }>([
     {
@@ -256,16 +253,13 @@ describe("embedded lifecycle", () => {
       },
       expected: { livenessState: "working", replayInvalid: true },
     },
-  ])("$name", async ({ stopReason, content = [], state, params, expected }) => {
+  ])("$name", async ({ stopReason, content = [], state, expected }) => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(stopReason ? { role: "assistant", stopReason, content } : undefined, {
       onAgentEvent,
     });
     Object.assign(ctx.state, { livenessState: "working" }, state);
-    Object.assign(ctx.params, params);
-
     await handleAgentEnd(ctx);
-
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: { phase: "end", ...(stopReason ? { stopReason } : {}), ...expected },
@@ -287,8 +281,7 @@ describe("embedded lifecycle", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
-    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+    expect(ctx.state).toMatchObject({ pendingToolMediaUrls: [], pendingToolAudioAsVoice: false });
     expect(onAgentEvent.mock.invocationCallOrder[0]).toBeGreaterThan(
       vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] ?? Infinity,
     );
