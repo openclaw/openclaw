@@ -132,7 +132,9 @@ Runtime bounds: 8 concurrent sessions per Gateway and a 30-minute session TTL.
 Browser sessions also use 60-second single-use offer tokens.
 
 The Codex route uses `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`,
-`sol`, `spruce`, and `vale`, with `cove` as the default. The public API defaults
+`sol`, `spruce`, `vale`, `aube`, `bubbie`, `haetsal`, `hanul`, `himari`,
+`leher`, `miko`, `neer`, `porto`, `rindo`, `rio`, `rivage`, `selva`, `sonna`,
+`tinta`, and `viola`, with `cove` as the default. The public API defaults
 to `marin` and has its own [voice list](/providers/openai/voice-and-speech).
 Choose the same model and supported voice in Talk and Discord to use the same
 voice; `cove` with the public `gpt-live-1` model falls back to `marin`.
