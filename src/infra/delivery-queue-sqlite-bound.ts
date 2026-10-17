@@ -347,14 +347,30 @@ function createDeliveryQueueUpsert(database: EngineConnection, mode: DeliveryQue
       id: parameter((row) => row.id),
       ...values,
     });
+    if (mode === "pending") {
+      // Update-only: a terminalized row that was deleted without retention must
+      // never be resurrected by a stale INSERT, and a row already terminalized
+      // must not be rewritten. Only a row still pending is mutated.
+      return queueDb
+        .updateTable("delivery_queue_entries")
+        .set(values)
+        .where(
+          "queue_name",
+          "=",
+          parameter((row) => row.queue_name),
+        )
+        .where(
+          "id",
+          "=",
+          parameter((row) => row.id),
+        )
+        .where("status", "=", "pending");
+    }
     const query =
       mode === "insert"
         ? insert.onConflict((conflict) => conflict.columns(["queue_name", "id"]).doNothing())
         : insert.onConflict((conflict) => {
             const update = conflict.columns(["queue_name", "id"]).doUpdateSet(values);
-            if (mode === "pending") {
-              return update.where("delivery_queue_entries.status", "=", "pending");
-            }
             return mode === "complete"
               ? update.where("delivery_queue_entries.status", "in", ["pending", "failed"])
               : update;
