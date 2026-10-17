@@ -1394,6 +1394,31 @@ describe("buildCachedChatItems", () => {
       count: 1,
       tailFirst: true,
     },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      shortcode: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 2,
+      shortcode: true,
+      otherShortcode: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+    },
     { savedReceipt: true, finalRun: "other-run", finalView: "cv_final", live: true, count: 2 },
     {
       savedReceipt: true,
@@ -1411,7 +1436,17 @@ describe("buildCachedChatItems", () => {
     },
   ])(
     "reconciles only the owned final Canvas tail: %j",
-    ({ savedReceipt, finalRun, finalView, live, count, tailFirst = false }) => {
+    ({
+      savedReceipt,
+      finalRun,
+      finalView,
+      live,
+      count,
+      tailFirst = false,
+      shortcode = false,
+      otherShortcode = false,
+      steer = false,
+    }) => {
       const runId = "final-widget-run";
       const parentToolCallId = "call_widget|fc_widget";
       const output = canvasToolOutput("cv_final", "Counter", 100);
@@ -1447,10 +1482,14 @@ describe("buildCachedChatItems", () => {
       });
       const final = assistant(
         [
-          textBlock("Final tail."),
+          textBlock(
+            "Final tail." +
+              (shortcode ? ' [embed ref="cv_final" /]' : "") +
+              (otherShortcode ? ' [embed ref="cv_other" /]' : ""),
+          ),
           { ...canvas, preview: { ...canvas.preview, viewId: finalView } },
         ],
-        1_004,
+        1_005,
         { __openclaw: { runId: finalRun } },
       );
       const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
@@ -1459,6 +1498,15 @@ describe("buildCachedChatItems", () => {
         ...(tailFirst ? [terminal] : []),
         ...(savedReceipt ? [nested] : []),
         saved,
+        ...(steer
+          ? [
+              nativeUser("steer-input", "Keep going", 1_004, {
+                id: "steer",
+                seq: 4,
+                steerTargetRunId: runId,
+              }),
+            ]
+          : []),
         ...(tailFirst ? [] : [terminal]),
       ];
       const original = structuredClone(messages);
@@ -1470,7 +1518,11 @@ describe("buildCachedChatItems", () => {
       });
       expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(count);
       expect(cardsIn(groups).some((card) => card.callId === "nested-widget")).toBe(true);
-      expect(groups.flatMap(normalizedBlocks)).toContainEqual(textBlock("Final tail."));
+      expect(
+        groups
+          .flatMap(normalizedBlocks)
+          .flatMap((block) => (block.type === "text" ? [block.text?.trim()] : [])),
+      ).toContain("Final tail.");
       expect(groups.flatMap(normalizedBlocks)).toContainEqual(textBlock("Your counter is ready."));
       expect(messages).toEqual(original);
       expect(readLiveTerminalRevision()).toBe(terminalRevision);

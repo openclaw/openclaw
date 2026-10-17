@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
+import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
@@ -194,6 +195,7 @@ export function buildChatItems(
       readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
     );
   const historyItems = buildMessageItems(history);
+  const historyRunBounds = createRunTurnLookup(historyItems);
   let canvasTurn: {
     previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
     lastMatchingAssistantIndex: number;
@@ -232,23 +234,42 @@ export function buildChatItems(
   for (const [i, item] of historyItems.entries()) {
     const terminalRunId = readLiveTerminalRunId(item.message);
     const terminal = terminalRunId ? asRecord(item.message) : null;
-    if (terminal && Array.isArray(terminal.content)) {
+    if (terminalRunId && terminal && Array.isArray(terminal.content)) {
       // The final wire tail repeats the run's Canvas blocks even when a saved
       // assistant row already owns them. Reconcile only that live projection.
       const turn = canvasTurns[i]!;
-      const owned = turn.previews.filter(
-        (entry) =>
-          entry.item !== item &&
-          !readLiveTerminalRunId(entry.item.message) &&
-          transcriptRunId(entry.item.message) === terminalRunId,
+      const { minimum, maximum } = insertionIndexesForBounds(
+        historyItems,
+        historyRunBounds(terminalRunId) ?? undefined,
       );
-      const isOwned = (preview: CanvasToolPreview) =>
+      const owned = [...new Set(canvasTurns.slice(minimum, maximum))]
+        .flatMap((segment) => segment.previews)
+        .filter(
+          (entry) =>
+            entry.item !== item &&
+            !readLiveTerminalRunId(entry.item.message) &&
+            transcriptRunId(entry.item.message) === terminalRunId,
+        );
+      const isOwned = (preview: Pick<CanvasToolPreview, "viewId" | "url">) =>
         owned.some((entry) => canvasPreviewsMatch(entry.preview, preview));
-      const content = terminal.content.filter((block) => {
-        const preview = readCanvasContentPreview(block);
-        return !preview || !isOwned(preview);
+      let changed = false;
+      const content = terminal.content.flatMap((value) => {
+        const preview = readCanvasContentPreview(value);
+        if (preview && isOwned(preview)) {
+          changed = true;
+          return [];
+        }
+        const block = asRecord(value);
+        if (block?.type === "text" && typeof block.text === "string") {
+          const extracted = extractCanvasShortcodes(block.text, isOwned);
+          if (extracted.previews.length > 0) {
+            changed = true;
+            return [{ ...block, text: extracted.text }];
+          }
+        }
+        return [value];
       });
-      if (content.length !== terminal.content.length) {
+      if (changed) {
         const projection = { ...terminal, content };
         copyLiveTerminalIdentity(terminal, projection);
         item.message = projection;
