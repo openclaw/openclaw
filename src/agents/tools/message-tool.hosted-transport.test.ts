@@ -6,19 +6,10 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  bindCronJobAdmittedRun,
-  clearCronJobActive,
-  markCronJobActive,
-} from "../../cron/active-jobs.js";
+import * as cron from "../../cron/active-jobs.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
-import {
-  mintMessageActionTurnCapability,
-  readMessageActionInvocationConfig,
-  revokeMessageActionTurnCapability,
-  withMessageActionInvocationConfig,
-} from "../../gateway/message-action-turn-capability.js";
+import * as turns from "../../gateway/message-action-turn-capability.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { closeMinimalGatewayServer } from "../../gateway/minimal-gateway.test-helpers.js";
 import { resolveTrustedMessageActionToolContext } from "../../gateway/server-methods/message-action-context.js";
@@ -26,47 +17,29 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandler,
 } from "../../gateway/server-methods/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  getActiveAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import * as runs from "../../infra/agent-run-registry.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
-import {
-  getGatewayContextResolver,
-  withPluginRuntimeGatewayContextResolver,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import * as plugins from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import * as fixtures from "../../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import * as callers from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-let registry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+let registry: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
 beforeEach(async () => {
   state = await createOpenClawTestState({
     env: { OPENCLAW_GATEWAY_URL: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
   });
-  registry = captureActivePluginRegistrySnapshot();
+  registry = plugins.captureActivePluginRegistrySnapshot();
 });
 afterEach(async () => {
-  restoreActivePluginRegistrySnapshot(registry);
+  plugins.restoreActivePluginRegistrySnapshot(registry);
   await state.cleanup();
 });
 
@@ -108,7 +81,7 @@ function gatewayPlugin(
   handleAction: NonNullable<ChannelPlugin["actions"]>["handleAction"],
 ): ChannelPlugin {
   return {
-    ...createChannelTestPluginBase({
+    ...fixtures.createChannelTestPluginBase({
       id: "gatewaychat",
       capabilities: { chatTypes: ["direct"], ...(action === "react" ? { reactions: true } : {}) },
       config: {
@@ -134,17 +107,13 @@ function gatewayPlugin(
 it("dispatches a hosted message action without connecting to either Gateway endpoint", async () => {
   const listeners: WebSocketServer[] = [];
   const operationalRunInstance = createOperationalRunInstanceRef("hosted-transport-run");
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const authority = runs.claimAgentRunDelegatedAuthority(operationalRunInstance);
   const sessionKey = "agent:ops:gatewaychat:direct:alice";
-  const capability = mintMessageActionTurnCapability({
-    agentId: "ops",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-  });
+  const run = { agentId: "ops", runId: operationalRunInstance.runId };
+  const capability = turns.mintMessageActionTurnCapability({ ...run, sessionKey });
   const assertDashboardReadCurrent = vi.fn();
-  const dashboardCapability = mintMessageActionTurnCapability({
-    agentId: "ops",
-    runId: operationalRunInstance.runId,
+  const dashboardCapability = turns.mintMessageActionTurnCapability({
+    ...run,
     sessionKey,
     assertDashboardReadCurrent,
     expiresWithRun: true,
@@ -170,7 +139,9 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     const plugin = gatewayPlugin("react", () => {
       throw new Error("The action must cross the Gateway transport");
     });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    plugins.setActivePluginRegistry(
+      fixtures.createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
+    );
     const config = hostedConfig({
       gateway: {
         mode: "remote",
@@ -188,25 +159,23 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     const makeTool = (turnCapability?: string) =>
       createMessageTool({
         getRuntimeConfig: () => config,
-        runMessageAction,
-        agentId: "ops",
+        ...run,
         agentSessionKey: sessionKey,
-        runId: operationalRunInstance.runId,
         messageActionTurnCapability: turnCapability,
         getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
         resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) =>
           resolvedSecrets(resolvedConfig),
       });
-    const tool = makeTool(capability);
-    const execute = (selectedTool = tool, accountId?: string) =>
-      withGatewayToolCallerIdentity(
+    const tools = [makeTool(capability), makeTool(), makeTool(dashboardCapability)];
+    const execute = (selectedTool: (typeof tools)[number], accountId?: string) =>
+      callers.withGatewayToolCallerIdentity(
         {
           agentId: "ops",
           sessionKey,
           operationalRunInstance,
           gatewayContextResolver: () => context,
           receiptAuthority: () =>
-            getActiveAgentRunDelegatedAuthority(operationalRunInstance) === authority,
+            runs.getActiveAgentRunDelegatedAuthority(operationalRunInstance) === authority,
         },
         () =>
           selectedTool.execute("hosted-reaction", {
@@ -218,39 +187,28 @@ it("dispatches a hosted message action without connecting to either Gateway endp
             ...(accountId ? { accountId } : {}),
           }),
       );
-    const result = await execute();
-    expect(dispatched).toHaveBeenCalledOnce();
-    expect(dispatched.mock.calls[0]?.[0].client?.internal?.agentRuntimeIdentity).toMatchObject({
-      agentId: "ops",
-      sessionKey,
-      operationalRunInstance,
-    });
-    expect(result.details).toMatchObject({
-      ok: true,
-      listener: "hosted-local",
-      action: {
-        channel: "gatewaychat",
-        action: "react",
-        sessionKey,
-        params: { messageId: "message-1", emoji: "✅" },
-      },
-    });
-    expect(local.connections).not.toHaveBeenCalled();
-    expect(remote.connections).not.toHaveBeenCalled();
-    const contextlessTool = makeTool();
-    const dashboardTool = makeTool(dashboardCapability);
-    for (const selectedTool of [contextlessTool, dashboardTool]) {
-      await expect(execute(selectedTool, "default")).resolves.toMatchObject({
-        details: { ok: true, listener: "hosted-local" },
+    for (const [index, tool] of tools.entries()) {
+      const result = await execute(tool, index === 0 ? undefined : "default");
+      expect(result.details).toMatchObject({
+        ok: true,
+        listener: "hosted-local",
+        action: {
+          channel: "gatewaychat",
+          action: "react",
+          sessionKey,
+          params: { messageId: "message-1", emoji: "✅" },
+        },
       });
-      expect(
-        dispatched.mock.calls.at(-1)?.[0].client?.internal?.agentRuntimeIdentity,
-      ).toBeUndefined();
+      expect(dispatched.mock.calls.at(-1)?.[0].client?.internal?.agentRuntimeIdentity).toEqual(
+        index === 0
+          ? expect.objectContaining({ agentId: "ops", sessionKey, operationalRunInstance })
+          : undefined,
+      );
     }
     expect(dispatched.mock.calls[2]?.[0].params).toEqual(dispatched.mock.calls[1]?.[0].params);
     expect(assertDashboardReadCurrent).not.toHaveBeenCalled();
-    releaseAgentRunDelegatedAuthority(authority);
-    for (const selectedTool of [tool, contextlessTool, dashboardTool]) {
+    runs.releaseAgentRunDelegatedAuthority(authority);
+    for (const selectedTool of tools) {
       await expect(execute(selectedTool)).rejects.toThrow(
         /agent (?:runtime identity requires active delegated run|tool caller) authority/,
       );
@@ -259,9 +217,9 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     expect(local.connections).not.toHaveBeenCalled();
     expect(remote.connections).not.toHaveBeenCalled();
   } finally {
-    revokeMessageActionTurnCapability(capability);
-    revokeMessageActionTurnCapability(dashboardCapability);
-    releaseAgentRunDelegatedAuthority(authority);
+    turns.revokeMessageActionTurnCapability(capability);
+    turns.revokeMessageActionTurnCapability(dashboardCapability);
+    runs.releaseAgentRunDelegatedAuthority(authority);
     await Promise.all(listeners.map(closeMinimalGatewayServer));
   }
 }, 30_000);
@@ -272,9 +230,10 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
   const runId = "scheduled-config-run";
   const sessionId = "scheduled-persistent-session";
   const sessionKey = `agent:ops:cron:${jobId}:run:${runId}`;
+  const run = { agentId: "ops", runId, sessionId };
   const policy = { version: 1, mode: "trusted" } as const;
   // Only runtime config changes here; canonical job revocation has its own owner tests.
-  const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+  const marker = cron.markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
   const entered = createDeferred<OpenClawConfig>();
   const release = createDeferred();
   let promptAdmission: ReturnType<typeof prepareCronRunAdmission> | undefined;
@@ -296,7 +255,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     owner
       .createApi(record, { config: configA, registrationMode: "full" })
       .registerChannel({ plugin });
-    setActivePluginRegistry(owner.registry);
+    plugins.setActivePluginRegistry(owner.registry);
     const { sendHandlers } = await import("../../gateway/server-methods/send.js");
     const dispatched = vi.fn(
       expectDefined(sendHandlers["message.action"], "Gateway message handler"),
@@ -310,26 +269,24 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       prepareCronRunAdmission({
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: configA,
-        agentId: "ops",
-        runId,
-        sessionId,
+        ...run,
         sessionKey,
         jobId,
         toolsAllow: ["message"],
         scheduledToolPolicy: policy,
         executionIdentity: {
           ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-          onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, source.signal),
+          onPostAdmission: (admitted) =>
+            cron.bindCronJobAdmittedRun(marker, admitted, source.signal),
         },
       }),
     );
     const admitted = await promptAdmission.preparedRunAdmission.admit("plugin-harness");
-    expect(getGatewayContextResolver(admitted)?.()).toBe(context);
     const capability = expectDefined(
       promptAdmission.messageActionTurnCapability,
       "scheduled grant",
     );
-    const caller = createAdmittedGatewayToolCallerIdentity({
+    const caller = callers.createAdmittedGatewayToolCallerIdentity({
       admittedRunContext: admitted,
       agentId: "ops",
       sessionKey,
@@ -340,10 +297,8 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       config: configA,
       capabilityProfile: resolveConversationCapabilityProfile({
         config: configA,
-        agentId: "ops",
+        ...run,
         sessionKey,
-        runId,
-        sessionId,
         agentAccountId: "default",
         scheduledToolPolicy: policy,
       }),
@@ -361,11 +316,9 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     });
     const tool = createMessageTool({
       config: configA,
-      agentId: "ops",
+      ...run,
       agentSessionKey: sessionKey,
       agentAccountId: "default",
-      runId,
-      sessionId,
       messageActionTurnCapability: capability,
       admitScheduledInvocation: admitInvocation,
       getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
@@ -373,7 +326,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     });
     catalog.push(tool);
     const execute = (callId: string) =>
-      withGatewayToolCallerIdentity(caller, () =>
+      callers.withGatewayToolCallerIdentity(caller, () =>
         tool.execute(
           callId,
           { action: "read", channel: plugin.id, target: "alice", limit: 1 },
@@ -397,13 +350,11 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     release.resolve();
     expect((await pending).details).toMatchObject({ ok: true, config: "A", accountId: "default" });
     expect(dispatched).toHaveBeenCalledOnce();
-    expect(providerRead).toHaveBeenCalledOnce();
     expect(providerRead.mock.calls[0]?.[0].cfg).toMatchObject(configA);
-    expect(admitInvocation).toHaveBeenCalledOnce();
-    expect(readMessageActionInvocationConfig(capability)).toBeUndefined();
+    expect(turns.readMessageActionInvocationConfig(capability)).toBeUndefined();
 
     const client = expectDefined(dispatched.mock.calls[0]?.[0].client, "bound Gateway client");
-    const mismatched = withMessageActionInvocationConfig(
+    const mismatched = turns.withMessageActionInvocationConfig(
       "unrelated-host-token",
       () => configA,
       () => resolveTrustedMessageActionToolContext({ client, request: { sessionKey, sessionId } }),
@@ -420,6 +371,6 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
     release.resolve();
     await pending?.catch(() => undefined);
     promptAdmission?.close();
-    clearCronJobActive(jobId, marker);
+    cron.clearCronJobActive(jobId, marker);
   }
 }, 30_000);

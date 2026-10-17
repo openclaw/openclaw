@@ -13,13 +13,15 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
     await import("./media-generation-lifecycle.test-support.js");
   return createMediaRequesterReadMock();
 });
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import type { MusicGenerationProvider } from "../../music-generation/types.js";
+import { mockFirstObjectArg as callArgument } from "../../test-utils/mock-call-assertions.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
@@ -47,10 +49,27 @@ function savedMedia(fileName: string, size: number, contentType = "audio/mpeg") 
   return { path: `/tmp/${fileName}`, id: fileName, size, contentType };
 }
 
-function configWithDefaults(
-  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
+function imageReference(bytes: string) {
+  return { kind: "image" as const, buffer: Buffer.from(bytes), contentType: "image/png" };
+}
+
+const requester = {
+  agentSessionKey: "agent:main:discord:direct:123",
+  requesterOrigin: { channel: "discord", to: "channel:1" },
+};
+
+function parseGeneratedReply(text: string) {
+  return parseReplyDirectives(text.replace(/\\r\\n|\\n|\\r/g, "\n"), {
+    currentMessageId: "operator-message",
+    extractMarkdownImages: true,
+  });
+}
+
+function musicConfig(
+  music: { primary?: string; fallbacks?: string[]; timeoutMs?: number },
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
 ): OpenClawConfig {
-  return { agents: { defaults } };
+  return { agents: { defaults: { ...defaults, mediaModels: { music } } } };
 }
 
 function musicTool(
@@ -60,24 +79,19 @@ function musicTool(
 ) {
   return expectMusicGenerateTool(
     createMusicGenerateTool({
-      config: configWithDefaults({
-        mediaModels: { music: { ...(primary === null ? {} : { primary }), ...modelOptions } },
-      }),
+      config: musicConfig({ ...(primary === null ? {} : { primary }), ...modelOptions }),
       ...options,
     }),
   );
 }
 
 const unusedGenerator = () =>
-  vi.fn(async () => {
-    throw new Error("not used");
-  });
+  vi.fn<() => Promise<never>>().mockRejectedValue(new Error("not used"));
+const prompt = "night-drive synthwave";
 
-function textOf(
-  result: Awaited<ReturnType<NonNullable<ReturnType<typeof createMusicGenerateTool>>["execute"]>>,
-) {
+function textOf(result: { content?: { type: string; text?: string }[] }) {
   const first = result.content?.[0];
-  return first?.type === "text" ? first.text : "";
+  return first?.type === "text" ? (first.text ?? "") : "";
 }
 
 function registerMusicProvider(overrides: Partial<MusicGenerationProvider> = {}) {
@@ -167,76 +181,56 @@ function expectMusicGenerateTool(
   return tool;
 }
 
-function resetMusicGenerateMocks() {
+beforeEach(() => {
   vi.restoreAllMocks();
   musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([]);
-  musicGenerationRuntimeMocks.generateMusic.mockReset();
-  mediaStoreMocks.deleteMediaBuffer.mockReset();
-  mediaStoreMocks.saveMediaBuffer.mockReset();
-  vi.mocked(webMedia.loadWebMedia).mockReset();
-  probeMediaFilesWithinBudgetMock.mockReset();
+  [
+    musicGenerationRuntimeMocks.generateMusic,
+    ...Object.values(mediaStoreMocks),
+    vi.mocked(webMedia.loadWebMedia),
+    probeMediaFilesWithinBudgetMock,
+    mediaActivityMocks.listOperations,
+    ...Object.values(taskExecutorMocks),
+    musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion,
+  ].forEach((mock) => mock.mockReset());
   probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
     inputs.map(() => ({})),
   );
-  mediaActivityMocks.listOperations.mockReset();
   mediaActivityMocks.listOperations.mockReturnValue(undefined);
   resetRecentMediaGenerationDuplicateGuardsForTests();
   resetGeneratedMediaTaskActivityForTests();
   vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mockClear();
-  Object.values(taskExecutorMocks).forEach((mock) => mock.mockReset());
-  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockReset();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue({
     status: "delivered",
   });
-}
+});
 
-function detailsOf(result: { details?: unknown }): Record<string, unknown> {
-  if (!result.details || typeof result.details !== "object") {
-    throw new Error("expected result details object");
-  }
-  return result.details as Record<string, unknown>;
-}
+const requireObject = createRequireRecord("object", "message");
+const detailsOf = (result: { details?: unknown }) =>
+  requireObject(result.details, "expected result details object");
 
 function generateMusicOptions() {
   return musicGenerationRuntimeMocks.generateMusic.mock.lastCall?.[0];
 }
-
-function callArgument(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex = 0,
-): Record<string, unknown> {
-  const call = mock.mock.calls[callIndex]?.[0];
-  if (!call || typeof call !== "object") {
-    throw new Error(`expected call argument ${callIndex}`);
-  }
-  return call as Record<string, unknown>;
-}
-
-beforeEach(resetMusicGenerateMocks);
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 it("returns null when generation tools are disabled", () => {
   expect(createMusicGenerateTool({ config: { plugins: { enabled: false } } })).toBeNull();
 });
 
 it("runs explicit deployment refs and preserves timeout-only music defaults", async () => {
+  const tracks = [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }];
   const provider = {
     id: "music-plugin",
     models: [],
     capabilities: {},
     isConfigured: () => true,
-    generateMusic: vi.fn(async () => ({
-      tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
-    })),
+    generateMusic: vi.fn(async () => ({ tracks })),
   };
   musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([provider]);
   mockGeneratedMusic({
     provider: "music-plugin",
     model: "deployment",
-    tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
+    tracks,
   });
   mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("deployment.mp3", 5));
   const tool = musicTool(
@@ -250,7 +244,7 @@ it("runs explicit deployment refs and preserves timeout-only music defaults", as
   );
 
   const result = await tool.execute("call-explicit-deployment", {
-    prompt: "night-drive synthwave",
+    prompt,
     model: "music-plugin/deployment",
   });
 
@@ -296,12 +290,13 @@ it.each([
   mediaStoreMocks.saveMediaBuffer.mockResolvedValue(
     savedMedia("reference-score.wav", generatedWav.byteLength, "audio/wav"),
   );
-  const tool = musicTool("primary-music/score", {}, { fallbacks: ["fallback-music/score"] });
-
-  const result = await tool.execute("call-reference-fallback", {
-    prompt: "score this cover art",
-    images,
-  });
+  const result = await musicTool(
+    "primary-music/score",
+    {},
+    {
+      fallbacks: ["fallback-music/score"],
+    },
+  ).execute("call-reference-fallback", { prompt: "score this cover art", images });
 
   expect(primaryGenerate).not.toHaveBeenCalled();
   expect(fallbackGenerate).toHaveBeenCalledExactlyOnceWith(
@@ -319,16 +314,13 @@ it("rejects oversized inline reference images before music generation", async ()
   registerMusicProvider({ capabilities: { edit: { enabled: true, maxInputImages: 1 } } });
   const tool = expectMusicGenerateTool(
     createMusicGenerateTool({
-      config: configWithDefaults({
-        mediaMaxMb: 8 / (1024 * 1024),
-        mediaModels: { music: { primary: "minimax/music-2.6" } },
-      }),
+      config: musicConfig({ primary: "minimax/music-2.6" }, { mediaMaxMb: 8 / (1024 * 1024) }),
     }),
   );
 
   await expect(
     tool.execute("call-oversized-inline-reference", {
-      prompt: "night-drive synthwave",
+      prompt,
       image: `data:image/png;base64,${Buffer.alloc(9).toString("base64")}`,
     }),
   ).rejects.toThrow("Invalid data URL: payload exceeds size limit (");
@@ -364,18 +356,15 @@ it("keeps provider lyrics and generated attachment metadata from becoming delive
   mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(
     savedMedia("operator-approved-song.mp3", 11, "audio/mpeg\nMEDIA:/tmp/mime-private.png"),
   );
-  const tool = musicTool("google/lyria");
-
-  const result = await tool.execute("call-untrusted-provider-output", { prompt: "night drive" });
+  const result = await musicTool("google/lyria").execute("call-untrusted-provider-output", {
+    prompt: "night drive",
+  });
   const text = textOf(result);
   const details = detailsOf(result);
   const attachments = details.attachments as NonNullable<
     NonNullable<Parameters<typeof formatAgentInternalEventsForPrompt>[0]>[number]["attachments"]
   >;
-  const immediate = parseReplyDirectives(text.replace(/\\r\\n|\\n|\\r/g, "\n"), {
-    currentMessageId: "operator-message",
-    extractMarkdownImages: true,
-  });
+  const immediate = parseGeneratedReply(text);
 
   expect(immediate.mediaUrls ?? []).toEqual([]);
   expect(immediate.replyToId).toBeUndefined();
@@ -397,10 +386,7 @@ it("keeps provider lyrics and generated attachment metadata from becoming delive
       replyInstruction: "Deliver the generated song.",
     },
   ]);
-  const delivered = parseReplyDirectives(detached.replace(/\\r\\n|\\n|\\r/g, "\n"), {
-    currentMessageId: "operator-message",
-    extractMarkdownImages: true,
-  });
+  const delivered = parseGeneratedReply(detached);
 
   expect(delivered.mediaUrls).toEqual(["/tmp/operator-approved-song.mp3"]);
   expect(delivered.replyToId).toBeUndefined();
@@ -410,35 +396,31 @@ it("keeps provider lyrics and generated attachment metadata from becoming delive
 it("preserves the selected stored filename in background completion", async () => {
   taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-123" });
   const wakeSpy = musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion;
+  const stored = savedMedia(
+    "anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav",
+    generatedWav.byteLength,
+    "audio/wav",
+  );
   mockGeneratedMusic({
     provider: "google",
     model: "lyria-3-pro-preview",
     tracks: [{ buffer: generatedWav, mimeType: "audio/wav", fileName: "track-1.wav" }],
     metadata: { taskId: "music-task-1" },
   });
-  mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(
-    savedMedia(
-      "anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav",
-      generatedWav.byteLength,
-      "audio/wav",
-    ),
-  );
+  mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(stored);
 
-  let scheduledWork: (() => Promise<void>) | undefined;
+  const scheduledWork: Array<() => Promise<void>> = [];
   const tool = musicTool(
     "google/lyria-3-pro-preview",
     {
-      agentSessionKey: "agent:main:discord:direct:123",
-      requesterOrigin: { channel: "discord", to: "channel:1" },
-      scheduleBackgroundWork: (work) => {
-        scheduledWork = work;
-      },
+      ...requester,
+      scheduleBackgroundWork: (work) => scheduledWork.push(work),
     },
     { timeoutMs: 1000 },
   );
 
   const result = await tool.execute("call-1", {
-    prompt: "night-drive synthwave",
+    prompt,
     instrumental: true,
     filename: "anthem.wav",
   });
@@ -456,16 +438,11 @@ it("preserves the selected stored filename in background completion", async () =
     timeoutMs: 120_000,
     requestedTimeoutMs: 1000,
   });
-  expect(details.timeoutNormalization).toEqual({
-    requested: 1000,
-    applied: 120_000,
-    minimum: 120_000,
-  });
+  const normalization = { requested: 1000, applied: 120_000, minimum: 120_000 };
+  expect(details.timeoutNormalization).toEqual(normalization);
   expect((result as { terminate?: boolean }).terminate).toBeUndefined();
-  if (!scheduledWork) {
-    throw new Error("expected scheduled music generation work");
-  }
-  await scheduledWork();
+  expect(scheduledWork).toHaveLength(1);
+  await scheduledWork[0]!();
   expect(generateMusicOptions()).toMatchObject({
     autoProviderFallback: false,
     timeoutMs: 120_000,
@@ -477,17 +454,15 @@ it("preserves the selected stored filename in background completion", async () =
     /^tool:music_generate:/,
   );
   expect(wakeSpy).toHaveBeenCalledTimes(1);
-  const wake = callArgument(
-    musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion,
-  );
+  const wake = callArgument(wakeSpy);
   expect(wake).toMatchObject({ handle: { taskId: "task-123" }, status: "ok" });
-  expect(wake.result).toContain('path="/tmp/anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav"');
+  expect(wake.result).toContain(`path="${stored.path}"`);
   expect(wake.result).not.toContain("MEDIA:");
   expect(wake.result).toContain('name="anthem.wav"');
   expect(wake.attachments).toEqual([
     {
       type: "audio",
-      path: "/tmp/anthem---8db91a41-5c79-4b34-8ab9-cd9d11f77a44.wav",
+      path: stored.path,
       mimeType: "audio/wav",
       name: "anthem.wav",
       sizeBytes: generatedWav.byteLength,
@@ -503,11 +478,9 @@ it("stops loading later music references when the caller aborts a pending refere
   const generate = musicGenerationRuntimeMocks.generateMusic;
   const reference = createDeferred<Awaited<ReturnType<typeof webMedia.loadWebMedia>>>();
   const referenceStarted = createDeferred();
-  const loadMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-    kind: "image",
-    buffer: Buffer.from("second-image"),
-    contentType: "image/png",
-  });
+  const loadMedia = vi
+    .spyOn(webMedia, "loadWebMedia")
+    .mockResolvedValue(imageReference("second-image"));
   loadMedia.mockImplementationOnce(() => {
     referenceStarted.resolve();
     return reference.promise;
@@ -515,9 +488,8 @@ it("stops loading later music references when the caller aborts a pending refere
   taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-music-references" });
   const scheduleBackgroundWork = vi.fn();
   const tool = musicTool("minimax/music-2.6", {
-    requesterOrigin: { channel: "discord", to: "channel:1" },
+    ...requester,
     workspaceDir: process.cwd(),
-    agentSessionKey: "agent:main:discord:direct:123",
     scheduleBackgroundWork,
   });
   const controller = new AbortController();
@@ -533,11 +505,7 @@ it("stops loading later music references when the caller aborts a pending refere
   await referenceStarted.promise;
   expect(loadMedia).toHaveBeenCalledOnce();
   controller.abort(abortReason);
-  reference.resolve({
-    kind: "image",
-    buffer: Buffer.from("first-image"),
-    contentType: "image/png",
-  });
+  reference.resolve(imageReference("first-image"));
 
   await expect(pending).rejects.toBe(abortReason);
   expect(loadMedia).toHaveBeenCalledOnce();
@@ -552,15 +520,14 @@ it("stops loading later music references when the caller aborts a pending refere
 
 it("keeps an accepted detached music task running after its requester aborts", async () => {
   const generate = mockGeneratedMusic({
-    tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg", fileName: "music.mp3" }],
+    tracks: [musicAsset("music", "music.mp3")],
   });
   mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("accepted-music.mp3", 5));
   taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-music-accepted" });
   const controller = new AbortController();
   const scheduled: Array<() => Promise<void>> = [];
   const tool = musicTool("google/lyria-3-clip-preview", {
-    requesterOrigin: { channel: "discord", to: "channel:1" },
-    agentSessionKey: "agent:main:discord:direct:123",
+    ...requester,
     scheduleBackgroundWork: (work) => scheduled.push(work),
   });
   const result = await tool.execute(
@@ -583,17 +550,14 @@ defineMediaGenerationDuplicateTests({
   listTasks: mediaActivityMocks.listOperations,
   createTool: (options) => expectMusicGenerateTool(createMusicGenerateTool(options)),
   requesterOrigin: { channel: "discord", to: "channel:1" },
-  setupProviders: () => {
-    musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([
-      {
-        id: "google",
-        defaultModel: "lyria-3-clip-preview",
-        models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
-        capabilities: { generate: { supportsInstrumental: true } },
-        generateMusic: unusedGenerator(),
-      },
-    ]);
-  },
+  setupProviders: () =>
+    registerMusicProvider({
+      id: "google",
+      defaultModel: "lyria-3-clip-preview",
+      models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
+      capabilities: { generate: { supportsInstrumental: true } },
+      generateMusic: unusedGenerator(),
+    }),
   cases: [
     {
       name: "dedupes a recent default-model music request repeated with explicit or model-only override",
@@ -601,7 +565,7 @@ defineMediaGenerationDuplicateTests({
       model: "lyria-3-clip-preview",
       defaultModel: true,
       timeoutMs: 180_000,
-      request: { prompt: "night-drive synthwave", instrumental: true },
+      request: { prompt, instrumental: true },
       progressSummary: "Generated 1 track",
     },
     {
@@ -609,7 +573,7 @@ defineMediaGenerationDuplicateTests({
       primary: "lyria-3-pro-preview",
       model: "lyria-3-pro-preview",
       timeoutMs: 180_000,
-      request: { prompt: "night-drive synthwave", instrumental: true },
+      request: { prompt, instrumental: true },
       progressSummary: "Generated 1 track",
     },
   ],
@@ -628,9 +592,7 @@ it("rolls back late music saves after a concurrent persistence failure", async (
     .mockRejectedValueOnce(terminalError)
     .mockImplementationOnce(() => lateSave.promise);
   mediaStoreMocks.deleteMediaBuffer.mockRejectedValueOnce(new Error("music cleanup failed"));
-  const tool = musicTool("minimax/music-2.6");
-
-  const execution = tool.execute("call-partial-save", { prompt: "two tracks" });
+  const execution = musicTool().execute("call-partial-save", { prompt: "two tracks" });
   let executionSettled = false;
   const onSettled = () => {
     executionSettled = true;
@@ -642,8 +604,7 @@ it("rolls back late music saves after a concurrent persistence failure", async (
 
   lateSave.resolve(lateSavedMedia);
   await expect(execution).rejects.toBe(terminalError);
-  expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledTimes(1);
-  expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledWith(
+  expect(mediaStoreMocks.deleteMediaBuffer).toHaveBeenCalledExactlyOnceWith(
     "late.mp3",
     "tool-music-generation",
   );
@@ -664,43 +625,40 @@ it("lists provider capabilities", async () => {
     generateMusic: unusedGenerator(),
   });
 
-  const tool = musicTool("minimax/music-2.6");
-
-  const result = await tool.execute("call-1", { action: "list" });
+  const result = await musicTool().execute("call-1", { action: "list" });
   const text = textOf(result);
   expect(text).toContain("supportedFormats=mp3");
   expect(text).toContain("instrumental");
 });
 
 it("warns when optional provider overrides are ignored", async () => {
-  musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([
-    {
-      id: "google",
-      defaultModel: "lyria-3-clip-preview",
-      models: ["lyria-3-clip-preview"],
-      capabilities: {
-        generate: {
-          supportsLyrics: true,
-          supportsInstrumental: true,
-          supportsFormat: true,
-          supportedFormatsByModel: { "lyria-3-clip-preview": ["mp3"] },
-        },
+  const ignoredOverrides = [
+    { key: "durationSeconds", value: 30 },
+    { key: "format", value: "wav" },
+  ];
+  const warning =
+    "Ignored unsupported overrides for google/lyria-3-clip-preview: durationSeconds=30, format=wav.";
+  registerMusicProvider({
+    id: "google",
+    defaultModel: "lyria-3-clip-preview",
+    models: ["lyria-3-clip-preview"],
+    capabilities: {
+      generate: {
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsFormat: true,
+        supportedFormatsByModel: { "lyria-3-clip-preview": ["mp3"] },
       },
-      generateMusic: unusedGenerator(),
     },
-  ]);
+    generateMusic: unusedGenerator(),
+  });
   mockGeneratedMusic({
-    ignoredOverrides: [
-      { key: "durationSeconds", value: 30 },
-      { key: "format", value: "wav" },
-    ],
+    ignoredOverrides,
     tracks: [musicAsset("music-bytes", "molty-anthem.mp3")],
   });
   mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(savedMedia("molty-anthem.mp3", 11));
 
-  const tool = musicTool("google/lyria-3-clip-preview");
-
-  const result = await tool.execute("call-google-generate", {
+  const result = await musicTool("google/lyria-3-clip-preview").execute("call-google-generate", {
     prompt: "OpenClaw anthem",
     instrumental: true,
     durationSeconds: 30,
@@ -709,18 +667,10 @@ it("warns when optional provider overrides are ignored", async () => {
   const text = textOf(result);
 
   expect(text).toContain("Generated 1 track with google/lyria-3-clip-preview.");
-  expect(text).toContain(
-    "Warning: Ignored unsupported overrides for google/lyria-3-clip-preview: durationSeconds=30, format=wav.",
-  );
+  expect(text).toContain(`Warning: ${warning}`);
   const details = detailsOf(result);
-  expect(details.instrumental).toBe(true);
-  expect(details.warning).toBe(
-    "Ignored unsupported overrides for google/lyria-3-clip-preview: durationSeconds=30, format=wav.",
-  );
-  expect(details.ignoredOverrides).toEqual([
-    { key: "durationSeconds", value: 30 },
-    { key: "format", value: "wav" },
-  ]);
+  expect(details).toMatchObject({ instrumental: true, warning });
+  expect(details.ignoredOverrides).toEqual(ignoredOverrides);
   expect(details).not.toHaveProperty("durationSeconds");
   expect(details).not.toHaveProperty("format");
 });
@@ -736,12 +686,7 @@ it("surfaces normalized durations from runtime metadata", async () => {
     savedMedia("generated-night-drive.mp3", 11),
   );
 
-  const tool = musicTool("minimax/music-2.6");
-
-  const result = await tool.execute("call-1", {
-    prompt: "night-drive synthwave",
-    durationSeconds: 45,
-  });
+  const result = await musicTool().execute("call-1", { prompt, durationSeconds: 45 });
   const text = textOf(result);
 
   expect(text).toContain("Duration normalized: requested 45s; used 30s.");
@@ -753,11 +698,9 @@ it("surfaces normalized durations from runtime metadata", async () => {
 it("rejects fractional duration seconds before generation", async () => {
   const generateMusic = mockGeneratedMusic({ provider: "minimax", model: "music-2.6" });
 
-  const tool = musicTool("minimax/music-2.6");
-
-  await expect(
-    tool.execute("call-1", { prompt: "night-drive synthwave", durationSeconds: 45.5 }),
-  ).rejects.toThrow("durationSeconds must be a positive integer");
+  await expect(musicTool().execute("call-1", { prompt, durationSeconds: 45.5 })).rejects.toThrow(
+    "durationSeconds must be a positive integer",
+  );
   expect(generateMusic).not.toHaveBeenCalled();
 });
 
@@ -766,11 +709,7 @@ it("passes web_fetch SSRF policy when loading reference images", async () => {
     capabilities: { edit: { enabled: true, maxInputImages: 1 } },
     generateMusic: unusedGenerator(),
   });
-  vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-    kind: "image",
-    buffer: Buffer.from("image"),
-    contentType: "image/png",
-  });
+  vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue(imageReference("image"));
   mockGeneratedMusic({
     provider: "minimax",
     model: "music-2.6",
@@ -779,36 +718,25 @@ it("passes web_fetch SSRF policy when loading reference images", async () => {
   mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(
     savedMedia("generated-night-drive.mp3", 11),
   );
-  const tool = expectMusicGenerateTool(
-    createMusicGenerateTool({
-      config: {
-        agents: {
-          defaults: {
-            mediaModels: { music: { primary: "minimax/music-2.6", timeoutMs: 180_000 } },
-          },
-        },
-        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
-      },
-    }),
-  );
+  const tool = musicTool(undefined, {
+    config: {
+      ...musicConfig({ primary: "minimax/music-2.6", timeoutMs: 180_000 }),
+      tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+    },
+  });
 
   await tool.execute("call-1", {
-    prompt: "night-drive synthwave",
+    prompt,
     image: "http://198.18.0.153/reference.png",
   });
 
-  expect(webMedia.loadWebMedia).toHaveBeenCalledTimes(1);
-  const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls[0];
-  if (!loadCall) {
-    throw new Error("expected web media load call");
-  }
-  expect(loadCall[0]).toBe("http://198.18.0.153/reference.png");
-  const loadOptions = loadCall[1] as {
-    requestInit?: { signal?: unknown };
-    ssrfPolicy?: unknown;
-  };
-  expect(loadOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
-  expect(loadOptions.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+  expect(webMedia.loadWebMedia).toHaveBeenCalledExactlyOnceWith(
+    "http://198.18.0.153/reference.png",
+    expect.objectContaining({
+      requestInit: expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    }),
+  );
   expect(generateMusicOptions()?.timeoutMs).toBe(180_000);
   expect(fetchTimeout.buildTimeoutAbortSignal).toHaveBeenCalledTimes(1);
   expect(vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mock.calls[0]?.[0]).toEqual({

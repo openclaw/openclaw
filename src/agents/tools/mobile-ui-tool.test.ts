@@ -41,10 +41,8 @@ function snapshotPayload(params?: { id?: string; packageName?: string; text?: st
       nodes: [
         {
           ref: "n1",
-          parentRef: null,
           role: "button",
           text: params?.text ?? "Next",
-          contentDescription: null,
           viewId: "example.app:id/next",
           bounds: [10, 20, 110, 70],
           flags: { clickable: true, enabled: true },
@@ -57,7 +55,7 @@ function snapshotPayload(params?: { id?: string; packageName?: string; text?: st
 
 function installGatewayBehavior(params?: {
   firstSnapshot?: ReturnType<typeof snapshotPayload>;
-  freshSnapshot?: ReturnType<typeof snapshotPayload>;
+  freshSnapshot?: ReturnType<typeof snapshotPayload> | Error;
   outcome?: { code: string; message?: string | null };
 }) {
   let observeCalls = 0;
@@ -65,6 +63,9 @@ function installGatewayBehavior(params?: {
     const command = (body as { command?: string }).command;
     if (command === OBSERVE) {
       observeCalls += 1;
+      if (observeCalls > 1 && params?.freshSnapshot instanceof Error) {
+        throw params.freshSnapshot;
+      }
       return observeCalls === 1
         ? (params?.firstSnapshot ?? snapshotPayload())
         : (params?.freshSnapshot ?? snapshotPayload({ id: "snapshot-2" }));
@@ -82,7 +83,8 @@ function invokeBodies(command: string) {
     .filter((body) => body.command === command);
 }
 
-async function observedTool() {
+async function observedTool(params: Parameters<typeof installGatewayBehavior>[0] = {}) {
+  installGatewayBehavior(params);
   const tool = createMobileUiTool();
   await tool.execute("observe-1", { action: "observe" });
   return tool;
@@ -151,7 +153,6 @@ it.each([
 });
 
 it("rejects swipes longer than Android's gesture-duration limit", async () => {
-  installGatewayBehavior();
   const tool = await observedTool();
 
   await expect(
@@ -165,7 +166,6 @@ it("rejects swipes longer than Android's gesture-duration limit", async () => {
 });
 
 it("gives long actions headroom in both gateway and node timeouts", async () => {
-  installGatewayBehavior();
   const tool = await observedTool();
 
   await tool.execute("act-1", {
@@ -184,8 +184,7 @@ it("gives long actions headroom in both gateway and node timeouts", async () => 
 
 it("surfaces target_stale and requires use of the fresh snapshot", async () => {
   const code = "target_stale";
-  installGatewayBehavior({ outcome: { code, message: "Observe again" } });
-  const tool = await observedTool();
+  const tool = await observedTool({ outcome: { code, message: "Observe again" } });
 
   const result = await tool.execute("act-1", { ...activation, confirmed: true });
 
@@ -198,19 +197,9 @@ it("surfaces target_stale and requires use of the fresh snapshot", async () => {
 });
 
 it("preserves a completed act outcome when postcondition observation fails", async () => {
-  let observeCalls = 0;
-  callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
-    const command = (body as { command?: string }).command;
-    if (command === ACT) {
-      return { payload: { code: "completed", message: null } };
-    }
-    observeCalls += 1;
-    if (observeCalls === 1) {
-      return snapshotPayload();
-    }
-    throw new Error("accessibility service disconnected");
+  const tool = await observedTool({
+    freshSnapshot: new Error("accessibility service disconnected"),
   });
-  const tool = await observedTool();
 
   const result = await tool.execute("act-1", { ...activation, confirmed: true });
 
@@ -279,10 +268,9 @@ it.each<[string, RegExp]>([
 });
 
 it("uses keyword matches only to enrich a required confirmation", async () => {
-  installGatewayBehavior({
+  const tool = await observedTool({
     firstSnapshot: snapshotPayload({ packageName: "com.example.messages", text: "Send message" }),
   });
-  const tool = await observedTool();
 
   const result = await tool.execute("act-1", activation);
 
@@ -311,7 +299,6 @@ it.each([
 ])(
   "requires confirmation for $mobileAction.type before dispatch",
   async ({ mobileAction, target, proposedEffect }) => {
-    installGatewayBehavior();
     const tool = await observedTool();
     const args = { ...activation, mobileAction };
     const result = await tool.execute("unconfirmed", args);
@@ -334,7 +321,6 @@ it.each([
 );
 
 it("fails closed for blind swipes", async () => {
-  installGatewayBehavior();
   const tool = await observedTool();
 
   await expect(
@@ -354,7 +340,6 @@ it.each([
   ["wait", { type: "wait", ms: 0 }],
   ["global navigation", { type: "global_action", name: "home" }],
 ])("does not require confirmation for %s", async (_label, mobileAction) => {
-  installGatewayBehavior();
   const tool = await observedTool();
 
   await expect(
