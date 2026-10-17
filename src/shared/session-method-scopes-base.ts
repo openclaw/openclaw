@@ -70,6 +70,9 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.abort",
   "sessions.goal.update",
   "sessions.goal.clear",
+  // Own-profile preferences: the handler resolves the authenticated profile, so a
+  // durable guest keeps its New Session choices without a broader operator grant.
+  "users.prefs.set",
 ]);
 
 /** Admission only: reads retain sharing policy; mutation owners must bind the caller's own row. */
