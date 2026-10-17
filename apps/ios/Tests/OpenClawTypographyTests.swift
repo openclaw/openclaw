@@ -187,7 +187,8 @@ struct OpenClawTypographyTests {
         #expect(typographySource.contains("maximumPointSize: 16"))
         #expect(typographySource.contains("maximumPointSize: 22"))
         #expect(typographySource.contains("maximumPointSize: 44"))
-        #expect(typographySource.contains("scaledFont(for: base, maximumPointSize: maximumPointSize)"))
+        #expect(typographySource
+            .contains("for: base, maximumPointSize: maximumPointSize, compatibleWith: UITraitCollection.current"))
         #expect(typographySource.contains("case let searchTextField as UISearchTextField"))
         #expect(!typographySource.contains("case let textField as UITextField"))
         #expect(!typographySource.contains("case let textView as UITextView"))
