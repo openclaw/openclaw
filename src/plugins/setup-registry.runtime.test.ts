@@ -58,18 +58,18 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function createCurrentSnapshot(params: {
-  manifestHash: string;
-  cliBackends: string[];
-  workspaceDir?: string;
-}): PluginMetadataSnapshot {
+function createCurrentSnapshot(
+  manifestHash: string,
+  backend: string,
+  workspaceDir?: string,
+): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
   const snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
         id: "openai",
-        rootDir: `/tmp/openai-${params.manifestHash}`,
-        cliBackends: params.cliBackends,
+        rootDir: `/tmp/openai-${manifestHash}`,
+        cliBackends: [backend],
         enabledByDefault: true,
       },
     ],
@@ -78,8 +78,8 @@ function createCurrentSnapshot(params: {
   return {
     ...snapshot,
     policyHash,
-    configFingerprint: params.manifestHash,
-    workspaceDir: params.workspaceDir,
+    configFingerprint: manifestHash,
+    workspaceDir,
   };
 }
 
@@ -191,10 +191,7 @@ describe("setup-registry descriptor lookup", () => {
 
   it("keeps descriptors inside a narrower scoped view of the same metadata generation", async () => {
     const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
-    const snapshot = createCurrentSnapshot({
-      manifestHash: "scoped",
-      cliBackends: ["Scoped-CLI"],
-    });
+    const snapshot = createCurrentSnapshot("scoped", "Scoped-CLI");
     const narrowed = projectPluginMetadataSnapshot(snapshot, []);
     const resolve = (view: PluginMetadataSnapshot) =>
       withPluginMetadataSnapshotScope(
@@ -223,11 +220,7 @@ describe("setup-registry descriptor lookup", () => {
       ["bravo", "Next-CLI", "codex-cli"],
     ] as const) {
       setCurrentPluginMetadataSnapshot(
-        createCurrentSnapshot({
-          manifestHash,
-          cliBackends: [backend],
-          workspaceDir: "/workspace/a",
-        }),
+        createCurrentSnapshot(manifestHash, backend, "/workspace/a"),
         { config: {}, env: process.env },
       );
       expect(

@@ -145,9 +145,7 @@ describe("plugin setup registry artifact lifecycle", () => {
       ]);
       expect(process.listenerCount(event)).toBe(before + 1);
     } finally {
-      await retirePluginCache(cache).finally(() => {
-        process.removeAllListeners(event);
-      });
+      await retirePluginCache(cache).finally(() => process.removeAllListeners(event));
     }
   });
 
@@ -418,17 +416,14 @@ describe("plugin setup registry artifact lifecycle", () => {
           "utf8",
         );
       };
-      const manifestRegistry = {
-        plugins: [
-          setupRecord("bundled-setup", rootDir, sourcePath, {
-            origin: "bundled",
-            setupSource: sourcePath,
-            providers: ["bundled-setup"],
-            setup: { requiresRuntime: true, providers: [{ id: "bundled-setup" }] },
-          }),
-        ],
-        diagnostics: [],
-      };
+      const manifestRegistry = registry(
+        setupRecord("bundled-setup", rootDir, sourcePath, {
+          origin: "bundled",
+          setupSource: sourcePath,
+          providers: ["bundled-setup"],
+          setup: { requiresRuntime: true, providers: [{ id: "bundled-setup" }] },
+        }),
+      );
 
       writeBundledArtifact("before");
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
@@ -506,9 +501,7 @@ describe("plugin setup module lifecycle", () => {
         expect(() => current()).toThrow("reloaded or disabled");
         expect(process.listenerCount(event)).toBe(listeners + evaluations);
       } finally {
-        await owner.close().finally(() => {
-          process.removeAllListeners(event);
-        });
+        await owner.close().finally(() => process.removeAllListeners(event));
       }
     },
   );
@@ -532,9 +525,7 @@ describe("plugin setup module lifecycle", () => {
       expect(loader()(source)).toMatchObject({ value: "recovered" });
       expect(process.listenerCount(event)).toBe(listeners + 1);
     } finally {
-      await retirePluginCache(cache).finally(() => {
-        process.removeAllListeners(event);
-      });
+      await retirePluginCache(cache).finally(() => process.removeAllListeners(event));
     }
   });
 
