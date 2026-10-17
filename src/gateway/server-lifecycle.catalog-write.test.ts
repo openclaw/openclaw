@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createOAuthManager } from "../agents/auth-profiles/oauth-manager.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -36,352 +36,311 @@ import {
   readLocalWorkspaceProjection,
 } from "./worker-environments/local-workspace-store.test-support.js";
 
-async function withClosingGateway(
-  name: string,
-  signal: AbortSignal,
-  run: (context: Awaited<ReturnType<typeof prepareClosingGateway>>) => Promise<void>,
-) {
-  const context = await prepareClosingGateway(name, signal);
-  try {
-    await run(context);
-  } finally {
-    context.release.resolve();
-    await Promise.allSettled(context.pending);
-    vi.restoreAllMocks();
-    await context.fixture.cleanup();
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
   }
-}
-
-async function prepareClosingGateway(name: string, signal: AbortSignal) {
+});
+async function prepareClosingGateway(signal: AbortSignal) {
+  const name = "gateway-catalog-write-close";
   const fixture = await createGatewayMetadataCloseFixture(name);
-  try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
-    const options = { env: fixture.state.env };
-    const shared = openOpenClawStateDatabase(options).db;
-    const accepted = createDeferredCore();
-    const release = createDeferredCore();
-    const pending: Promise<unknown>[] = [];
-    const track = <T>(task: Promise<T>) => {
-      pending.push(task);
-      return task;
-    };
-    return {
-      fixture,
-      port,
-      kernel,
-      options,
-      shared,
-      accepted,
-      release,
-      pending,
-      track,
-      holdCommand(type: string) {
-        probe.command(stateWorker, async (command, executeOptions, scope) => {
-          if (command.type === type) {
-            accepted.resolve();
-            await release.promise;
-          }
-          return scope.execute(command, executeOptions);
-        });
-      },
-      async admitted(task: Promise<unknown>, message: string) {
-        await withinTest(awaitGateBeforeSettlement(accepted.promise, task, message), signal);
-      },
-      async beginClose(abortSignal = kernel.connectionWork.signal) {
-        const parentClosed = createDeferredCore();
-        abortSignal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
-        const closing = track(server.close({ reason: name }));
-        await withinTest(parentClosed.promise, signal);
-        return { closing };
-      },
-    };
-  } catch (error) {
+  const release = createDeferredCore();
+  const pending: Promise<unknown>[] = [];
+  cleanups.push(async () => {
+    release.resolve();
+    await Promise.allSettled(pending);
     vi.restoreAllMocks();
     await fixture.cleanup();
-    throw error;
-  }
+  });
+  const port = await fixture.reservePort();
+  const server = await fixture.start(port);
+  const kernel = fixture.kernels.get(port);
+  assert(kernel);
+  const options = { env: fixture.state.env };
+  const shared = openOpenClawStateDatabase(options).db;
+  const accepted = createDeferredCore();
+  const track = <T>(task: Promise<T>) => {
+    pending.push(task);
+    return task;
+  };
+  return {
+    fixture,
+    port,
+    kernel,
+    options,
+    shared,
+    accepted,
+    release,
+    track,
+    trackConnection<T>(run: () => Promise<T>) {
+      return track(kernel.connectionWork.track(run));
+    },
+    sql: (query: string) => openOpenClawStateDatabase(options).db.prepare(query),
+    holdCommand(type: string) {
+      probe.command(stateWorker, async (command, executeOptions, scope) => {
+        if (command.type === type) {
+          accepted.resolve();
+          await release.promise;
+        }
+        return scope.execute(command, executeOptions);
+      });
+    },
+    async admitted(task: Promise<unknown>, message: string) {
+      await withinTest(awaitGateBeforeSettlement(accepted.promise, task, message), signal);
+    },
+    async beginClose(abortSignal = kernel.connectionWork.signal) {
+      const parentClosed = createDeferredCore();
+      abortSignal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
+      const closing = track(server.close({ reason: name }));
+      await withinTest(parentClosed.promise, signal);
+      return { closing };
+    },
+  };
 }
 
-it("settles an accepted catalog refresh before Gateway close retires its state writer", async ({
-  signal,
-}) => {
-  await withClosingGateway("gateway-catalog-write-close", signal, async (context) => {
-    const { fixture, kernel, shared, release } = context;
-    const lifecycle = createGatewayUpdateLifecycle(kernel.scheduler);
-    kernel.runtimeState.stopGatewayUpdateCheck = lifecycle.stop;
-    const bundle = {
-      schemaVersion: 2,
-      sourceCommit: "synthetic",
-      generatedAt: 1_753_500_000_000,
-      providers: { anthropic: {} },
-      models: [{ id: "catalog-close", provider: "anthropic", pricing: { status: "unknown" } }],
-    };
-    context.holdCommand("modelCatalog.remote.write");
-    const refreshing = context.track(
-      lifecycle.run((catalogSignal) =>
-        refreshRemoteModelCatalog({
-          config: {},
-          force: true,
-          signal: catalogSignal,
-          databaseOptions: { env: fixture.state.env },
-          bundledGeneratedAt: () => bundle.generatedAt - 1,
-          fetchImpl: async () => new Response(JSON.stringify(bundle)),
-        }),
-      ),
-    );
-    await context.admitted(
-      refreshing,
-      "Catalog refresh settled before handing its accepted write to the state worker",
-    );
-    const { closing } = await context.beginClose(kernel.scheduler.signal);
-    expect(lifecycle.signal.aborted).toBe(true);
-    const lateWork = vi.fn(async () => undefined);
-    await expect(lifecycle.run(lateWork)).rejects.toThrow();
-    expect(lateWork).not.toHaveBeenCalled();
-    expect(shared.isOpen).toBe(true);
-    release.resolve();
-    await expect(refreshing).resolves.toMatchObject({
-      status: "updated",
-      generatedAt: bundle.generatedAt,
-    });
-    await closing;
-    expect(shared.isOpen).toBe(false);
-    expect(
-      JSON.parse(readRemoteModelCatalog({ env: fixture.state.env })?.bundle_json ?? "null"),
-    ).toEqual(bundle);
+it("persists accepted catalog writes before closing the state writer", async ({ signal }) => {
+  const context = await prepareClosingGateway(signal);
+  const { fixture, kernel, shared, release } = context;
+  const lifecycle = createGatewayUpdateLifecycle(kernel.scheduler);
+  kernel.runtimeState.stopGatewayUpdateCheck = lifecycle.stop;
+  const bundle = {
+    schemaVersion: 2,
+    sourceCommit: "synthetic",
+    generatedAt: 1_753_500_000_000,
+    providers: { anthropic: {} },
+    models: [{ id: "catalog-close", provider: "anthropic", pricing: { status: "unknown" } }],
+  };
+  context.holdCommand("modelCatalog.remote.write");
+  const refreshing = context.track(
+    lifecycle.run((catalogSignal) =>
+      refreshRemoteModelCatalog({
+        config: {},
+        force: true,
+        signal: catalogSignal,
+        databaseOptions: { env: fixture.state.env },
+        bundledGeneratedAt: () => bundle.generatedAt - 1,
+        fetchImpl: async () => new Response(JSON.stringify(bundle)),
+      }),
+    ),
+  );
+  await context.admitted(refreshing, "Catalog refresh settled before worker write");
+  const { closing } = await context.beginClose(kernel.scheduler.signal);
+  expect(lifecycle.signal.aborted).toBe(true);
+  const lateWork = vi.fn(async () => undefined);
+  await expect(lifecycle.run(lateWork)).rejects.toThrow();
+  expect(lateWork).not.toHaveBeenCalled();
+  expect(shared.isOpen).toBe(true);
+  release.resolve();
+  await expect(refreshing).resolves.toMatchObject({
+    status: "updated",
+    generatedAt: bundle.generatedAt,
   });
+  await closing;
+  expect(shared.isOpen).toBe(false);
+  expect(
+    JSON.parse(readRemoteModelCatalog({ env: fixture.state.env })?.bundle_json ?? "null"),
+  ).toEqual(bundle);
 });
 
-it("joins accepted notices, signal cleanup, and upstream deletion after the Gateway close prelude aborts", async ({
-  signal,
-}) => {
-  await withClosingGateway("gateway-notice-sweep-close", signal, async (context) => {
-    const { fixture, port, kernel, options, shared, release } = context;
-    const watcher = "agent:main:subagent:startup-notice-watcher";
-    const target = "agent:main:subagent:startup-notice-target";
-    await upsertSessionEntryCore(
-      { sessionKey: watcher, env: fixture.state.env },
-      { sessionId: "startup-notice-watcher", updatedAt: Date.now() },
-    );
-    shared
-      .prepare(
-        `INSERT INTO session_watch_cursors
+it("joins notice cleanup and upstream deletion after close prelude", async ({ signal }) => {
+  const context = await prepareClosingGateway(signal);
+  const { fixture, port, kernel, options, shared, release, sql } = context;
+  const watcher = "agent:main:subagent:startup-notice-watcher";
+  const target = "agent:main:subagent:startup-notice-target";
+  await upsertSessionEntryCore(
+    { sessionKey: watcher, env: fixture.state.env },
+    { sessionId: "startup-notice-watcher", updatedAt: Date.now() },
+  );
+  sql(
+    `INSERT INTO session_watch_cursors
          (watcher_session_key, target_session_key, watcher_store_path, last_seen_sequence,
           notified_sequence, material_sequence, updated_at)
          VALUES (?, ?, ?, 1, 2, 3, ?)`,
-      )
-      .run(
-        watcher,
-        target,
-        resolvePhysicalSessionStorePath({ sessionKey: watcher, env: fixture.state.env }),
-        Date.now(),
-      );
-    context.holdCommand("sessionState.sweep");
-    const logs = { info() {}, warn() {}, error() {} };
-    // Startup tracks the original promise without lending its connection scope to storage.
-    const operation = Promise.resolve().then(() =>
-      runGatewayStartupObservers({
-        registry: createEmptyPluginRegistry(),
-        resolveGatewayContext: () => undefined,
-        loadSubagentRegistryActivation: async () => () => {},
-        signal: kernel.connectionWork.signal,
-        port,
-        config: fixture.config,
-        workspaceDir: fixture.state.workspaceDir,
-        getCron: () => undefined,
-        isClosing: () => kernel.lifecycle.closePreludeStarted,
-        log: logs,
-        logHooks: logs,
-        createHookRunner,
-        refreshLatestUpdateRestartSentinel: async () => {},
-      }),
-    );
-    const sweeping = context.track(kernel.connectionWork.track(() => operation));
-    await context.admitted(
-      sweeping,
-      "Startup observers settled before their notice write reached the state worker",
-    );
-    const resetWatcher = `${watcher}-reset`;
-    const deletedTarget = `${target}-deleted`;
-    expect(
-      upsertSessionUpstreamLink(
-        {
-          sessionKey: deletedTarget,
-          agentId: "main",
-          catalogId: "codex",
-          hostId: "gateway:local",
-          threadId: "close",
-          upstreamKind: "codex-app-server",
-          upstreamRef: null,
-          marker: null,
-        },
-        options,
-      ),
-    ).toBe(true);
-    shared
-      .prepare(
-        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
-      )
-      .run(resetWatcher, target, Date.now());
-    shared
-      .prepare(
-        "INSERT INTO session_state_events (session_key, agent_id, kind, actor_type, occurred_at, summary) VALUES (?, 'main', 'adopted', 'human', ?, 'accepted deletion')",
-      )
-      .run(deletedTarget, Date.now());
-    let cleanupSettled = false;
-    const cleaning = context.track(
-      kernel.connectionWork.track(async () => {
-        await handleSessionStateSessionReset(resetWatcher, options);
-        await handleSessionStateSessionDeleted(deletedTarget, "main", options);
-        cleanupSettled = true;
-      }),
-    );
-    const { closing } = await context.beginClose();
-    expect(kernel.scheduler.signal.aborted).toBe(true);
-    expect(shared.isOpen).toBe(true);
-    expect(cleanupSettled).toBe(false);
-    release.resolve();
-    await Promise.all([sweeping, cleaning]);
-    await closing;
-    expect(shared.isOpen).toBe(false);
-    expect(
-      openOpenClawStateDatabase(options)
-        .db.prepare(
-          "SELECT notified_sequence FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
-        )
-        .get(watcher, target),
-    ).toEqual({ notified_sequence: 3 });
-    const reopened = openOpenClawStateDatabase(options).db;
-    expect(readSessionUpstreamLinkInDatabase(reopened, deletedTarget, "main")).toBeUndefined();
-    expect(
-      reopened
-        .prepare("SELECT 1 FROM session_watch_cursors WHERE watcher_session_key = ?")
-        .get(resetWatcher),
-    ).toBeUndefined();
-    expect(
-      reopened
-        .prepare("SELECT 1 FROM session_state_events WHERE session_key = ?")
-        .get(deletedTarget),
-    ).toBeUndefined();
+  ).run(
+    watcher,
+    target,
+    resolvePhysicalSessionStorePath({ sessionKey: watcher, env: fixture.state.env }),
+    Date.now(),
+  );
+  context.holdCommand("sessionState.sweep");
+  const logs = { info() {}, warn() {}, error() {} };
+  // Startup tracks the original promise without lending its connection scope to storage.
+  const operation = Promise.resolve().then(() =>
+    runGatewayStartupObservers({
+      registry: createEmptyPluginRegistry(),
+      resolveGatewayContext: () => undefined,
+      loadSubagentRegistryActivation: async () => () => {},
+      signal: kernel.connectionWork.signal,
+      port,
+      config: fixture.config,
+      workspaceDir: fixture.state.workspaceDir,
+      getCron: () => undefined,
+      isClosing: () => kernel.lifecycle.closePreludeStarted,
+      log: logs,
+      logHooks: logs,
+      createHookRunner,
+      refreshLatestUpdateRestartSentinel: async () => {},
+    }),
+  );
+  const sweeping = context.trackConnection(() => operation);
+  await context.admitted(sweeping, "Startup observers settled before notice write");
+  const resetWatcher = `${watcher}-reset`;
+  const deletedTarget = `${target}-deleted`;
+  expect(
+    upsertSessionUpstreamLink(
+      {
+        sessionKey: deletedTarget,
+        agentId: "main",
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "close",
+        upstreamKind: "codex-app-server",
+        upstreamRef: null,
+        marker: null,
+      },
+      options,
+    ),
+  ).toBe(true);
+  sql(
+    "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
+  ).run(resetWatcher, target, Date.now());
+  sql(
+    "INSERT INTO session_state_events (session_key, agent_id, kind, actor_type, occurred_at, summary) VALUES (?, 'main', 'adopted', 'human', ?, 'accepted deletion')",
+  ).run(deletedTarget, Date.now());
+  let cleanupSettled = false;
+  const cleaning = context.trackConnection(async () => {
+    await handleSessionStateSessionReset(resetWatcher, options);
+    await handleSessionStateSessionDeleted(deletedTarget, "main", options);
+    cleanupSettled = true;
   });
+  const { closing } = await context.beginClose();
+  expect(kernel.scheduler.signal.aborted).toBe(true);
+  expect(shared.isOpen).toBe(true);
+  expect(cleanupSettled).toBe(false);
+  release.resolve();
+  await Promise.all([sweeping, cleaning]);
+  await closing;
+  expect(shared.isOpen).toBe(false);
+  expect(
+    sql(
+      "SELECT notified_sequence FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+    ).get(watcher, target),
+  ).toEqual({ notified_sequence: 3 });
+  const reopened = openOpenClawStateDatabase(options).db;
+  expect(readSessionUpstreamLinkInDatabase(reopened, deletedTarget, "main")).toBeUndefined();
+  expect(
+    sql("SELECT 1 FROM session_watch_cursors WHERE watcher_session_key = ?").get(resetWatcher),
+  ).toBeUndefined();
+  expect(
+    sql("SELECT 1 FROM session_state_events WHERE session_key = ?").get(deletedTarget),
+  ).toBeUndefined();
 });
 
-it("joins accepted workspace persistence and releases its lease after the Gateway close prelude", async ({
-  signal,
-}) => {
+it("joins workspace writes and releases leases after close prelude", async ({ signal }) => {
   let custody: LocalWorkspaceStore | undefined;
   const worktreeId = "local-workspace-close";
-  await withClosingGateway("gateway-workspace-write-close", signal, async (context) => {
-    const { fixture, kernel, options, shared, release } = context;
-    context.holdCommand("localWorkspace.mutate");
-    const writing = context.track(
-      kernel.connectionWork.track(() =>
-        withLocalWorkspaceStore({ worktreeId, ...options }, async (store) => {
-          custody = store;
-          return store.create(
-            localWorkspaceProjectionFixture(worktreeId, fixture.state.workspaceDir),
-          );
-        }),
-      ),
-    );
-    await context.admitted(writing, "Workspace write settled before admission");
-    const { closing } = await context.beginClose();
-    expect(kernel.scheduler.signal.aborted).toBe(true);
-    const lateWork = vi.fn(async () => undefined);
-    await expect(
-      withLocalWorkspaceStore({ worktreeId: "late-workspace", ...options }, lateWork),
-    ).rejects.toThrow("run-end admission is closed");
-    expect(lateWork).not.toHaveBeenCalled();
-    expect(shared.isOpen).toBe(true);
-    release.resolve();
-    await expect(writing).resolves.toMatchObject({ worktree_id: worktreeId, revision: 0 });
-    await closing;
-    expect(shared.isOpen).toBe(false);
-    assert(custody);
-    expect(custody.assertCurrent).toThrow();
-    expect(await readLocalWorkspaceProjection(worktreeId, fixture.state.env)).toMatchObject({
-      worktree_id: worktreeId,
-      revision: 0,
-    });
-    expect(
-      openOpenClawStateDatabase(options)
-        .db.prepare("SELECT count(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?")
-        .get("workspace.local-reconciliation", worktreeId),
-    ).toEqual({ count: 0 });
+  const context = await prepareClosingGateway(signal);
+  const { fixture, kernel, options, shared, release, sql } = context;
+  context.holdCommand("localWorkspace.mutate");
+  const writing = context.trackConnection(() =>
+    withLocalWorkspaceStore({ worktreeId, ...options }, async (store) => {
+      custody = store;
+      return store.create(localWorkspaceProjectionFixture(worktreeId, fixture.state.workspaceDir));
+    }),
+  );
+  await context.admitted(writing, "Workspace write settled before admission");
+  const { closing } = await context.beginClose();
+  expect(kernel.scheduler.signal.aborted).toBe(true);
+  const lateWork = vi.fn(async () => undefined);
+  await expect(
+    withLocalWorkspaceStore({ worktreeId: "late-workspace", ...options }, lateWork),
+  ).rejects.toThrow("run-end admission is closed");
+  expect(lateWork).not.toHaveBeenCalled();
+  expect(shared.isOpen).toBe(true);
+  release.resolve();
+  await expect(writing).resolves.toMatchObject({ worktree_id: worktreeId, revision: 0 });
+  await closing;
+  expect(shared.isOpen).toBe(false);
+  assert(custody);
+  expect(custody.assertCurrent).toThrow();
+  expect(await readLocalWorkspaceProjection(worktreeId, fixture.state.env)).toMatchObject({
+    worktree_id: worktreeId,
+    revision: 0,
   });
+  expect(
+    sql("SELECT count(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?").get(
+      "workspace.local-reconciliation",
+      worktreeId,
+    ),
+  ).toEqual({ count: 0 });
 });
 
 it.for(["personal", "shared-peer"] as const)(
   "joins %s OAuth settlement after the close prelude cancels its observer",
   async (kind, { signal }) => {
-    await withClosingGateway("gateway-personal-refresh-close", signal, async (context) => {
-      const { fixture, kernel, shared, accepted, release } = context;
-      const owner = ensureProfileForEmail("close-personal@example.test");
-      const credential: OAuthCredential = {
-        type: "oauth",
-        provider: "synthetic",
-        access: "synthetic-close-old",
-        refresh: "synthetic-refresh-old",
-        expires: 1,
-      };
-      const peerDir = fixture.state.agentDir("peer");
-      const profileId =
-        kind === "personal"
-          ? connectUserModelAccount({
-              ownerProfileId: owner.id,
-              credential,
-              assertCurrent() {},
-            }).authProfileId
-          : "synthetic:shared";
-      if (kind === "shared-peer") {
-        const store = { version: 1, profiles: { [profileId]: credential } };
-        saveAuthProfileStore(store, peerDir);
-        saveAuthProfileStore(store);
-      }
-      const replacement = {
-        ...credential,
-        access: "synthetic-close-new",
-        refresh: "synthetic-refresh-new",
-        expires: Date.now() + 600_000,
-      };
-      const manager = createOAuthManager({
-        canRefreshCredential: async () => true,
-        refreshCredential: async () => {
-          accepted.resolve();
-          await release.promise;
-          return replacement;
-        },
-        buildApiKey: async (_provider, value) => value.access,
-        readBootstrapCredential: () => null,
-      });
-      const resolving = context.track(
-        kernel.connectionWork
-          .track(() =>
-            manager.resolveOAuthAccess({
-              profileId,
-              credential,
-              store: { version: 1, profiles: { [profileId]: credential } },
-              signal: kernel.connectionWork.signal,
-            }),
-          )
-          .catch((error: unknown) => error),
-      );
-      await context.admitted(resolving, "Refresh did not acquire its durable claim");
-      const { closing } = await context.beginClose();
-      expect(await resolving).toBeInstanceOf(Error);
-      expect(shared.isOpen).toBe(true);
-      release.resolve();
-      await closing;
-      expect(shared.isOpen).toBe(false);
-      if (kind === "personal") {
-        expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
-      } else {
-        expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(replacement);
-        expect(loadPersistedAuthProfileStore(peerDir)?.profiles[profileId]).toBeUndefined();
-      }
+    const context = await prepareClosingGateway(signal);
+    const { fixture, kernel, shared, accepted, release } = context;
+    const owner = ensureProfileForEmail("close-personal@example.test");
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider: "synthetic",
+      access: "synthetic-close-old",
+      refresh: "synthetic-refresh-old",
+      expires: 1,
+    };
+    const peerDir = fixture.state.agentDir("peer");
+    const profileId =
+      kind === "personal"
+        ? connectUserModelAccount({
+            ownerProfileId: owner.id,
+            credential,
+            assertCurrent() {},
+          }).authProfileId
+        : "synthetic:shared";
+    if (kind === "shared-peer") {
+      const store = { version: 1, profiles: { [profileId]: credential } };
+      saveAuthProfileStore(store, peerDir);
+      saveAuthProfileStore(store);
+    }
+    const replacement = {
+      ...credential,
+      access: "synthetic-close-new",
+      refresh: "synthetic-refresh-new",
+      expires: Date.now() + 600_000,
+    };
+    const manager = createOAuthManager({
+      canRefreshCredential: async () => true,
+      refreshCredential: async () => {
+        accepted.resolve();
+        await release.promise;
+        return replacement;
+      },
+      buildApiKey: async (_provider, value) => value.access,
+      readBootstrapCredential: () => null,
     });
+    const resolving = context
+      .trackConnection(() =>
+        manager.resolveOAuthAccess({
+          profileId,
+          credential,
+          store: { version: 1, profiles: { [profileId]: credential } },
+          signal: kernel.connectionWork.signal,
+        }),
+      )
+      .catch((error: unknown) => error);
+    await context.admitted(resolving, "Refresh did not acquire its durable claim");
+    const { closing } = await context.beginClose();
+    expect(await resolving).toBeInstanceOf(Error);
+    expect(shared.isOpen).toBe(true);
+    release.resolve();
+    await closing;
+    expect(shared.isOpen).toBe(false);
+    if (kind === "personal") {
+      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
+    } else {
+      expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(replacement);
+      expect(loadPersistedAuthProfileStore(peerDir)?.profiles[profileId]).toBeUndefined();
+    }
   },
 );

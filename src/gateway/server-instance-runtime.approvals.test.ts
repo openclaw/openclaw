@@ -9,12 +9,12 @@ import {
 import type { MSTeamsConfig } from "../config/types.msteams.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import {
   loadCronRows,
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
-import type { CronStoredJob } from "../cron/types.js";
 import { resolveApprovalOverGateway } from "../infra/approval-gateway-resolver.js";
 import type { ExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals-core.js";
@@ -116,6 +116,7 @@ function createFixture(
     runtime,
     context,
     databaseOptions: persistence.databaseOptions,
+    read: (id: string) => getOperatorApproval({ id, databaseOptions: persistence.databaseOptions }),
     register: (id: string, request: ExecApprovalRequestPayload = { command }) =>
       registerApproval(exec, request, id),
     revoke() {
@@ -272,9 +273,7 @@ it.each([
         approval: { status: "allowed", decision: "allow-once" },
       });
       await expect(decision).resolves.toBe("allow-once");
-      expect(
-        getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }),
-      ).toMatchObject({
+      expect(fixture.read(record.id)).toMatchObject({
         status: "allowed",
         resolver: { kind: "channel", id: "msteams:support" },
       });
@@ -285,9 +284,7 @@ it.each([
         (error: unknown) => ({ error }),
       );
       expect(revokedBeforeCommit).toBe(scenario !== "sibling");
-      expect
-        .soft(getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }))
-        .toMatchObject({ status: "pending", decision: null });
+      expect.soft(fixture.read(record.id)).toMatchObject({ status: "pending", decision: null });
       expect.soft(decisions).not.toContain("allow-once");
       expect.soft(fixture.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
       expect(outcome).toHaveProperty("error");
@@ -390,20 +387,13 @@ it("denies a malformed internal verdict through the same worker owner", async ()
 });
 
 it("mints a cron standing grant with the internal approval verdict in the worker", async () => {
-  const now = Date.now();
-  const job: CronStoredJob = {
+  const job = makeCronJob({
     id: "internal-grant-job",
     agentId: "main",
     name: "Synthetic grant job",
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: command },
-    state: {},
-  };
+  });
   const database = openOpenClawStateDatabase({ env: state.env });
   const storePath = state.statePath("cron");
   upsertCronJobRow(database.db, storePath, job, 0);
@@ -412,11 +402,7 @@ it("mints a cron standing grant with the internal approval verdict in the worker
     agentId: "main",
     cronJobId: job.id,
     jobConfigRevision: resolveCronJobConfigRevision(loaded),
-    operationBinding: buildCronExecOperationBinding({
-      command,
-      cwd: undefined,
-      env: undefined,
-    }),
+    operationBinding: buildCronExecOperationBinding({ command, cwd: undefined, env: undefined }),
   };
   await withSqlFixture(async (fixture, calibrate) => {
     const { record, decision } = await fixture.register("grant-verdict", {
@@ -458,9 +444,7 @@ it.each(["channel", "tool"] as const)(
     try {
       await expect(fixture.resolve(record.id, route, () => current)).rejects.toThrow();
       expect(transaction).toBe(route === "channel" ? 2 : 1);
-      expect(
-        getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }),
-      ).toMatchObject({ status: "pending", decision: null });
+      expect(fixture.read(record.id)).toMatchObject({ status: "pending", decision: null });
       expect(record.resolvedAtMs).toBeUndefined();
       expect(fixture.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
     } finally {

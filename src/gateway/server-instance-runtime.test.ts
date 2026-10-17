@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { GatewayApprovalEventSubscriber } from "../infra/approval-gateway-runtime.types.js";
-import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -53,12 +52,14 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 function createRuntime(options: Partial<Parameters<typeof createGatewayInstanceRuntime>[0]> = {}) {
-  return createGatewayInstanceRuntime({
+  const runtime = createGatewayInstanceRuntime({
     getContext: createContext,
     getMethodRegistry: () => createRegistry({}),
     isDispatchAvailable: () => true,
     ...options,
   });
+  onTestFinished(() => runtime.close());
+  return runtime;
 }
 
 function subscribe(
@@ -78,382 +79,338 @@ function approvalRequest(id: string, request = {}) {
   return { id, request, createdAtMs: 1, expiresAtMs: 2 };
 }
 
-describe("createGatewayInstanceRuntime", () => {
-  it.each([false, true])(
-    "revalidates recovery authority across admission (dedicated principal=%s)",
-    async (dedicatedPrincipal) => {
-      const context = createContext();
-      const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
-      context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
-      const runtime = createRuntime({ getContext: () => context });
-      let requesterCurrent = true;
-      const options = {
-        expectFinal: true,
-        ...(dedicatedPrincipal
-          ? { runtimeContextFragments: [{ kind: "runtime-instruction" as const, text: "media" }] }
-          : {}),
-        assertAdmissionCurrent: () => {
-          if (!requesterCurrent) {
-            throw new Error("Recovery requester retired");
-          }
-        },
-      };
-      const request = { message: "completed media", idempotencyKey: "bound-recovery" };
-      try {
-        await expect(runtime.recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(
-          payload,
-        );
-        const pending = runtime.recovery.dispatchAgent(request, undefined, options);
-        requesterCurrent = false;
-        await expect(pending).rejects.toThrow("Recovery requester retired");
-      } finally {
-        runtime.close();
-      }
-    },
-  );
+const unavailable = "Gateway instance dispatch unavailable";
+async function expectCompleted(id: string) {
+  expect(await findDeliveryIntentOwner(id)).toMatchObject({ status: "completed" });
+}
 
-  it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
-    let available = false;
-    const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
-      respond(true, { raw: true });
-    });
-    const registry = createRegistry({ agent: rawAgent });
+it.each([false, true])(
+  "revalidates recovery authority across admission (dedicated principal=%s)",
+  async (dedicatedPrincipal) => {
     const context = createContext();
-    const preparing = createDeferred<number | undefined>();
-    const runtime = createRuntime({
-      getContext: () => context,
-      getMethodRegistry: () => registry,
-      isDispatchAvailable: () => available,
-      prepareRestartRecovery: () => preparing.promise,
-    });
-    expect(getGatewayRecoveryRuntime()).toBe(runtime.recovery);
-
-    await expect(
-      runtime.recovery.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
-    ).rejects.toMatchObject({
-      name: "GatewayDispatchUnavailableError",
-      message: expect.stringContaining("Gateway instance dispatch unavailable"),
-      retryable: true,
-    });
-    available = true;
-    await expect(runtime.recovery.waitForAgent({ runId: "run-1", timeoutMs: 0 })).resolves.toEqual({
-      runId: "run-1",
-      status: "timeout",
-    });
-    context.dedupe.set("agent:run-cached-recovery", {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId: "run-cached-recovery", status: "ok", summary: "replayed" },
-    });
-    await expect(
-      runtime.recovery.dispatchAgent({
-        message: "test",
-        idempotencyKey: "run-cached-recovery",
-      }),
-    ).resolves.toEqual({ runId: "run-cached-recovery", status: "ok", summary: "replayed" });
-    const onExecutionStarted = vi.fn();
-    context.dedupe.set("agent:run-cached-active", {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId: "run-cached-active", status: "accepted" },
-    });
-    context.chatAbortControllers.set("run-cached-active", {
-      controller: new AbortController(),
-      executionStarted: true,
-    } as never);
-    await expect(
-      runtime.recovery.dispatchAgent(
-        { message: "test", idempotencyKey: "run-cached-active" },
-        undefined,
-        { onExecutionStarted },
-      ),
-    ).resolves.toMatchObject({ runId: "run-cached-active", status: "in_flight" });
-    expect(onExecutionStarted).toHaveBeenCalledOnce();
-    await expect(
-      runtime.recovery.dispatchAgent({
-        message: "test",
-        idempotencyKey: "run-typed-recovery",
-        cwd: "relative",
-      }),
-    ).rejects.toThrow("cwd must be absolute");
-    expect(rawAgent).not.toHaveBeenCalled();
-
-    const retainedFacade = await runtime.createAgentTurnFacade({
-      client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
-    });
-    const preparation = runtime.recovery.prepareRestartRecovery();
-    runtime.close();
-    preparing.resolve(undefined);
-    await expect(preparation).rejects.toThrow("Gateway instance dispatch unavailable");
-    expect(getGatewayRecoveryRuntime()).toBeUndefined();
-    await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toMatchObject({
-      name: "GatewayDispatchUnavailableError",
-      message: expect.stringContaining("Gateway instance dispatch unavailable"),
-      retryable: false,
-    });
-    await expect(
-      retainedFacade.dispatch({ message: "stale completion", idempotencyKey: "closed-host" }),
-    ).rejects.toThrow("Gateway instance dispatch unavailable");
-    await expect(retainedFacade.wait({ runId: "run-1" })).rejects.toThrow(
-      "Gateway instance dispatch unavailable",
+    const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
+    context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
+    const runtime = createRuntime({ getContext: () => context });
+    let requesterCurrent = true;
+    const options = {
+      expectFinal: true,
+      ...(dedicatedPrincipal
+        ? { runtimeContextFragments: [{ kind: "runtime-instruction" as const, text: "media" }] }
+        : {}),
+      assertAdmissionCurrent: () => {
+        if (!requesterCurrent) {
+          throw new Error("Recovery requester retired");
+        }
+      },
+    };
+    const request = { message: "completed media", idempotencyKey: "bound-recovery" };
+    await expect(runtime.recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(
+      payload,
     );
+    const pending = runtime.recovery.dispatchAgent(request, undefined, options);
+    requesterCurrent = false;
+    await expect(pending).rejects.toThrow("Recovery requester retired");
+  },
+);
+
+it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
+  let available = false;
+  const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
+    respond(true, { raw: true });
   });
+  const registry = createRegistry({ agent: rawAgent });
+  const context = createContext();
+  const preparing = createDeferred<number | undefined>();
+  const runtime = createRuntime({
+    getContext: () => context,
+    getMethodRegistry: () => registry,
+    isDispatchAvailable: () => available,
+    prepareRestartRecovery: () => preparing.promise,
+  });
+  const { recovery } = runtime;
+  expect(getGatewayRecoveryRuntime()).toBe(recovery);
 
-  it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
-    await withOpenClawTestState({ layout: "state-only", prefix: "recovery-notice-" }, async () => {
-      let platformDispatchHold: Promise<void> | undefined;
-      const visibleSend = vi.fn();
-      const sendText = vi.fn(async (ctx: { onPlatformSendDispatch?: () => Promise<void> }) => {
-        await platformDispatchHold;
-        await ctx.onPlatformSendDispatch?.();
-        visibleSend();
-        return { channel: "signal", messageId: `signal-message-${visibleSend.mock.calls.length}` };
-      });
-      const handleAction = vi.fn(async () => {
-        throw new Error("recovery notice must not invoke message actions");
-      });
-      const plugin: ChannelPlugin = {
-        ...createChannelTestPluginBase({
-          id: "signal",
-          label: "Signal",
-          config: { listAccountIds: () => ["work"], isConfigured: () => true },
-        }),
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: () => false,
-          handleAction,
-        },
-        outbound: {
-          deliveryMode: "direct",
-          resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
-          sendText,
-        },
-      };
-      const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
-      stageActivePluginRegistry(
-        createTestRegistry([{ pluginId: "signal", source: "test", plugin }]),
-        null,
-        "default",
-      );
-      const context = {
-        ...createContext(),
-        getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
-      } as GatewayRequestContext;
-      const runtime = createRuntime({ getContext: () => context });
+  await expect(
+    recovery.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
+  ).rejects.toMatchObject({
+    name: "GatewayDispatchUnavailableError",
+    message: expect.stringContaining(unavailable),
+    retryable: true,
+  });
+  available = true;
+  await expect(recovery.waitForAgent({ runId: "run-1", timeoutMs: 0 })).resolves.toEqual({
+    runId: "run-1",
+    status: "timeout",
+  });
+  const onExecutionStarted = vi.fn();
+  context.dedupe.set("agent:run-cached-active", {
+    ts: Date.now(),
+    ok: true,
+    payload: { runId: "run-cached-active", status: "accepted" },
+  });
+  context.chatAbortControllers.set("run-cached-active", {
+    controller: new AbortController(),
+    executionStarted: true,
+  } as never);
+  await expect(
+    recovery.dispatchAgent({ message: "test", idempotencyKey: "run-cached-active" }, undefined, {
+      onExecutionStarted,
+    }),
+  ).resolves.toMatchObject({ runId: "run-cached-active", status: "in_flight" });
+  expect(onExecutionStarted).toHaveBeenCalledOnce();
+  await expect(
+    recovery.dispatchAgent({
+      message: "test",
+      idempotencyKey: "run-typed-recovery",
+      cwd: "relative",
+    }),
+  ).rejects.toThrow("cwd must be absolute");
+  expect(rawAgent).not.toHaveBeenCalled();
 
-      try {
-        const idempotencyKey = "main-session-restart-recovery:run-1:failed-notice";
-        const notice = {
-          channel: "signal",
-          to: "+15551234567",
-          accountId: "work",
-          threadId: "thread-1",
-          text: "Recovery notice",
-          idempotencyKey,
-        } as const;
-        await runtime.recovery.sendRecoveryNotice(notice);
-        await runtime.recovery.sendRecoveryNotice(notice);
+  const retainedFacade = await runtime.createAgentTurnFacade({
+    client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
+  });
+  const preparation = recovery.prepareRestartRecovery();
+  runtime.close();
+  preparing.resolve(undefined);
+  await expect(preparation).rejects.toThrow(unavailable);
+  expect(getGatewayRecoveryRuntime()).toBeUndefined();
+  await expect(recovery.waitForAgent({ runId: "run-1" })).rejects.toMatchObject({
+    name: "GatewayDispatchUnavailableError",
+    message: expect.stringContaining(unavailable),
+    retryable: false,
+  });
+  await expect(
+    retainedFacade.dispatch({ message: "stale completion", idempotencyKey: "closed-host" }),
+  ).rejects.toThrow(unavailable);
+  await expect(retainedFacade.wait({ runId: "run-1" })).rejects.toThrow(unavailable);
+});
 
-        expect(await findDeliveryIntentOwner(idempotencyKey)).toMatchObject({
-          status: "completed",
-        });
-        expect(visibleSend).toHaveBeenCalledOnce();
-
-        let ownerCurrent = true;
-        const platformDispatch = createDeferred();
-        platformDispatchHold = platformDispatch.promise;
-        const staleDelivery = runtime.recovery.sendRecoveryNotice({
-          ...notice,
-          idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
-          liveOnly: true,
-          isCurrent: () => ownerCurrent,
-        });
-        await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
-        const queuedResumption = await findDeliveryIntentOwner(
-          "main-session-restart-recovery:run-2:failed-notice",
-        );
-        ownerCurrent = false;
-        platformDispatch.resolve();
-
-        await expect(staleDelivery).rejects.toThrow(
-          "Recovery notice owner retired before delivery",
-        );
-
-        expect(visibleSend).toHaveBeenCalledOnce();
-        expect(queuedResumption).toBeNull();
-        expect(sendText).toHaveBeenCalledWith(
-          expect.objectContaining({
-            to: "+15551234567",
-            accountId: "work",
-            threadId: "thread-1",
-            text: "Recovery notice",
-          }),
-        );
-        expect(handleAction).not.toHaveBeenCalled();
-
-        const guardedDurableNotice = {
-          ...notice,
-          idempotencyKey: "main-session-restart-recovery:subagent:run-3:resumed-notice",
-          isCurrent: () => true,
-        };
-        await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
-        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
-          status: "completed",
-        });
-        await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
-        expect(visibleSend).toHaveBeenCalledTimes(2);
-        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
-          status: "completed",
-        });
-      } finally {
-        runtime.close();
-        restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
-      }
+it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
+  await withOpenClawTestState({ layout: "state-only", prefix: "recovery-notice-" }, async () => {
+    let platformDispatchHold: Promise<void> | undefined;
+    const visibleSend = vi.fn();
+    const sendText = vi.fn(async (ctx: { onPlatformSendDispatch?: () => Promise<void> }) => {
+      await platformDispatchHold;
+      await ctx.onPlatformSendDispatch?.();
+      visibleSend();
+      return { channel: "signal", messageId: `signal-message-${visibleSend.mock.calls.length}` };
     });
-  });
+    const handleAction = vi.fn(async () => {
+      throw new Error("recovery notice must not invoke message actions");
+    });
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "signal",
+        label: "Signal",
+        config: { listAccountIds: () => ["work"], isConfigured: () => true },
+      }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: () => false,
+        handleAction,
+      },
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
+        sendText,
+      },
+    };
+    const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+    stageActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin }]),
+      null,
+      "default",
+    );
+    const context = {
+      ...createContext(),
+      getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
+    } as GatewayRequestContext;
+    const runtime = createRuntime({ getContext: () => context });
 
-  it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
-    const registry = createRegistry({});
-    const first = createRuntime({ getMethodRegistry: () => registry });
-    const second = createRuntime({ getMethodRegistry: () => registry });
-    expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
-    const onRequested = vi.fn();
-    const unsubscribe = subscribe(first, onRequested);
-    const request = approvalRequest("approval-1") as ExecApprovalRequest;
-
-    expect(second.approvalEvents.publishRequested("exec", request)).toBe(0);
-    expect(first.approvalEvents.publishRequested("plugin", request)).toBe(0);
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(1);
-    expect(onRequested).toHaveBeenCalledOnce();
-
-    unsubscribe();
-    unsubscribe();
-    expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
-
-    const declined = vi.fn();
-    subscribe(first, declined, async () => false);
-    expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
-    expect(declined).not.toHaveBeenCalled();
-    first.close();
-    expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
-    second.close();
-    expect(getGatewayRecoveryRuntime()).toBeUndefined();
-  });
-
-  it("refuses synchronous publication before sending when a subscriber requires async eligibility", async () => {
-    const logError = vi.fn();
-    const runtime = createRuntime({ logError });
-    const pending = createDeferred<boolean>();
-    const onRequested = vi.fn();
-    subscribe(runtime, onRequested);
-    subscribe(runtime, onRequested, () => pending.promise);
     try {
-      expect(() =>
-        runtime.approvalEvents.publishRequested(
-          "exec",
-          approvalRequest("legacy-async-eligibility"),
-        ),
-      ).toThrow("use approvalEvents.publishRequestedAsync");
-      expect(onRequested).not.toHaveBeenCalled();
-      pending.reject(new Error("eligibility rejected"));
-      await Promise.resolve();
-      expect(logError).toHaveBeenCalledWith(expect.stringContaining("eligibility rejected"));
-      expect(onRequested).not.toHaveBeenCalled();
+      const idempotencyKey = "main-session-restart-recovery:run-1:failed-notice";
+      const target = {
+        to: "+15551234567",
+        accountId: "work",
+        threadId: "thread-1",
+        text: "Recovery notice",
+      };
+      const notice = { channel: "signal", ...target, idempotencyKey };
+      await runtime.recovery.sendRecoveryNotice(notice);
+      await runtime.recovery.sendRecoveryNotice(notice);
+
+      await expectCompleted(idempotencyKey);
+      expect(visibleSend).toHaveBeenCalledOnce();
+
+      let ownerCurrent = true;
+      const platformDispatch = createDeferred();
+      platformDispatchHold = platformDispatch.promise;
+      const staleDelivery = runtime.recovery.sendRecoveryNotice({
+        ...notice,
+        idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
+        liveOnly: true,
+        isCurrent: () => ownerCurrent,
+      });
+      await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
+      const queuedResumption = await findDeliveryIntentOwner(
+        "main-session-restart-recovery:run-2:failed-notice",
+      );
+      ownerCurrent = false;
+      platformDispatch.resolve();
+
+      await expect(staleDelivery).rejects.toThrow("Recovery notice owner retired before delivery");
+
+      expect(visibleSend).toHaveBeenCalledOnce();
+      expect(queuedResumption).toBeNull();
+      expect(sendText).toHaveBeenCalledWith(expect.objectContaining(target));
+      expect(handleAction).not.toHaveBeenCalled();
+
+      const guardedDurableNotice = {
+        ...notice,
+        idempotencyKey: "main-session-restart-recovery:subagent:run-3:resumed-notice",
+        isCurrent: () => true,
+      };
+      await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
+      await expectCompleted(guardedDurableNotice.idempotencyKey);
+      await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
+      expect(visibleSend).toHaveBeenCalledTimes(2);
+      await expectCompleted(guardedDurableNotice.idempotencyKey);
     } finally {
       runtime.close();
+      restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
     }
   });
+});
 
-  it.each(["unsubscribe", "resolve", "close"] as const)(
-    "retires native approval delivery when %s wins an async eligibility wait",
-    async (retire) => {
-      const eligibility = createDeferred<boolean>();
-      const runtime = createRuntime();
-      const onRequested = vi.fn();
-      const unsubscribe = subscribe(runtime, onRequested, () => eligibility.promise);
-      const publication = runtime.approvalEvents.publishRequestedAsync(
-        "exec",
-        approvalRequest("pending-eligibility", { command: "echo test" }),
-      );
-      if (retire === "unsubscribe") {
-        unsubscribe();
-      } else if (retire === "resolve") {
-        runtime.approvalEvents.publishResolved("exec", { id: "pending-eligibility" });
-      } else {
-        runtime.close();
-      }
-      eligibility.resolve(true);
-      expect(await publication).toBe(0);
-      expect(onRequested).not.toHaveBeenCalled();
-      runtime.close();
-    },
-  );
+it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", async () => {
+  const registry = createRegistry({});
+  const first = createRuntime({ getMethodRegistry: () => registry });
+  const second = createRuntime({ getMethodRegistry: () => registry });
+  expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
+  const onRequested = vi.fn();
+  const unsubscribe = subscribe(first, onRequested);
+  const request = approvalRequest("approval-1");
 
-  it("rejects methods outside each closed internal principal", async () => {
+  expect(second.approvalEvents.publishRequested("exec", request)).toBe(0);
+  expect(first.approvalEvents.publishRequested("plugin", request)).toBe(0);
+  expect(first.approvalEvents.publishRequested("exec", request)).toBe(1);
+  expect(onRequested).toHaveBeenCalledOnce();
+
+  unsubscribe();
+  unsubscribe();
+  expect(first.approvalEvents.publishRequested("exec", request)).toBe(0);
+
+  const declined = vi.fn();
+  subscribe(first, declined, async () => false);
+  expect(await first.approvalEvents.publishRequestedAsync("exec", request)).toBe(0);
+  expect(declined).not.toHaveBeenCalled();
+  first.close();
+  expect(getGatewayRecoveryRuntime()).toBe(second.recovery);
+  second.close();
+  expect(getGatewayRecoveryRuntime()).toBeUndefined();
+});
+
+it("refuses synchronous publication before sending when a subscriber requires async eligibility", async () => {
+  const logError = vi.fn();
+  const runtime = createRuntime({ logError });
+  const pending = createDeferred<boolean>();
+  const onRequested = vi.fn();
+  subscribe(runtime, onRequested);
+  subscribe(runtime, onRequested, () => pending.promise);
+  expect(() =>
+    runtime.approvalEvents.publishRequested("exec", approvalRequest("legacy-async-eligibility")),
+  ).toThrow("use approvalEvents.publishRequestedAsync");
+  expect(onRequested).not.toHaveBeenCalled();
+  pending.reject(new Error("eligibility rejected"));
+  await Promise.resolve();
+  expect(logError).toHaveBeenCalledWith(expect.stringContaining("eligibility rejected"));
+  expect(onRequested).not.toHaveBeenCalled();
+});
+
+it.each(["unsubscribe", "resolve", "close"] as const)(
+  "retires native approval delivery when %s wins an async eligibility wait",
+  async (retire) => {
+    const eligibility = createDeferred<boolean>();
     const runtime = createRuntime();
-
-    await expect(
-      runtime.nativeApprovals.request("config.get" as GatewayNativeApprovalMethod, {}),
-    ).rejects.toThrow("internal principal cannot dispatch config.get");
-    await expect(runtime.nativeApprovals.requestRoute("config.get" as "send", {})).rejects.toThrow(
-      "internal principal cannot dispatch config.get",
+    const onRequested = vi.fn();
+    const unsubscribe = subscribe(runtime, onRequested, () => eligibility.promise);
+    const publication = runtime.approvalEvents.publishRequestedAsync(
+      "exec",
+      approvalRequest("pending-eligibility", { command: "echo test" }),
     );
-    runtime.close();
-  });
-
-  it("preserves a trusted approval resolver display name", async () => {
-    const context = createContext();
-    const runtime = createRuntime({
-      getContext: () => context,
-      getMethodRegistry: () =>
-        createRegistry({
-          "exec.approval.list": ({ client, respond }) =>
-            respond(true, { displayName: client?.connect.client.displayName }),
-        }),
-    });
-
-    await expect(
-      runtime.nativeApprovals.request(
-        "exec.approval.list",
-        {},
-        { clientDisplayName: "Telegram approval (owner)" },
-      ),
-    ).resolves.toEqual({ displayName: "Telegram approval (owner)" });
-    runtime.close();
-  });
-
-  it("preserves the Gateway client's approval request deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      const { promise: started, resolve: markStarted } = createDeferred();
-      const { promise: handlerCanFinish, resolve: finishHandler } = createDeferred();
-      const context = createContext();
-      const runtime = createRuntime({
-        getContext: () => context,
-        getMethodRegistry: () =>
-          createRegistry({
-            send: async () => {
-              markStarted();
-              await handlerCanFinish;
-            },
-          }),
-      });
-
-      try {
-        const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
-        const error = request.catch((value: unknown) => value);
-        await started;
-        await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-        const caught = await error;
-        expect(caught).toBeInstanceOf(Error);
-        expect((caught as Error).message).toContain("gateway request timeout for send");
-      } finally {
-        finishHandler();
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        runtime.close();
-      }
-    } finally {
-      vi.useRealTimers();
+    if (retire === "unsubscribe") {
+      unsubscribe();
+    } else if (retire === "resolve") {
+      runtime.approvalEvents.publishResolved("exec", { id: "pending-eligibility" });
+    } else {
+      runtime.close();
     }
+    eligibility.resolve(true);
+    expect(await publication).toBe(0);
+    expect(onRequested).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects methods outside each closed internal principal", async () => {
+  const runtime = createRuntime();
+
+  await expect(
+    runtime.nativeApprovals.request("config.get" as GatewayNativeApprovalMethod, {}),
+  ).rejects.toThrow("internal principal cannot dispatch config.get");
+  await expect(runtime.nativeApprovals.requestRoute("config.get" as "send", {})).rejects.toThrow(
+    "internal principal cannot dispatch config.get",
+  );
+});
+
+it("preserves a trusted approval resolver display name", async () => {
+  const context = createContext();
+  const runtime = createRuntime({
+    getContext: () => context,
+    getMethodRegistry: () =>
+      createRegistry({
+        "exec.approval.list": ({ client, respond }) =>
+          respond(true, { displayName: client?.connect.client.displayName }),
+      }),
   });
+
+  await expect(
+    runtime.nativeApprovals.request(
+      "exec.approval.list",
+      {},
+      { clientDisplayName: "Telegram approval (owner)" },
+    ),
+  ).resolves.toEqual({ displayName: "Telegram approval (owner)" });
+});
+
+it("preserves the Gateway client's approval request deadline", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+  const { promise: started, resolve: markStarted } = createDeferred();
+  const { promise: handlerCanFinish, resolve: finishHandler } = createDeferred();
+  const context = createContext();
+  const runtime = createRuntime({
+    getContext: () => context,
+    getMethodRegistry: () =>
+      createRegistry({
+        send: async () => {
+          markStarted();
+          await handlerCanFinish;
+        },
+      }),
+  });
+
+  try {
+    const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
+    const error = request.catch((value: unknown) => value);
+    await started;
+    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+    const caught = await error;
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("gateway request timeout for send");
+  } finally {
+    finishHandler();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    runtime.close();
+  }
 });

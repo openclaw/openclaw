@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -58,6 +59,13 @@ vi.mock("./session-cost-usage-lifetime.js", () => ({
 
 const roots: string[] = [];
 
+function nextTurn(channel: MessageChannel): Promise<void> {
+  return new Promise((resolve) => {
+    channel.port1.once("message", () => resolve());
+    channel.port2.postMessage(null);
+  });
+}
+
 function sidecarFixture() {
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
@@ -86,13 +94,6 @@ function createStateDir(): string {
   return root;
 }
 
-function countStoredRows(name: string): number {
-  const row = openOpenClawStateDatabase()
-    .db.prepare("SELECT COUNT(*) AS count FROM secret_store_entries WHERE name = ?")
-    .get(name) as { count: number };
-  return row.count;
-}
-
 async function writeStoredSecret(name: string, value: string): Promise<void> {
   await writeSecretStoreEntry({
     scope: { kind: "team" },
@@ -119,10 +120,7 @@ describe("gateway lifetime sidecars", () => {
     oauth.start.mockReset();
     oauth.stop.mockReset().mockResolvedValue(undefined);
     oauth.uninstall.mockReset();
-    oauth.create.mockReset().mockReturnValue({
-      start: oauth.start,
-      stop: oauth.stop,
-    });
+    oauth.create.mockReset().mockReturnValue({ start: oauth.start, stop: oauth.stop });
     oauth.install.mockReset().mockReturnValue(oauth.uninstall);
   });
 
@@ -149,6 +147,7 @@ describe("gateway lifetime sidecars", () => {
       });
       const worker = openingMessages.mock.contexts[openIndex];
       openingMessages.mockRestore();
+      assert(worker instanceof Worker);
       const handoff = "github-setup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
       await writeStoredSecret(handoff, "synthetic-expired-handoff");
       openOpenClawStateDatabase()
@@ -159,21 +158,20 @@ describe("gateway lifetime sidecars", () => {
       const checkpoint = new MessageChannel();
       checkpoint.port1.once("message", () => hostYielded.resolve(Atomics.load(holder.released, 0)));
       const dispatched = createDeferred();
-      const post = worker instanceof Worker ? worker.postMessage.bind(worker) : undefined;
-      const observeDispatch =
-        worker instanceof Worker && post
-          ? vi.spyOn(worker, "postMessage").mockImplementation((message, transferList) => {
-              const request = asOptionalRecord(message);
-              if (
-                request?.type === "execute" &&
-                request.input instanceof Uint8Array &&
-                asOptionalRecord(deserialize(request.input))?.type === "secrets.purge"
-              ) {
-                dispatched.resolve();
-              }
-              return post(message, transferList);
-            })
-          : undefined;
+      const post = worker.postMessage.bind(worker);
+      const observeDispatch = vi
+        .spyOn(worker, "postMessage")
+        .mockImplementation((message, transferList) => {
+          const request = asOptionalRecord(message);
+          if (
+            request?.type === "execute" &&
+            request.input instanceof Uint8Array &&
+            asOptionalRecord(deserialize(request.input))?.type === "secrets.purge"
+          ) {
+            dispatched.resolve();
+          }
+          return post(message, transferList);
+        });
       let stopping: Promise<void> | undefined;
       let scheduledSweep: void | Promise<void> = undefined;
       try {
@@ -184,7 +182,6 @@ describe("gateway lifetime sidecars", () => {
           expect(
             await withTestTimeout(hostYielded.promise, 10_000, "Expiry did not yield to the host"),
           ).toBe(0);
-          expect(worker).toBeInstanceOf(Worker);
           await withTestTimeout(
             dispatched.promise,
             5_000,
@@ -192,19 +189,10 @@ describe("gateway lifetime sidecars", () => {
           );
           await clock.advanceBy(60_000);
           expect(sweeps).toHaveLength(2);
-          let stopped = false;
-          stopping = owner.stop().then(() => {
-            stopped = true;
-          });
-          const stopCheckpoint = createDeferred();
-          checkpoint.port1.once("message", () => stopCheckpoint.resolve());
-          checkpoint.port2.postMessage(null);
-          await withTestTimeout(
-            stopCheckpoint.promise,
-            5_000,
-            "Shutdown did not yield to the host",
-          );
-          expect(stopped).toBe(false);
+          const stopped = vi.fn();
+          stopping = owner.stop().then(stopped);
+          await withTestTimeout(nextTurn(checkpoint), 5_000, "Shutdown did not yield to the host");
+          expect(stopped).not.toHaveBeenCalled();
           expect(Atomics.load(holder.released, 0)).toBe(0);
           holder.release();
           await expect(holder.joined).resolves.toBe(0);
@@ -215,14 +203,18 @@ describe("gateway lifetime sidecars", () => {
           await clock.advanceBy(60_000);
           expect(sweeps).toHaveLength(2);
         });
-        expect(countStoredRows(handoff)).toBe(0);
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare("SELECT COUNT(*) AS count FROM secret_store_entries WHERE name = ?")
+            .get(handoff),
+        ).toEqual({ count: 0 });
       } finally {
         checkpoint.port1.close();
         checkpoint.port2.close();
         holder.release();
         await Promise.allSettled([...sweeps, holder.joined, stopping, scheduledSweep]);
         await owner.stop();
-        observeDispatch?.mockRestore();
+        observeDispatch.mockRestore();
         observePurge.mockRestore();
       }
     });
@@ -287,9 +279,9 @@ describe("gateway lifetime sidecars", () => {
       await runWithProcessCleanupBudget(budget, () => owner.stop());
     }
     await owner.sealAndJoin();
-    expect(metadataListener.stop).toHaveBeenCalledOnce();
-    expect(sessionChange.stop).toHaveBeenCalledOnce();
-    expect(worker.stop).toHaveBeenCalledOnce();
+    for (const entry of [metadataListener, sessionChange, worker]) {
+      expect(entry.stop).toHaveBeenCalledOnce();
+    }
   });
 
   test("joins session events admitted after the initial sidecar drain", async () => {
@@ -325,16 +317,14 @@ describe("gateway lifetime sidecars", () => {
       });
       await owner.stop();
       emitSessionsChanged(context, { reason: "patch", sessionKey });
-      let sealed = false;
-      const seal = owner.sealAndJoin().then(() => {
-        sealed = true;
-      });
+      const sealed = vi.fn();
+      const seal = owner.sealAndJoin().then(sealed);
       await vi.advanceTimersByTimeAsync(0);
-      const sealedBeforePublication = sealed;
+      const sealedBeforePublication = sealed.mock.calls.length;
       prepared.resolve();
       await seal;
       await flushPendingSessionsChangedEvents(context);
-      expect(sealedBeforePublication).toBe(false);
+      expect(sealedBeforePublication).toBe(0);
       emitSessionsChanged(context, { reason: "patch", sessionKey });
       await vi.advanceTimersByTimeAsync(0);
       expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
@@ -362,10 +352,7 @@ describe("gateway lifetime sidecars", () => {
     vi.spyOn(secretStore, "getSecretStoreExpiryDeadline").mockReturnValue(null);
     vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries").mockResolvedValue(0);
 
-    await attach({
-      logWarning: warn,
-      reconcileGitHubPublications,
-    });
+    await attach({ logWarning: warn, reconcileGitHubPublications });
     let scheduled: void | Promise<void> = undefined;
     let stopping: Promise<void> | undefined;
     try {
@@ -376,18 +363,13 @@ describe("gateway lifetime sidecars", () => {
       await entered.promise;
       await clock.advanceBy(3 * 60_000);
       expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
-      let stopped = false;
-      stopping = owner.stop().then(() => {
-        stopped = true;
-      });
-      const shutdownYielded = createDeferred();
-      checkpoint.port1.once("message", () => shutdownYielded.resolve());
-      checkpoint.port2.postMessage(null);
-      await shutdownYielded.promise;
-      expect(stopped).toBe(false);
+      const stopped = vi.fn();
+      stopping = owner.stop().then(stopped);
+      await nextTurn(checkpoint);
+      expect(stopped).not.toHaveBeenCalled();
       release.reject(new Error("synthetic publication recovery failure"));
       await Promise.all([scheduled, stopping]);
-      expect(stopped).toBe(true);
+      expect(stopped).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith("GitHub publication recovery failed; will retry.");
 
       await clock.advanceBy(60_000);

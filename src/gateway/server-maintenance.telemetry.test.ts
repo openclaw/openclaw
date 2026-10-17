@@ -85,8 +85,11 @@ type TimerOptions = Parameters<
 >[0];
 
 function createMaintenanceDeps() {
+  const state = createGatewayMaintenanceStateForTest();
   return {
-    ...createGatewayMaintenanceStateForTest(),
+    ...state,
+    broadcast: vi.fn(),
+    refreshGatewayHealthSnapshot: vi.fn(state.refreshGatewayHealthSnapshot),
     logHealth: { info: vi.fn(), error: vi.fn() },
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
@@ -100,14 +103,11 @@ async function startMaintenance(params: TimerOptions) {
 }
 
 async function stopMaintenanceTimers(
-  timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
+  timers: Awaited<ReturnType<typeof startMaintenance>>,
   failure?: Error,
 ): Promise<void> {
-  if (failure) {
-    await expect(timers.stopPeriodicTasks()).rejects.toMatchObject({ errors: [failure] });
-  } else {
-    await timers.stopPeriodicTasks();
-  }
+  const stopping = timers.stopPeriodicTasks();
+  await (failure ? expect(stopping).rejects.toMatchObject({ errors: [failure] }) : stopping);
   await timers.skillUsageCleanup();
 }
 
@@ -175,6 +175,8 @@ describe("gateway telemetry maintenance", () => {
             client: { id: "test", version: "test", platform: "test", mode: "test" },
           },
         });
+      } else if (owner === "worktree") {
+        state.runWorktreeGc.mockImplementation(run);
       }
       devicePairCleanupMock.mockImplementation(({ scheduler }) => {
         if (owner === "device-pair") {
@@ -189,11 +191,6 @@ describe("gateway telemetry maintenance", () => {
           }
           return await state.refreshGatewayHealthSnapshot();
         },
-        runWorktreeGc: async () => {
-          if (owner === "worktree") {
-            await run();
-          }
-        },
       });
       try {
         await vi.advanceTimersByTimeAsync(
@@ -203,24 +200,22 @@ describe("gateway telemetry maintenance", () => {
         if (!fails) {
           markGatewayRestartDraining();
         }
-        let stopped = false;
+        const stopped = vi.fn();
         const stopping = timers
           .stopPeriodicTasks()
           .catch((error: unknown) => error)
-          .finally(() => {
-            stopped = true;
-          });
+          .finally(stopped);
         await vi.advanceTimersByTimeAsync(0);
-        expect(stopped).toBe(false);
+        expect(stopped).not.toHaveBeenCalled();
 
         operation.resolve();
         await cleanupStarted.promise;
         await vi.advanceTimersByTimeAsync(0);
-        expect(stopped).toBe(false);
+        expect(stopped).not.toHaveBeenCalled();
 
         cleanup.resolve();
         const error = await stopping;
-        expect(stopped).toBe(true);
+        expect(stopped).toHaveBeenCalledOnce();
         if (failure) {
           expect(error).toBeInstanceOf(AggregateError);
           expect(error).toMatchObject({ errors: [failure] });
@@ -243,19 +238,18 @@ describe("gateway telemetry maintenance", () => {
       const check = createDeferredCore<null>();
       const thaw = createDeferredCore<boolean>();
       checkTelemetryUpdateMock.mockReturnValue(check.promise);
-      const restartRunningChannels = vi.fn(
-        (_mode: "new-thaw" | "deferred-retry", _shouldContinue?: () => boolean) => thaw.promise,
+      const restartRunningChannels = vi.fn<TimerOptions["restartRunningChannels"]>(
+        () => thaw.promise,
       );
       const state = createMaintenanceDeps();
-      const refreshGatewayHealthSnapshot = vi.fn(state.refreshGatewayHealthSnapshot);
-      const broadcast = vi.fn();
-      const { runWorktreeGc, runDeliveryQueueMediaGc, logHealth } = state;
-      const timers = await startMaintenance({
-        ...state,
-        restartRunningChannels,
+      const {
+        runWorktreeGc,
+        runDeliveryQueueMediaGc,
+        logHealth,
         refreshGatewayHealthSnapshot,
         broadcast,
-      });
+      } = state;
+      const timers = await startMaintenance({ ...state, restartRunningChannels });
       try {
         vi.setSystemTime(Date.now() + 75_000);
         await vi.advanceTimersByTimeAsync(30_000);
@@ -267,10 +261,8 @@ describe("gateway telemetry maintenance", () => {
           state.scheduler.beginClose();
           expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);
         }
-        let stopped = false;
-        const stopping = timers.stopPeriodicTasks().then(() => {
-          stopped = true;
-        });
+        const stopped = vi.fn();
+        const stopping = timers.stopPeriodicTasks().finally(stopped);
         refreshGatewayHealthSnapshot.mockRejectedValue(
           new Error("Gateway health refresh owner is closed"),
         );
@@ -289,10 +281,10 @@ describe("gateway telemetry maintenance", () => {
         expect(state.dedupe.has("retained-during-drain")).toBe(true);
         expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);
         await vi.advanceTimersByTimeAsync(0);
-        expect(stopped).toBe(false);
+        expect(stopped).not.toHaveBeenCalled();
         check.resolve(null);
         await stopping;
-        expect(stopped).toBe(true);
+        expect(stopped).toHaveBeenCalledOnce();
       } finally {
         thaw.resolve(true);
         check.resolve(null);
@@ -332,16 +324,14 @@ describe("gateway telemetry maintenance", () => {
     try {
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
-      let stopped = false;
-      const stopping = timers.stopPeriodicTasks().then(() => {
-        stopped = true;
-      });
+      const stopped = vi.fn();
+      const stopping = timers.stopPeriodicTasks().finally(stopped);
       await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
       check.resolve(null);
       await stopping;
-      expect(stopped).toBe(true);
+      expect(stopped).toHaveBeenCalledOnce();
       await timers.stopPeriodicTasks();
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
@@ -352,17 +342,13 @@ describe("gateway telemetry maintenance", () => {
   });
 
   it("never checks telemetry for Nix-managed gateways", async () => {
-    const broadcast = vi.fn();
-    const timers = await startMaintenance({
-      ...createMaintenanceDeps(),
-      broadcast,
-      isNixMode: true,
-    });
+    const state = createMaintenanceDeps();
+    const timers = await startMaintenance({ ...state, isNixMode: true });
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
-    expect(broadcast).toHaveBeenCalledWith("tick", { ts: expect.any(Number) });
+    expect(state.broadcast).toHaveBeenCalledWith("tick", { ts: expect.any(Number) });
     await stopMaintenanceTimers(timers);
   });
 });
