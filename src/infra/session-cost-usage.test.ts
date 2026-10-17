@@ -96,8 +96,21 @@ describe("session cost usage", () => {
   const readCachedAggregate = (
     params: Omit<Parameters<typeof loadCostUsageSummaryFromCache>[0], "config" | "agentId">,
   ) => loadCostUsageSummaryFromCache({ config: defaultConfig, agentId: "main", ...params });
-  const assistant = (timestamp: string | undefined, usage: unknown) =>
-    transcriptEntry(timestamp, { role: "assistant", usage });
+  const assistant = (
+    timestamp: string | undefined,
+    usage: unknown,
+    details: Record<string, unknown> = {},
+  ) => transcriptEntry(timestamp, { role: "assistant", usage, ...details });
+  const modelMessage = (
+    timestamp: string | undefined,
+    tokens: number,
+    details: Record<string, unknown> = {},
+  ) =>
+    assistant(timestamp, billed(tokens, 0, tokens, tokens / 1000), {
+      provider: "openai",
+      model: "gpt-5.5",
+      ...details,
+    });
 
   const writeTranscript = (file: string, sessionId: string, entry: unknown) =>
     writeEntries(file, [{ type: "session", version: 1, id: sessionId }, entry], true);
@@ -124,23 +137,15 @@ describe("session cost usage", () => {
         }),
         "utf8",
       );
-      await fs.writeFile(
+      await writeEntries(
         path.join(agentSessionsDir, `${agentId}-session.jsonl`),
         [
-          JSON.stringify({ type: "session", version: 1, id: `${agentId}-session` }),
+          { type: "session", version: 1, id: `${agentId}-session` },
           ...inputs.map((input) =>
-            JSON.stringify(
-              transcriptEntry(now, {
-                role: "assistant",
-                provider,
-                model,
-                usage: { input, output: 0, totalTokens: input },
-              }),
-            ),
+            assistant(now, { input, output: 0, totalTokens: input }, { provider, model }),
           ),
-          "",
-        ].join("\n"),
-        "utf8",
+        ],
+        true,
       );
     };
 
@@ -169,18 +174,8 @@ describe("session cost usage", () => {
 
   it("excludes untimestamped entries from direct bounded session ranges", async () => {
     const sessionFile = path.join(root, "session.jsonl");
-    const assistantEntry = (
-      timestamp: string | undefined,
-      totalTokens: number,
-      model = "gpt-5.5",
-    ) =>
-      transcriptEntry(timestamp, {
-        role: "assistant",
-        provider: "openai",
-        model,
-        content: [{ type: "tool_use", name: "weather" }],
-        usage: billed(totalTokens, 0, totalTokens, totalTokens / 1000),
-      });
+    const assistantEntry = (timestamp: string | undefined, tokens: number, model = "gpt-5.5") =>
+      modelMessage(timestamp, tokens, { model, content: [{ type: "tool_use", name: "weather" }] });
     const userEntry = (timestamp: string) =>
       transcriptEntry(timestamp, { role: "user", content: "hello" });
 
@@ -204,10 +199,7 @@ describe("session cost usage", () => {
     ]);
     expect(ranged?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
-    const upperBounded = await readSummary({
-      sessionFile,
-      endMs: rangeEndMs,
-    });
+    const upperBounded = await readSummary({ sessionFile, endMs: rangeEndMs });
     expect(upperBounded?.totalTokens).toBe(30);
     expect(upperBounded?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(false);
 
@@ -225,15 +217,14 @@ describe("session cost usage", () => {
   it("rebuilds obsolete rollups and preserves tool occurrences and untimestamped usage on append", async () => {
     const sessionFile = path.join(sessionsDir, "sess-v8-upgrade.jsonl");
     const assistantEntry = (timestamp: string | undefined, totalTokens: number) =>
-      transcriptEntry(timestamp, {
-        role: "assistant",
-        provider: "openai",
+      modelMessage(timestamp, totalTokens, {
         model: timestamp ? "gpt-5.5" : "glm-5",
-        content: [
-          { type: "toolCall", id: `${timestamp ?? "untimed"}-1`, name: "read", arguments: {} },
-          { type: "toolCall", id: `${timestamp ?? "untimed"}-2`, name: "read", arguments: {} },
-        ],
-        usage: billed(totalTokens, 0, totalTokens, totalTokens / 1000),
+        content: [1, 2].map((n) => ({
+          type: "toolCall",
+          id: `${timestamp ?? "untimed"}-${n}`,
+          name: "read",
+          arguments: {},
+        })),
       });
     await writeEntries(
       sessionFile,
@@ -243,10 +234,7 @@ describe("session cost usage", () => {
 
     const session = { sessionId: "sess-v8-upgrade", sessionFile };
     await refreshSessionCostUsageForTest(sessionFile);
-    const current = await readCached({
-      sessions: [session],
-      requestRefresh: false,
-    });
+    const current = await readCached({ sessions: [session], requestRefresh: false });
     expect(current.cacheStatus.status).toBe("fresh");
 
     const writeLegacyRollup = () => writeLegacyUsageCostRollupForTest(sessionFile);
@@ -406,9 +394,7 @@ describe("session cost usage", () => {
     await fs.rename(sessionsDir, movedSessionsDir);
     try {
       await fs.writeFile(sessionsDir, "not a directory");
-      await expect(readAggregate()).rejects.toMatchObject({
-        code: "ENOTDIR",
-      });
+      await expect(readAggregate()).rejects.toMatchObject({ code: "ENOTDIR" });
     } finally {
       await fs.rm(sessionsDir, { force: true });
       await fs.rename(movedSessionsDir, sessionsDir);
@@ -486,10 +472,7 @@ describe("session cost usage", () => {
     const end = new Date("2026-02-01T10:05:00.000Z");
 
     const entries = [
-      transcriptEntry(start.toISOString(), {
-        role: "user",
-        content: "Hello",
-      }),
+      transcriptEntry(start.toISOString(), { role: "user", content: "Hello" }),
       transcriptEntry(end.toISOString(), {
         role: "assistant",
         provider: "openai",
@@ -689,11 +672,9 @@ describe("session cost usage", () => {
   it("aggregates exact UTC quarter-hour usage across midnight", async () => {
     const sessionFile = path.join(root, "session.jsonl");
     const entries = [
-      transcriptEntry("2026-03-15T06:30:00.000Z", {
-        role: "assistant",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
+      [
+        "2026-03-15T06:30:00.000Z",
+        {
           input: 5,
           output: 7,
           cache_read: 3,
@@ -701,67 +682,50 @@ describe("session cost usage", () => {
           totalTokens: 25,
           cost: { total: 0.025 },
         },
-      }),
-      transcriptEntry("2026-03-15T06:35:00.000Z", {
-        role: "assistant",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
+      ],
+      [
+        "2026-03-15T06:35:00.000Z",
+        {
           input: 1,
           output: 2,
           cache_read: 3,
           cache_creation_input_tokens: 4,
           cost: { total: 0.01 },
         },
-      }),
-      transcriptEntry("2026-03-15T23:59:00.000Z", {
-        role: "assistant",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: billed(2, 3, 9, 0.009),
-      }),
-      transcriptEntry("2026-03-16T00:00:00.000Z", {
-        role: "assistant",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: billed(4, 5, 11, 0.011),
-      }),
-    ];
+      ],
+      ["2026-03-15T23:59:00.000Z", billed(2, 3, 9, 0.009)],
+      ["2026-03-16T00:00:00.000Z", billed(4, 5, 11, 0.011)],
+    ] as const;
+    const messages = entries.map(([timestamp, usage]) =>
+      assistant(timestamp, usage, { provider: "openai", model: "gpt-5.2" }),
+    );
 
-    await writeEntries(sessionFile, entries);
+    await writeEntries(sessionFile, messages);
 
     const summary = await readSummary({ sessionFile });
+    const quarter = (
+      date: string,
+      quarterIndex: number,
+      input: number,
+      output: number,
+      cacheRead: number,
+      cacheWrite: number,
+      totalTokens: number,
+      totalCost: unknown,
+    ) => ({
+      date,
+      quarterIndex,
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      totalTokens,
+      totalCost,
+    });
     expect(summary?.utcQuarterHourTokenUsage).toEqual([
-      {
-        date: "2026-03-15",
-        quarterIndex: 26,
-        input: 6,
-        output: 9,
-        cacheRead: 6,
-        cacheWrite: 6,
-        totalTokens: 35,
-        totalCost: expect.closeTo(0.035, 6),
-      },
-      {
-        date: "2026-03-15",
-        quarterIndex: 95,
-        input: 2,
-        output: 3,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 9,
-        totalCost: expect.closeTo(0.009, 6),
-      },
-      {
-        date: "2026-03-16",
-        quarterIndex: 0,
-        input: 4,
-        output: 5,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 11,
-        totalCost: 0.011,
-      },
+      quarter("2026-03-15", 26, 6, 9, 6, 6, 35, expect.closeTo(0.035, 6)),
+      quarter("2026-03-15", 95, 2, 3, 0, 0, 9, expect.closeTo(0.009, 6)),
+      quarter("2026-03-16", 0, 4, 5, 0, 0, 11, 0.011),
     ]);
   });
 

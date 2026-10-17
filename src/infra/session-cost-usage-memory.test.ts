@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
+import type {
+  SessionActor,
+  SessionActorAuthority,
+} from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "../config/sessions/session-actor-memory-publication.test-support.js";
+import type { SessionActorMemoryUsageReads } from "../config/sessions/session-actor-memory-usage-contract.js";
 import {
   acquireSessionActorStorage,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorStorageWrites } from "../config/sessions/session-actor-storage-contract.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -52,6 +57,20 @@ afterEach(() => {
   memorySessionActorOwners.reset();
 });
 
+const getSnapshot = (
+  actor: SessionActor,
+  input: SessionActorMemoryUsageReads["session.usage.snapshot"]["input"],
+) => actor.storage!.read({ type: "session.usage.snapshot", input }, authority);
+
+async function commit<Key extends keyof SessionActorStorageWrites>(
+  actor: SessionActor,
+  type: Key,
+  input: SessionActorStorageWrites[Key]["input"],
+  expected: object = { kind: "committed" },
+) {
+  expect(await actor.storage!.mutate({ type, input }, authority)).toMatchObject(expected);
+}
+
 async function fixture(
   entry: Partial<InternalSessionEntry> = {},
   target = { sessionKey, sessionId },
@@ -66,19 +85,17 @@ async function fixture(
     throw new Error("Production acquisition did not select memory storage");
   }
   const { actor } = binding;
+  const scope = {
+    agentId: "main",
+    sessionKey: fixtureSessionKey,
+    sessionId: fixtureSessionId,
+    storePath: binding.path,
+  };
   const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath })!;
-  expect(
-    await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: { sessionId: fixtureSessionId, updatedAt: 1, ...entry },
-          cwd: "/synthetic",
-        },
-      },
-      authority,
-    ),
-  ).toMatchObject({ kind: "committed" });
+  await commit(actor, "session.entry.create", {
+    entry: { sessionId: fixtureSessionId, updatedAt: 1, ...entry },
+    cwd: "/synthetic",
+  });
   let next = 0;
   const append = async (
     input: number,
@@ -93,18 +110,8 @@ async function fixture(
           append: {
             kind: "metadata",
             input: {
-              scope: {
-                agentId: "main",
-                sessionKey: fixtureSessionKey,
-                sessionId: fixtureSessionId,
-                storePath: binding.path,
-              },
-              event: {
-                type: "message",
-                id,
-                parentId: null,
-                timestamp: "2026-10-01T12:00:00.000Z",
-              },
+              scope,
+              event: { type: "message", id, parentId: null, timestamp: "2026-10-01T12:00:00.000Z" },
               message: {
                 messageJson: JSON.stringify({
                   role: "assistant",
@@ -129,29 +136,26 @@ async function fixture(
       ),
     ).toMatchObject({ kind: "committed" });
   };
-  const sessionFile = formatSqliteSessionFileMarker({
-    agentId: "main",
-    storePath: binding.path,
-    sessionId: fixtureSessionId,
-  });
-  return { owner, actor, binding, append, sessionFile };
+  const sessionFile = formatSqliteSessionFileMarker(scope);
+  return {
+    owner,
+    actor,
+    binding,
+    append,
+    sessionFile,
+    refresh: () => refreshUsage(binding),
+    report: () => memoryReport({ binding, sessionFile }),
+  };
 }
 
 async function cachedFixture(target = { sessionKey, sessionId }) {
   const cached = await fixture({}, target);
   await cached.append(5);
-  await runSessionActorUsage(
-    cached.binding,
-    { kind: "refresh", pricingFingerprint: "fixture" },
-    () => undefined,
-  );
-  const [snapshot] = await cached.actor.storage!.read(
-    {
-      type: "session.usage.snapshot",
-      input: { sessionIds: [target.sessionId], includeRollupBodies: true },
-    },
-    authority,
-  );
+  await cached.refresh();
+  const [snapshot] = await getSnapshot(cached.actor, {
+    sessionIds: [target.sessionId],
+    includeRollupBodies: true,
+  });
   const entry =
     snapshot?.rollup &&
     decodeUsageCostRollup(snapshot.rollup.valueJson, "fixture", snapshot.rollup.blob ?? null);
@@ -186,19 +190,19 @@ async function writeRollup(
   cached: Awaited<ReturnType<typeof cachedFixture>>,
   rollup: ReturnType<typeof paddedRollup>,
 ) {
-  expect(
-    await cached.actor.storage!.mutate(
-      {
-        type: "session.usage.write",
-        input: { sessionId: cached.sessionId, rollup: { ...rollup, updatedAt: 1 } },
-      },
-      authority,
-    ),
-  ).toMatchObject({ kind: "committed", value: true });
+  await commit(
+    cached.actor,
+    "session.usage.write",
+    {
+      sessionId: cached.sessionId,
+      rollup: { ...rollup, updatedAt: 1 },
+    },
+    { kind: "committed", value: true },
+  );
 }
 
 function memoryReport(
-  cached: Pick<Awaited<ReturnType<typeof fixture>>, "binding" | "sessionFile">,
+  cached: { binding: Parameters<typeof runSessionActorUsage>[0]; sessionFile: string },
   sessionFiles = [cached.sessionFile],
 ) {
   return runUsage(cached.binding, {
@@ -280,20 +284,14 @@ describe("actor memory usage", () => {
       await writeRollup(next, paddedRollup(next.entry, 900 * 1024));
       sessionFiles.push(next.sessionFile);
     }
-    const snapshot = await cached.actor.storage!.read(
-      {
-        type: "session.usage.snapshot",
-        input: {
-          includeRollupBodies: true,
-          reportBudget: {
-            remainingBytes: 32 * 1024 * 1024 - 40 * 256,
-            metadataLimit: 40,
-            pricingFingerprint: "fixture",
-          },
-        },
+    const snapshot = await getSnapshot(cached.actor, {
+      includeRollupBodies: true,
+      reportBudget: {
+        remainingBytes: 32 * 1024 * 1024 - 40 * 256,
+        metadataLimit: 40,
+        pricingFingerprint: "fixture",
       },
-      authority,
-    );
+    });
     expect(
       snapshot.reduce(
         (bytes, { rollup }) =>
@@ -336,21 +334,12 @@ describe("actor memory usage", () => {
       const cached = await cachedFixture();
       if (mode !== "valid") {
         const encoded = encodeUsageCostRollup(cached.entry);
-        await writeRollup(cached, {
-          ...encoded,
-          blob: new Uint8Array(),
-        });
+        await writeRollup(cached, { ...encoded, blob: new Uint8Array() });
       }
-      const snapshot = await cached.actor.storage!.read(
-        {
-          type: "session.usage.snapshot",
-          input: {
-            includeRollupBodies: true,
-            reportBudget: { remainingBytes: 128, metadataLimit: 1, pricingFingerprint: "fixture" },
-          },
-        },
-        authority,
-      );
+      const snapshot = await getSnapshot(cached.actor, {
+        includeRollupBodies: true,
+        reportBudget: { remainingBytes: 128, metadataLimit: 1, pricingFingerprint: "fixture" },
+      });
       if (mode === "valid") {
         expect(snapshot).toMatchObject([
           { rollupDeferred: true, deferredRollupMetadata: { checkpoint: { kind: "sqlite" } } },
@@ -375,9 +364,8 @@ describe("actor memory usage", () => {
   );
 
   it("reports publication failure while keeping the refreshed usage rollup", async () => {
-    const { binding, append, sessionFile } = await fixture();
+    const { append, refresh, report } = await fixture();
     await append(5);
-    const refresh = () => refreshUsage(binding);
     const stop = failSessionActorMemoryPublication(sessionKey);
     try {
       await expect(refresh()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
@@ -385,18 +373,14 @@ describe("actor memory usage", () => {
       stop();
     }
     expect(await refresh()).toEqual({ kind: "refresh", changed: false });
-    expect(
-      await runUsage(binding, {
-        kind: "sessions",
-        pricingFingerprint: "fixture",
-        sessions: [{ sessionFile }],
-        dayBucket,
-      }),
-    ).toMatchObject({ kind: "sessions", summaries: [{ input: 5, output: 2 }] });
+    expect(await report()).toMatchObject({
+      kind: "sessions",
+      summaries: [{ input: 5, output: 2 }],
+    });
   });
 
   it("uses production memory acquisition and refreshes a stale report after an in-process append", async () => {
-    const { binding, append, sessionFile } = await fixture();
+    const { binding, append, sessionFile, refresh, report } = await fixture();
     await append(5);
     {
       const prepared = prepareUsageCostWorker({ agentId: "main", storePath: binding.path, env });
@@ -414,8 +398,6 @@ describe("actor memory usage", () => {
         { role: "assistant", content: "answer", tokens: 7, cost: 0.03 },
       ]);
     }
-    const refresh = () => refreshUsage(binding);
-    const report = () => memoryReport({ binding, sessionFile });
     expect(await refresh()).toEqual({ kind: "refresh", changed: true });
     expect(await report()).toMatchObject({
       kind: "sessions",
@@ -520,9 +502,8 @@ describe("actor memory usage", () => {
   });
 
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {
-    const { actor, binding, append } = await fixture();
+    const { actor, binding, append, refresh } = await fixture();
     await append(5);
-    const refresh = () => refreshUsage(binding);
     await refresh();
     const store = actor.storage!;
     const snapshotInput = {
@@ -534,10 +515,7 @@ describe("actor memory usage", () => {
         pricingFingerprint: "fixture",
       },
     };
-    const before = await store.read(
-      { type: "session.usage.snapshot", input: snapshotInput },
-      authority,
-    );
+    const before = await getSnapshot(actor, snapshotInput);
     const corpus = await store.read(
       { type: "session.corpus.list", input: { options: {} } },
       authority,
@@ -547,10 +525,7 @@ describe("actor memory usage", () => {
     ]);
     await append(7);
     await refresh();
-    const after = await store.read(
-      { type: "session.usage.snapshot", input: snapshotInput },
-      authority,
-    );
+    const after = await getSnapshot(actor, snapshotInput);
     expect(after[0]!.stats.eventCount).toBe(before[0]!.stats.eventCount + 1);
     expect(before[0]!.events?.some(({ eventJson }) => eventJson.includes("assistant-2"))).toBe(
       false,
@@ -591,15 +566,9 @@ describe("actor memory usage", () => {
       },
     });
     const store = actor.storage!;
-    expect(
-      await store.mutate(
-        {
-          type: "session.collaboration.participant",
-          input: { params: { identity: { type: "profile", id: "profile-1" }, promptedAt: 2 } },
-        },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
+    await commit(actor, "session.collaboration.participant", {
+      params: { identity: { type: "profile", id: "profile-1" }, promptedAt: 2 },
+    });
     await runWithSessionActorStorage(binding, async () => {
       expect(
         await resolveMemorySessionTargetsInWorker({ agentId: "main", participants: ["profile-1"] }),
@@ -631,18 +600,10 @@ describe("actor memory usage", () => {
       ).toEqual([]);
     });
     const expected = await store.read({ type: "session.entry.read", input: {} }, authority);
-    expect(
-      await store.mutate(
-        {
-          type: "session.lifecycle.reset",
-          input: {
-            expected,
-            nextEntry: { ...expected!, sessionId: "usage-2", sessionStartedAt: 20, updatedAt: 20 },
-          },
-        },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
+    await commit(actor, "session.lifecycle.reset", {
+      expected,
+      nextEntry: { ...expected!, sessionId: "usage-2", sessionStartedAt: 20, updatedAt: 20 },
+    });
     const current = await owner.acquire(
       { database: owner.identity, sessionKey },
       { assertCurrent() {}, assertReadable() {} },

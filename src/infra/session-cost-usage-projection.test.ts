@@ -35,14 +35,14 @@ function createFile(name: string): UsageCostTranscriptFile {
 
 function createRow(
   file: UsageCostTranscriptFile,
-  contributions: Array<{ timestamp?: number; cost: number }>,
+  contributions: Array<[timestamp: number | undefined, cost: number]>,
   scannedAt = 100,
   version = USAGE_COST_ROLLUP_VERSION,
 ): SessionCostUsageRollupRow & { blob: Uint8Array } {
   const rollup = createSessionUsageRollupData();
-  for (const contribution of contributions) {
+  for (const [timestamp, cost] of contributions) {
     appendSessionUsageRollupContribution(rollup, {
-      timestamp: contribution.timestamp,
+      timestamp,
       role: "assistant",
       toolNames: [],
       toolResultCounts: { total: 0, errors: 0 },
@@ -50,8 +50,8 @@ function createRow(
         ...createEmptyCostUsageTotals(),
         input: 1,
         totalTokens: 1,
-        inputCost: contribution.cost,
-        totalCost: contribution.cost,
+        inputCost: cost,
+        totalCost: cost,
       },
     });
   }
@@ -69,25 +69,25 @@ function createRow(
     },
     scannedAt,
     parsedRecords: contributions.length,
-    countedRecords: contributions.filter((contribution) => contribution.timestamp !== undefined)
-      .length,
+    countedRecords: contributions.filter(([timestamp]) => timestamp !== undefined).length,
     rollup,
   };
   return { key: file.filePath, ...encodeUsageCostRollup(entry), updatedAt: scannedAt + 10_000 };
 }
 
-function createSource(
+function createSource<File extends UsageCostTranscriptFile | undefined>(
   rows: Array<SessionCostUsageRollupRow & { blob?: Uint8Array }>,
-  files: ReadonlyArray<UsageCostTranscriptFile | undefined>,
-): UsageCostRollupRowSource {
+  files: readonly File[],
+) {
   const byPath = new Map(rows.map((row) => [row.key, row]));
   const requestedPaths = new Set(files.flatMap((file) => (file ? [file.filePath] : [])));
-  return {
+  const source: UsageCostRollupRowSource = {
     readRow: (filePath) => byPath.get(filePath),
     readBody: (row) => byPath.get(row.key)?.blob ?? null,
     onInvalidBody: () => {},
     remainingRows: rows.filter((row) => !requestedPaths.has(row.key)),
   };
+  return { ...source, files, pricingFingerprint, dayBucket: utcDayBucket };
 }
 
 describe("usage cache projections", () => {
@@ -95,7 +95,7 @@ describe("usage cache projections", () => {
     "repairs %s bodies despite partition budget deferral",
     async (mode) => {
       const file = createFile("corrupt-deferred");
-      const row = createRow(file, [{ timestamp: dayStart, cost: 1 }]);
+      const row = createRow(file, [[dayStart, 1]]);
       const invalid: string[] = [];
       const result = await projectSessionCostSummaries({
         ...createSource(
@@ -104,9 +104,7 @@ describe("usage cache projections", () => {
         ),
         deferredPaths: new Set([row.key]),
         onInvalidBody: (key) => invalid.push(key),
-        files: [file],
         sessions: [{ sessionFile: file.filePath }],
-        pricingFingerprint,
       });
       expect(result).toMatchObject({
         summaries: [null],
@@ -121,15 +119,13 @@ describe("usage cache projections", () => {
     "refreshes a budget-deferred aggregate only when stale=%s",
     async (stale) => {
       const file = createFile("deferred");
-      const row = createRow(file, [{ timestamp: dayStart, cost: 1 }]);
+      const row = createRow(file, [[dayStart, 1]]);
       const result = await projectCostUsageSummary({
         ...createSource([row], [file]),
-        readEntry: async () => null,
-        files: [stale ? { ...file, size: file.size + 1, mtimeMs: file.mtimeMs + 1 } : file],
-        pricingFingerprint,
         startMs: dayStart,
         endMs: dayStart + 86_400_000 - 1,
-        dayBucket: utcDayBucket,
+        readEntry: async () => null,
+        files: [stale ? { ...file, size: file.size + 1, mtimeMs: file.mtimeMs + 1 } : file],
       });
       expect(result.cacheStatus).toMatchObject({
         status: stale ? "stale" : "partial",
@@ -143,13 +139,10 @@ describe("usage cache projections", () => {
 
   it("requests a refresh for rollups computed before pricing availability was preserved", async () => {
     const file = createFile("old-pricing");
-    const rows = [createRow(file, [{ timestamp: dayStart, cost: 0 }], 100, 5)];
+    const rows = [createRow(file, [[dayStart, 0]], 100, 5)];
     const result = await projectSessionCostSummaries({
       ...createSource(rows, [file]),
       sessions: [{ sessionId: "old-pricing", sessionFile: file.filePath }],
-      files: [file],
-      pricingFingerprint,
-      dayBucket: utcDayBucket,
     });
     expect(result.summaries).toEqual([null]);
     expect(result.staleSessionFiles).toEqual([file.sourcePath]);
@@ -163,23 +156,20 @@ describe("usage cache projections", () => {
     const files = [largeFile, smallFile, smallFile];
     const rows = [
       createRow(smallFile, [
-        { timestamp: dayStart + 1, cost: 1 },
-        { timestamp: dayStart + 2, cost: 1 },
+        [dayStart + 1, 1],
+        [dayStart + 2, 1],
       ]),
-      createRow(orphanFile, [{ timestamp: dayStart, cost: 999 }], 900),
+      createRow(orphanFile, [[dayStart, 999]], 900),
       createRow(largeFile, [
-        { timestamp: dayStart + 3, cost: 1 },
-        { timestamp: dayStart, cost: 1e16 },
+        [dayStart + 3, 1],
+        [dayStart, 1e16],
       ]),
       { key: "broken-orphan", valueJson: "{", updatedAt: 99_999 },
     ];
     const result = await projectCostUsageSummary({
       ...createSource(rows, files),
-      files,
-      pricingFingerprint,
       startMs: dayStart,
       endMs: dayStart + 3,
-      dayBucket: utcDayBucket,
     });
 
     // Each cost-1 addition rounds away; grouping a pair would instead add 2.
@@ -202,17 +192,15 @@ describe("usage cache projections", () => {
     const endMs = Date.UTC(2026, 8, 21, 11, 59, 59, 999);
     const rows = [
       createRow(file, [
-        { timestamp: endMs, cost: 0.2 },
-        { timestamp: endMs + 1, cost: 1_000 },
-        { timestamp: startMs - 1, cost: 100 },
-        { timestamp: startMs, cost: 0.1 },
-        { cost: 500 },
+        [endMs, 0.2],
+        [endMs + 1, 1_000],
+        [startMs - 1, 100],
+        [startMs, 0.1],
+        [undefined, 500],
       ]),
     ];
     const result = await projectCostUsageSummary({
       ...createSource(rows, [file]),
-      files: [file],
-      pricingFingerprint,
       startMs,
       endMs,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 12 * 60 },
@@ -229,7 +217,16 @@ describe("usage cache projections", () => {
 
   it("keeps committed totals and freshness for duplicate canonical files", async () => {
     const file = createFile("selected");
-    const rows = [createRow(file, [{ timestamp: dayStart, cost: 0.5 }, { cost: 0.25 }], 300)];
+    const rows = [
+      createRow(
+        file,
+        [
+          [dayStart, 0.5],
+          [undefined, 0.25],
+        ],
+        300,
+      ),
+    ];
     const sessions = [
       { sessionId: "first", sessionFile: "first-archive-alias" },
       { sessionId: "stale", sessionFile: "stale-archive-alias" },
@@ -247,9 +244,6 @@ describe("usage cache projections", () => {
         ...createSource(rows, files),
         ...range,
         sessions,
-        files,
-        pricingFingerprint,
-        dayBucket: utcDayBucket,
       });
 
       expect(result.summaries).toMatchObject([
@@ -279,9 +273,6 @@ describe("usage cache projections", () => {
     const fresh = await projectSessionCostSummaries({
       ...createSource(rows, [file]),
       sessions: [{ sessionFile: "fresh-archive-alias" }],
-      files: [file],
-      pricingFingerprint,
-      dayBucket: utcDayBucket,
     });
     expect(fresh.cacheStatus.status).toBe("fresh");
   });
