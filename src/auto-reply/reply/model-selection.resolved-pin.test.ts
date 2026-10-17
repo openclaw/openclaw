@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { hasSessionActiveAutoModelFallback } from "../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -8,6 +9,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolveDirectStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createModelSelectionState } from "./model-selection.js";
 
@@ -223,5 +225,163 @@ test.each<[string, string, string, SelectionOptions]>([
         }
       },
     );
+  });
+});
+
+test.each([
+  {
+    name: "complete self-origin automatic selection",
+    origin: {
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-x",
+    },
+    stale: false,
+  },
+  { name: "legacy auto selection without origin", origin: {}, stale: true },
+  {
+    name: "stale auto selection whose origin names an older model",
+    origin: {
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-old",
+    },
+    stale: true,
+  },
+  {
+    name: "stale auto selection whose origin names another provider",
+    origin: {
+      modelOverrideFallbackOriginProvider: "retired-provider",
+      modelOverrideFallbackOriginModel: "gpt-x",
+    },
+    stale: true,
+  },
+])("Codex legacy stale check: $name", async ({ origin, stale }) => {
+  await withStateDirEnv("reply-codex-legacy-auto-", async () => {
+    const entry: SessionEntry = {
+      sessionId: "child",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-x",
+      modelOverrideSource: "auto",
+      ...origin,
+    };
+    const selection = await createModelSelectionState({
+      agentId: "main",
+      cfg: {
+        plugins: { enabled: false },
+        agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
+      },
+      agentCfg: undefined,
+      sessionEntry: entry,
+      sessionStore: { child: entry },
+      sessionKey: "child",
+      defaultProvider: "openai",
+      defaultModel: "gpt-x",
+      provider: "openai",
+      model: "gpt-x",
+      hasModelDirective: false,
+    });
+    expect(selection.resetModelOverride).toBe(stale);
+    expect(entry.modelOverride).toBe(stale ? undefined : "gpt-x");
+  });
+});
+
+// Counterexamples exercise complete stored-ref equality independently of entry age.
+test.each([
+  {
+    name: "missing override provider with foreign provider origin",
+    origin: {
+      providerOverride: undefined,
+      modelOverrideFallbackOriginProvider: "retired",
+      modelOverrideFallbackOriginModel: "gpt-x",
+    },
+    stale: true,
+  },
+  {
+    name: "blank override provider with foreign provider origin",
+    origin: {
+      providerOverride: "   ",
+      modelOverrideFallbackOriginProvider: "retired",
+      modelOverrideFallbackOriginModel: "gpt-x",
+    },
+    stale: true,
+  },
+  {
+    name: "provider-only origin",
+    origin: { modelOverrideFallbackOriginProvider: "openai" },
+    stale: true,
+  },
+  { name: "model-only origin", origin: { modelOverrideFallbackOriginModel: "gpt-x" }, stale: true },
+  {
+    name: "whitespace provider origin",
+    origin: {
+      modelOverrideFallbackOriginProvider: "   ",
+      modelOverrideFallbackOriginModel: "gpt-x",
+    },
+    stale: true,
+  },
+  {
+    name: "both origin components foreign",
+    origin: {
+      modelOverrideFallbackOriginProvider: "retired",
+      modelOverrideFallbackOriginModel: "gpt-old",
+    },
+    stale: true,
+  },
+  {
+    name: "case-sensitive different model",
+    origin: {
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-X",
+    },
+    stale: true,
+  },
+  {
+    name: "trimmed self-origin",
+    origin: {
+      modelOverrideFallbackOriginProvider: " openai ",
+      modelOverrideFallbackOriginModel: " gpt-x ",
+    },
+    stale: false,
+  },
+])("Codex legacy self-origin boundary: $name", async ({ origin, stale }) => {
+  await withStateDirEnv("reply-codex-self-origin-boundary-", async () => {
+    const entry: SessionEntry = {
+      sessionId: "child",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-x",
+      modelOverrideSource: "auto",
+      ...origin,
+    };
+    if (!entry.providerOverride?.trim()) {
+      // The stored ref defaults the provider to the default provider, while the fallback helper
+      // defaults it to the origin provider. The exemption must follow the stored ref, so these
+      // entries are cross-origin even though the helper reports no active fallback.
+      const resolved = resolveDirectStoredModelOverride({
+        sessionEntry: entry,
+        defaultProvider: "openai",
+        allowPluginNormalization: false,
+      });
+      expect(resolved?.provider).toBe("openai");
+      expect(hasSessionActiveAutoModelFallback(entry)).toBe(false);
+    }
+    const selection = await createModelSelectionState({
+      agentId: "main",
+      cfg: {
+        plugins: { enabled: false },
+        agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
+      },
+      agentCfg: undefined,
+      sessionEntry: entry,
+      sessionStore: { child: entry },
+      sessionKey: "child",
+      defaultProvider: "openai",
+      defaultModel: "gpt-x",
+      provider: "openai",
+      model: "gpt-x",
+      hasModelDirective: false,
+    });
+    expect(selection.resetModelOverride).toBe(stale);
+    expect(entry.modelOverride).toBe(stale ? undefined : "gpt-x");
   });
 });

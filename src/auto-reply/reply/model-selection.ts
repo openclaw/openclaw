@@ -1,4 +1,5 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   assertAdmittedRunOperatorAuthority,
   assertOperatorModelAllowed,
@@ -248,9 +249,24 @@ export async function createModelSelectionState(params: {
       primaryProvider: params.primaryProvider,
       primaryModel: params.primaryModel,
     });
+    // Configured or inherited automatic selections may carry a complete self-origin ref.
+    // Preserve that internally consistent stored selection in this legacy cleanup branch.
+    // Equality does not establish freshness or prove that failover never occurred.
+    // Require an explicit non-blank provider and model matching both origin fields;
+    // missing or blank override fields do not qualify for this exemption.
+    const originProvider = normalizeOptionalString(entry?.modelOverrideFallbackOriginProvider);
+    const originModel = normalizeOptionalString(entry?.modelOverrideFallbackOriginModel);
+    const overrideProvider = normalizeOptionalString(entry?.providerOverride);
+    const overrideModel = normalizeOptionalString(entry?.modelOverride);
+    const selfOriginAutoSelection =
+      entry?.modelOverrideSource === "auto" &&
+      Boolean(overrideProvider && overrideModel) &&
+      overrideProvider === originProvider &&
+      overrideModel === originModel;
     const staleLegacyOpenAICodexAutoOverride =
       override?.source === "session" &&
       entry?.modelOverrideSource === "auto" &&
+      !selfOriginAutoSelection &&
       normalizeProviderId(override.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
