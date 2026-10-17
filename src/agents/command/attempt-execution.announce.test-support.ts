@@ -5,6 +5,15 @@ import type { AgentCommandOpts } from "./types.js";
 
 const CHILD_SESSION_KEY = "agent:main:subagent:child";
 const REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
+type AnnounceToolOptions = {
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  disableMessageTool?: boolean;
+  requireExplicitMessageTarget?: boolean;
+  modelRun?: boolean;
+  promptMode?: "none";
+  runtimeToolsAllow?: string[];
+  trustedInternalHandoff?: boolean;
+};
 
 export function createCompletionHandoff(
   target: Omit<NonNullable<AgentCommandOpts["trustedInternalHandoff"]>, "kind">,
@@ -45,19 +54,14 @@ export function createSubagentAnnounceConfig(
   };
 }
 
-export function createSubagentAnnounceHandoffOptions(params: {
-  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
-  targetSessionKey: string;
-  targetSessionId: string;
-  provider: string;
-  model: string;
-  disableMessageTool?: boolean;
-  requireExplicitMessageTarget?: boolean;
-  modelRun?: boolean;
-  promptMode?: "none";
-  runtimeToolsAllow?: string[];
-  trustedInternalHandoff?: boolean;
-}): Partial<AgentCommandOpts> {
+export function createSubagentAnnounceHandoffOptions(
+  params: AnnounceToolOptions & {
+    targetSessionKey: string;
+    targetSessionId: string;
+    provider: string;
+    model: string;
+  },
+): Partial<AgentCommandOpts> {
   const { trustedInternalHandoff, ...handoff } = createCompletionHandoff({
     sourceSessionKey: CHILD_SESSION_KEY,
     sourceSessionId: "subagent-announce-child",
@@ -78,19 +82,13 @@ export function createSubagentAnnounceHandoffOptions(params: {
   };
 }
 
-export type SubagentAnnounceDeliveryCase = {
+export type SubagentAnnounceDeliveryCase = AnnounceToolOptions & {
   name: string;
-  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   disableMessageTool: boolean;
-  requireExplicitMessageTarget?: boolean;
-  modelRun?: boolean;
-  promptMode?: "none";
   inheritedToolAllow?: readonly string[];
   inheritedToolDeny?: readonly string[];
-  runtimeToolsAllow?: string[];
   operatorTools?: OpenClawConfig["tools"];
   sandboxMode?: "off" | "non-main" | "all";
-  trustedInternalHandoff?: boolean;
   expectedDisableTools: boolean;
   expectedToolsAllow?: readonly string[];
 };
@@ -109,12 +107,17 @@ function deliveryCase(
     ...overrides,
   };
 }
-const SUBAGENT_ANNOUNCE_DELIVERY_CASES = [
-  deliveryCase("automatic source replies", { sourceReplyDeliveryMode: "automatic" }),
-  deliveryCase("message-tool-only source replies", { requireExplicitMessageTarget: true }, true),
+const messageOnly = deliveryCase("message-tool-only", { requireExplicitMessageTarget: true }, true);
+export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES = [
+  deliveryCase("automatic source replies", {
+    sourceReplyDeliveryMode: "automatic",
+    expectedDisableTools: false,
+    expectedToolsAllow: REQUESTER_TOOLS,
+  }),
+  messageOnly,
   deliveryCase("an explicitly disabled message tool", { disableMessageTool: true }),
   deliveryCase(
-    "a coding profile with a source-bound message grant",
+    "coding-profile source-bound grant",
     {
       inheritedToolAllow: ["read", "exec", "sessions_spawn"],
       operatorTools: { profile: "coding" },
@@ -122,10 +125,8 @@ const SUBAGENT_ANNOUNCE_DELIVERY_CASES = [
     true,
   ),
   deliveryCase(
-    "an operator allowlist with a source-bound message grant",
-    {
-      operatorTools: { allow: ["read", "exec"] },
-    },
+    "operator-allowlist source-bound grant",
+    { operatorTools: { allow: ["read", "exec"] } },
     true,
   ),
   deliveryCase("an inherited explicit message deny", {
@@ -157,26 +158,9 @@ const SUBAGENT_ANNOUNCE_DELIVERY_CASES = [
   deliveryCase("an untrusted completion handoff", { trustedInternalHandoff: false }),
 ];
 
-// Only automatic Claude CLI completion replies restore requester tools.
-export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES = SUBAGENT_ANNOUNCE_DELIVERY_CASES.map(
-  (testCase) =>
-    testCase.sourceReplyDeliveryMode === "automatic" && testCase.trustedInternalHandoff !== false
-      ? {
-          ...testCase,
-          expectedDisableTools: false,
-          expectedToolsAllow: testCase.runtimeToolsAllow ?? REQUESTER_TOOLS,
-        }
-      : testCase,
-);
-
-export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES = SUBAGENT_ANNOUNCE_DELIVERY_CASES.filter(
-  (testCase) => testCase.name === "message-tool-only source replies",
-).map((testCase) =>
-  Object.assign({}, testCase, {
-    expectedDisableTools: false,
-    expectedToolsAllow: REQUESTER_TOOLS,
-  }),
-);
+export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES = [
+  { ...messageOnly, expectedToolsAllow: REQUESTER_TOOLS },
+];
 
 export function createSubagentAnnounceSessionStore(
   requesterSessionKey: string,
@@ -199,7 +183,6 @@ export function createSubagentAnnounceSessionStore(
   };
 }
 
-// Required public outputs and optional result intake share both command runtimes.
 export const INTER_SESSION_REPLY_POLICY_CASES = [
   ["agent:main:subagent:reply-required", "discord"],
   ["agent:main:subagent:optional-settle", "discord", true, true, "subagent_settle", "optional"],

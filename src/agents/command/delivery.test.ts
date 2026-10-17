@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
-import type {
-  ChannelOutboundAdapter,
-  ChannelThreadingAdapter,
-} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -23,47 +19,33 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: outboundMock,
 }));
 
-const createReplyMediaPathNormalizerMock = vi.hoisted(() =>
-  vi.fn<typeof createReplyMediaPathNormalizer>(),
-);
+const normalizerMock = vi.hoisted(() => vi.fn<typeof createReplyMediaPathNormalizer>());
 vi.mock("../../auto-reply/reply/reply-media-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../auto-reply/reply/reply-media-paths.js")>()),
-  createReplyMediaPathNormalizer: createReplyMediaPathNormalizerMock,
+  createReplyMediaPathNormalizer: normalizerMock,
 }));
 
 type DeliverParams = Parameters<typeof deliverAgentCommandResult>[0];
 type RunResult = DeliverParams["result"];
-type ResolveReplyTransportParams = Parameters<
-  NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>
->[0];
-const slackOutboundForTest: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async ({ to, text }) => ({
-    channel: "slack",
-    messageId: `${to}:${text}`,
-  }),
-};
-
 const emptyRegistry = createTestRegistry([]);
 const slackPluginForTest = createOutboundTestPlugin({
   id: "slack",
-  outbound: slackOutboundForTest,
-});
-const slackRegistry = createTestRegistry([
-  {
-    pluginId: "slack",
-    source: "test",
-    plugin: {
-      ...slackPluginForTest,
-      threading: {
-        resolveReplyTransport: ({ threadId }: ResolveReplyTransportParams) => ({
-          replyToId: threadId == null ? undefined : String(threadId),
-          threadId: null,
-        }),
-      },
-    },
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async ({ to, text }) => ({ channel: "slack", messageId: `${to}:${text}` }),
   },
-]);
+});
+function setSlackPlugin(overrides: Partial<typeof slackPluginForTest>) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: { ...slackPluginForTest, ...overrides },
+      },
+    ]),
+  );
+}
 
 function createResult(overrides: Partial<RunResult> = {}): RunResult {
   return { ...overrides, meta: { durationMs: 1, ...overrides.meta } };
@@ -125,6 +107,12 @@ function deliverForTest({
   workspace,
   ...params
 }: DeliveryFixture) {
+  const runResult: RunResult = { ...createResult(), ...result };
+  if (sentTarget) {
+    runResult.messagingToolSentTargets = [
+      { tool: "message", provider: "slack", to: "channel:C123", ...sentTarget },
+    ];
+  }
   return deliverAgentCommandResult({
     cfg: (workspace
       ? { agents: { entries: { tester: { workspace: "/tmp/agent-workspace" } } } }
@@ -139,23 +127,12 @@ function deliverForTest({
     } as AgentCommandOpts,
     outboundSession: undefined,
     sessionEntry: undefined,
-    result: {
-      ...createResult(),
-      ...result,
-      ...(sentTarget
-        ? {
-            messagingToolSentTargets: [
-              { tool: "message", provider: "slack", to: "channel:C123", ...sentTarget },
-            ],
-          }
-        : {}),
-    } as RunResult,
+    result: runResult,
     ...params,
   } as DeliverParams);
 }
 
 function outboundArgs() {
-  expect(outboundMock).toHaveBeenCalled();
   return outboundMock.mock.lastCall![0];
 }
 
@@ -185,40 +162,31 @@ type JsonOutput = { payloads: unknown[]; meta?: unknown; deliveryStatus?: Delive
 async function deliverMediaReplyForTest(
   outboundSession: DeliverParams["outboundSession"],
   optsOverrides: Partial<AgentCommandOpts> = {},
+  overrides: Partial<DeliveryFixture> = {},
 ) {
   return await deliverForTest({
     workspace: true,
     opts: { message: "go", replyTo: "#general", ...optsOverrides },
     outboundSession,
     payloads: [mediaPayload],
+    ...overrides,
   });
-}
-
-function useReplyTransform(
-  transformReplyPayload: NonNullable<typeof slackPluginForTest.messaging>["transformReplyPayload"],
-) {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: { ...slackPluginForTest, messaging: { transformReplyPayload } },
-      },
-    ]),
-  );
 }
 
 describe("deliverAgentCommandResult payload normalization", () => {
   beforeEach(() => {
-    setActivePluginRegistry(slackRegistry);
+    setSlackPlugin({
+      threading: {
+        resolveReplyTransport: ({ threadId }) => ({
+          replyToId: threadId == null ? undefined : String(threadId),
+          threadId: null,
+        }),
+      },
+    });
     outboundMock.mockReset();
     outboundMock.mockResolvedValue([]);
-    createReplyMediaPathNormalizerMock.mockReset();
-    createReplyMediaPathNormalizerMock.mockImplementation(
-      (..._args: unknown[]) =>
-        (payload: ReplyPayload) =>
-          Promise.resolve(payload),
-    );
+    normalizerMock.mockReset();
+    normalizerMock.mockImplementation(() => async (payload) => payload);
   });
 
   afterEach(() => {
@@ -234,8 +202,8 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
   it("rechecks delivery ownership after asynchronous payload preparation", async () => {
     let deliveryCurrent = true;
-    createReplyMediaPathNormalizerMock.mockImplementationOnce(
-      (..._args: unknown[]) =>
+    normalizerMock.mockImplementationOnce(
+      () =>
         async (payload: ReplyPayload): Promise<ReplyPayload> => {
           deliveryCurrent = false;
           return payload;
@@ -272,38 +240,35 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(deliverySignal?.aborted).toBe(false);
   });
 
-  it.each([false, true])(
-    "restart preserves delivery only after durable intent=%s",
-    async (hasIntent) => {
-      const controller = new AbortController();
-      let deliverySignal: AbortSignal | undefined;
-      outboundMock.mockImplementationOnce(async (request) => {
-        deliverySignal = request.abortSignal;
-        if (hasIntent) {
-          request.onDeliveryIntent?.({
-            id: "intent-after-restart",
-            channel: "discord",
-            to: "channel:123",
-            queuePolicy: "required",
-          });
-        }
-        controller.abort(createAgentRunRestartAbortError());
-        expect(deliverySignal?.aborted).toBe(!hasIntent);
-        if (!hasIntent) {
-          throw deliverySignal?.reason;
-        }
-        return [{ channel: "discord", messageId: "sent-after-restart" }];
-      });
-      const delivery = deliverMediaReplyForTest(undefined, { abortSignal: controller.signal });
+  it.each([false, true])("restart after durable intent=%s", async (hasIntent) => {
+    const controller = new AbortController();
+    let deliverySignal: AbortSignal | undefined;
+    outboundMock.mockImplementationOnce(async (request) => {
+      deliverySignal = request.abortSignal;
       if (hasIntent) {
-        expect((await delivery).deliverySucceeded).toBe(true);
-        expect(deliverySignal?.aborted).toBe(false);
-      } else {
-        await expect(delivery).rejects.toThrow("agent run aborted for restart");
-        expect(deliverySignal?.reason).toBe(controller.signal.reason);
+        request.onDeliveryIntent?.({
+          id: "intent-after-restart",
+          channel: "discord",
+          to: "channel:123",
+          queuePolicy: "required",
+        });
       }
-    },
-  );
+      controller.abort(createAgentRunRestartAbortError());
+      expect(deliverySignal?.aborted).toBe(!hasIntent);
+      if (!hasIntent) {
+        throw deliverySignal?.reason;
+      }
+      return [{ channel: "discord", messageId: "sent-after-restart" }];
+    });
+    const delivery = deliverMediaReplyForTest(undefined, { abortSignal: controller.signal });
+    if (hasIntent) {
+      expect((await delivery).deliverySucceeded).toBe(true);
+      expect(deliverySignal?.aborted).toBe(false);
+    } else {
+      await expect(delivery).rejects.toThrow("agent run aborted for restart");
+      expect(deliverySignal?.reason).toBe(controller.signal.reason);
+    }
+  });
 
   it("carries the session key identity through durable final delivery", async () => {
     await deliverForTest({
@@ -353,35 +318,25 @@ describe("deliverAgentCommandResult payload normalization", () => {
       mediaUrl: "/tmp/agent-workspace/out/photo.png",
       mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
     }));
-    createReplyMediaPathNormalizerMock.mockReturnValue(normalizerFn);
-    outboundMock.mockResolvedValue([]);
+    normalizerMock.mockReturnValue(normalizerFn);
 
-    await deliverForTest({
-      workspace: true,
-      opts: {
-        message: "go",
-        replyTo: "#general",
-        replyAccountId: "workspace-1",
-        threadId: "thread-1",
-        runId: "run-1",
+    await deliverMediaReplyForTest(
+      mediaSession,
+      { replyAccountId: "workspace-1", threadId: "thread-1", runId: "run-1" },
+      {
+        sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+        payloads: [{ ...mediaPayload, text: "✅ New session started.", isStatusNotice: true }],
       },
-      outboundSession: mediaSession,
-      sessionEntry: { sessionId: "session-1", updatedAt: 1 },
-      payloads: [
-        { text: "✅ New session started.", isStatusNotice: true, mediaUrls: ["./out/photo.png"] },
-      ],
-    });
+    );
 
-    expect(createReplyMediaPathNormalizerMock).toHaveBeenCalled();
-    expect(createReplyMediaPathNormalizerMock.mock.lastCall![0]).toMatchObject({
+    expect(normalizerMock.mock.lastCall![0]).toMatchObject({
       sessionKey: mediaSession.key,
       agentId: "tester",
       workspaceDir: "/tmp/agent-workspace",
       messageProvider: "slack",
     });
 
-    const normalizedInput = normalizerFn.mock.calls[0]?.[0];
-    expect(normalizedInput?.mediaUrls).toStrictEqual(["./out/photo.png"]);
+    expect(normalizerFn.mock.calls[0]?.[0].mediaUrls).toStrictEqual(["./out/photo.png"]);
     expect(outboundMock).toHaveBeenCalledTimes(1);
     const deliverArgs = outboundArgs();
     expect(deliverArgs.payloads[0]?.isStatusNotice).toBe(true);
@@ -440,51 +395,43 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(delivered.deliveryStatus).toBeUndefined();
   });
 
-  it.each(["session-1", "session-2"])(
-    "refreshes final routing only for the same logical session: %s",
-    async (sessionId) => {
-      outboundMock.mockResolvedValue(sentMessage);
-      const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
-        sessionId,
-        updatedAt: 2,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "slack", to: "#fresh", accountId: "workspace-1" },
-        }),
-      }));
-      const delivered = await deliverForTest({
-        workspace: true,
-        omitReplyTarget: true,
-        opts: { bestEffortDeliver: true, sessionKey: "agent:tester:main" },
-        outboundSession: { key: "agent:tester:main", agentId: "tester" },
-        sessionEntry: { sessionId: "session-1", updatedAt: 1 },
-        expectedSessionIdForFreshDelivery: "session-1",
-        resolveFreshSessionEntryForDelivery,
-        payloads: [{ text: "final answer" }],
+  it.each(["session-1", "session-2"])("refreshes matching session: %s", async (sessionId) => {
+    outboundMock.mockResolvedValue(sentMessage);
+    const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
+      sessionId,
+      updatedAt: 2,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "slack", to: "#fresh", accountId: "workspace-1" },
+      }),
+    }));
+    const delivered = await deliverForTest({
+      workspace: true,
+      omitReplyTarget: true,
+      opts: { bestEffortDeliver: true, sessionKey: "agent:tester:main" },
+      outboundSession: { key: "agent:tester:main", agentId: "tester" },
+      sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+      expectedSessionIdForFreshDelivery: "session-1",
+      resolveFreshSessionEntryForDelivery,
+      payloads: [{ text: "final answer" }],
+    });
+    expect(resolveFreshSessionEntryForDelivery).toHaveBeenCalledOnce();
+    const refreshed = sessionId === "session-1";
+    expect(outboundMock).toHaveBeenCalledTimes(Number(refreshed));
+    expect(delivered.deliverySucceeded).toBe(refreshed);
+    expectStatus(
+      delivered,
+      refreshed
+        ? { status: "sent", resultCount: 1 }
+        : { attempted: false, status: "failed", reason: "channel_resolved_to_internal" },
+    );
+    if (refreshed) {
+      expect(outboundArgs()).toMatchObject({
+        channel: "slack",
+        to: "#fresh",
+        accountId: "workspace-1",
       });
-      expect(resolveFreshSessionEntryForDelivery).toHaveBeenCalledOnce();
-      if (sessionId === "session-1") {
-        expect(outboundMock).toHaveBeenCalledOnce();
-        expect(outboundArgs()).toMatchObject({
-          channel: "slack",
-          to: "#fresh",
-          accountId: "workspace-1",
-        });
-        expect(delivered.deliverySucceeded).toBe(true);
-        expectStatus(delivered, {
-          status: "sent",
-          resultCount: 1,
-        });
-      } else {
-        expect(outboundMock).not.toHaveBeenCalled();
-        expect(delivered.deliverySucceeded).toBe(false);
-        expectStatus(delivered, {
-          attempted: false,
-          status: "failed",
-          reason: "channel_resolved_to_internal",
-        });
-      }
-    },
-  );
+    }
+  });
 
   it.each([false, true])("reports best-effort delivery failure (partial=%s)", async (partial) => {
     const message = partial ? "second chunk failed" : "send failed";
@@ -504,13 +451,14 @@ describe("deliverAgentCommandResult payload normalization", () => {
     });
 
     const runtime = { log: vi.fn(), error: vi.fn() };
-    const delivered = await deliverForTest({
-      workspace: true,
-      runtime: runtime as never,
-      opts: { message: "go", bestEffortDeliver: true, replyTo: "#general" },
-      outboundSession: mediaSession,
-      payloads: partial ? [mediaPayload] : [{ text: "here you go" }],
-    });
+    const delivered = await deliverMediaReplyForTest(
+      mediaSession,
+      { bestEffortDeliver: true },
+      {
+        runtime: runtime as never,
+        payloads: partial ? [mediaPayload] : [{ text: "here you go" }],
+      },
+    );
 
     expect(delivered.deliverySucceeded).toBe(false);
     const status = expectStatus(delivered, {
@@ -538,7 +486,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
   });
 
   it.each(["isCommentary", "isStatusNotice"] as const)(
-    "retains %s in native settlement evidence without changing JSON output",
+    "keeps native %s out of JSON",
     async (flag) => {
       const onDeliveryResult = vi.fn();
       const delivered = await deliverForTest({
@@ -604,8 +552,8 @@ describe("deliverAgentCommandResult payload normalization", () => {
   });
 
   it("dedupes delivered file media before normalization can add a failure warning", async () => {
-    createReplyMediaPathNormalizerMock.mockImplementationOnce(
-      (..._args: unknown[]) =>
+    normalizerMock.mockImplementationOnce(
+      () =>
         async (payload: ReplyPayload): Promise<ReplyPayload> => ({
           ...payload,
           text: `${payload.text ?? ""}\n⚠️ Media failed.`,
@@ -637,7 +585,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       reason: "no_visible_payload",
     });
     expect(delivered.messagingToolSentMediaUrls).toEqual(["file:///tmp/generated-image.png"]);
-    expect(createReplyMediaPathNormalizerMock).not.toHaveBeenCalled();
+    expect(normalizerMock).not.toHaveBeenCalled();
     expect(outboundMock).not.toHaveBeenCalled();
   });
 
@@ -675,39 +623,37 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expectOutboundPayloads({ text: "", location });
   });
 
-  it.each(["default", "other"])(
-    "does not dedupe cross-account evidence for %s",
-    async (account) => {
-      outboundMock.mockResolvedValue(sentMessage);
-      const delivered = await deliverForTest({
-        opts:
-          account === "default"
-            ? {}
-            : {
-                replyAccountId: account,
-                runContext: {
-                  messageChannel: "slack",
-                  currentChannelId: "channel:C123",
-                  accountId: "work",
-                },
+  it.each(["default", "other"])("cross-account evidence is not deduped: %s", async (account) => {
+    outboundMock.mockResolvedValue(sentMessage);
+    const delivered = await deliverForTest({
+      opts:
+        account === "default"
+          ? {}
+          : {
+              replyAccountId: account,
+              runContext: {
+                messageChannel: "slack",
+                currentChannelId: "channel:C123",
+                accountId: "work",
               },
-        payloads: [readyPayload],
-        sentTarget: { text: "Ready", ...(account === "default" ? { accountId: "work" } : {}) },
-      });
-      expect(delivered.deliverySucceeded).toBe(true);
-      expect(outboundMock).toHaveBeenCalledTimes(1);
-      expect(outboundArgs().accountId).toBe(account);
-    },
-  );
+            },
+      payloads: [readyPayload],
+      sentTarget: { text: "Ready", ...(account === "default" ? { accountId: "work" } : {}) },
+    });
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(outboundMock).toHaveBeenCalledTimes(1);
+    expect(outboundArgs().accountId).toBe(account);
+  });
 
   it("surfaces hook cancellation as a suppressed terminal deliveryStatus", async () => {
+    const outcome = {
+      index: 0,
+      status: "suppressed" as const,
+      reason: "cancelled_by_message_sending_hook",
+      hookEffect: { cancelReason: "owned-by-other-agent" },
+    };
     outboundMock.mockImplementationOnce(async (params) => {
-      params.onPayloadDeliveryOutcome?.({
-        index: 0,
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-        hookEffect: { cancelReason: "owned-by-other-agent" },
-      });
+      params.onPayloadDeliveryOutcome?.(structuredClone(outcome));
       return [];
     });
 
@@ -718,108 +664,96 @@ describe("deliverAgentCommandResult payload normalization", () => {
       status: "suppressed",
       reason: "cancelled_by_message_sending_hook",
     });
-    expect(status.payloadOutcomes).toEqual([
-      {
-        index: 0,
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-        hookEffect: { cancelReason: "owned-by-other-agent" },
-      },
-    ]);
+    expect(status.payloadOutcomes).toEqual([outcome]);
   });
 
-  it.each([false, true])(
-    "records transform veto and delivers later accepted payload=%s",
-    async (accepted) => {
-      useReplyTransform(
-        vi.fn(({ payload }: { payload: ReplyPayload }) =>
+  it.each([false, true])("transform veto with accepted payload=%s", async (accepted) => {
+    setSlackPlugin({
+      messaging: {
+        transformReplyPayload: vi.fn(({ payload }) =>
           payload.text === "private reply" ? null : payload,
         ),
-      );
-      outboundMock.mockResolvedValue(sentMessage);
-      const delivered = await deliverForTest({
-        payloads: [{ text: "private reply" }, ...(accepted ? [{ text: "public reply" }] : [])],
+      },
+    });
+    outboundMock.mockResolvedValue(sentMessage);
+    const delivered = await deliverForTest({
+      payloads: [{ text: "private reply" }, ...(accepted ? [{ text: "public reply" }] : [])],
+    });
+    expect(delivered.deliverySucceeded).toBe(true);
+    if (accepted) {
+      expectOutboundPayloads({ text: "public reply" });
+    } else {
+      expect(delivered.payloads).toEqual([]);
+      expectStatus(delivered, {
+        attempted: false,
+        status: "suppressed",
+        reason: "channel_transform",
       });
-      expect(delivered.deliverySucceeded).toBe(true);
-      if (accepted) {
-        expectOutboundPayloads({ text: "public reply" });
-      } else {
-        expect(delivered.payloads).toEqual([]);
-        expectStatus(delivered, {
-          attempted: false,
-          status: "suppressed",
-          reason: "channel_transform",
-        });
-        expect(outboundMock).not.toHaveBeenCalled();
-      }
-    },
-  );
+      expect(outboundMock).not.toHaveBeenCalled();
+    }
+  });
 
-  it.each([false, true])(
-    "emits JSON deliveryStatus before strict failure (preflight=%s)",
-    async (preflight) => {
-      const error = preflight ? 'Unknown channel "not-installed"' : "Slack API timeout";
-      if (!preflight) {
-        outboundMock.mockRejectedValueOnce(new Error(error));
-      }
-      const events: string[] = [];
-      const onDeliveryResult = vi.fn(() => events.push("captured"));
-      const runtime = {
-        ...createRuntime(),
-        writeJson: vi.fn((_value: JsonOutput) => events.push("json")),
-      };
-      await expect(
-        deliverForTest({
-          workspace: true,
+  it.each([false, true])("JSON precedes strict failure (preflight=%s)", async (preflight) => {
+    const error = preflight ? 'Unknown channel "not-installed"' : "Slack API timeout";
+    if (!preflight) {
+      outboundMock.mockRejectedValueOnce(new Error(error));
+    }
+    const events: string[] = [];
+    const onDeliveryResult = vi.fn(() => events.push("captured"));
+    const runtime = {
+      ...createRuntime(),
+      writeJson: vi.fn((_value: JsonOutput) => events.push("json")),
+    };
+    await expect(
+      deliverMediaReplyForTest(
+        {
+          ...mediaSession,
+          ...(preflight ? { key: "agent:tester:not-installed:direct:alice" } : {}),
+        },
+        {
+          json: true,
+          bestEffortDeliver: false,
+          replyChannel: preflight ? "not-installed" : "slack",
+        },
+        {
           runtime: runtime as never,
-          opts: {
-            message: "go",
-            json: true,
-            bestEffortDeliver: false,
-            replyTo: "#general",
-            replyChannel: preflight ? "not-installed" : "slack",
-          },
-          outboundSession: {
-            ...mediaSession,
-            ...(preflight ? { key: "agent:tester:not-installed:direct:alice" } : {}),
-          },
           payloads: preflight ? [mediaPayload] : [{ text: "here you go" }],
           onDeliveryResult,
-        }),
-      ).rejects.toThrow(error);
-      expect(runtime.writeJson).toHaveBeenCalledOnce();
-      const json = runtime.writeJson.mock.calls[0]![0] as JsonOutput;
-      expect(Object.keys(json)).toEqual(["payloads", "meta", "deliveryStatus"]);
-      expect(json).toMatchObject({
-        payloads: [
-          {
-            text: "here you go",
-            mediaUrl: null,
-            ...(preflight ? { mediaUrls: mediaPayload.mediaUrls } : {}),
-          },
-        ],
-        meta: { durationMs: 1 },
-      });
-      expect(events).toEqual(["json", "captured"]);
-      expect(onDeliveryResult).toHaveBeenCalledWith(
-        expect.objectContaining({ deliveryStatus: expect.objectContaining({ status: "failed" }) }),
-        expect.any(Array),
-      );
-      const expectedStatus = {
-        requested: true,
-        attempted: !preflight,
-        status: "failed",
-        succeeded: false,
-        error: true,
-      };
-      if (preflight) {
-        expect(outboundMock).not.toHaveBeenCalled();
-        expect(createReplyMediaPathNormalizerMock).not.toHaveBeenCalled();
-        expect(json.deliveryStatus).toEqual({ ...expectedStatus, reason: "unknown_channel" });
-      } else {
-        expect(json.deliveryStatus).toMatchObject(expectedStatus);
-        expect(String(json.deliveryStatus?.errorMessage)).toContain(error);
-      }
-    },
-  );
+        },
+      ),
+    ).rejects.toThrow(error);
+    expect(runtime.writeJson).toHaveBeenCalledOnce();
+    const json = runtime.writeJson.mock.calls[0]![0] as JsonOutput;
+    expect(Object.keys(json)).toEqual(["payloads", "meta", "deliveryStatus"]);
+    expect(json).toMatchObject({
+      payloads: [
+        {
+          text: "here you go",
+          mediaUrl: null,
+          ...(preflight ? { mediaUrls: mediaPayload.mediaUrls } : {}),
+        },
+      ],
+      meta: { durationMs: 1 },
+    });
+    expect(events).toEqual(["json", "captured"]);
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryStatus: expect.objectContaining({ status: "failed" }) }),
+      expect.any(Array),
+    );
+    const expectedStatus = {
+      requested: true,
+      attempted: !preflight,
+      status: "failed",
+      succeeded: false,
+      error: true,
+    };
+    if (preflight) {
+      expect(outboundMock).not.toHaveBeenCalled();
+      expect(normalizerMock).not.toHaveBeenCalled();
+      expect(json.deliveryStatus).toEqual({ ...expectedStatus, reason: "unknown_channel" });
+    } else {
+      expect(json.deliveryStatus).toMatchObject(expectedStatus);
+      expect(String(json.deliveryStatus?.errorMessage)).toContain(error);
+    }
+  });
 });

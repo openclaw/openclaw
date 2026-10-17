@@ -17,7 +17,6 @@ import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
-import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { createCompletionHandoff } from "./attempt-execution.announce.test-support.js";
 import type { runAgentAttempt } from "./attempt-execution.js";
 
@@ -27,7 +26,7 @@ export function resetCliAttemptFixtureDatabases(suiteRoot: string): void {
       continue;
     }
     runOpenClawAgentWriteTransaction(
-      (fixture) => {
+      (fixture) =>
         fixture.db.exec(`
           DELETE FROM session_transcript_fts;
           DELETE FROM session_transcript_fts_rows;
@@ -36,44 +35,30 @@ export function resetCliAttemptFixtureDatabases(suiteRoot: string): void {
           DELETE FROM auth_profile_store;
           DELETE FROM auth_profile_state;
           DELETE FROM cache_entries;
-        `);
-      },
+        `),
       database,
       { operationLabel: "test.attempt-execution.reset" },
     );
   }
 }
 
-/** Model capability and channel discovery fixtures for CLI fallback tests. */
 export function createCliImageCapabilityPlugins(model: string) {
   // MCP still builds message schemas before applying the read-only grant.
   // Keep this capability test independent of bundled Discord action discovery.
-  const pluginRegistry = createTestRegistry([
-    {
-      pluginId: "discord",
-      source: "test",
-      plugin: {
-        ...createChannelTestPluginBase({ id: "discord" }),
-        actions: { describeMessageTool: () => null },
-      } satisfies ChannelPlugin,
-    },
-  ]);
-  const metadataSnapshot = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: "anthropic",
-        providers: ["anthropic"],
-        cliBackends: ["claude-cli"],
-        modelCatalog: {
-          providers: {
-            anthropic: {
-              models: [{ id: model, name: model, reasoning: true, input: ["text", "image"] }],
-            },
-          },
-        },
-      },
-    ],
-  });
+  const plugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id: "discord" }),
+    actions: { describeMessageTool: () => null },
+  };
+  const pluginRegistry = createTestRegistry([{ pluginId: "discord", source: "test", plugin }]);
+  const input: ("text" | "image")[] = ["text", "image"];
+  const models = [{ id: model, name: model, reasoning: true, input }];
+  const provider = {
+    id: "anthropic",
+    providers: ["anthropic"],
+    cliBackends: ["claude-cli"],
+    modelCatalog: { providers: { anthropic: { models } } },
+  };
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [provider] });
   return { metadataSnapshot, pluginRegistry };
 }
 
@@ -83,7 +68,6 @@ export type RunAgentAttemptOverrides = Omit<
   "opts" | "runContext"
 > & {
   agentDir: RunAgentAttemptParams["agentDir"];
-  modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   sessionEntry: NonNullable<RunAgentAttemptParams["sessionEntry"]>;
   sessionKey: NonNullable<RunAgentAttemptParams["sessionKey"]>;
   workspaceDir: RunAgentAttemptParams["workspaceDir"];
@@ -98,12 +82,6 @@ export function makeRunAgentAttemptParams(
   const model = overrides.modelOverride ?? "gpt-5.4";
   const isFallbackRetry = overrides.isFallbackRetry ?? false;
   const runId = overrides.runId ?? `run-${overrides.sessionEntry.sessionId}`;
-  const modelRoutingProvenance: ModelFallbackAttemptProvenance =
-    overrides.modelRoutingProvenance ?? {
-      requestedProvider: overrides.originalProvider ?? provider,
-      requestedModel: model,
-      stage: isFallbackRetry ? "fallback" : "initial",
-    };
   return {
     providerOverride: provider,
     originalProvider: provider,
@@ -125,7 +103,11 @@ export function makeRunAgentAttemptParams(
     authProfileProvider: provider,
     sessionHasHistory: false,
     ...overrides,
-    modelRoutingProvenance,
+    modelRoutingProvenance: overrides.modelRoutingProvenance ?? {
+      requestedProvider: overrides.originalProvider ?? provider,
+      requestedModel: model,
+      stage: isFallbackRetry ? "fallback" : "initial",
+    },
     pluginGeneration: overrides.pluginGeneration,
     preparedRunAdmission: overrides.preparedRunAdmission ?? createTestPreparedRunAdmission(runId),
     lifecycleGeneration: overrides.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
@@ -173,10 +155,7 @@ export function saveTestAuthProfiles(
   });
 }
 
-export function makeSessionEntry(
-  sessionId: string,
-  overrides: Partial<SessionEntry> = {},
-): SessionEntry {
+export function makeSessionEntry(sessionId: string, overrides: Partial<SessionEntry> = {}) {
   return { sessionId, updatedAt: Date.now(), ...overrides };
 }
 
