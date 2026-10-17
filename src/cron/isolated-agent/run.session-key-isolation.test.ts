@@ -45,9 +45,8 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
   it("isolates run identities while retaining job-level prompt-cache affinity", async () => {
     const baseKey = "agent:default:cron:daily-monitor";
-    for (const sessionId of ["run-a", "run-b"]) {
-      h.resolveCronSessionMock.mockReturnValueOnce(makeSession({ sessionId }));
-    }
+    const firstSession = makeSession({ sessionId: "run-a" });
+    h.resolveCronSessionMock.mockReturnValueOnce(firstSession);
     h.mockRunCronFallbackPassthrough();
     h.removeCronRunContinuationSessionIfIdleMock.mockImplementation(async (sessionKey) => {
       expect(sessionKey).toMatch(/:run:run-[ab]$/u);
@@ -58,6 +57,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       { sessionKey: "cron:daily-monitor" },
     );
     const first = await runAgent(params);
+    h.resolveCronSessionMock.mockReturnValueOnce(
+      makeSession({ sessionId: "run-b" }, { initialSessionEntry: firstSession.sessionEntry }),
+    );
     const second = await runAgent(params);
     expect([first.status, second.status]).toEqual(["ok", "ok"]);
     expect([first.sessionKey, second.sessionKey]).toEqual([

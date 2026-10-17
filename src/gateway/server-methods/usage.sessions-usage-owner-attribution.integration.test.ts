@@ -10,11 +10,11 @@ import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/co
 import {
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
-  patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
   projectionLane,
@@ -276,12 +276,11 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
         cronSession,
         agentSessionKey: sessionKey,
         workspaceDir: state.workspaceDir,
-        persistSessionEntry: async ({ storePath, fallbackEntry, update }) => {
-          await patchSessionEntryCore(
-            { ...scope, storePath },
-            (_entry, context) => update(context.existingEntry),
-            { fallbackEntry, replaceEntry: true },
-          );
+        persistSessionEntry: async ({ storePath, operation }) => {
+          return await applySessionEntryOperation({ ...scope, storePath }, operation, {
+            fallbackEntry: operation.next,
+            replaceEntry: true,
+          });
         },
       })();
       const sessionId = cronSession.sessionEntry.sessionId;

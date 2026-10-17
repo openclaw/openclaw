@@ -172,7 +172,7 @@ it("creates the full initial cron session in one owner command", async () => {
       updatedAt: 20,
       label: "Cron: initial state",
       lifecycleRevision: "admitted",
-      status: "running",
+      thinkingLevel: "high",
       modelProvider: "openai",
       model: "gpt-5.4",
     };
@@ -191,7 +191,7 @@ it("creates the full initial cron session in one owner command", async () => {
       updatedAt: 20,
       label: "Cron: initial state",
       lifecycleRevision: "admitted",
-      status: "running",
+      thinkingLevel: "high",
       modelProvider: "openai",
       model: "gpt-5.4",
       createdVia: "cron",

@@ -2441,6 +2441,7 @@ src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
 src/config/sessions/session-entry-lineage.ts
 src/config/sessions/session-entry-patch-operation.ts
+src/config/sessions/session-snapshot-merge.ts
 src/config/sessions/session-entry-projection.ts
 src/config/sessions/session-entry-provenance.ts
 src/config/sessions/session-entry-public-patch.ts
