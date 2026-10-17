@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 105">
+    <g class="lob-antennae" stroke="#4a7dfc" stroke-width="4" stroke-linecap="round" fill="none">
+      <path d="M46 14 Q38 4 31 7" />
+      <path d="M74 14 Q82 4 89 7" />
+    </g>
+  <path d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z" fill="#7fa4ff" /><path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="#7fa4ff" /><path class="lob-standard-dome" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" fill="#4a7dfc" /><ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1"/><circle cx="45" cy="32" r="5.5" fill="#0a1014"/><circle cx="75" cy="32" r="5.5" fill="#0a1014"/><circle cx="46.5" cy="30.5" r="2.2" fill="#00e5cc"/><circle cx="76.5" cy="30.5" r="2.2" fill="#00e5cc"/></svg>

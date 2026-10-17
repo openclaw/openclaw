@@ -474,6 +474,7 @@ class GatewaySession(
     val tls: GatewayTlsParams?,
     val bootstrapHandoff: GatewayBootstrapHandoff?,
     val onReady: (() -> Unit)?,
+    val bootstrapExpiresAtMs: Long?,
   ) {
     var recoveringStoredBootstrap = false
 
@@ -486,7 +487,9 @@ class GatewaySession(
     @Volatile var reconnectPausedForAuthFailure = false
 
     var attempt = 0
+    var basicNetworkFailures = 0
     var cleanupDeadline: Job? = null
+    var proxyPairingDeadline: Job? = null
   }
 
   private val lifecycleLock = Any()
@@ -518,12 +521,14 @@ class GatewaySession(
     tls: GatewayTlsParams? = null,
     bootstrapHandoff: GatewayBootstrapHandoff? = null,
     onReady: (() -> Unit)? = null,
+    bootstrapExpiresAtMs: Long? = null,
   ) {
     val connectionToClose: Connection?
     synchronized(notificationLock) {
-      val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff, onReady)
+      val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff, onReady, bootstrapExpiresAtMs)
       synchronized(lifecycleLock) {
         desired?.cleanupDeadline?.cancel()
+        desired?.proxyPairingDeadline?.cancel()
         desired = target
         connectionToClose = currentConnection
         connectionToClose?.retire()
@@ -569,6 +574,7 @@ class GatewaySession(
     val cleanup: Job
     synchronized(lifecycleLock) {
       desired?.cleanupDeadline?.cancel()
+      desired?.proxyPairingDeadline?.cancel()
       desired = null
       drainReconnectSignals()
       connectionToClose = currentConnection
@@ -614,6 +620,9 @@ class GatewaySession(
       val target = desired ?: return
       if (resumeAuthPaused) {
         target.reconnectPausedForAuthFailure = false
+        target.basicNetworkFailures = 0
+        target.proxyPairingDeadline?.cancel()
+        target.proxyPairingDeadline = null
       } else if (target.reconnectPausedForAuthFailure || currentConnection?.hasOpenTransport() == true) {
         // Another network becoming available does not invalidate an open WebSocket.
         // Its handshake may already have consumed a one-time setup code.
@@ -827,7 +836,7 @@ class GatewaySession(
   ): GatewayLoadedImage? {
     if (!config.automaticallyFetchFavicons) return null
     val conn = readyConnection(expectedEndpointStableId) ?: return null
-    val image = conn.loadSourceFavicon(config, hostname, guardRequestEnqueue(conn, withEnqueue))
+    val image = conn.loadSourceFavicon(hostname, guardRequestEnqueue(conn, withEnqueue))
     return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
   }
 
@@ -1054,7 +1063,31 @@ class GatewaySession(
     private val ingressRetirementStarted = AtomicBoolean(false)
     private val ingressCalls = ConcurrentHashMap.newKeySet<Call>()
     private val ingressAuthorization =
-      if (target.tls == null) null else ingressAuthorizationProvider?.invoke(target.endpoint)
+      if (target.tls == null) {
+        null
+      } else {
+        try {
+          ingressAuthorizationProvider?.invoke(target.endpoint)?.also { authorization ->
+            if (authorization.isProxyBasic && !target.tls.requireSystemTrust) {
+              throw GatewayExternalAuthorizationException(
+                "Proxy login requires a certificate and hostname verified by Android.",
+                "PROXY_AUTH_CONFIGURATION",
+              )
+            }
+          }
+        } catch (_: IllegalArgumentException) {
+          throw GatewayExternalAuthorizationException(
+            "The saved proxy login does not match this destination. Edit its proxy authentication settings.",
+            "PROXY_AUTH_CONFIGURATION",
+          )
+        } catch (_: IllegalStateException) {
+          throw GatewayExternalAuthorizationException(
+            "The saved proxy login does not match this destination. Edit its proxy authentication settings.",
+            "PROXY_AUTH_CONFIGURATION",
+          )
+        }
+      }
+    val hasBasicProxyAuthorization: Boolean get() = ingressAuthorization?.isProxyBasic == true
     private var ingressHeaders: Map<String, String> = emptyMap()
 
     @Volatile
@@ -1064,8 +1097,7 @@ class GatewaySession(
     private var connectRequestId: String? = null
     val tlsConfig: GatewayTlsConfig? = buildGatewayTlsConfig(target.tls)
     private val client: OkHttpClient = buildClient()
-    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
-    private var controlUiReadCredentials: List<String> = emptyList()
+    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader() }
     private val listener = Listener()
     private var socket: WebSocket? = null
 
@@ -1091,7 +1123,7 @@ class GatewaySession(
           } catch (err: Throwable) {
             Log.w(
               loggerTag,
-              "gateway message handling failed: ${err.message ?: err::class.java.simpleName}",
+              "gateway message handling failed: ${if (hasBasicProxyAuthorization) err::class.java.simpleName else err.message ?: err::class.java.simpleName}",
             )
           }
         }
@@ -1214,18 +1246,25 @@ class GatewaySession(
     }
 
     suspend fun loadSourceFavicon(
-      config: GatewaySourcePreviewConfig,
       hostname: String,
       withEnqueue: (() -> Unit) -> Unit,
-    ): GatewayLoadedImage? =
-      sourceFaviconLoader.load(
-        gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
-        basePath = config.basePath,
-        hostname = hostname,
-        headers = mediaTransportHeaders(),
-        credentials = controlUiReadCredentials,
-        withEnqueue = withEnqueue,
-      )
+    ): GatewayLoadedImage? {
+      // Older Gateways without page-preview RPC keep the globe. Never replace
+      // proxy Basic credentials or export Gateway credentials to an image URL.
+      val method = "controlUi.linkPreview"
+      if (method !in advertisedMethods) return null
+      return try {
+        sourceFaviconLoader.load(hostname) { url ->
+          val params = buildJsonObject { put("url", JsonPrimitive(url)) }
+          val response = request(method, params, timeoutMs = 15_000, withEnqueue = withEnqueue)
+          if (response.ok) response.payloadJson?.let(::parseJsonOrNull).asObjectOrNull() else null
+        }
+      } catch (_: GatewayRequestDefinitiveFailure) {
+        null
+      } catch (_: GatewayRequestOutcomeUnknown) {
+        null
+      }
+    }
 
     fun bufferedMedia(
       bytes: ByteArray,
@@ -1355,7 +1394,7 @@ class GatewaySession(
               onError(ErrorShape("UNAVAILABLE", "request timeout"))
               return@launchDrainingWork
             } catch (err: GatewayRequestOutcomeUnknown) {
-              onError(ErrorShape("UNAVAILABLE", err.message ?: "request outcome unknown"))
+              onError(ErrorShape("UNAVAILABLE", if (hasBasicProxyAuthorization) "The Gateway request could not complete." else err.message ?: "request outcome unknown"))
               return@launchDrainingWork
             }
           if (!response.ok) {
@@ -1476,6 +1515,15 @@ class GatewaySession(
       connectError: Throwable,
     ) {
       if (!terminalCallbackClaimed.compareAndSet(false, true)) return
+      val safeMessage =
+        if (hasBasicProxyAuthorization) {
+          when (connectError) {
+            is GatewayExternalAuthorizationException -> "Gateway error: ${connectError.message}"
+            else -> "The Gateway connection ended. Retry to reconnect."
+          }
+        } else {
+          message
+        }
       val shouldNotify = state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED
       retireIngressRequests()
       incomingMessages.close()
@@ -1489,7 +1537,10 @@ class GatewaySession(
             connectChallengeDeferred.completeExceptionally(connectError)
           }
           synchronized(notificationLock) {
-            if (shouldNotify && currentConnection === this@Connection && desired === target) onDisconnected(message)
+            // connectOnce owns failed-handshake diagnostics; a late transport drain must not erase them.
+            if (shouldNotify && !connectDeferred.isCancelled && currentConnection === this@Connection && desired === target) {
+              onDisconnected(safeMessage)
+            }
           }
         } finally {
           connectDeferred.completeExceptionally(connectError)
@@ -1615,7 +1666,24 @@ class GatewaySession(
         t: Throwable,
         response: Response?,
       ) {
-        val error = response?.let { ingressAuthorization?.rejection(it) } ?: t
+        val error =
+          response?.let { ingressAuthorization?.rejection(it) }
+            ?: response
+              ?.takeIf {
+                target.tls != null && it.code == 401 && it.challenges().any { challenge -> challenge.scheme.equals("Basic", ignoreCase = true) }
+              }?.let { GatewayExternalAuthorizationException("This destination requires a proxy username and password.", "PROXY_AUTH_REQUIRED") }
+            ?: if (hasBasicProxyAuthorization && response != null) {
+              GatewayExternalAuthorizationException(
+                if (response.code in 300..399) {
+                  "The proxy redirected the connection. Confirm the Gateway destination before trying again."
+                } else {
+                  "The server rejected the connection before Gateway login. Contact its administrator."
+                },
+                if (response.code in 300..399) "PROXY_REDIRECT" else "HTTP_UPGRADE_REJECTED",
+              )
+            } else {
+              t
+            }
         finishTransport(
           message = "Gateway error: ${error.message ?: error::class.java.simpleName}",
           connectError = error,
@@ -1628,7 +1696,7 @@ class GatewaySession(
         reason: String,
       ) {
         // OkHttp requires the client to acknowledge a peer-initiated close before onClosed fires.
-        webSocket.close(code, reason)
+        webSocket.close(code, if (hasBasicProxyAuthorization) "" else reason)
       }
 
       override fun onClosed(
@@ -1638,7 +1706,7 @@ class GatewaySession(
       ) {
         finishTransport(
           message = "Gateway closed: $reason",
-          connectError = IllegalStateException("Gateway closed: $reason"),
+          connectError = if (hasBasicProxyAuthorization) IOException("The Gateway connection ended.") else IllegalStateException("Gateway closed: $reason"),
         )
       }
     }
@@ -1647,6 +1715,12 @@ class GatewaySession(
       val identity = identityStore.loadOrCreate()
       val storedEntry = deviceAuthStore.loadEntry(target.endpoint.stableId, identity.deviceId, target.options.role)
       val storedToken = storedEntry?.token?.trim()
+      val bootstrapExpired = target.bootstrapExpiresAtMs?.let { it <= System.currentTimeMillis() } == true
+      if (bootstrapExpired && target.bootstrapHandoff?.allowStoredTokenRecovery == true && !storedToken.isNullOrEmpty()) {
+        // A previously paired role can recover an implicitly loaded, expired bootstrap.
+        // Fresh setup input cannot inherit a different account's older role grant.
+        target.recoveringStoredBootstrap = true
+      }
       val selectedAuth =
         selectConnectAuth(
           target = target,
@@ -1656,6 +1730,9 @@ class GatewaySession(
           storedToken = storedToken?.takeIf { it.isNotEmpty() },
           storedScopes = storedEntry?.scopes.orEmpty(),
         )
+      if (selectedAuth.authBootstrapToken != null && bootstrapExpired && target.bootstrapHandoff?.completed != true) {
+        throw GatewayConnectFailure(ErrorShape("SETUP_CODE_EXPIRED", "Setup code has expired. Create a new setup code."))
+      }
       if (selectedAuth.authDeviceToken != null) {
         target.pendingDeviceTokenRetry = false
       }
@@ -1798,11 +1875,6 @@ class GatewaySession(
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
       val authSessionCap = authObj?.get("sessionCap").asStringOrNull()
-      controlUiReadCredentials =
-        listOfNotNull(deviceToken, selectedAuth.authDeviceToken, selectedAuth.authToken, selectedAuth.authPassword)
-          .map(String::trim)
-          .filter(String::isNotEmpty)
-          .distinct()
       val authScopes = authObj?.get("scopes").asStringList()
       val persistedRoles = mutableMapOf<String, Boolean>()
       if (!deviceToken.isNullOrBlank()) {
@@ -2179,7 +2251,7 @@ class GatewaySession(
       } catch (err: Throwable) {
         Log.w(
           loggerTag,
-          "node.invoke.result failed (ackTimeoutMs=$ackTimeoutMs): ${err.message ?: err::class.java.simpleName}",
+          "node.invoke.result failed (ackTimeoutMs=$ackTimeoutMs): ${if (hasBasicProxyAuthorization) err::class.java.simpleName else err.message ?: err::class.java.simpleName}",
         )
       }
     }
@@ -2231,6 +2303,37 @@ class GatewaySession(
     }
   }
 
+  private fun armProxyPairingDeadline(
+    target: DesiredConnection,
+    error: ErrorShape,
+  ) {
+    synchronized(lifecycleLock) {
+      if (desired !== target || target.proxyPairingDeadline != null) return
+      target.proxyPairingDeadline =
+        scope.launch(lifecycleDispatcher) {
+          delay(120_000L)
+          val connection: Connection?
+          synchronized(notificationLock) {
+            synchronized(lifecycleLock) {
+              if (desired !== target || target.reconnectPausedForAuthFailure) return@launch
+              target.reconnectPausedForAuthFailure = true
+              connection = currentConnection
+              connection?.retire()
+            }
+            onConnectFailure(
+              error.copy(
+                message = "Phone approval is still pending. Check again or cancel waiting.",
+                details = error.details?.copy(retryable = false, recommendedNextStep = "check_again", pauseReconnect = true),
+              ),
+              true,
+            )
+            reconnectSignal.trySend(Unit)
+          }
+          connection?.closeQuietly()
+        }
+    }
+  }
+
   private suspend fun connectOnce(
     target: DesiredConnection,
     loopJob: Job,
@@ -2249,6 +2352,9 @@ class GatewaySession(
         synchronized(lifecycleLock) {
           if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady(connected.hello)) return@withContext
           // Ready metadata precedes callbacks; retries requested by a callback remain queued.
+          target.basicNetworkFailures = 0
+          target.proxyPairingDeadline?.cancel()
+          target.proxyPairingDeadline = null
           pluginSurfaceUrls = connected.pluginSurfaceUrls
           sessionRouting = connected.sessionRouting
           drainReconnectSignals()
@@ -2269,18 +2375,47 @@ class GatewaySession(
         val conn = ownedConnection
         val error =
           when (err) {
-            is GatewayConnectFailure -> err.gatewayError
+            is GatewayConnectFailure -> {
+              if (conn?.hasBasicProxyAuthorization == true && err.gatewayError.code != "NETWORK_UNREACHABLE") {
+                err.gatewayError.copy(
+                  message =
+                    when (err.gatewayError.details?.code) {
+                      "PAIRING_REQUIRED" -> "This phone is waiting for Gateway pairing approval."
+                      "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "The Gateway rejected this setup code. Request a new code."
+                      "AUTH_SCOPE_MISMATCH" -> "The Gateway rejected the requested role or permissions."
+                      "AUTH_VERIFIED_USER_REQUIRED" -> "The Gateway requires a verified user identity from its authenticated proxy or Tailscale. A setup code alone does not provide it."
+                      else -> if (err.gatewayError.code == "SETUP_CODE_EXPIRED") "Setup code has expired. Create a new setup code." else "The Gateway rejected login. Review its authentication and pairing requirements."
+                    },
+                )
+              } else {
+                err.gatewayError
+              }
+            }
 
-            is GatewayExternalAuthorizationException -> ErrorShape("EXTERNAL_AUTH_REQUIRED", err.message.orEmpty())
+            is GatewayExternalAuthorizationException -> {
+              ErrorShape(err.code, err.message.orEmpty())
+            }
+
+            is javax.net.ssl.SSLException -> {
+              if (conn?.hasBasicProxyAuthorization == true) {
+                ErrorShape("PROXY_TLS_FAILURE", "Could not verify this destination’s secure connection. Check its certificate and address.")
+              } else {
+                null
+              }
+            }
 
             is ConnectException,
             is NoRouteToHostException,
             is UnknownHostException,
             is SocketException,
             is SocketTimeoutException,
-            -> gatewayNetworkConnectError()
+            -> {
+              gatewayNetworkConnectError()
+            }
 
-            else -> null
+            else -> {
+              if (conn?.hasBasicProxyAuthorization == true) gatewayNetworkConnectError() else null
+            }
           }
         val current =
           synchronized(lifecycleLock) {
@@ -2288,15 +2423,23 @@ class GatewaySession(
               false
             } else {
               // Commit before callbacks so a reentrant connect/reconnect owns the next state.
-              target.reconnectPausedForAuthFailure = error?.let { shouldPauseReconnectAfterAuthFailure(target, it) } == true
+              if (conn?.hasBasicProxyAuthorization == true && error?.code == "NETWORK_UNREACHABLE") {
+                target.basicNetworkFailures += 1
+              }
+              target.reconnectPausedForAuthFailure =
+                error?.let { shouldPauseReconnectAfterAuthFailure(target, it) } == true ||
+                (conn?.hasBasicProxyAuthorization == true && target.basicNetworkFailures >= 3)
               true
             }
           }
         if (current) {
           conn?.retire()
-          onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
+          onDisconnected("Gateway error: ${error?.message ?: err.message ?: err::class.java.simpleName}")
           if (error != null && synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
             onConnectFailure(error, target.reconnectPausedForAuthFailure)
+            if (conn?.hasBasicProxyAuthorization == true && error.details?.code == "PAIRING_REQUIRED" && !target.reconnectPausedForAuthFailure) {
+              armProxyPairingDeadline(target, error)
+            }
           }
         }
       }
@@ -2411,7 +2554,7 @@ class GatewaySession(
     target: DesiredConnection,
     error: ErrorShape,
   ): Boolean =
-    error.code == "EXTERNAL_AUTH_REQUIRED" ||
+    (error.code.startsWith("PROXY_AUTH_") || error.code in setOf("EXTERNAL_AUTH_REQUIRED", "PROXY_TLS_FAILURE", "PROXY_REDIRECT", "HTTP_UPGRADE_REJECTED", "SETUP_CODE_EXPIRED")) ||
       (
         !(target.recoveringStoredBootstrap && error.details?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID") &&
           shouldPauseGatewayReconnectAfterAuthFailure(

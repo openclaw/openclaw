@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 105">
+    <g class="lob-flatpack">
+      <path
+        d="M48 10 C28 10 17 25 17 41 C17 58 29 69 48 69 C67 69 79 58 79 41 C79 25 68 10 48 10 Z"
+        fill="#d9c9a8"
+        stroke="#8a7c5f"
+        stroke-width="2"
+        stroke-dasharray="4 3"
+      />
+      <g class="lob-eye-open" >
+        <circle cx="39" cy="34" r="4.5" fill="#0a1014" />
+        <circle cx="57" cy="34" r="4.5" fill="#0a1014" />
+        <circle cx="40.2" cy="32.8" r="1.7" fill="#00e5cc" />
+        <circle cx="58.2" cy="32.8" r="1.7" fill="#00e5cc" />
+      </g>
+      <g
+        class="lob-eye-closed"
+        stroke="#0a1014"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        fill="none"
+        style="display:none"
+      >
+        <path d="M34 35 Q39 31 44 35" />
+        <path d="M52 35 Q57 31 62 35" />
+      </g>
+
+      <g fill="none" stroke="#8a7c5f" stroke-width="1.5" stroke-dasharray="4 3">
+        <path d="M27 48 Q50 58 75 61" />
+        <path d="M68 47 Q79 58 92 70" />
+      </g>
+      <g class="lob-claw lob-claw--l">
+        <path
+          d="M76 53 C66 50 62 58 67 65 C72 72 82 68 85 60 C87 55 82 53 76 53 Z"
+          fill="#d9c9a8"
+          stroke="#8a7c5f"
+          stroke-width="1.5"
+          stroke-dasharray="4 3"
+        />
+      </g>
+      <g class="lob-claw lob-claw--r">
+        <path
+          d="M98 65 C109 62 115 70 111 79 C107 88 96 84 91 76 C88 70 92 66 98 65 Z"
+          fill="#d9c9a8"
+          stroke="#8a7c5f"
+          stroke-width="1.5"
+          stroke-dasharray="4 3"
+        />
+      </g>
+
+      <g fill="#d9c9a8" stroke="#8a7c5f" stroke-width="1.5" stroke-dasharray="4 3">
+        <rect x="15" y="88" width="15" height="6" rx="2" />
+        <rect x="34" y="88" width="15" height="6" rx="2" />
+        <rect x="53" y="88" width="15" height="6" rx="2" />
+        <rect x="72" y="88" width="15" height="6" rx="2" />
+      </g>
+
+      <g fill="none" stroke="#5f5648" stroke-width="3" stroke-linecap="round">
+        <path d="M84 24 L101 8" />
+        <path d="M93 31 L113 14" />
+      </g>
+      <g fill="#8a7c5f">
+        <circle cx="105" cy="29" r="3" />
+        <circle cx="113" cy="35" r="3" />
+      </g>
+      <path
+        class="lob-flatpack__allen-key"
+        d="M101 84 L101 99 L115 99"
+        fill="none"
+        stroke="#5f5648"
+        stroke-width="3"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </g>
+  </svg>

@@ -696,6 +696,18 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun verifiedUserRecoveryRequiresAuthenticatedSetupWithoutTreatingNodeAsChatAccess() {
+    val problem = authProblem(code = "AUTH_VERIFIED_USER_REQUIRED", recommendedNextStep = null)
+    val state = gatewayPairingUiState(false, "Connected (operator: sign-in required)", problem)
+    assertEquals(GatewayRecoveryUiState.Failed, state)
+    assertEquals(GatewayRecoveryPrimaryAction.UseAuthenticatedSetup, gatewayRecoveryPrimaryAction(state, problem))
+    val detail = recoveryGatewayAuthDetail(problem)
+    assertTrue(detail.contains("openclaw qr --url"))
+    assertTrue(detail.contains("WebSocket"))
+    assertTrue(detail.contains("browser-only SSO"))
+  }
+
+  @Test
   fun recoveryGatewayAuthDetailPreservesProtocolMismatchGuidance() {
     assertEquals(
       "This app is older than the Gateway. Update OpenClaw on this device, then retry. (app protocol v4, gateway protocol v5).",
@@ -765,7 +777,8 @@ class OnboardingFlowLogicTest {
       gatewayRecoveryDiagnosticText(
         statusText = "Gateway closed: token mismatch",
         gatewayName = "Home Gateway",
-        gatewayPaired = false,
+        operatorConnected = false,
+        nodeConnected = true,
         gatewayPairingCanContinue = false,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
@@ -783,7 +796,8 @@ class OnboardingFlowLogicTest {
     assertTrue(diagnostic.contains("[OpenClaw Android gateway diagnostic]"))
     assertTrue(diagnostic.contains("[Gateway]: Home Gateway"))
     assertTrue(diagnostic.contains("[Status]: Gateway closed: token mismatch"))
-    assertTrue(diagnostic.contains("[Gateway paired]: false"))
+    assertTrue(diagnostic.contains("[Chat/operator connected]: false"))
+    assertTrue(diagnostic.contains("[Node connected]: true"))
     assertTrue(diagnostic.contains("[Ready to continue]: false"))
     assertTrue(diagnostic.contains("[Error code]: AUTH_TOKEN_MISMATCH"))
     assertTrue(diagnostic.contains("[Reason]: bad-token"))
@@ -799,7 +813,8 @@ class OnboardingFlowLogicTest {
       gatewayRecoveryDiagnosticText(
         statusText = status,
         gatewayName = "Gateway A",
-        gatewayPaired = false,
+        operatorConnected = false,
+        nodeConnected = true,
         gatewayPairingCanContinue = false,
         gatewayConnectionProblem = null,
         localizeLabel = { label -> "[$label]" },

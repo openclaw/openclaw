@@ -29,6 +29,8 @@ import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
 import ai.openclaw.app.gateway.GatewayMethod
+import ai.openclaw.app.gateway.GatewayProxyCredentials
+import ai.openclaw.app.gateway.GatewayProxySaveResult
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
@@ -897,6 +899,7 @@ class NodeRuntime internal constructor(
     val bootstrapToken: String?,
     val password: String?,
     val bootstrapHandoff: ai.openclaw.app.gateway.GatewayBootstrapHandoff? = null,
+    val bootstrapExpiresAtMs: Long? = null,
   )
 
   /** Gateway page route and a short-lived signer owned by its native operator connection. */
@@ -1463,6 +1466,7 @@ class NodeRuntime internal constructor(
       },
       onEvent = ::handleGatewayEvent,
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
+      ingressAuthorizationProvider = prefs::gatewayProxyAuthorization,
     )
 
   private fun publishOperatorConnection(
@@ -1517,6 +1521,7 @@ class NodeRuntime internal constructor(
   private data class SecondaryOperatorRuntime(
     val endpoint: GatewayEndpoint?,
     val session: GatewaySession,
+    val proxyReconnectPaused: Boolean = false,
   )
 
   private val secondaryOperatorSessions = ConcurrentHashMap<String, SecondaryOperatorRuntime>()
@@ -1835,6 +1840,7 @@ class NodeRuntime internal constructor(
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
+      ingressAuthorizationProvider = prefs::gatewayProxyAuthorization,
     )
 
   /**
@@ -3159,7 +3165,8 @@ class NodeRuntime internal constructor(
           }
         }
         for ((stableId, endpoint) in plan.resolvedEndpoints) {
-          if (secondaryOperatorSessions[stableId]?.endpoint == endpoint) continue
+          val retained = secondaryOperatorSessions[stableId]
+          if (retained?.proxyReconnectPaused == true || retained?.endpoint == endpoint) continue
           // A retained session may still be saving an accepted hello. Drain it before reading
           // auth for its replacement, or the older write can overwrite the replacement token.
           disconnectSecondaryGatewayConnection(stableId)?.disconnectAndJoin()
@@ -3178,23 +3185,62 @@ class NodeRuntime internal constructor(
             ) {
               return@synchronized
             }
+            if (secondaryOperatorSessions[stableId]?.proxyReconnectPaused == true) return@synchronized
             if (operatorAuth == null) {
               disconnectSecondaryGatewayConnection(stableId)
               return@synchronized
             }
+            // A drained predecessor never supplies callbacks for this admission.
             val session =
-              secondaryOperatorSessions[stableId]?.session ?: GatewaySession(
-                scope = scope,
-                identityStore = identityStore,
-                deviceAuthStore = deviceAuthStore,
-                onConnected = { prefs.gatewayRegistry.markConnected(stableId, System.currentTimeMillis()) },
-                onDisconnected = {},
-                // Only the focused runtime owns node commands and UI state.
-                onEvent = { _, _ -> },
-                customHeadersProvider = prefs::loadGatewayCustomHeaders,
-              )
+              run {
+                lateinit var created: GatewaySession
+                created =
+                  GatewaySession(
+                    scope = scope,
+                    identityStore = identityStore,
+                    deviceAuthStore = deviceAuthStore,
+                    onConnected = {
+                      val publication = secondaryOperatorSessions[stableId]
+                      if (publication?.session === created && publication.endpoint != null) {
+                        // Session callbacks hold session locks; dispatch before acquiring the runtime owner.
+                        scope.launch {
+                          synchronized(gatewayLifecycleIntentLock) {
+                            if (secondaryOperatorSessions[stableId] === publication && publication.session === created &&
+                              stableId in currentBackgroundGatewayStableIds() &&
+                              resolveGatewaySwitchEndpoint(stableId) == publication.endpoint
+                            ) {
+                              prefs.gatewayRegistry.markConnected(stableId, System.currentTimeMillis())
+                            }
+                          }
+                        }
+                      }
+                    },
+                    onDisconnected = {},
+                    onConnectFailure = { error, paused ->
+                      val publication = secondaryOperatorSessions[stableId]
+                      if (publication?.session === created && publication.endpoint != null && paused) {
+                        scope.launch {
+                          synchronized(gatewayLifecycleIntentLock) {
+                            if (secondaryOperatorSessions[stableId] === publication && publication.session === created &&
+                              stableId in currentBackgroundGatewayStableIds() &&
+                              resolveGatewaySwitchEndpoint(stableId) == publication.endpoint &&
+                              (error.code.startsWith("PROXY_") || prefs.hasGatewayProxyCredentials(stableId))
+                            ) {
+                              secondaryOperatorSessions[stableId] = publication.copy(proxyReconnectPaused = true)
+                            }
+                          }
+                        }
+                      }
+                    },
+                    // Only the focused runtime owns node commands and UI state.
+                    onEvent = { _, _ -> },
+                    customHeadersProvider = prefs::loadGatewayCustomHeaders,
+                    ingressAuthorizationProvider = prefs::gatewayProxyAuthorization,
+                  )
+                created
+              }
             secondaryOperatorSessions[stableId] = SecondaryOperatorRuntime(endpoint, session)
-            session.connect(endpoint, operatorAuth.token, operatorAuth.bootstrapToken, operatorAuth.password, options, tls)
+            session.connect(endpoint, operatorAuth.token, operatorAuth.bootstrapToken, operatorAuth.password, options, tls, bootstrapExpiresAtMs = operatorAuth.bootstrapExpiresAtMs)
           }
         }
       }
@@ -3242,7 +3288,9 @@ class NodeRuntime internal constructor(
           synchronized(gatewayLifecycleIntentLock) {
             if (!intent()) return@withLock GatewayTargetSelection.Retired
             // Registry/discovery can change while another switch owns the mutex.
-            resolveGatewaySwitchEndpoint(stableId) ?: return@withLock GatewayTargetSelection.Unavailable
+            (resolveGatewaySwitchEndpoint(stableId) ?: return@withLock GatewayTargetSelection.Unavailable).also {
+              resumeSecondaryProxyConnectionLocked(stableId)
+            }
           }
         if (!connectGatewayLocked(endpoint, explicitAuth = null, intent = intent)) return@withLock GatewayTargetSelection.Retired
         synchronized(gatewayLifecycleIntentLock) {
@@ -3292,7 +3340,10 @@ class NodeRuntime internal constructor(
     stableId: String,
     enabled: Boolean,
   ) = synchronized(gatewayLifecycleIntentLock) {
-    if (enabled) secondaryGatewayConnectionsEnabled = true
+    if (enabled) {
+      secondaryGatewayConnectionsEnabled = true
+      resumeSecondaryProxyConnectionLocked(stableId)
+    }
     prefs.gatewayRegistry.setConnectionEnabled(stableId, enabled)
     if (!enabled) disconnectSecondaryGatewayConnection(stableId)
     requestBackgroundGatewayReconciliation()
@@ -3304,6 +3355,9 @@ class NodeRuntime internal constructor(
     isCurrent: () -> Boolean = { true },
   ): Boolean {
     val intent = beginGatewayReplacementOperation(isCurrent) ?: return false
+    synchronized(gatewayLifecycleIntentLock) {
+      if (intent()) resumeSecondaryProxyConnectionLocked(endpoint.stableId)
+    }
     return connectGateway(endpoint, explicitAuth, intent)
   }
 
@@ -3312,22 +3366,46 @@ class NodeRuntime internal constructor(
     explicitAuth: GatewayConnectAuth?,
     operation: GatewayConnectionOperation,
     replaceAuth: Boolean,
+    persistProxyAuth: (() -> Unit)? = null,
     clearComposer: suspend () -> Unit,
     persistConfig: () -> Unit,
   ): Boolean {
     val intent = beginGatewayReplacementOperation(operation) ?: return false
     return connectGateway(endpoint, explicitAuth, intent) {
+      if (persistProxyAuth != null && (connectedEndpoint?.stableId == endpoint.stableId || connectingEndpoint?.stableId == endpoint.stableId)) {
+        drainPrimaryGatewaySessions()
+        if (!intent()) return@connectGateway false
+      }
+      // Reject a failed proxy write before retiring paired auth, cached chats, or drafts.
+      val proxySaved =
+        synchronized(gatewayLifecycleIntentLock) {
+          operation() && (persistProxyAuth == null || persistGatewayConfigOrReportFailure(persistProxyAuth))
+        }
+      if (!proxySaved) return@connectGateway false
       if (replaceAuth) {
         if (!resetGatewaySetupAuthLocked(endpoint.stableId, operation)) return@connectGateway false
         clearComposer()
       }
       synchronized(gatewayLifecycleIntentLock) {
         if (!operation()) return@synchronized false
-        persistConfig()
+        if (!persistGatewayConfigOrReportFailure(persistConfig)) return@synchronized false
+        resumeSecondaryProxyConnectionLocked(endpoint.stableId)
         true
       }
     }
   }
+
+  private fun persistGatewayConfigOrReportFailure(persistConfig: () -> Unit): Boolean =
+    try {
+      persistConfig()
+      true
+    } catch (_: IllegalArgumentException) {
+      setStandaloneGatewayStatus("Could not save proxy login. Confirm the HTTPS destination and try again.")
+      false
+    } catch (_: IllegalStateException) {
+      setStandaloneGatewayStatus("Could not save proxy login. Check secure storage and existing proxy headers, then try again.")
+      false
+    }
 
   private suspend fun connectGateway(
     endpoint: GatewayEndpoint,
@@ -3385,7 +3463,7 @@ class NodeRuntime internal constructor(
 
   private fun reconnectPreferredGatewayOnForeground() =
     synchronized(gatewayLifecycleIntentLock) {
-      if (preferredGatewayReconnectSuppressed || gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null) return@synchronized
+      if (preferredGatewayReconnectSuppressed || gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null || proxyReconnectPaused()) return@synchronized
       if (connectedEndpoint != null) {
         val connection = activeGatewayConnection
         val attempt = acceptedConnectAttempt.value
@@ -4242,7 +4320,7 @@ class NodeRuntime internal constructor(
         (if (accepted == null) gatewayConnectionOperation == null else accepted === connection.attempt) &&
         connectedEndpoint?.stableId == endpoint.stableId
     }) {
-      if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
+      if (preferredGatewayReconnectSuppressed || proxyReconnectPaused()) return@launchGatewayLifecycle
       if (connection.bootstrapHandoff?.completed == false) {
         // Onboarding permissions may change after the Gateway consumes its setup token but
         // before hello delivers durable role grants. Keep that handoff alive; reconnect with
@@ -4452,6 +4530,7 @@ class NodeRuntime internal constructor(
           operatorConnectOptions(auth, storedOperatorEntry),
           tls,
           onReady = { publishOperatorReadiness(connection) },
+          bootstrapExpiresAtMs = operatorAuth.bootstrapExpiresAtMs,
         )
       }
       connectNodeSession(endpoint, auth, tls, connectionManager.buildNodeConnectOptions())
@@ -4484,6 +4563,7 @@ class NodeRuntime internal constructor(
       options,
       tls,
       bootstrapHandoff = auth.bootstrapHandoff,
+      bootstrapExpiresAtMs = auth.bootstrapExpiresAtMs,
     )
   }
 
@@ -4540,6 +4620,11 @@ class NodeRuntime internal constructor(
     restoration.start()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
+    if (tls?.requireSystemTrust == true) {
+      registerGateway(endpoint)
+      connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+      return
+    }
     if (tls != null) {
       val storedFingerprint = tls.expectedFingerprint
       intent.handedOff = true
@@ -4794,6 +4879,7 @@ class NodeRuntime internal constructor(
           GatewayConnectAuth(
             token = credentials.token,
             bootstrapToken = credentials.bootstrapToken,
+            bootstrapExpiresAtMs = credentials.bootstrapExpiresAtMs,
             password = credentials.password,
           )
         }
@@ -4901,6 +4987,7 @@ class NodeRuntime internal constructor(
             operatorConnectOptions(auth, storedOperatorEntry),
             connectionManager.resolveTlsParams(endpoint),
             onReady = { publishOperatorReadiness(connection) },
+            bootstrapExpiresAtMs = operatorAuth.bootstrapExpiresAtMs,
           )
         }
       }
@@ -4920,6 +5007,14 @@ class NodeRuntime internal constructor(
       disconnect(retireRunState)
       requestBackgroundGatewayReconciliation()
     }
+  }
+
+  /** Explicit target actions resume its retained pause; foreground and network wakes do not. */
+  private fun resumeSecondaryProxyConnectionLocked(stableId: String) {
+    val runtime = secondaryOperatorSessions[stableId] ?: return
+    if (!runtime.proxyReconnectPaused) return
+    secondaryOperatorSessions[stableId] = runtime.copy(endpoint = null, proxyReconnectPaused = false)
+    runtime.session.disconnect()
   }
 
   private fun disconnectSecondaryGatewayConnections() {
@@ -4942,6 +5037,57 @@ class NodeRuntime internal constructor(
     prepareDisconnect(retireRunState)
     operatorSession.disconnect()
     nodeSession.disconnect()
+  }
+
+  private fun proxyReconnectPaused(): Boolean =
+    connectedEndpoint?.let { endpoint ->
+      listOfNotNull(operatorConnectionProblem, nodeConnectionProblem).any { problem ->
+        problem.pauseReconnect && (problem.code?.startsWith("PROXY_") == true || prefs.hasGatewayProxyCredentials(endpoint.stableId))
+      }
+    } == true
+
+  private fun matchesGatewayProxyEditDestination(endpoint: GatewayEndpoint): Boolean {
+    val current = resolveGatewaySwitchEndpoint(endpoint.stableId) ?: return false
+    return current.host.equals(endpoint.host, ignoreCase = true) && current.port == endpoint.port &&
+      current.contextPath == endpoint.contextPath && current.tlsEnabled == endpoint.tlsEnabled
+  }
+
+  /** Replaces proxy login after the old physical sockets and accepted token writes drain. */
+  internal suspend fun updateGatewayProxyCredentials(
+    endpoint: GatewayEndpoint,
+    credentials: GatewayProxyCredentials?,
+    isCurrent: () -> Boolean = { true },
+  ): GatewayProxySaveResult {
+    val stableId = endpoint.stableId
+    // Refuse an account switch before retiring any live connection; the durable write rechecks.
+    if (prefs.gatewayProxyPrincipal(stableId)?.admits(credentials) == false) return GatewayProxySaveResult.ACCOUNT_LOCKED
+    val intent =
+      synchronized(gatewayLifecycleIntentLock) {
+        if (!isCurrent() || !matchesGatewayProxyEditDestination(endpoint)) return GatewayProxySaveResult.FAILED
+        // Reuse Add Gateway's admitted owner instead of retiring its captured generation.
+        if (isCurrent is GatewayConnectionOperation) {
+          beginGatewayReplacementOperation(isCurrent) ?: return GatewayProxySaveResult.FAILED
+        } else {
+          gatewayLifecycleIntent(advanceGatewayLifecycleIntent(retiringGatewayId = stableId), isCurrent)
+        }
+      }
+    return gatewaySwitchMutex.withLock {
+      if (!intent() || !matchesGatewayProxyEditDestination(endpoint)) return@withLock GatewayProxySaveResult.FAILED
+      val active = connectedEndpoint?.stableId == stableId || connectingEndpoint?.stableId == stableId
+      disconnectSecondaryGatewayConnection(stableId)?.disconnectAndJoin()
+      if (active) drainPrimaryGatewaySessions()
+      synchronized(gatewayLifecycleIntentLock) {
+        if (!intent() || !matchesGatewayProxyEditDestination(endpoint)) return@synchronized GatewayProxySaveResult.FAILED
+        val saved = runCatching { prefs.saveGatewayProxyCredentials(endpoint, credentials) }.getOrDefault(GatewayProxySaveResult.FAILED)
+        if (saved == GatewayProxySaveResult.SAVED) resumeSecondaryProxyConnectionLocked(stableId)
+        if (active) {
+          // Even failed durable writes must resume the old record, never a staged password.
+          connectWithAuth(endpoint, resolveGatewayConnectAuth(endpoint)) { beginConnectAttempt(endpoint) }
+        }
+        requestBackgroundGatewayReconciliation()
+        saved
+      }
+    }
   }
 
   suspend fun forgetGateway(
@@ -4979,6 +5125,8 @@ class NodeRuntime internal constructor(
       if (!removalStaged) return false
       val authRetired =
         runCatching {
+          // The pending binding must be durable before the tokens that otherwise establish the lock go.
+          check(prefs.retireGatewayProxyPassword(normalized)) { "Could not remove saved proxy login" }
           val deviceId = identityStore.loadOrCreate().deviceId
           deviceAuthStore.clearToken(normalized, deviceId, "node")
           deviceAuthStore.clearToken(normalized, deviceId, "operator")
@@ -4999,6 +5147,8 @@ class NodeRuntime internal constructor(
             clientDatabases.commitGatewayRemoval(normalized, requireCacheRemoval = true)
             externalTranscriptCache?.clearGateway(normalized)
           }
+          // The proxy account binding outlives a partial forget so leftover chat data stays bound to it.
+          check(prefs.clearGatewayProxyCredentials(normalized)) { "Could not remove proxy account binding" }
         }.onFailure { err ->
           Log.e("OpenClawRuntime", "Failed to purge forgotten gateway chat data", err)
           setStandaloneGatewayStatus("Failed: couldn't clear offline gateway data. Retry forget.")

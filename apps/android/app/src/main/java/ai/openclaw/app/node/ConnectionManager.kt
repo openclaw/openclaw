@@ -157,6 +157,11 @@ class ConnectionManager internal constructor(
 
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
-    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls(endpoint))
+    val tls = resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls(endpoint))
+    return if (prefs.hasGatewayProxyCredentials(endpoint.stableId)) {
+      GatewayTlsParams(expectedFingerprint = stored, requireSystemTrust = true)
+    } else {
+      tls
+    }
   }
 }
