@@ -1,10 +1,7 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockBootstrapConfig,
@@ -89,14 +86,6 @@ suite.define(() => {
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
       const last = chat.getByText("The second message keeps its rounded corners.", { exact: true });
       await browserExpect(last).toBeVisible();
-      const frame = await takeControlUiScreenshotFrame(page, chat, [last], {
-        animations: "disabled",
-        elements: [chat],
-      });
-      writeFileSync(
-        path.join(suite.artifactDir, "conversation-" + viewport.width + ".png"),
-        frame.elements[0]!.png,
-      );
       await browserExpect(
         chat.getByText("I’ll check the spacing first.", { exact: true }),
       ).toBeVisible();
@@ -116,18 +105,18 @@ suite.define(() => {
                 style.borderTopRightRadius,
                 style.borderBottomRightRadius,
                 style.borderBottomLeftRadius,
-              ];
+              ].join(" ");
             }),
           })),
       );
       expect(geometry.find((group) => group.role === "user")?.corners).toEqual([
-        ["18px", "4px", "18px", "18px"],
-        ["18px", "18px", "18px", "18px"],
+        "18px 4px 18px 18px",
+        "18px 18px 18px 18px",
       ]);
       expect(geometry.find((group) => group.role === "assistant")?.corners).toEqual([
-        ["4px", "18px", "18px", "18px"],
-        ["18px", "18px", "18px", "18px"],
-        ["18px", "18px", "18px", "18px"],
+        "4px 18px 18px 18px",
+        "18px 18px 18px 18px",
+        "18px 18px 18px 18px",
       ]);
       expect(await chat.locator(".chat-bubble-dots").count()).toBe(0);
       expect(await chat.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
@@ -149,6 +138,8 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const chat = page.locator("section.chat");
+      const preamble = chat.locator(".chat-text").getByText("I’ll", { exact: true });
+      const workingDots = chat.locator(".chat-bubble-dots--working");
       await page.locator(".agent-chat__composer-combobox textarea").fill("Check the live layout.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const request = await gateway.waitForRequest("chat.send");
@@ -172,12 +163,7 @@ suite.define(() => {
               .querySelector(".chat-bubble.streaming .chat-text")
               ?.textContent?.includes("I’ll")
           ) {
-            performance.mark("bubble-first-visible");
-            performance.measure(
-              "bubble-delta-to-visible",
-              "bubble-first-delta",
-              "bubble-first-visible",
-            );
+            performance.measure("bubble-delta-to-visible", { start: "bubble-first-delta" });
             observer.disconnect();
           }
         });
@@ -204,14 +190,8 @@ suite.define(() => {
       );
       expect(latency).toBeTypeOf("number");
       expect(latency).toBeLessThan(1000);
-      console.log(
-        "Mock Gateway first-fragment to DOM visibility:",
-        latency,
-        "ms (not provider first-token latency)",
-      );
-      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(0);
-      // The producer retires the live text tail when its keyed preamble is published.
-      // First-fragment visibility above deliberately precedes this boundary.
+      await browserExpect(workingDots).toHaveCount(0);
+      // Publish the keyed preamble only after proving first-fragment visibility.
       await emit("chat", 3, {
         state: "delta",
         deltaText: "",
@@ -229,29 +209,25 @@ suite.define(() => {
         name: "read",
         args: { path: "layout.css" },
       });
-      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
+      await browserExpect(workingDots).toHaveCount(1);
       const working = chat.locator(".chat-bubble-activity--working");
       await working.locator("summary").click();
       await browserExpect(working).toHaveAttribute("open", "");
-      await browserExpect(
-        chat.locator(".chat-text").getByText("I’ll", { exact: true }),
-      ).toBeVisible();
+      await browserExpect(preamble).toBeVisible();
       await tool(6, {
         phase: "result",
         toolCallId: "live-read",
         name: "read",
         result: "The layout is ready.",
       });
-      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(1);
+      await browserExpect(workingDots).toHaveCount(1);
       await browserExpect(working).toHaveAttribute("open", "");
       await gateway.emitChatFinal({ sessionKey, runId, text: "The layout is ready." });
       await browserExpect(
         chat.getByText("The layout is ready.", { exact: true }).last(),
       ).toBeVisible();
-      await browserExpect(
-        chat.locator(".chat-text").getByText("I’ll", { exact: true }),
-      ).toBeVisible();
-      await browserExpect(chat.locator(".chat-bubble-dots--working")).toHaveCount(0);
+      await browserExpect(preamble).toBeVisible();
+      await browserExpect(workingDots).toHaveCount(0);
     });
   });
 });

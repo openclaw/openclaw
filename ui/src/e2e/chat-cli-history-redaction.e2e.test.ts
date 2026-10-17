@@ -7,8 +7,6 @@ import {
   readClaudeCliSessionMessagesAsync,
 } from "../../../src/gateway/cli-session-history.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -26,9 +24,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 suite.define(() => {
   it("renders a real imported Claude transcript once with its original text", async () => {
     const homeDir = tempDirs.make("openclaw-cli-history-redaction-");
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    try {
-      const page = await context.newPage();
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const cliSessionId = "control-ui-claude-history-redaction";
       const secret = "sk-abcdef1234567890xyz";
       const userText = `CLI user copy ${secret}`;
@@ -88,22 +84,16 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await waitForRequests(gateway, "chat.startup", 1);
       const thread = page.locator(".chat-thread");
-      await thread.getByText("CLI user copy", { exact: false }).waitFor({ timeout: 10_000 });
-      await thread.getByText("CLI imported-only reply", { exact: false }).waitFor({
-        timeout: 10_000,
-      });
-
+      const prefixes = ["CLI user copy", "CLI imported-only reply"];
+      for (const prefix of prefixes) {
+        await thread.getByText(prefix, { exact: false }).waitFor({ timeout: 10_000 });
+      }
       const visibleMessages = await visibleChatBubbleTexts(page);
-      expect(visibleMessages.filter((message) => message.includes("CLI user copy"))).toHaveLength(
-        1,
-      );
-      expect(
-        visibleMessages.filter((message) => message.includes("CLI imported-only reply")),
-      ).toHaveLength(1);
+      for (const prefix of prefixes) {
+        expect(visibleMessages.filter((message) => message.includes(prefix))).toHaveLength(1);
+      }
       expect(await thread.textContent()).toContain(secret);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("preserves tool source in Activity while bounding the visible preview", async () => {
@@ -145,25 +135,6 @@ suite.define(() => {
             { role: "assistant", content: "The original tool source is available.", timestamp: 4 },
           ],
         });
-        const artifacts =
-          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-            ? createControlUiE2eArtifactDir("tool-source-fidelity")
-            : undefined;
-        const capture = async (
-          name: string,
-          element: ReturnType<typeof page.locator>,
-          ready: ReturnType<typeof page.locator>[],
-        ) => {
-          if (!artifacts) {
-            return;
-          }
-          const frame = await takeControlUiScreenshotFrame(page, element, ready, {
-            animations: "disabled",
-            elements: [element],
-          });
-          await fs.writeFile(path.join(artifacts, `${name}.png`), frame.png);
-          await fs.writeFile(path.join(artifacts, `${name}-crop.png`), frame.elements[0]!.png);
-        };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("The original tool source is available.", { exact: true }).waitFor();
         for (const group of await page
@@ -174,7 +145,6 @@ suite.define(() => {
         const toolRow = page.locator(".chat-tool-msg-summary").first();
         await toolRow.waitFor();
         const collapsedText = await toolRow.textContent();
-        await capture("chat-tool-source", toolRow, [toolRow]);
         await page.goto(`${suite.server.baseUrl}activity?view=live`);
         await page.locator(".activity-empty").waitFor();
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
@@ -197,7 +167,6 @@ suite.define(() => {
         const note = entry.locator(".activity-entry__note");
         await preview.waitFor();
         await note.waitFor();
-        await capture("activity-source", entry, [preview, note]);
         expect(collapsedText).toContain(command);
         const visible = await preview.textContent();
         expect(visible).toContain("API_TOKEN = computeToken()");
