@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import type { runScenarioFlow as RunScenarioFlow } from "./scenario-flow-runner.js";
@@ -54,10 +54,7 @@ function makeEnv() {
 }
 
 function expectAggregate(error: unknown, ...errors: unknown[]) {
-  expect(error).toBeInstanceOf(AggregateError);
-  if (!(error instanceof AggregateError)) {
-    throw error;
-  }
+  assert(error instanceof AggregateError);
   expect(error.errors).toHaveLength(errors.length);
   errors.forEach((cause, index) => expect(error.errors[index]).toBe(cause));
   return error;
@@ -74,180 +71,164 @@ beforeEach(() => {
   runScenarioFlow.mockReset();
 });
 
-describe("QA web acquisition across the real scenario DSL", () => {
-  it.each(["navigation", "title"] as const)(
-    "rejects late %s success, permits finally web use and preserves retry and cleanup ownership",
-    async (phase) => {
-      const web = await import("./web-runtime.js");
-      const runtime = await import("./suite-runtime-flow.js");
-      const actualFlow = await vi.importActual<typeof import("./scenario-flow-runner.js")>(
-        "./scenario-flow-runner.js",
-      );
-      const env = makeEnv();
-      const first = makeBrowser();
-      const fixtures = [first];
-      const started = createDeferred<void>();
-      const released = createDeferred<void>();
-      const contextError = new Error("first context cleanup failed");
-      first.context.close.mockRejectedValueOnce(contextError);
-      const waitForRelease = async () => {
-        started.resolve();
-        await released.promise;
-      };
-      if (phase === "navigation") {
-        first.page.goto.mockImplementationOnce(waitForRelease);
-      } else {
-        first.page.title.mockImplementationOnce(async () => {
-          await waitForRelease();
-          return "late title";
-        });
-      }
-      launch.mockResolvedValueOnce(first.browser).mockImplementation(() => {
-        const fixture = makeBrowser();
-        fixtures.push(fixture);
-        return Promise.resolve(fixture.browser);
+it.each(["navigation", "title"] as const)(
+  "rejects late %s success, permits finally web use and preserves retry and cleanup ownership",
+  async (phase) => {
+    const web = await import("./web-runtime.js");
+    const runtime = await import("./suite-runtime-flow.js");
+    const actualFlow = await vi.importActual<typeof import("./scenario-flow-runner.js")>(
+      "./scenario-flow-runner.js",
+    );
+    const env = makeEnv();
+    const first = makeBrowser();
+    const fixtures = [first];
+    const started = createDeferred<void>();
+    const released = createDeferred<void>();
+    const contextError = new Error("first context cleanup failed");
+    first.context.close.mockRejectedValueOnce(contextError);
+    const waitForRelease = async () => {
+      started.resolve();
+      await released.promise;
+    };
+    if (phase === "navigation") {
+      first.page.goto.mockImplementationOnce(waitForRelease);
+    } else {
+      first.page.title.mockImplementationOnce(async () => {
+        await waitForRelease();
+        return "late title";
       });
-      const captures: Parameters<typeof RunScenarioFlow>[0][] = [];
-      const rawSteps: Promise<unknown>[] = [];
-      const openings: Promise<unknown>[] = [];
-      const fulfilled = vi.fn();
-      runScenarioFlow.mockImplementation((params) => {
-        captures.push(params);
-        const runSteps = params.api.runScenario;
-        const open = params.api.webOpenPage as ReturnType<typeof web.createQaWebPageOpener>;
-        params.api.webOpenPage = (input: Parameters<typeof open>[0]) =>
-          track(
-            open(input).then((page) => {
-              fulfilled(params, page);
-              return page;
-            }),
-            openings,
-          );
-        params.api.runScenario = (name, steps) =>
-          runSteps(
-            name,
-            steps.map((step) => ({
-              ...step,
-              run: () => track(step.run(), rawSteps),
-            })),
-          );
-        return actualFlow.runScenarioFlow(params);
-      });
-      const scenario = makeQaSuiteTestScenario("web-deadline-ownership", { config: {} });
-      if (scenario.execution.kind !== "flow") {
-        throw new Error("expected flow scenario");
-      }
-      scenario.execution.timeoutMs = 30;
-      const openAction = (saveAs: string) => ({
-        call: "webOpenPage",
-        args: [{ url: first.page.url(), channel: "chrome" }],
-        saveAs,
-      });
-      scenario.execution.flow = {
-        steps: [
-          {
-            name: "Open and clean up",
-            actions: [
-              {
-                try: {
-                  actions: [openAction("normalPage")],
-                  finally: [
-                    openAction("cleanupPage"),
-                    {
-                      call: "webSnapshot",
-                      args: [{ pageId: { ref: "cleanupPage.pageId" } }],
-                      saveAs: "cleanupSnapshot",
-                    },
-                  ],
-                },
-              },
-              { set: "laterAction", value: true },
-            ],
-          },
-        ],
-      };
-      const runs: Promise<unknown>[] = [];
-      const runAttempt = (nextScenario = scenario) =>
-        track(
-          runtime.runQaSuiteScenarioDefinition({
-            env,
-            scenario: nextScenario,
-            runScenario: runtime.runQaSuiteScenarioSteps,
-            constants: {
-              imageUnderstandingPngBase64: "small",
-              imageUnderstandingLargePngBase64: "large",
-              imageUnderstandingValidPngBase64: "valid",
-            },
-          }),
-          runs,
+    }
+    launch.mockResolvedValueOnce(first.browser).mockImplementation(() => {
+      const fixture = makeBrowser();
+      fixtures.push(fixture);
+      return Promise.resolve(fixture.browser);
+    });
+    const captures: Parameters<typeof RunScenarioFlow>[0][] = [];
+    const rawSteps: Promise<unknown>[] = [];
+    const openings: Promise<unknown>[] = [];
+    runScenarioFlow.mockImplementation((params) => {
+      captures.push(params);
+      const runSteps = params.api.runScenario;
+      const open = params.api.webOpenPage as ReturnType<typeof web.createQaWebPageOpener>;
+      params.api.webOpenPage = (input: Parameters<typeof open>[0]) => track(open(input), openings);
+      params.api.runScenario = (name, steps) =>
+        runSteps(
+          name,
+          steps.map((step) => ({
+            ...step,
+            run: () => track(step.run(), rawSteps),
+          })),
         );
+      return actualFlow.runScenarioFlow(params);
+    });
+    const scenario = makeQaSuiteTestScenario("web-deadline-ownership", { config: {} });
+    if (scenario.execution.kind !== "flow") {
+      throw new Error("expected flow scenario");
+    }
+    scenario.execution.timeoutMs = 30;
+    const openAction = (saveAs: string) => ({
+      call: "webOpenPage",
+      args: [{ url: first.page.url(), channel: "chrome" }],
+      saveAs,
+    });
+    const actions = [
+      {
+        try: {
+          actions: [openAction("normalPage")],
+          finally: [
+            openAction("cleanupPage"),
+            {
+              call: "webSnapshot",
+              args: [{ pageId: { ref: "cleanupPage.pageId" } }],
+              saveAs: "cleanupSnapshot",
+            },
+          ],
+        },
+      },
+      { set: "laterAction", value: true },
+    ];
+    scenario.execution.flow = { steps: [{ name: "Open and clean up", actions }] };
+    const runs: Promise<unknown>[] = [];
+    const runAttempt = (nextScenario = scenario) =>
+      track(
+        runtime.runQaSuiteScenarioDefinition({
+          env,
+          scenario: nextScenario,
+          runScenario: runtime.runQaSuiteScenarioSteps,
+          constants: {
+            imageUnderstandingPngBase64: "small",
+            imageUnderstandingLargePngBase64: "large",
+            imageUnderstandingValidPngBase64: "valid",
+          },
+        }),
+        runs,
+      );
 
-      vi.useFakeTimers();
-      try {
-        const retried = runQaScenarioWithFlakeRetry(() => runAttempt());
-        runs.push(retried);
-        await Promise.race([
-          started.promise,
-          retried.then(() => {
-            throw new Error("flow settled before the held acquisition started");
-          }),
-        ]);
-        await vi.advanceTimersByTimeAsync(5_030);
-        expect(await retried).toMatchObject({
-          status: "pass",
-          details: expect.stringContaining(
-            "passed on retry; first attempt: QA scenario flow timed out after 30ms",
-          ),
-        });
-        expect(first.context.close).toHaveBeenCalledOnce();
-        expect(first.browser.close).toHaveBeenCalledOnce();
-        expect(captures[0]?.vars).not.toHaveProperty("normalPage");
-        released.resolve();
-        const reason = captures[0]?.api.signal?.reason;
-        expect(reason).toBeInstanceOf(Error);
-        expect(reason).toHaveProperty("message", "QA scenario flow timed out after 30ms");
-        const failedOpen = expectAggregate(await openings[0], reason, contextError);
-        await expect(rawSteps[0]).resolves.toBe(failedOpen);
-        expect(failedOpen.cause).toBe(reason);
-        expect(fulfilled.mock.calls.some(([params]) => params === captures[0])).toBe(false);
-        expect(captures[0]?.vars).not.toHaveProperty("normalPage");
-        expect(captures[0]?.vars).not.toHaveProperty("laterAction");
-        expect(captures[0]?.vars?.cleanupSnapshot).toMatchObject({ text: "page body" });
-        const cleanupPage = captures[0]?.vars?.cleanupPage as { pageId: string };
-        expect(env.webSessionIds.has(cleanupPage.pageId)).toBe(true);
-        await expect(web.qaWebSnapshot(cleanupPage)).resolves.toMatchObject({ text: "page body" });
-        expect(
-          (await runAttempt({ ...scenario, id: "later-web", title: "Later web" })).status,
-        ).toBe("pass");
-        expect(captures.map(({ api }) => api.signal?.aborted)).toEqual([true, false, false]);
-        expect(captures.slice(1).map(({ vars }) => vars?.laterAction)).toEqual([true, true]);
-        const finishTransport = vi.fn(async () => undefined);
-        const stopGateway = vi.fn(async () => undefined);
-        const failures = await runQaSuiteCleanupSteps([
-          { phase: "web sessions", run: () => web.closeQaWebSessions(env.webSessionIds) },
-          { phase: "transport", run: finishTransport },
-          { phase: "gateway", run: stopGateway },
-        ]);
-        expect(failures).toMatchObject([{ phase: "web sessions" }]);
-        expectAggregate(failures[0]?.error, contextError);
-        expect(env.webSessionIds.size).toBe(1);
-        expect(finishTransport).toHaveBeenCalledOnce();
-        expect(stopGateway).toHaveBeenCalledOnce();
-        for (const fixture of fixtures) {
-          expect(fixture.context.close).toHaveBeenCalledOnce();
-          expect(fixture.browser.close).toHaveBeenCalledOnce();
-        }
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        try {
-          released.resolve();
-          await Promise.allSettled([...runs, ...rawSteps, ...openings]);
-          await expect(web.closeQaWebSessions()).rejects.toMatchObject({ errors: [contextError] });
-        } finally {
-          vi.clearAllTimers();
-          vi.useRealTimers();
-        }
+    vi.useFakeTimers();
+    try {
+      const retried = runQaScenarioWithFlakeRetry(() => runAttempt());
+      runs.push(retried);
+      await Promise.race([
+        started.promise,
+        retried.then(() => {
+          throw new Error("flow settled before the held acquisition started");
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(5_030);
+      expect(await retried).toMatchObject({
+        status: "pass",
+        details: expect.stringContaining(
+          "passed on retry; first attempt: QA scenario flow timed out after 30ms",
+        ),
+      });
+      expect(first.context.close).toHaveBeenCalledOnce();
+      expect(first.browser.close).toHaveBeenCalledOnce();
+      expect(captures[0]?.vars).not.toHaveProperty("normalPage");
+      released.resolve();
+      const reason = captures[0]?.api.signal?.reason;
+      expect(reason).toBeInstanceOf(Error);
+      expect(reason).toHaveProperty("message", "QA scenario flow timed out after 30ms");
+      const failedOpen = expectAggregate(await openings[0], reason, contextError);
+      await expect(rawSteps[0]).resolves.toBe(failedOpen);
+      expect(failedOpen.cause).toBe(reason);
+      expect(captures[0]?.vars).not.toHaveProperty("normalPage");
+      expect(captures[0]?.vars).not.toHaveProperty("laterAction");
+      expect(captures[0]?.vars?.cleanupSnapshot).toMatchObject({ text: "page body" });
+      const cleanupPage = captures[0]?.vars?.cleanupPage as { pageId: string };
+      expect(env.webSessionIds.has(cleanupPage.pageId)).toBe(true);
+      await expect(web.qaWebSnapshot(cleanupPage)).resolves.toMatchObject({ text: "page body" });
+      expect((await runAttempt({ ...scenario, id: "later-web", title: "Later web" })).status).toBe(
+        "pass",
+      );
+      expect(captures.map(({ api }) => api.signal?.aborted)).toEqual([true, false, false]);
+      expect(captures.slice(1).map(({ vars }) => vars?.laterAction)).toEqual([true, true]);
+      const finishTransport = vi.fn(async () => undefined);
+      const stopGateway = vi.fn(async () => undefined);
+      const failures = await runQaSuiteCleanupSteps([
+        { phase: "web sessions", run: () => web.closeQaWebSessions(env.webSessionIds) },
+        { phase: "transport", run: finishTransport },
+        { phase: "gateway", run: stopGateway },
+      ]);
+      expect(failures).toMatchObject([{ phase: "web sessions" }]);
+      expectAggregate(failures[0]?.error, contextError);
+      expect(env.webSessionIds.size).toBe(1);
+      expect(finishTransport).toHaveBeenCalledOnce();
+      expect(stopGateway).toHaveBeenCalledOnce();
+      for (const fixture of fixtures) {
+        expect(fixture.context.close).toHaveBeenCalledOnce();
+        expect(fixture.browser.close).toHaveBeenCalledOnce();
       }
-    },
-  );
-});
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      try {
+        released.resolve();
+        await Promise.allSettled([...runs, ...rawSteps, ...openings]);
+        await expect(web.closeQaWebSessions()).rejects.toMatchObject({ errors: [contextError] });
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    }
+  },
+);
+import assert from "node:assert/strict";

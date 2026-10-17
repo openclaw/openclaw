@@ -170,10 +170,10 @@ const scenarioRunner = (status: "pass" | "fail" = "pass") =>
 
 function runSuite(
   params: Parameters<typeof runQaFlowSuiteStandard>[0] = {},
-  context = makeRetryTestContext(),
+  runContext = context,
   runner = scenarioRunner(),
 ) {
-  return runQaFlowSuiteStandard({ lab: makeRetryTestLab(), ...params }, context, runner);
+  return runQaFlowSuiteStandard({ lab, ...params }, runContext, runner);
 }
 
 function makeRetryTestResult(
@@ -191,9 +191,15 @@ function makeRetryTestResult(
 
 const tempDirs = createTempDirHarness();
 let testOutputDir: string;
+let lab: QaLabServerHandle;
+let context: QaSuiteResolvedRunContext;
+let captured: QaEvidenceSummaryV3Json[];
 
 beforeEach(async () => {
   testOutputDir = await tempDirs.makeTempDir("qa-standard-lifecycle-");
+  lab = makeRetryTestLab();
+  context = makeRetryTestContext();
+  captured = [];
   vi.clearAllMocks();
   mocks.stopQaGatewayChild.mockReset().mockResolvedValue({
     process: "confirmed-stopped",
@@ -209,26 +215,22 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-describe("QA suite Control UI ownership", () => {
-  it("starts and publishes the gateway Control UI for a Control UI scenario by default", async () => {
-    const lab = makeRetryTestLab();
-    const context = makeRetryTestContext();
-    context.selectedScenarios = [
-      makeQaSuiteTestScenario("control-ui-ownership", { surface: "control-ui" }),
-    ];
-    await runSuite({ lab }, context);
+it("starts and publishes the gateway Control UI for a Control UI scenario by default", async () => {
+  context.selectedScenarios = [
+    makeQaSuiteTestScenario("control-ui-ownership", { surface: "control-ui" }),
+  ];
+  await runSuite({ lab }, context);
 
-    expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        controlUiEnabled: true,
-        runtimePreloads: ["file:///qa-transport-preload.mjs"],
-      }),
-    );
-    expect(mocks.createRuntimePreloads).toHaveBeenCalledOnce();
-    expect(lab.setControlUi).toHaveBeenCalledWith({
-      controlUiProxyTarget: "http://127.0.0.1:18789",
-      controlUiProxyToken: "qa-test-token",
-    });
+  expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
+    expect.objectContaining({
+      controlUiEnabled: true,
+      runtimePreloads: ["file:///qa-transport-preload.mjs"],
+    }),
+  );
+  expect(mocks.createRuntimePreloads).toHaveBeenCalledOnce();
+  expect(lab.setControlUi).toHaveBeenCalledWith({
+    controlUiProxyTarget: "http://127.0.0.1:18789",
+    controlUiProxyToken: "qa-test-token",
   });
 });
 
@@ -236,10 +238,8 @@ describe("QA runtime parity scenario retry isolation", () => {
   it.each(["skip", "pass", "fail"] as const)(
     "retries only observed failures when a captured failure continues to %s",
     async (status) => {
-      const context = makeRetryTestContext();
       const scenario = makeFlowScenario("runtime-soak-100-turn");
       context.selectedScenarios = [scenario];
-      const captured: QaEvidenceSummaryV3Json[] = [];
       const first = await runSuite(
         { onEvidence: (summary) => captured.push(summary) },
         context,
@@ -320,10 +320,7 @@ describe("QA runtime parity scenario retry isolation", () => {
     });
     await runSuite({ forcedRuntime: "codex" });
     const summary = mocks.writeQaSuiteArtifacts.mock.calls.at(-1)![0].recordedEvidence!;
-    expect(summary.schemaVersion).toBe(3);
-    if (summary.schemaVersion !== 3) {
-      throw new Error("expected occurrences");
-    }
+    assert(summary.schemaVersion === 3, "expected occurrence evidence");
     const receipts = summary.occurrences.flatMap((occurrence) => occurrence.receipts);
     expect(receipts.find((receipt) => receipt.phase === "runtime")?.identity).toEqual({
       source: { ref: null, integrity: null },
@@ -339,11 +336,9 @@ describe("QA runtime parity scenario retry isolation", () => {
   it.each(["pass", "fail", "throws"] as const)(
     "retains a pass and separate diagnostic when the post-run probe %s",
     async (probeStatus) => {
-      const context = makeRetryTestContext();
       context.selectedScenarios[0]!.assertions = [
         { id: "scenario-result", meaning: "the scenario owns its result", coverage: [] },
       ];
-      const captured: QaEvidenceSummaryV3Json[] = [];
       const error = new Error("post-run probe failed");
       let scenarioStartCursor: number | undefined;
       mocks.runQaSuiteRoundTripProbe.mockImplementationOnce(async (params) => {
@@ -402,8 +397,6 @@ describe("QA runtime parity scenario retry isolation", () => {
   );
 
   it("keeps unstarted repeated flow instances pending after the first failure", async () => {
-    const lab = makeRetryTestLab();
-    const context = makeRetryTestContext();
     context.selectedScenarios = ["same", "other", "same"].map((id) => makeFlowScenario(id));
     const snapshots = recordScenarioRuns(lab);
     const evidence: QaEvidenceSummaryV3Json[] = [];
@@ -434,8 +427,6 @@ describe("QA runtime parity scenario retry isolation", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const at = (second: number) => new Date(Date.UTC(2026, 7, 4, 0, 0, second));
     vi.setSystemTime(at(0));
-    const lab = makeRetryTestLab();
-    const context = makeRetryTestContext();
     context.selectedScenarios = ["first", "second", "tail"].map((id) =>
       makeFlowScenario(id, `Catalog ${id}`),
     );
@@ -513,7 +504,6 @@ describe("QA runtime parity scenario retry isolation", () => {
   });
 
   it("does not publish terminal artifacts when cleanup fails", async () => {
-    const lab = makeRetryTestLab();
     const cleanupError = Object.assign(new Error("gateway shutdown socket reset"), {
       code: "ECONNRESET",
     });
@@ -543,7 +533,7 @@ describe("QA runtime parity scenario retry isolation", () => {
   });
 
   it("skips connected-transport readiness for intentionally unhealthy startup", async () => {
-    const context = makeRetryTestContext({
+    context = makeRetryTestContext({
       gatewayRuntimeOptions: { allowUnhealthyStartup: true },
     });
     const runScenario = scenarioRunner();
@@ -612,7 +602,7 @@ describe("QA runtime parity scenario retry isolation", () => {
       );
       return makeRetryTestResult(attempts === 1 ? "fail" : "pass");
     });
-    const context = makeRetryTestContext({
+    context = makeRetryTestContext({
       repoRoot: root,
       outputDir: path.join(root, "output"),
     });
@@ -633,3 +623,4 @@ describe("QA runtime parity scenario retry isolation", () => {
     expect(log).not.toContain("synthetic-fixture-secret");
   });
 });
+import assert from "node:assert/strict";

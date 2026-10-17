@@ -1,4 +1,3 @@
-// Qa Lab tests cover suite runtime agent process plugin behavior.
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import timersPromises from "node:timers/promises";
@@ -10,7 +9,8 @@ const runQaWindowsTaskkillMock = vi.hoisted(() => vi.fn());
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
-const readSessionTranscriptSummaryMock = vi.hoisted(() => vi.fn());
+const readTranscriptMock = vi.hoisted(() => vi.fn());
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
@@ -27,7 +27,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
 }));
 
 vi.mock("./suite-runtime-agent-session.js", () => ({
-  readSessionTranscriptSummary: readSessionTranscriptSummaryMock,
+  readSessionTranscriptSummary: readTranscriptMock,
 }));
 
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
@@ -42,16 +42,9 @@ import {
   waitForAgentHistoryReply,
 } from "./suite-runtime-agent-process.js";
 
-type MockChildProcess = EventEmitter & {
-  pid?: number;
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  kill: ReturnType<typeof vi.fn>;
-};
-
-function createSpawnedProcess(params: { pid?: number } = {}) {
+function createSpawnedProcess(pid?: number) {
   const child = Object.assign(new EventEmitter(), {
-    pid: params.pid,
+    pid,
     stdout: new EventEmitter(),
     stderr: new EventEmitter(),
     kill: vi.fn(),
@@ -71,42 +64,26 @@ function createSpawnedProcess(params: { pid?: number } = {}) {
 }
 
 async function waitForSpawnCount(count: number) {
-  await vi.waitFor(() => {
-    expect(spawnMock).toHaveBeenCalledTimes(count);
-  });
+  await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(count));
   await Promise.resolve();
 }
+const captureError = (error: unknown) => error;
 
 const QA_CLI_ENV = {
   repoRoot: "/repo",
-  gateway: {
-    tempRoot: "/tmp/runtime",
-    runtimeEnv: { PATH: "/usr/bin" },
-  },
+  gateway: { tempRoot: "/tmp/runtime", runtimeEnv: { PATH: "/usr/bin" } },
   primaryModel: "openai/gpt-5.6-luna",
   alternateModel: "openai/gpt-5.6-luna-mini",
   providerMode: "mock-openai",
 } as unknown as Parameters<typeof runQaCli>[0];
 
-const QA_CLI_JSON_ENV = {
-  ...QA_CLI_ENV,
-  gateway: { tempRoot: "/tmp/runtime", runtimeEnv: {} },
-} as unknown as Parameters<typeof runQaCli>[0];
-
 function startMockQaCli(
-  params: {
-    args?: string[];
-    child?: MockChildProcess;
-    env?: Parameters<typeof runQaCli>[0];
-    options?: Parameters<typeof runQaCli>[2];
-  } = {},
+  child = createSpawnedProcess(),
+  options?: Parameters<typeof runQaCli>[2],
+  args = ["qa", "suite"],
 ) {
-  const child = params.child ?? createSpawnedProcess();
   spawnMock.mockReturnValue(child);
-  return {
-    child,
-    pending: runQaCli(params.env ?? QA_CLI_ENV, params.args ?? ["qa", "suite"], params.options),
-  };
+  return { child, pending: runQaCli(QA_CLI_ENV, args, options) };
 }
 
 function historyError(
@@ -121,40 +98,36 @@ function historyError(
   });
 }
 function completedAgentCall(runId: string) {
-  return vi.fn().mockResolvedValueOnce({ runId }).mockResolvedValueOnce({ status: "completed" });
+  return gatewayResults({ runId }, { status: "completed" });
 }
-function transcript(toolName: string, completed = false, successful = false, finalText = "") {
+function gatewayResults(...results: unknown[]) {
+  const call = vi.fn();
+  results.forEach((result) => call.mockResolvedValueOnce(result));
+  return call;
+}
+const assistantHistory = (content: string) => ({ messages: [{ role: "assistant", content }] });
+function transcript(toolName: string, completed = false) {
   return {
     assistantToolCallCounts: { [toolName]: 1 },
     completedToolCallCounts: completed ? { [toolName]: 1 } : {},
-    successfulToolCallCounts: successful ? { [toolName]: 1 } : {},
-    finalText,
+    successfulToolCallCounts: {},
   };
 }
 function startJsonCli() {
-  return startMockQaCli({
-    env: QA_CLI_JSON_ENV,
-    args: ["memory", "search", "--json"],
-    options: { json: true },
-  });
+  return startMockQaCli(undefined, { json: true }, ["memory", "search", "--json"]);
 }
 const delivery = { channel: "qa-channel", replyChannel: "reply-channel", replyTo: "reply-target" };
-function createAgentPromptEnv(
+function agentEnv(
   gatewayCall: ReturnType<typeof vi.fn>,
   buildAgentDelivery = vi.fn(() => delivery),
 ) {
-  return {
-    gateway: { call: gatewayCall },
-    transport: {
-      buildAgentDelivery,
-    },
-  } as never;
+  return { gateway: { call: gatewayCall }, transport: { buildAgentDelivery } } as never;
 }
 function prompt(
   gatewayCall: ReturnType<typeof vi.fn>,
   params: Partial<Parameters<typeof runAgentPrompt>[1]> = {},
 ) {
-  return runAgentPrompt(createAgentPromptEnv(gatewayCall), {
+  return runAgentPrompt(agentEnv(gatewayCall), {
     sessionKey: "session-evidence",
     message: "run the shell command",
     ...params,
@@ -162,14 +135,14 @@ function prompt(
 }
 function historyReply(
   gatewayCall: ReturnType<typeof vi.fn>,
-  predicate: (text: string) => boolean,
+  expectedText: string | false,
   timeoutMs = 1_000,
   intervalMs = 1,
 ) {
   return waitForAgentHistoryReply(
-    createAgentPromptEnv(gatewayCall),
+    agentEnv(gatewayCall),
     "session-history",
-    predicate,
+    (text) => text === expectedText,
     timeoutMs,
     intervalMs,
   );
@@ -180,6 +153,9 @@ describe("qa suite runtime agent process helpers", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     syncBuiltinESMExports();
+    if (platformDescriptor) {
+      Object.defineProperty(process, "platform", platformDescriptor);
+    }
   });
   beforeEach(() => {
     spawnMock.mockReset();
@@ -187,7 +163,7 @@ describe("qa suite runtime agent process helpers", () => {
     resolveQaNodeExecPathMock.mockClear();
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
-    readSessionTranscriptSummaryMock.mockReset();
+    readTranscriptMock.mockReset();
   });
 
   it.runIf(process.platform !== "win32")("kills timed-out qa cli process groups", async () => {
@@ -203,11 +179,8 @@ describe("qa suite runtime agent process helpers", () => {
     });
     vi.useFakeTimers();
 
-    const { child, pending } = startMockQaCli({
-      child: createSpawnedProcess({ pid: 12345 }),
-      options: { timeoutMs: 1 },
-    });
-    const errorPromise = pending.catch((value: unknown) => value);
+    const { child, pending } = startMockQaCli(createSpawnedProcess(12345), { timeoutMs: 1 });
+    const errorPromise = pending.catch(captureError);
     await Promise.resolve();
     expect(spawnMock).toHaveBeenCalledTimes(1);
     for (const [stream, limit] of [
@@ -247,9 +220,8 @@ describe("qa suite runtime agent process helpers", () => {
       });
       vi.useFakeTimers();
 
-      const child = createSpawnedProcess({ pid: 12345 });
-      const { pending } = startMockQaCli({ child });
-      const errorPromise = pending.catch((value: unknown) => value);
+      const { child, pending } = startMockQaCli(createSpawnedProcess(12345));
+      const errorPromise = pending.catch(captureError);
       await Promise.resolve();
       child.stderr.emit("data", Buffer.from("suite failed\n"));
       child.emit("exit", 7, null);
@@ -258,50 +230,36 @@ describe("qa suite runtime agent process helpers", () => {
 
       const error = await errorPromise;
       expect(error).toBeInstanceOf(AggregateError);
-      expect(error).toMatchObject({ message: "qa cli command and settlement failed" });
-      const failures = error instanceof AggregateError ? error.errors : [];
-      expect(failures).toEqual([
-        expect.objectContaining({ message: "qa cli failed (7): suite failed" }),
-        expect.any(Error),
-      ]);
+      expect(error).toMatchObject({
+        message: "qa cli command and settlement failed",
+        errors: [
+          expect.objectContaining({ message: "qa cli failed (7): suite failed" }),
+          expect.any(Error),
+        ],
+      });
     },
   );
 
-  it.each([
-    { label: "succeeds", taskkillSucceeded: true },
-    { label: "falls back", taskkillSucceeded: false },
-  ])(
-    "preserves the Windows timeout result when canonical cleanup $label",
-    async ({ taskkillSucceeded }) => {
-      const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  it.each([true, false])(
+    "preserves Windows CLI timeouts (taskkill succeeded=%s)",
+    async (taskkillSucceeded) => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      try {
-        const child = createSpawnedProcess({ pid: 12345 });
-        runQaWindowsTaskkillMock.mockReturnValue(taskkillSucceeded);
-        const { pending } = startMockQaCli({
-          args: ["qa", "suite"],
-          child,
-          options: { timeoutMs: 1 },
-        });
-        const timeoutAssertion = expect(pending).rejects.toThrow(
-          "qa cli timed out: openclaw qa suite",
-        );
+      runQaWindowsTaskkillMock.mockReturnValue(taskkillSucceeded);
+      const { child, pending } = startMockQaCli(createSpawnedProcess(12345), { timeoutMs: 1 });
+      const timeoutAssertion = expect(pending).rejects.toThrow(
+        "qa cli timed out: openclaw qa suite",
+      );
 
-        await waitForSpawnCount(1);
-        await timeoutAssertion;
-        expect(runQaWindowsTaskkillMock).toHaveBeenCalledWith({
-          pid: 12345,
-          signal: "SIGKILL",
-        });
-        if (taskkillSucceeded) {
-          expect(child.kill).not.toHaveBeenCalled();
-        } else {
-          expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-        }
-      } finally {
-        if (platformDescriptor) {
-          Object.defineProperty(process, "platform", platformDescriptor);
-        }
+      await waitForSpawnCount(1);
+      await timeoutAssertion;
+      expect(runQaWindowsTaskkillMock).toHaveBeenCalledWith({
+        pid: 12345,
+        signal: "SIGKILL",
+      });
+      if (taskkillSucceeded) {
+        expect(child.kill).not.toHaveBeenCalled();
+      } else {
+        expect(child.kill).toHaveBeenCalledWith("SIGKILL");
       }
     },
   );
@@ -373,100 +331,81 @@ describe("qa suite runtime agent process helpers", () => {
     expect(operations).toEqual(["stop", "index", "restart", "search"]);
   });
 
-  it("starts an agent run with transport-derived delivery metadata", async () => {
-    const gatewayCall = vi.fn(async () => ({ runId: "run-1" }));
-    const env = createAgentPromptEnv(
-      gatewayCall,
-      vi.fn(() => ({
-        ...delivery,
-        to: "transport-target",
-        threadId: "adapter-thread",
-      })),
+  it.each([true, false])("routes agent delivery with task tracking=%s", async (taskTracking) => {
+    const sessionKey = taskTracking ? "session-1" : "agent:qa:main";
+    const gatewayCall = vi.fn(async () =>
+      taskTracking ? { runId: "run-1" } : { runId: "run-chat", status: "started" },
     );
-
+    const buildAgentDelivery = vi.fn(() =>
+      taskTracking
+        ? { ...delivery, to: "transport-target", threadId: "adapter-thread" }
+        : {
+            channel: "qa-channel",
+            replyChannel: "qa-channel",
+            replyTo: "dm:qa-operator",
+            threadId: "provider-topic-42",
+          },
+    );
+    const env = agentEnv(gatewayCall, buildAgentDelivery);
     await expect(
       startAgentRun(env, {
-        sessionKey: "session-1",
+        sessionKey,
         message: "hello",
+        ...(!taskTracking ? { threadId: "topic-42", taskTracking: false } : {}),
       }),
-    ).resolves.toEqual({ runId: "run-1" });
+    ).resolves.toEqual(
+      taskTracking ? { runId: "run-1" } : { runId: "run-chat", status: "started" },
+    );
     expect(gatewayCall).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({
-        sessionKey: "session-1",
-        message: "hello",
-        channel: "qa-channel",
-        to: "transport-target",
-        replyChannel: "reply-channel",
-        replyTo: "reply-target",
-        threadId: "adapter-thread",
-      }),
-      expect.any(Object),
+      taskTracking ? "agent" : "chat.send",
+      taskTracking
+        ? expect.objectContaining({
+            sessionKey,
+            message: "hello",
+            channel: "qa-channel",
+            to: "transport-target",
+            replyChannel: "reply-channel",
+            replyTo: "reply-target",
+            threadId: "adapter-thread",
+          })
+        : {
+            idempotencyKey: expect.any(String),
+            sessionKey,
+            message: "hello",
+            deliver: true,
+            originatingChannel: "qa-channel",
+            originatingTo: "dm:qa-operator",
+            originatingThreadId: "provider-topic-42",
+          },
+      taskTracking ? expect.any(Object) : { timeoutMs: 30_000 },
     );
-  });
-
-  it("preserves thread routing for an interactive run without CLI task tracking", async () => {
-    const gatewayCall = vi.fn(async () => ({ runId: "run-chat", status: "started" }));
-    const buildAgentDelivery = vi.fn(() => ({
-      channel: "qa-channel",
-      replyChannel: "qa-channel",
-      replyTo: "dm:qa-operator",
-      threadId: "provider-topic-42",
-    }));
-    const env = createAgentPromptEnv(gatewayCall, buildAgentDelivery);
-
-    await expect(
-      startAgentRun(env, {
-        sessionKey: "agent:qa:main",
-        message: "hello",
+    if (!taskTracking) {
+      expect(buildAgentDelivery).toHaveBeenCalledWith({
+        target: "dm:qa-operator",
         threadId: "topic-42",
-        taskTracking: false,
-      }),
-    ).resolves.toEqual({ runId: "run-chat", status: "started" });
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "chat.send",
-      {
-        idempotencyKey: expect.any(String),
-        sessionKey: "agent:qa:main",
-        message: "hello",
-        deliver: true,
-        originatingChannel: "qa-channel",
-        originatingTo: "dm:qa-operator",
-        originatingThreadId: "provider-topic-42",
-      },
-      { timeoutMs: 30_000 },
-    );
-    expect(buildAgentDelivery).toHaveBeenCalledWith({
-      target: "dm:qa-operator",
-      threadId: "topic-42",
-    });
+      });
+    }
   });
 
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
     const name = "Memory Dreaming Promotion";
     const marker = "__openclaw_memory_core_short_term_promotion_dream__";
-    const legacy = { id: "legacy", name, payload: { kind: "systemEvent", text: marker } };
-    const current = {
-      id: "current",
-      name,
-      payload: {
-        kind: "agentTurn",
-        message: marker,
-        lightContext: true,
+    for (const contract of [
+      { id: "legacy", payload: { kind: "systemEvent", text: marker } },
+      {
+        id: "current",
+        payload: { kind: "agentTurn", message: marker, lightContext: true },
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
       },
-      sessionTarget: "isolated",
-      delivery: { mode: "none" },
-    };
-
-    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, legacy])).toBe(legacy);
-    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, current])).toBe(current);
+    ]) {
+      const job = { name, ...contract };
+      expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, job])).toBe(job);
+    }
   });
 
   it("waits for an agent run and fails when the run does not finish ok", async () => {
-    const gatewayCall = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run-2" })
-      .mockResolvedValueOnce({ status: "error", error: "boom" });
+    const gatewayCall = gatewayResults({ runId: "run-2" }, { status: "error", error: "boom" });
     await expect(
       prompt(gatewayCall, { sessionKey: "session-2", message: "hello" }),
     ).rejects.toThrow("agent.wait returned error: boom");
@@ -477,7 +416,7 @@ describe("qa suite runtime agent process helpers", () => {
     vi.useFakeTimers();
 
     const gatewayCall = completedAgentCall("run-transcript-evidence");
-    readSessionTranscriptSummaryMock
+    readTranscriptMock
       .mockResolvedValueOnce(transcript(toolName))
       .mockResolvedValueOnce(transcript(toolName, true));
     const pending = prompt(gatewayCall, {
@@ -490,15 +429,15 @@ describe("qa suite runtime agent process helpers", () => {
       started: { runId: "run-transcript-evidence" },
       waited: { status: "completed" },
     });
-    expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
+    expect(readTranscriptMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses the turn budget for delayed persisted tool completion", async () => {
     vi.useFakeTimers();
 
     const gatewayCall = completedAgentCall("run-delayed-evidence");
-    const summary = transcript("exec", false, false, "command finished");
-    readSessionTranscriptSummaryMock.mockResolvedValue(summary);
+    const summary = transcript("exec");
+    readTranscriptMock.mockResolvedValue(summary);
     const pending = prompt(gatewayCall, {
       timeoutMs: 10_000,
       transcriptToolName: "exec",
@@ -506,7 +445,7 @@ describe("qa suite runtime agent process helpers", () => {
     });
     const result = expect(pending).resolves.toMatchObject({ waited: { status: "completed" } });
     await vi.advanceTimersByTimeAsync(6_000);
-    readSessionTranscriptSummaryMock.mockResolvedValue({
+    readTranscriptMock.mockResolvedValue({
       ...summary,
       completedToolCallCounts: { exec: 1 },
       successfulToolCallCounts: { exec: 1 },
@@ -519,9 +458,7 @@ describe("qa suite runtime agent process helpers", () => {
     vi.useFakeTimers();
 
     const gatewayCall = completedAgentCall("run-missing-evidence");
-    readSessionTranscriptSummaryMock.mockResolvedValue(
-      transcript("exec", true, false, "command failed"),
-    );
+    readTranscriptMock.mockResolvedValue(transcript("exec", true));
     const pending = prompt(gatewayCall, {
       timeoutMs: 100,
       transcriptToolName: "exec",
@@ -535,22 +472,17 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("waits for the latest assistant history reply", async () => {
-    const gatewayCall = vi
-      .fn()
-      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "still working" }] })
-      .mockResolvedValueOnce({
-        messages: [
-          { role: "user", content: "hello" },
-          {
-            role: "assistant",
-            content: [{ type: "output_text", text: "HISTORY-REPLY-OK" }],
-          },
-        ],
-      });
+    const gatewayCall = gatewayResults(assistantHistory("still working"), {
+      messages: [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "HISTORY-REPLY-OK" }],
+        },
+      ],
+    });
 
-    await expect(
-      historyReply(gatewayCall, (text) => text === "HISTORY-REPLY-OK", 1_000, 1),
-    ).resolves.toMatchObject({
+    await expect(historyReply(gatewayCall, "HISTORY-REPLY-OK")).resolves.toMatchObject({
       text: "HISTORY-REPLY-OK",
     });
     expect(gatewayCall).toHaveBeenLastCalledWith(
@@ -577,16 +509,9 @@ describe("qa suite runtime agent process helpers", () => {
       const gatewayCall = vi
         .fn()
         .mockRejectedValueOnce(wrappedError)
-        .mockResolvedValueOnce({
-          messages: [{ role: "assistant", content: "HISTORY-RETRY-OK" }],
-        });
+        .mockResolvedValueOnce(assistantHistory("HISTORY-RETRY-OK"));
 
-      const pending = historyReply(
-        gatewayCall,
-        (text) => text === "HISTORY-RETRY-OK",
-        1_000,
-        1,
-      ).catch((error: unknown) => error);
+      const pending = historyReply(gatewayCall, "HISTORY-RETRY-OK").catch(captureError);
       await vi.advanceTimersByTimeAsync(250);
 
       await expect(pending).resolves.toEqual({ text: "HISTORY-RETRY-OK" });
@@ -603,13 +528,9 @@ describe("qa suite runtime agent process helpers", () => {
         ? vi
             .fn()
             .mockRejectedValueOnce(gatewayError)
-            .mockResolvedValue({
-              messages: [{ role: "assistant", content: "still working" }],
-            })
+            .mockResolvedValue(assistantHistory("still working"))
         : vi.fn().mockRejectedValue(wrappedError);
-      const timeoutError = await historyReply(gatewayCall, () => false, 220, 50).catch(
-        (error: unknown) => error,
-      );
+      const timeoutError = await historyReply(gatewayCall, false, 220, 50).catch(captureError);
       if (recovered) {
         expect(timeoutError).toBeInstanceOf(Error);
         expect(timeoutError).not.toHaveProperty("cause");
@@ -624,27 +545,18 @@ describe("qa suite runtime agent process helpers", () => {
   );
 
   it("does not retry history errors without method-specific refusal details", async () => {
-    const gatewayError = Object.assign(new Error("history unavailable"), {
-      gatewayCode: "UNAVAILABLE",
-      retryable: true,
-      retryAfterMs: 250,
-      details: {},
-    });
+    const gatewayError = historyError({}, 250);
     const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
 
-    await expect(historyReply(gatewayCall, () => false, 1_000, 1)).rejects.toBe(gatewayError);
+    await expect(historyReply(gatewayCall, false)).rejects.toBe(gatewayError);
     expect(gatewayCall).toHaveBeenCalledOnce();
   });
 
   it("lists cron jobs and doctor memory status through the gateway", async () => {
-    const gatewayCall = vi
-      .fn()
-      .mockResolvedValueOnce({
-        jobs: [{ id: "job-1", name: "dreaming" }],
-      })
-      .mockResolvedValueOnce({
-        dreaming: { enabled: true, shortTermCount: 3 },
-      });
+    const gatewayCall = gatewayResults(
+      { jobs: [{ id: "job-1", name: "dreaming" }] },
+      { dreaming: { enabled: true, shortTermCount: 3 } },
+    );
     const env = { gateway: { call: gatewayCall } } as never;
 
     await expect(listCronJobs(env)).resolves.toEqual([{ id: "job-1", name: "dreaming" }]);
