@@ -14,24 +14,31 @@ import {
 } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
+type SessionReader = typeof import("../../../config/sessions/session-entry-read-runtime.js");
+const fixedStoreConfig = {
+  agents: {
+    ownership: "explicit" as const,
+    defaults: { sessionStore: { agentId: "ops" } },
+    entries: { ops: {}, research: {} },
+  },
+  session: { store: "/tmp/shared-sessions.json" },
+};
+const sessionKey = "agent:main:main";
+const markerAfter = "sqlite:main:session-after:/tmp/sessions.json";
+
+function makeSessionTarget(sessionId = "session-before", storePath = "/tmp/sessions.json") {
+  return { agentId: "main", sessionId, sessionKey, storePath };
+}
+
 const sessionAccessorMocks = vi.hoisted(() => ({
   patchSessionEntryCore:
     vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   updateSessionEntry: vi.fn(async () => undefined),
 }));
 const sessionReaderMocks = vi.hoisted(() => ({
-  readSessionEntrySummariesInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntrySummariesInWorker
-    >(),
-  readSessionEntryInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
-    >(),
-  withSessionEntryReadOnlyInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
-    >(),
+  readSessionEntrySummariesInWorker: vi.fn<SessionReader["readSessionEntrySummariesInWorker"]>(),
+  readSessionEntryInWorker: vi.fn<SessionReader["readSessionEntryInWorker"]>(),
+  withSessionEntryReadOnlyInWorker: vi.fn<SessionReader["withSessionEntryReadOnlyInWorker"]>(),
 }));
 
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionReaderMocks);
@@ -145,14 +152,7 @@ describe("buildContextEngineCompactionSessionTarget", () => {
   it("rejects a partial target that conflicts with the fixed-store owner", async () => {
     await expect(
       buildContextEngineCompactionSessionTarget({
-        config: {
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { ops: {}, research: {} },
-          },
-          session: { store: "/tmp/shared-sessions.json" },
-        },
+        config: fixedStoreConfig,
         sessionFile: "global",
         sessionId: "ops-session",
         sessionKey: "global",
@@ -185,15 +185,6 @@ describe("buildContextEngineCompactionSessionTarget", () => {
 });
 
 describe("fixed-store session bootstrap", () => {
-  const config = {
-    agents: {
-      ownership: "explicit" as const,
-      defaults: { sessionStore: { agentId: "ops" } },
-      entries: { ops: {}, research: {} },
-    },
-    session: { store: "/tmp/shared-sessions.json" },
-  };
-
   it.each([false, true])(
     "keeps the prepared reset target and its commit owner (closed=%s)",
     async (closeBeforeCommit) => {
@@ -241,7 +232,7 @@ describe("fixed-store session bootstrap", () => {
 
   it("carries the persisted owner into harness admission", async () => {
     await assertAgentHarnessRunAdmission({
-      config,
+      config: fixedStoreConfig,
       sessionId: "ops-session",
       sessionKey: "global",
     } as never);
@@ -281,19 +272,16 @@ describe("createEmbeddedRunSessionPromptState", () => {
         agentId: "main",
         prompt: "hello",
         runId: "run-b",
-        sessionFile: "agent:main:main",
+        sessionFile: sessionKey,
         sessionId: "session-before",
-        sessionKey: "agent:main:main",
-        sessionTarget: {
-          agentId: "main",
-          expectedLifecycleRevision: "revision-a",
-          expectedWriterRunId: "run-b",
-          sessionId: "session-before",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/sessions.json",
-        },
+        sessionKey,
         timeoutMs: 30_000,
         workspaceDir: "/tmp",
+        sessionTarget: {
+          ...makeSessionTarget(),
+          expectedLifecycleRevision: "revision-a",
+          expectedWriterRunId: "run-b",
+        },
       } as never,
       lifecycleGeneration: "generation-a",
       onInterrupt: () => {},
@@ -301,12 +289,7 @@ describe("createEmbeddedRunSessionPromptState", () => {
       sessionAgentId: "main",
     });
 
-    state.sessionTarget = {
-      agentId: "main",
-      sessionId: "session-after",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-    };
+    state.sessionTarget = makeSessionTarget("session-after");
 
     expect(state.sessionTarget).not.toHaveProperty("expectedWriterRunId");
     expect(state.sessionWriterFence).toEqual({
@@ -320,14 +303,18 @@ function promptState(storePath = "/tmp/sessions.json") {
   return {
     sessionId: "session-before",
     sessionFile: "agent:main:main",
-    sessionTarget: {
-      agentId: "main",
-      sessionId: "session-before",
-      sessionKey: "agent:main:main",
-      storePath,
-    },
+    sessionTarget: makeSessionTarget("session-before", storePath),
     adoptSessionId: vi.fn(),
   };
+}
+
+function applyIdentity(state = promptState(), sessionFileUsed: string | undefined = markerAfter) {
+  return applyEmbeddedAttemptSessionIdentity({
+    assertCurrent: vi.fn(),
+    sessionPromptState: state,
+    sessionIdUsed: "session-after",
+    sessionFileUsed,
+  });
 }
 
 describe("applyEmbeddedAttemptSessionIdentity", () => {
@@ -442,19 +429,8 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     ]);
     const state = promptState();
 
-    await applyEmbeddedAttemptSessionIdentity({
-      assertCurrent: vi.fn(),
-      sessionPromptState: state,
-      sessionIdUsed: "session-after",
-      sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
-    });
-
-    expect(state.sessionTarget).toEqual({
-      agentId: "main",
-      sessionId: "session-after",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-    });
+    await applyIdentity(state);
+    expect(state.sessionTarget).toEqual(makeSessionTarget("session-after"));
   });
 
   it("rejects a legacy marker successor already mapped to another key", async () => {
@@ -465,44 +441,23 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
         entry: { sessionId: "session-after", updatedAt: 2 },
       },
     ]);
-    const state = promptState();
-
-    await expect(
-      applyEmbeddedAttemptSessionIdentity({
-        assertCurrent: vi.fn(),
-        sessionPromptState: state,
-        sessionIdUsed: "session-after",
-        sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
-      }),
-    ).rejects.toThrow("successor target changed the active session binding");
+    await expect(applyIdentity()).rejects.toThrow(
+      "successor target changed the active session binding",
+    );
   });
 
   it("rejects a legacy SQLite marker outside the active store", async () => {
-    const state = promptState();
-
     await expect(
-      applyEmbeddedAttemptSessionIdentity({
-        assertCurrent: vi.fn(),
-        sessionPromptState: state,
-        sessionIdUsed: "session-after",
-        sessionFileUsed: "sqlite:main:session-after:/tmp/other-sessions.json",
-      }),
+      applyIdentity(promptState(), "sqlite:main:session-after:/tmp/other-sessions.json"),
     ).rejects.toThrow("successor target changed the active session binding");
   });
 
   it.each(["sqlite:other:session-after:/tmp/sessions.json", "agent:other:main"])(
     "rejects a cross-agent legacy successor identity: %s",
     async (sessionFileUsed) => {
-      const state = promptState();
-
-      await expect(
-        applyEmbeddedAttemptSessionIdentity({
-          assertCurrent: vi.fn(),
-          sessionPromptState: state,
-          sessionIdUsed: "session-after",
-          sessionFileUsed,
-        }),
-      ).rejects.toThrow(/successor (identity is inconsistent|files are unsupported)/u);
+      await expect(applyIdentity(promptState(), sessionFileUsed)).rejects.toThrow(
+        /successor (identity is inconsistent|files are unsupported)/u,
+      );
     },
   );
 

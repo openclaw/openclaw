@@ -119,7 +119,7 @@ async function fixture(
   );
   const controls = mode === "search" ? ["tool_search"] : mode === "code" ? ["exec"] : [];
   const controlTools = controls.map((name) => ({ ...tools[0]!, name }));
-  const { session, sessionManager, modelRegistry } = await createTestSession({
+  const { session, sessionManager } = await createTestSession({
     customTools: [...tools, ...controlTools],
   });
   session.setActiveToolsByName(
@@ -167,23 +167,16 @@ async function fixture(
     clearEmbeddedSessionPromptStates([runId]);
   });
   const controller = new AbortController();
-  const attempt: EmbeddedRunAttemptParams = {
+  const attempt: Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["attempt"] = {
     admittedRunContext: await admission.admit("embedded"),
-    authStorage: modelRegistry.authStorage,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry,
     config: cfg,
     model: testModel,
-    modelId: testModel.id,
     provider: testModel.provider,
-    thinkLevel: "off",
     prompt: "Hello",
     runId,
     sessionId: runId,
-    sessionFile: "",
     sessionPersistence: "detached",
     trigger: "user",
-    timeoutMs: 10_000,
     workspaceDir: "/synthetic",
     abortSignal: controller.signal,
     supportsTurnScopedToolRestrictions: true,
@@ -209,9 +202,8 @@ async function fixture(
   const submit = async (
     assembly: Awaited<ReturnType<typeof assemble>>,
     persistToolResultProjections: () => Promise<void>,
-  ) => {
-    const state = promptStateLease.state;
-    return await submitEmbeddedAttemptPrompt({
+  ) =>
+    submitEmbeddedAttemptPrompt({
       attempt,
       activeSession: session,
       contextTokenBudget: 8000,
@@ -220,7 +212,7 @@ async function fixture(
       transcriptPrompt: assembly.effectivePrompt,
       systemPrompt: session.agent.state.systemPrompt,
       runtimeOnly: false,
-      toolResultPromptProjectionState: state.toolResults,
+      toolResultPromptProjectionState: promptStateLease.state.toolResults,
       toolResultMaxChars: 4000,
       toolResultAggregateMaxChars: 8000,
       transcriptLeafId: null,
@@ -231,7 +223,6 @@ async function fixture(
       persistToolResultProjections,
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
-  };
   return { assemble, submit, session, policy, catalogRef, controller, admission, attempt, tools };
 }
 
@@ -313,9 +304,7 @@ describe("prompt assembly with registered Decision runtime", () => {
       const call = register();
       const f = await fixture(cfg, "structured", agentId);
       if (missingReferent) {
-        f.session.agent.state.messages = [
-          createAssistant(testModel, [{ type: "text", text: "Should I edit the file?" }]),
-        ];
+        f.session.agent.state.messages = [createAssistant(testModel, "Should I edit the file?")];
       }
       await f.assemble({
         supportsTurnScopedToolRestrictions: support,
@@ -342,9 +331,7 @@ describe("prompt assembly with registered Decision runtime", () => {
         const captured: string[][] = [];
         streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
           captured.push((context.tools ?? []).map((t) => t.name));
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "done" }]),
-          );
+          return createAssistantResultStream(createAssistant(model, "done"));
         });
         const pending = f.submit(assembly, async () => {
           entered.resolve();
@@ -474,7 +461,7 @@ describe("prompt assembly with registered Decision runtime", () => {
             parameters,
           })),
         });
-        return createAssistantResultStream(createAssistant(model, [{ type: "text", text: reply }]));
+        return createAssistantResultStream(createAssistant(model, reply));
       });
       const submit = async (prompt: string) => {
         await f.assemble({ prompt });

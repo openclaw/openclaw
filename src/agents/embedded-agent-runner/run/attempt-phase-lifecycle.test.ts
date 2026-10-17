@@ -41,6 +41,110 @@ import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-attempt-terminal-anchor-");
 
+function streamInput(messages: unknown[] = [], currentAttemptAssistant?: unknown) {
+  const runAbortDeadlineAtMs = Date.now() + 60_000;
+  const sessionManager = Object.assign(SessionManager.inMemory(), {
+    appendCustomEntryAsync: vi.fn(async () => undefined),
+    buildSessionContext: () => ({ messages }),
+    getEntries: () => [],
+    removeTrailingEntriesAsync: vi.fn(async () => 0),
+  });
+  const input: Parameters<typeof settleEmbeddedAttemptStream>[0] = {
+    attempt: {
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      sessionFile: "/tmp/session.jsonl",
+      provider: "test",
+      modelId: "model",
+      model: { api: "openai-responses" },
+    } as never,
+    activeSession: {
+      agent: { state: { messages } },
+      isCompacting: false,
+      isStreaming: false,
+      messages,
+      sessionId: "session-1",
+    } as never,
+    sessionManager: sessionManager as never,
+    toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+    withOwnedTranscriptWrite: async (operation) => await operation(),
+    subscription: {
+      toolMetas: [],
+      waitForCompactionRetry: async () => {},
+      isCompactionInFlight: () => false,
+      getCompactionCount: () => 0,
+      getCurrentAttemptAssistant: () => structuredClone(currentAttemptAssistant),
+      getUsageTotals: () => undefined,
+      getLastAssistantUsage: () => undefined,
+    } as never,
+    state: { promptError: null, promptErrorSource: null, yieldAborted: false },
+    readLifecycleState: () => ({
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    }),
+    markTimedOutDuringCompaction: () => {},
+    getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
+    runAbortSignal: new AbortController().signal,
+    isProbeSession: true,
+    abortable: async (promise) => await promise,
+    prePromptMessageCount: 0,
+    nestedToolActivityState: createAttemptNestedToolActivityState(),
+    cache: { retention: undefined },
+    shouldFlushForContextEngine: false,
+  };
+  return { input, sessionManager };
+}
+
+function prepared(
+  sessionManager: SessionManager,
+  record = true,
+  tools: { name: string }[] = [],
+  hookRunner: Pick<
+    NonNullable<Parameters<typeof awaitAgentHarnessAgentEndHook>[0]["hookRunner"]>,
+    "hasHooks" | "runAgentEnd"
+  > | null = null,
+) {
+  return {
+    bootstrap: { shouldRecordCompletedBootstrapTurn: record },
+    bundleTools: { uncompactedEffectiveTools: tools },
+    toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
+    sessionRuntime: {
+      sessionManager,
+      agentSession: { hookRunner },
+      state: { prePromptMessageCount: 0 },
+      contextGuards: { getAfterTurnCheckpoint: () => null },
+      cacheTrace: null,
+      anthropicPayloadLogger: null,
+    },
+  };
+}
+
+function settled(
+  sessionIdUsed: string,
+  overrides: Partial<Parameters<typeof completeEmbeddedAttemptAfterTurn>[1]> = {},
+) {
+  return {
+    promptError: null,
+    sessionIdUsed,
+    messagesSnapshot: [],
+    lastCallUsage: undefined,
+    promptCache: undefined,
+    compactionOccurredThisAttempt: false,
+    ...overrides,
+  };
+}
+
+function prompt(transcriptLeafId: string | null = null) {
+  return {
+    yieldAborted: false,
+    transcriptLeafId,
+    promptStartedAt: Date.now(),
+    beforeAgentFinalizeRevisionReason: undefined,
+  };
+}
+
 describe("embedded attempt phase lifecycle state", () => {
   beforeEach(() => {
     hoisted.runAgentEndSideEffects.mockReset();
@@ -51,75 +155,20 @@ describe("embedded attempt phase lifecycle state", () => {
   it("re-reads compaction timeout state after the retry wait", async () => {
     let timedOut = false;
     let timedOutDuringCompaction = false;
-    const messages: never[] = [];
-    const removeTrailingEntriesAsync = vi.fn(async () => 0);
-    const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntryAsync: vi.fn(async () => undefined),
-      buildSessionContext: () => ({ messages }),
-      getEntries: () => [],
-      removeTrailingEntriesAsync,
-    });
-    const activeSession = {
-      agent: { state: { messages } },
-      isCompacting: false,
-      isStreaming: false,
-      messages,
-      sessionId: "session-1",
+    const { input, sessionManager } = streamInput();
+    delete input.attempt.sessionKey;
+    input.subscription.waitForCompactionRetry = async () => {
+      timedOut = true;
+      timedOutDuringCompaction = true;
     };
-
-    const runAbortDeadlineAtMs = Date.now() + 60_000;
-    const result = await settleEmbeddedAttemptStream({
-      attempt: {
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
-        provider: "test",
-        modelId: "model",
-        model: { api: "openai-responses" },
-      } as never,
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      withOwnedTranscriptWrite: async (operation) => await operation(),
-      subscription: {
-        toolMetas: [],
-        waitForCompactionRetry: async () => {
-          timedOut = true;
-          timedOutDuringCompaction = true;
-        },
-        isCompactionInFlight: () => false,
-        getCompactionCount: () => 0,
-        getCurrentAttemptAssistant: () => undefined,
-        getUsageTotals: () => undefined,
-        getLastAssistantUsage: () => undefined,
-      } as never,
-      state: {
-        promptError: null,
-        promptErrorSource: null,
-        yieldAborted: false,
-      },
-      readLifecycleState: () => ({
-        aborted: timedOut,
-        timedOut,
-        timedOutDuringCompaction,
-      }),
-      markTimedOutDuringCompaction: () => {
-        timedOutDuringCompaction = true;
-      },
-      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
-      runAbortSignal: new AbortController().signal,
-      isProbeSession: true,
-      abortable: async (promise) => await promise,
-      prePromptMessageCount: 0,
-      nestedToolActivityState: createAttemptNestedToolActivityState(),
-      cache: {
-        retention: undefined,
-      },
-      shouldFlushForContextEngine: false,
-    });
+    input.readLifecycleState = () => ({ aborted: timedOut, timedOut, timedOutDuringCompaction });
+    input.markTimedOutDuringCompaction = () => {
+      timedOutDuringCompaction = true;
+    };
+    const result = await settleEmbeddedAttemptStream(input);
 
     expect(result.timedOutDuringCompaction).toBe(true);
-    expect(removeTrailingEntriesAsync).toHaveBeenCalledOnce();
+    expect(sessionManager.removeTrailingEntriesAsync).toHaveBeenCalledOnce();
   });
 
   it("settles a user-aborted run whose async-task wait throws AbortError", async () => {
@@ -128,67 +177,15 @@ describe("embedded attempt phase lifecycle state", () => {
     });
     hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReturnValue(true);
     hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
-    const messages: never[] = [];
-    const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntryAsync: vi.fn(async () => undefined),
-      buildSessionContext: () => ({ messages }),
-      getEntries: () => [],
-      removeTrailingEntriesAsync: vi.fn(async () => 0),
+    const { input } = streamInput();
+    input.subscription.toolMetas = [{ toolName: "exec", asyncStarted: true }];
+    input.readLifecycleState = () => ({
+      aborted: true,
+      timedOut: false,
+      timedOutDuringCompaction: false,
     });
-    const activeSession = {
-      agent: { state: { messages } },
-      isCompacting: false,
-      isStreaming: false,
-      messages,
-      sessionId: "session-1",
-    };
-
-    const runAbortDeadlineAtMs = Date.now() + 60_000;
-    const result = await settleEmbeddedAttemptStream({
-      attempt: {
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        sessionFile: "/tmp/session.jsonl",
-        provider: "test",
-        modelId: "model",
-        model: { api: "openai-responses" },
-      } as never,
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      withOwnedTranscriptWrite: async (operation) => await operation(),
-      subscription: {
-        toolMetas: [{ toolName: "exec", asyncStarted: true }],
-        waitForCompactionRetry: async () => {},
-        isCompactionInFlight: () => false,
-        getCompactionCount: () => 0,
-        getCurrentAttemptAssistant: () => undefined,
-        getUsageTotals: () => undefined,
-        getLastAssistantUsage: () => undefined,
-      } as never,
-      state: {
-        promptError: null,
-        promptErrorSource: null,
-        yieldAborted: false,
-      },
-      readLifecycleState: () => ({
-        aborted: true,
-        timedOut: false,
-        timedOutDuringCompaction: false,
-      }),
-      markTimedOutDuringCompaction: () => {},
-      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
-      runAbortSignal: AbortSignal.abort(),
-      isProbeSession: true,
-      abortable: async (promise) => await promise,
-      prePromptMessageCount: 0,
-      nestedToolActivityState: createAttemptNestedToolActivityState(),
-      cache: {
-        retention: undefined,
-      },
-      shouldFlushForContextEngine: false,
-    });
+    input.runAbortSignal = AbortSignal.abort();
+    const result = await settleEmbeddedAttemptStream(input);
 
     // The aborted run settles instead of unwinding the lane task, and its
     // unfinished async tasks are not reclassified as a timeout failure.
@@ -213,69 +210,15 @@ describe("embedded attempt phase lifecycle state", () => {
         content: [{ type: "text", text: "ENOENT" }],
       },
     ];
-    const activeSession = {
-      agent: { state: { messages } },
-      isCompacting: false,
-      isStreaming: false,
-      messages,
-      sessionId: "session-1",
-    };
-    const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntryAsync: vi.fn(async () => undefined),
-      buildSessionContext: () => ({ messages }),
-      getEntries: () => [],
-      removeTrailingEntriesAsync: vi.fn(async () => 0),
-    });
-
-    const runAbortDeadlineAtMs = Date.now() + 60_000;
-    const result = await settleEmbeddedAttemptStream({
-      attempt: {
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        sessionFile: "/tmp/session.jsonl",
-        provider: "mock-openai",
-        modelId: "gpt-5.6-luna",
-        model: { api: "openai-responses" },
-      } as never,
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      withOwnedTranscriptWrite: async (operation) => await operation(),
-      subscription: {
-        toolMetas: [
-          { toolName: "read", isError: true },
-          { toolName: "exec", isError: true },
-        ],
-        waitForCompactionRetry: async () => {},
-        isCompactionInFlight: () => false,
-        getCompactionCount: () => 0,
-        getCurrentAttemptAssistant: () => structuredClone(modelAssistant),
-        getUsageTotals: () => undefined,
-        getLastAssistantUsage: () => undefined,
-      } as never,
-      state: {
-        promptError: null,
-        promptErrorSource: null,
-        yieldAborted: false,
-      },
-      readLifecycleState: () => ({
-        aborted: false,
-        timedOut: false,
-        timedOutDuringCompaction: false,
-      }),
-      markTimedOutDuringCompaction: () => {},
-      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
-      runAbortSignal: new AbortController().signal,
-      isProbeSession: true,
-      abortable: async (promise) => await promise,
-      prePromptMessageCount: 1,
-      nestedToolActivityState: createAttemptNestedToolActivityState(),
-      cache: {
-        retention: undefined,
-      },
-      shouldFlushForContextEngine: false,
-    });
+    const { input } = streamInput(messages, modelAssistant);
+    input.attempt.provider = "mock-openai";
+    input.attempt.modelId = "gpt-5.6-luna";
+    input.prePromptMessageCount = 1;
+    input.subscription.toolMetas = [
+      { toolName: "read", isError: true },
+      { toolName: "exec", isError: true },
+    ];
+    const result = await settleEmbeddedAttemptStream(input);
 
     expect(result.lastAssistant).toBe(modelAssistant);
     expect(result.currentAttemptAssistant).toBe(modelAssistant);
@@ -381,35 +324,13 @@ describe("embedded attempt phase lifecycle state", () => {
             withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
           },
           state: { terminal: { kind: "ok" } },
-          prepared: {
-            bootstrap: { shouldRecordCompletedBootstrapTurn: true },
-            bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
-            sessionRuntime: {
-              sessionManager,
-              agentSession: { hookRunner: null },
-              state: { prePromptMessageCount: 0 },
-              contextGuards: { getAfterTurnCheckpoint: () => null },
-              cacheTrace: null,
-              anthropicPayloadLogger: null,
-            },
-          },
+          prepared: prepared(sessionManager),
           diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
         } as never,
-        {
-          promptError: null,
-          sessionIdUsed: target.sessionId,
+        settled(target.sessionId, {
           messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
-          lastCallUsage: undefined,
-          promptCache: undefined,
-          compactionOccurredThisAttempt: false,
-        } as never,
-        {
-          yieldAborted: false,
-          transcriptLeafId: null,
-          promptStartedAt: Date.now(),
-          beforeAgentFinalizeRevisionReason: undefined,
-        },
+        }) as never,
+        prompt(),
       );
 
       if (boundary === "complete") {
@@ -478,35 +399,14 @@ describe("embedded attempt phase lifecycle state", () => {
           state: {
             terminal: { kind: "ok" },
           },
-          prepared: {
-            bootstrap: { shouldRecordCompletedBootstrapTurn: false },
-            bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
-            sessionRuntime: {
-              sessionManager: SessionManager.inMemory(),
-              agentSession: { hookRunner: { hasHooks: () => true, runAgentEnd } },
-              state: { prePromptMessageCount: 0 },
-              contextGuards: { getAfterTurnCheckpoint: () => null },
-              cacheTrace: null,
-              anthropicPayloadLogger: null,
-            },
-          },
+          prepared: prepared(SessionManager.inMemory(), false, [{ name: "skill_workshop" }], {
+            hasHooks: () => true,
+            runAgentEnd,
+          }),
           diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
         } as never,
-        {
-          promptError,
-          sessionIdUsed: "session-1",
-          messagesSnapshot: [],
-          lastCallUsage: undefined,
-          promptCache: undefined,
-          compactionOccurredThisAttempt: false,
-        } as never,
-        {
-          yieldAborted: false,
-          transcriptLeafId: null,
-          promptStartedAt: Date.now(),
-          beforeAgentFinalizeRevisionReason: undefined,
-        },
+        settled("session-1", { promptError }) as never,
+        prompt(),
       );
 
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledTimes(1);
@@ -591,35 +491,11 @@ describe("embedded attempt phase lifecycle state", () => {
                 ? { kind: "aborted", source: "external" }
                 : { kind: "ok" },
           },
-          prepared: {
-            bootstrap: { shouldRecordCompletedBootstrapTurn: true },
-            bundleTools: { uncompactedEffectiveTools: [{ name: "skill_workshop" }] },
-            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
-            sessionRuntime: {
-              sessionManager,
-              agentSession: { hookRunner: null },
-              state: { prePromptMessageCount: 0 },
-              contextGuards: { getAfterTurnCheckpoint: () => null },
-              cacheTrace: null,
-              anthropicPayloadLogger: null,
-            },
-          },
+          prepared: prepared(sessionManager, true, [{ name: "skill_workshop" }]),
           diagnostics: { diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never },
         } as never,
-        {
-          promptError: null,
-          sessionIdUsed: target.sessionId,
-          messagesSnapshot: [],
-          lastCallUsage: undefined,
-          promptCache: undefined,
-          compactionOccurredThisAttempt: false,
-        } as never,
-        {
-          yieldAborted: false,
-          transcriptLeafId,
-          promptStartedAt: Date.now(),
-          beforeAgentFinalizeRevisionReason: undefined,
-        },
+        settled(target.sessionId) as never,
+        prompt(transcriptLeafId),
       );
 
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
@@ -691,21 +567,7 @@ describe("embedded attempt phase lifecycle state", () => {
               lifecycle.withTranscriptWrite(operation),
           },
           state: executionState,
-          prepared: {
-            bootstrap: {
-              shouldRecordCompletedBootstrapTurn: scenario !== "completion not requested",
-            },
-            bundleTools: { uncompactedEffectiveTools: [] },
-            toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
-            sessionRuntime: {
-              sessionManager,
-              agentSession: { hookRunner: null },
-              state: { prePromptMessageCount: 0 },
-              contextGuards: { getAfterTurnCheckpoint: () => null },
-              cacheTrace: null,
-              anthropicPayloadLogger: null,
-            },
-          },
+          prepared: prepared(sessionManager, scenario !== "completion not requested"),
           diagnostics: {
             diagnosticTrace: {
               traceId: "11111111111111111111111111111111",
@@ -713,7 +575,7 @@ describe("embedded attempt phase lifecycle state", () => {
             },
           },
         } as never,
-        {
+        settled(target.sessionId, {
           promptError: scenario === "prompt error" ? new Error("synthetic prompt error") : null,
           currentAttemptAssistant: makeAgentAssistantMessage({
             content: [],
@@ -723,13 +585,8 @@ describe("embedded attempt phase lifecycle state", () => {
             scenario === "provider error"
               ? makeAgentAssistantMessage({ content: [], stopReason: "error" })
               : undefined,
-          sessionIdUsed: target.sessionId,
-          messagesSnapshot: [],
-          lastCallUsage: undefined,
-          promptCache: undefined,
-          compactionOccurredThisAttempt: false,
-        } as never,
-        { yieldAborted: false, transcriptLeafId: null, promptStartedAt: Date.now() },
+        }) as never,
+        prompt(),
       ).then(() => {
         completed = true;
       });
