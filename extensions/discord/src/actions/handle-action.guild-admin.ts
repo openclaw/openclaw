@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/param-readers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
+import { parseDiscordTarget } from "../target-parsing.js";
 import { isTrustedRequesterGuildAdminAction } from "../trusted-requester-actions.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import {
@@ -89,10 +90,11 @@ function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
+  readOptionalTarget?: () => string | undefined;
   readPolicyOptions?: DiscordMessagingActionOptions;
   actionOptions: DiscordMessagingActionOptions;
 }): Promise<AgentToolResult<unknown> | undefined> {
-  const { ctx, resolveChannelId, readPolicyOptions, actionOptions } = params;
+  const { ctx, resolveChannelId, readOptionalTarget, readPolicyOptions, actionOptions } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
@@ -117,10 +119,16 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   if (action === "emoji-list") {
     const guildId = readStringParam(actionParams, "guildId");
     const limit = readPositiveIntegerParam(actionParams, "limit");
+    // Preserve resolver-only callers of the helper exported through api.ts.
+    const target = guildId
+      ? undefined
+      : parseDiscordTarget((readOptionalTarget ? readOptionalTarget() : resolveChannelId()) ?? "", {
+          defaultKind: "channel",
+        });
     return await runAction(
       "emojiList",
       {
-        ...(guildId ? { guildId } : { channelId: resolveChannelId() }),
+        ...(guildId ? { guildId } : target?.kind === "channel" ? { channelId: target.id } : {}),
         ...(limit ? { limit } : {}),
       },
       readPolicyOptions,

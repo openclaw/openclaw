@@ -159,11 +159,14 @@ async function dispatchDiscordMessageAction(
     return result;
   };
 
-  const readTarget = ([firstKey, secondKey]: readonly [string, string] = ["channelId", "to"]) => {
-    const target =
-      readStringParam(params, firstKey) ??
-      readStringParam(params, secondKey) ??
-      readCurrentDiscordTarget(ctx.toolContext);
+  const readOptionalTarget = (
+    [firstKey, secondKey]: readonly [string, string] = ["channelId", "to"],
+  ) =>
+    readStringParam(params, firstKey) ??
+    readStringParam(params, secondKey) ??
+    readCurrentDiscordTarget(ctx.toolContext);
+  const readTarget = (keys?: readonly [string, string]) => {
+    const target = readOptionalTarget(keys);
     if (!target) {
       throw new Error("Discord channel target is required (use channel:<id>).");
     }
@@ -406,6 +409,7 @@ async function dispatchDiscordMessageAction(
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
+    readOptionalTarget,
     readPolicyOptions,
     actionOptions,
   });

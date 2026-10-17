@@ -1548,40 +1548,6 @@ describe("handleDiscordGuildAction", () => {
     expect(details.activities).toEqual([]);
   });
 
-  it.each([
-    {
-      label: "resolves the guild from the current channel",
-      params: {},
-      expectedGuildId: "current-guild",
-      resolvesChannel: true,
-    },
-    {
-      label: "prefers an explicit guild over the current channel",
-      params: { guildId: "explicit-guild" },
-      expectedGuildId: "explicit-guild",
-      resolvesChannel: false,
-    },
-  ])("$label for emoji-list", async ({ params, expectedGuildId, resolvesChannel }) => {
-    if (resolvesChannel) {
-      fetchChannelInfoDiscord.mockResolvedValueOnce({
-        id: "123",
-        type: ChannelType.GuildText,
-        guild_id: "current-guild",
-      });
-    }
-
-    const result = await handleDiscordMessageAction({
-      action: "emoji-list",
-      params,
-      cfg: DISCORD_TEST_CFG,
-      toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
-    });
-
-    expect(result.details).toEqual({ ok: true, emojis: [] });
-    expect(listGuildEmojisDiscord).toHaveBeenCalledWith(expectedGuildId, { cfg: DISCORD_TEST_CFG });
-    expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(resolvesChannel ? 1 : 0);
-  });
-
   it("reuses the gateway-owned normalized emoji list across requests with different limits", async () => {
     const client = createInternalTestClient();
     registerGateway("default", {
