@@ -29,6 +29,8 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 let root: string;
 let env: NodeJS.ProcessEnv;
 let lease: ManagedHandoffLease;
+const history = vi.mocked(listUpdateRunsAsync);
+const readFacts = (runId?: string) => readManagedHandoffRepairFacts(lease, env, runId);
 
 beforeEach(async () => {
   root = await fs.realpath(dirs.make("handoff-repair-facts-"));
@@ -54,7 +56,7 @@ beforeEach(async () => {
     owner: "handoff-correlation",
     updatedAt: 42,
   };
-  vi.mocked(listUpdateRunsAsync).mockReset().mockResolvedValue([]);
+  history.mockReset().mockResolvedValue([]);
   vi.mocked(assertUpdateRecoveryAdmission).mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
@@ -105,13 +107,13 @@ describe("managed handoff repair facts", () => {
   it.each(["S-1-5-21-100", undefined])(
     "reads the launching SID from retained history after helper cleanup (%s)",
     async (sid) => {
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([
+      history.mockResolvedValue([
         run("retained-run", {
           windowsUserSid: sid,
           driver: { ...lease.executor, host: os.hostname() },
         }),
       ]);
-      expect((await readManagedHandoffRepairFacts(lease, env)).windowsUserSid).toBe(sid);
+      expect((await readFacts()).windowsUserSid).toBe(sid);
     },
   );
 
@@ -126,9 +128,9 @@ describe("managed handoff repair facts", () => {
     });
     const capture = path.join(`${env.OPENCLAW_STATE_DIR}.update-captures`, "retained-run");
     await fs.mkdir(capture, { recursive: true });
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run", {})]);
+    history.mockResolvedValue([run("retained-run", {})]);
 
-    expect(await readManagedHandoffRepairFacts(lease, env)).toEqual({
+    expect(await readFacts()).toEqual({
       runIds: ["retained-run"],
       artifactPaths: [directory, context, capture],
       drivers: [lease.helper, lease.executor],
@@ -138,14 +140,14 @@ describe("managed handoff repair facts", () => {
 
   it("correlates ledger drivers only by matching PID, start identity, and hostname", async () => {
     const driver = { ...lease.executor, host: os.hostname() };
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([
+    history.mockResolvedValue([
       run("wrong-host", { driver: { ...driver, host: "other-host" } }),
       run("wrong-pid", { driver: { ...driver, pid: 1003 } }),
       run("wrong-start", { driver: { ...driver, startIdentity: "other-start" } }),
       run("matched-run", { previousDrivers: [{ ...lease.helper, host: os.hostname() }] }),
     ]);
 
-    expect(await readManagedHandoffRepairFacts(lease, env)).toEqual({
+    expect(await readFacts()).toEqual({
       runIds: ["matched-run"],
       artifactPaths: [lease.key],
       drivers: [lease.helper, lease.executor, { ...lease.helper, host: os.hostname() }],
@@ -162,25 +164,23 @@ describe("managed handoff repair facts", () => {
     "reads the recorded %s phase budget with the CLI timeout parser",
     async (name, recoveryTimeoutMs, parentExitTimeoutMs, commandArgv, expected) => {
       await helper(name, { recoveryTimeoutMs, parentExitTimeoutMs, commandArgv });
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run", {})]);
-      expect((await readManagedHandoffRepairFacts(lease, env)).timeoutMs).toBe(expected);
+      history.mockResolvedValue([run("retained-run", {})]);
+      expect((await readFacts()).timeoutMs).toBe(expected);
     },
   );
 
   it.each(["missing", "conflicting"])("refuses %s original run identity", async (identity) => {
     if (identity === "conflicting") {
       await helper("matching", { runId: "helper-run" });
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("ledger-run")]);
+      history.mockResolvedValue([run("ledger-run")]);
     }
-    await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(
-      "Cannot identify handoff run",
-    );
+    await expect(readFacts()).rejects.toThrow("Cannot identify handoff run");
   });
 
   it.each([false, true])(
     "preserves unresolved capture custody (generation-bound=%s)",
     async (bound) => {
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([
+      history.mockResolvedValue([
         run("captured-run", {
           ...(bound ? {} : { driver: { ...lease.executor, host: os.hostname() } }),
           updateRecoveryCapture: {
@@ -190,9 +190,9 @@ describe("managed handoff repair facts", () => {
           },
         }),
       ]);
-      await expect(
-        readManagedHandoffRepairFacts(lease, env, bound ? "captured-run" : undefined),
-      ).rejects.toThrow("retains restoration");
+      await expect(readFacts(bound ? "captured-run" : undefined)).rejects.toThrow(
+        "retains restoration",
+      );
       if (bound) {
         expect(listUpdateRunsAsync).toHaveBeenCalledWith(
           { limit: 100, includeRunId: "captured-run" },
@@ -204,40 +204,30 @@ describe("managed handoff repair facts", () => {
 
   it("preserves a native recovery owner's admission refusal", async () => {
     await helper("known-native");
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run", {})]);
+    history.mockResolvedValue([run("retained-run", {})]);
     const refusal = new Error("Retained native recovery still owns its artifacts");
     vi.mocked(assertUpdateRecoveryAdmission).mockRejectedValueOnce(refusal);
-    await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toBe(refusal);
+    await expect(readFacts()).rejects.toBe(refusal);
   });
 
-  it.each<
-    [
-      step: string | undefined,
-      status: UpdateRunRecord["steps"][number]["status"],
-      outcome:
-        | NonNullable<UpdateRunRecord["verification"]["rollbackOutcome"]>["status"]
-        | undefined,
-      refuses: boolean,
-      legacyCompleted?: boolean,
-    ]
-  >([
-    [undefined, "failed", "failed", true],
-    ["git rollback reset", "in_progress", "not-needed", true],
-    ["global install rollback", "failed", "not-attempted", true],
-    ["package rollback", "completed", undefined, true],
-    ["config-rollback", "failed", "succeeded", true],
-    ["git-runtime-rollback", "in_progress", undefined, true],
-    ["git-rollback-source", "completed", undefined, true],
-    ["previous generation restoration", "failed", undefined, true],
-    ["package rollback", "completed", "succeeded", false],
-    ["git rollback delete openclaw-update-fixture", "failed", "succeeded", false],
+  it.each([
+    [undefined, "failed", "failed", true, false],
+    ["git rollback reset", "in_progress", "not-needed", true, false],
+    ["global install rollback", "failed", "not-attempted", true, false],
+    ["package rollback", "completed", undefined, true, false],
+    ["config-rollback", "failed", "succeeded", true, false],
+    ["git-runtime-rollback", "in_progress", undefined, true, false],
+    ["git-rollback-source", "completed", undefined, true, false],
+    ["previous generation restoration", "failed", undefined, true, false],
+    ["package rollback", "completed", "succeeded", false, false],
+    ["git rollback delete openclaw-update-fixture", "failed", "succeeded", false, false],
     ["git rollback checkout", "completed", undefined, false, true],
-    ["package rollback", "skipped", undefined, false],
-    ["rollback-outcome-recording", "failed", undefined, false],
-    ["warning:package rollback", "failed", undefined, false],
-    ["finalize:package-rollback-not-needed", "completed", undefined, false],
-    ["git-rollback-keep-branch", "completed", undefined, false],
-  ])(
+    ["package rollback", "skipped", undefined, false, false],
+    ["rollback-outcome-recording", "failed", undefined, false, false],
+    ["warning:package rollback", "failed", undefined, false, false],
+    ["finalize:package-rollback-not-needed", "completed", undefined, false, false],
+    ["git-rollback-keep-branch", "completed", undefined, false, false],
+  ] as const)(
     "classifies legacy %s (%s, outcome=%s)",
     async (step, status, outcome, refuses, legacyCompleted) => {
       const original = run("legacy-rollback");
@@ -256,13 +246,11 @@ describe("managed handoff repair facts", () => {
           version: "1.0.0",
         };
       }
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([original]);
+      history.mockResolvedValue([original]);
       if (refuses) {
-        await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(
-          /legacy-rollback.*rollback.*update status/u,
-        );
+        await expect(readFacts()).rejects.toThrow(/legacy-rollback.*rollback.*update status/u);
       } else {
-        expect((await readManagedHandoffRepairFacts(lease, env)).runIds).toEqual([original.runId]);
+        expect((await readFacts()).runIds).toEqual([original.runId]);
       }
     },
   );
@@ -321,8 +309,8 @@ describe("managed handoff repair facts", () => {
         };
       }
       original.origin.updateRecoveryCapture = capture;
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([original]);
-      expect((await readManagedHandoffRepairFacts(lease, env)).runIds).toEqual([original.runId]);
+      history.mockResolvedValue([original]);
+      expect((await readFacts()).runIds).toEqual([original.runId]);
     },
   );
 
@@ -333,7 +321,7 @@ describe("managed handoff repair facts", () => {
       const original = run(created.runId);
       original.verification.rollbackOutcome = { status: "failed", reason: "Old rollback" };
       original.steps = [{ step: "package rollback", status: "failed" }];
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([original]);
+      history.mockResolvedValue([original]);
       const runtime = { root, nodePath: process.execPath, version: "1.0.0", buildId: "build" };
       const record = createRetainedUpdateRecovery(
         { runId: created.runId, from: runtime, to: runtime },
@@ -360,12 +348,10 @@ describe("managed handoff repair facts", () => {
         };
         record.package = retainedTerminalRecord(record).package!;
         record.package.descriptor.retention = null;
-        record.package.observed.observation = {
+        Object.assign(record.package.observed.observation, {
           previous: "live",
           candidate: "staged",
-          launchers: "both",
-          successorLive: false,
-        };
+        });
         record.primaryFailure = { code: "interrupted-preparation", effectId: null };
         record.preparationAborted = {
           reason: "interrupted-preparation",
@@ -374,12 +360,12 @@ describe("managed handoff repair facts", () => {
           observedIdentity: record.package.observed.observedIdentity,
         };
         storeRetainedUpdateRecovery(record, { env });
-        await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(/rollback/u);
+        await expect(readFacts()).rejects.toThrow(/rollback/u);
       } else {
         storeRetainedUpdateRecovery(retainedTerminalRecord(record, settlement === "rollback"), {
           env,
         });
-        expect((await readManagedHandoffRepairFacts(lease, env)).runIds).toEqual([original.runId]);
+        expect((await readFacts()).runIds).toEqual([original.runId]);
       }
     },
   );
@@ -387,7 +373,7 @@ describe("managed handoff repair facts", () => {
   it.each(["unreadable", "invalid-json", "invalid-owner"])(
     "keeps an %s helper directory and installation root in the census scope",
     async (kind) => {
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run")]);
+      history.mockResolvedValue([run("retained-run")]);
       const directory = await helper(kind);
       const file = path.join(directory, "handoff.json");
       if (kind === "unreadable") {
@@ -395,7 +381,7 @@ describe("managed handoff repair facts", () => {
       } else {
         await fs.writeFile(file, kind === "invalid-json" ? "{" : '{"updateLeaseOwner":123}');
       }
-      expect(await readManagedHandoffRepairFacts(lease, env)).toEqual({
+      expect(await readFacts()).toEqual({
         runIds: ["retained-run"],
         artifactPaths: [directory, lease.key],
         drivers: [lease.helper, lease.executor, { ...lease.executor, host: os.hostname() }],

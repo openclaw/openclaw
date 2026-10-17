@@ -55,6 +55,17 @@ function createReadyChild(_command: string, args: string[], readyDelayMs = 0) {
   return child;
 }
 
+function captureSpawn(readyDelayMs = 0) {
+  const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
+  spawnMock.mockImplementationOnce((command: string, args: string[]) => {
+    const child = createReadyChild(command, args, readyDelayMs);
+    tempDirs.add(readManagedHandoffArtifacts(args).dir);
+    spawned.resolve(child);
+    return child;
+  });
+  return spawned.promise;
+}
+
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessModule } =
     await import("../gateway/server-methods/node-child-process.test-support.js");
@@ -82,10 +93,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 beforeEach(async () => {
   vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({ kind: "none" });
   // Helpers in one fixture share a coordinator without touching the operator's database.
-  const coordinatorDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
-  );
-  tempDirs.add(coordinatorDir);
+  const coordinatorDir = await fs.realpath(tempDirs.make("openclaw-handoff-coordinator-"));
   resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   forceKillChildProcessTreeMock.mockReset();
   spawnMock.mockReset();
@@ -229,12 +237,7 @@ describe("managed service update handoff command", () => {
       const { waitForSystemServiceUpdateHandoffs } =
         await import("./update-managed-service-handoff.js");
       expect(waitForSystemServiceUpdateHandoffs()).toBeUndefined();
-      const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
-      spawnMock.mockImplementationOnce((command: string, args: string[]) => {
-        const child = createReadyChild(command, args);
-        spawned.resolve(child);
-        return child;
-      });
+      const spawned = captureSpawn();
       const started = startHandoff({
         root,
         parentPid: undefined,
@@ -267,7 +270,7 @@ describe("managed service update handoff command", () => {
       expect(barrier).toBeDefined();
       const settled = vi.fn();
       const observed = barrier?.then(settled, settled);
-      const child = await spawned.promise;
+      const child = await spawned;
       // Model the helper's completion receipt independently of its exit code.
       if (receipt) {
         child.stdout.write("system-update-settled\n");
@@ -295,13 +298,7 @@ describe("managed service update handoff command", () => {
     async ({ phase, budgetMs }) => {
       const { requestManagedServiceUpdateHandoffPark } =
         await import("./update-managed-service-handoff.js");
-      const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
-      spawnMock.mockImplementationOnce((command: string, args: string[]) => {
-        const child = createReadyChild(command, args, phase === "readiness" ? 31_000 : 0);
-        tempDirs.add(readManagedHandoffArtifacts(args).dir);
-        spawned.resolve(child);
-        return child;
-      });
+      const spawned = captureSpawn(phase === "readiness" ? 31_000 : 0);
       vi.useFakeTimers();
       let child: ReturnType<typeof createReadyChild> | undefined;
       try {
@@ -312,7 +309,7 @@ describe("managed service update handoff command", () => {
           (value) => ({ kind: "ready" as const, value }),
           (error: unknown) => ({ kind: "rejected" as const, error }),
         );
-        child = await spawned.promise;
+        child = await spawned;
         if (phase === "readiness") {
           await vi.advanceTimersByTimeAsync(31_000);
         }
@@ -497,23 +494,16 @@ describe("managed service update handoff command", () => {
     }
   });
 
-  it.each([true, false])(
-    "preserves replay consent=%s across the detached handoff",
-    async (reapplyLocalOverrides) => {
-      const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
-      expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
-      expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
-    },
-  );
-
-  it.each([true, false])(
-    "preserves full integrity selection=%s across the detached handoff",
-    async (fullIntegrityCheck) => {
-      const result = await startHandoffAndReadCommand({ channel: "beta", fullIntegrityCheck });
-      expect(result.commandArgv?.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
-      expect(result.command.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
-    },
-  );
+  it.each([
+    ["reapplyLocalOverrides", "--reapply-local-overrides", true],
+    ["reapplyLocalOverrides", "--reapply-local-overrides", false],
+    ["fullIntegrityCheck", "--full-integrity-check", true],
+    ["fullIntegrityCheck", "--full-integrity-check", false],
+  ] as const)("preserves %s (%s=%s) across handoff", async (option, flag, enabled) => {
+    const result = await startHandoffAndReadCommand({ channel: "beta", [option]: enabled });
+    expect(result.commandArgv?.includes(flag)).toBe(enabled);
+    expect(result.command.includes(flag)).toBe(enabled);
+  });
 
   it.each(["auto", "installed"] as const)(
     "preserves %s admission through the detached CLI command",
@@ -540,14 +530,7 @@ describe("managed service update handoff command", () => {
         `/usr/local/bin/${runtime}`,
         ...(runtime === "bun" ? ["--no-install"] : []),
         "/opt/openclaw/openclaw.mjs",
-        "update",
-        "--yes",
-        "--json",
-        "--accept-capabilities",
-        "--channel",
-        "beta",
-        "--tag",
-        "2.0.0-beta.1",
+        ..."update --yes --json --accept-capabilities --channel beta --tag 2.0.0-beta.1".split(" "),
       ]);
       expect(result.command).toContain("--tag 2.0.0-beta.1");
       expect(result.command).toContain("--channel beta");
