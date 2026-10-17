@@ -129,40 +129,45 @@ describe("persistent chat session snapshots", () => {
       groupSettings: [],
       sectionOrder: [],
     };
+    async function putSidebarModel(model: unknown): Promise<void> {
+      const database = await requestResult(indexedDB.open(CHAT_SNAPSHOT_DB_NAME));
+      const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
+      const completed = transactionDone(transaction);
+      transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME).put({
+        sessionKey: sidebarKey,
+        projectionVersion: 1,
+        savedAt: Date.now(),
+        model,
+      });
+      await completed;
+      database.close();
+    }
     try {
-      expect(
-        await store.writeSidebar(
-          sidebarKey,
-          {
-            ...sidebarSnapshot,
-            peoplePresenceFilter: undefined,
-            offlineUsers: undefined,
-            roster,
-            footer: { id: "operator", scopes: ["operator.admin"] },
-            token: "synthetic-disallowed-field",
-          },
-          parseSidebarSnapshot,
-        ),
-      ).toBe(true);
+      expect(await store.writeSidebar(sidebarKey, sidebarSnapshot, parseSidebarSnapshot)).toBe(
+        true,
+      );
+      // Older or foreign writers can leave data that is not an admitted live model.
+      await putSidebarModel({
+        ...sidebarSnapshot,
+        peoplePresenceFilter: undefined,
+        offlineUsers: undefined,
+        roster,
+        footer: { id: "operator", scopes: ["operator.admin"] },
+        token: "synthetic-disallowed-field",
+      });
       const restored = await store.readSidebar(sidebarKey, parseSidebarSnapshot);
       expect(restored?.peoplePresenceFilter).toBe("online");
       expect(restored?.offlineUsers).toEqual([]);
       expect(restored?.roster?.result.sessions).toEqual([row]);
       expect(restored?.footer).toEqual({ id: "operator" });
       expect(restored).not.toHaveProperty("token");
-      expect(
-        await store.writeSidebar(
-          sidebarKey,
-          {
-            ...sidebarSnapshot,
-            roster: {
-              ...roster,
-              result: { ...roster.result, sessions: [{ ...row, incognito: true }] },
-            },
-          },
-          parseSidebarSnapshot,
-        ),
-      ).toBe(false);
+      await putSidebarModel({
+        ...sidebarSnapshot,
+        roster: {
+          ...roster,
+          result: { ...roster.result, sessions: [{ ...row, incognito: true }] },
+        },
+      });
       expect(await store.readSidebar(sidebarKey, parseSidebarSnapshot)).toBeNull();
     } finally {
       store.disconnect();
@@ -182,12 +187,12 @@ describe("persistent chat session snapshots", () => {
       const writer = new SessionSnapshotStore();
       writer.write(sessionKey, snapshot("message"));
       await writer.flush();
+      const persisted = await readStoredChatSnapshotRecord(sessionKey);
+      if (!persisted || typeof persisted !== "object") {
+        throw new Error("expected the writer to persist a snapshot envelope");
+      }
       await putRawRecord({
-        projectionVersion: 2,
-        savedAt: 1,
-        sessionId: "session-1",
-        sessionKey,
-        snapshot: snapshot("message"),
+        ...persisted,
         ...corrupt,
       });
       expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
