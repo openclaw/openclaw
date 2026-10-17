@@ -33,7 +33,7 @@ describe("renderUsageHeatmap", () => {
     ).toContain("20 tokens");
   });
 
-  it("keeps short ranges at their natural cell width", () => {
+  it("leaves short ranges to the daily chart", () => {
     const container = document.createElement("div");
     mountSolid(
       () => renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
@@ -41,10 +41,6 @@ describe("renderUsageHeatmap", () => {
     );
     flush();
 
-    expect(
-      container
-        .querySelector<SVGElement>(".usage-heatmap__svg")
-        ?.style.getPropertyValue("--usage-heatmap-width"),
-    ).toBe("44px");
+    expect(container.querySelector(".usage-heatmap__svg")).toBeNull();
   });
 });

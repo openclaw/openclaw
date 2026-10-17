@@ -705,13 +705,6 @@ describe("UsagePage detail requests", () => {
     const gateway = page.context.gateway;
     page.routeData = {
       ...createPendingUsageRouteData(gateway, "2026-05-14"),
-      providerUsage: {
-        state: "settled",
-        result: {
-          ok: true,
-          value: { updatedAt: 1, providers: [], refreshing: true },
-        },
-      },
       loadedAtMs: 1,
     } satisfies UsageRouteData;
     await page.updateComplete;
@@ -720,8 +713,14 @@ describe("UsagePage detail requests", () => {
       await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
     }
 
-    expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(3);
+    // Route data carries only session usage, so the page makes the first provider read
+    // itself when it applies; that read plus the three-attempt retry budget makes four.
+    expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(4);
     expect(page.providerUsageStalled).toBe(true);
+    // Retries for incomplete provider plans never re-read session usage.
+    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(4);
 
     rejectProviderUsage = false;
     await page.refresh();

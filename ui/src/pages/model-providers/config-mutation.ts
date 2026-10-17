@@ -270,7 +270,7 @@ export async function runModelProviderApiKeyMutation(
     client: GatewayBrowserClient;
     agentId: string;
     provider: string;
-    apiKey: string | null;
+    apiKey: string;
     success: string;
   },
 ): Promise<{ ok: false } | { ok: true; warning: string | null }> {
@@ -284,15 +284,10 @@ export async function runModelProviderApiKeyMutation(
           throw new Error(t("modelProviders.requestFailed"));
         }
         const target = { provider: params.provider, agentId: params.agentId };
-        const receipt = await (params.apiKey === null
-          ? client.request<{ warning?: string }>("models.authLogout", {
-              ...target,
-              credentialType: "api_key",
-            })
-          : client.request<{ warning?: string }>("models.authSetApiKey", {
-              ...target,
-              apiKey: params.apiKey,
-            }));
+        const receipt = await client.request<{ warning?: string }>("models.authSetApiKey", {
+          ...target,
+          apiKey: params.apiKey,
+        });
         invalidateModelAuthStatusRequests(client);
         return receipt;
       },

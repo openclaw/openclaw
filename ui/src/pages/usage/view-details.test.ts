@@ -363,7 +363,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(
       [...full.querySelectorAll(".usage-list-item")].map((item) => [
         item.firstElementChild?.textContent,
-        item.querySelector(".usage-list-value > span")?.textContent,
+        item.querySelector(".usage-list-value")?.textContent,
       ]),
     ).toEqual([
       ["read", "4"],
@@ -416,7 +416,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
       expect(
         [...container.querySelectorAll(".usage-list-item")].map((item) => [
           item.firstElementChild?.textContent,
-          item.querySelector(".usage-list-value > span")?.textContent,
+          item.querySelector(".usage-list-value")?.textContent,
         ]),
       ).toEqual([
         ["read", "—"],
@@ -503,7 +503,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
       expect(
         [...selected.querySelectorAll(".usage-list-item")].map((item) => [
           item.firstElementChild?.textContent,
-          item.querySelector(".usage-list-value > span")?.textContent,
+          item.querySelector(".usage-list-value")?.textContent,
         ]),
       ).toEqual([
         ["read", "2"],

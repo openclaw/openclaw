@@ -23,6 +23,7 @@ import {
 } from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
+  expandProvider,
   unmountPage,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
@@ -838,10 +839,7 @@ describe("Models provider login", () => {
       ],
     });
     const page = appendPage(context);
-    await waitForSolid(() =>
-      expect(page.querySelector('[data-provider-id="example-owner"]')).not.toBeNull(),
-    );
-    const card = page.querySelector('[data-provider-id="example-owner"]')!;
+    const card = await expandProvider(page, "example-owner");
     const addAccount = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Add account",
     );

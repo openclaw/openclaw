@@ -6,7 +6,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { createUsageProps, projectUsageData, usageSession } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
-it("shows unknown totals after interruption while keeping completed session usage inspectable", () => {
+it("shows lower-bound totals after interruption while keeping completed session usage exact", () => {
   const base = createUsageProps();
   const interrupted = usageSession("interrupted", "interrupted", "ollama", {
     totalTokens: 0,
@@ -40,19 +40,20 @@ it("shows unknown totals after interruption while keeping completed session usag
 
   expect(
     [...container.querySelectorAll(".usage-metric-badge strong")].map((node) => node.textContent),
-  ).toEqual(["unknown", "unknown", "2"]);
-  expect(container.querySelector(".usage-trend-section")).toBeNull();
-  expect(container.querySelector(".usage-callout")?.textContent).toContain(
-    "before final usage arrived",
-  );
+  ).toEqual(["≥ 2.6K", "≥ $0.00", "2"]);
+  // Analytics stay visible; the note explains the lower bound instead of hiding them.
+  expect(container.querySelector(".usage-trend-section")).not.toBeNull();
+  expect(
+    container.querySelector(".usage-lower-bound:not(.usage-lower-bound--off)")?.textContent,
+  ).toContain("lower bound");
   expect(container.querySelector('[title="interrupted"] .session-bar-value')?.textContent).toBe(
-    "unknown",
+    "≥ 0",
   );
   expect(container.querySelector('[title="completed"] .session-bar-value')?.textContent).toBe(
     "2.6K",
   );
 
-  expect(container.querySelector(".sessions-card-stats")?.textContent).toContain("unknown");
+  expect(container.querySelector(".sessions-card-stats")?.textContent).toContain("≥ ");
 
   setSelection(["completed"]);
   flush();
@@ -60,9 +61,14 @@ it("shows unknown totals after interruption while keeping completed session usag
     [...container.querySelectorAll(".usage-metric-badge strong")].map((node) => node.textContent),
   ).toEqual(["2.6K", "$0.00", "1"]);
   expect(container.querySelector(".usage-trend-section")).not.toBeNull();
+  expect(container.querySelector(".usage-callout")).toBeNull();
+  // Exact totals keep the chip's slot but hide it, so the header never reflows.
+  expect(container.querySelector(".usage-lower-bound")?.classList).toContain(
+    "usage-lower-bound--off",
+  );
 });
 
-it("keeps full-session charts unknown when only the selected day has complete usage", () => {
+it("keeps the lower-bound note for full-session charts when only the selected day is complete", () => {
   const session = usageSession("mixed-days", "main", "ollama", {
     totalTokens: 100,
     usageReport: { state: "unavailable" },
@@ -87,10 +93,12 @@ it("keeps full-session charts unknown when only the selected day has complete us
   const container = document.createElement("div");
   mountSolid(() => renderUsage(props), { container });
   flush();
+  // The selected day is complete, so its total is exact.
   expect(container.querySelector(".usage-metric-badge strong")?.textContent).toBe("100");
-  expect(container.querySelector(".usage-trend-section")).toBeNull();
-  expect(container.querySelector(".usage-mosaic")).toBeNull();
-  expect(container.querySelector(".usage-callout")?.textContent).toContain(
-    "before final usage arrived",
-  );
+  expect(container.querySelector(".usage-trend-section")).not.toBeNull();
+  expect(container.querySelector(".usage-mosaic")).not.toBeNull();
+  // Full-session rollups still include the interrupted day.
+  expect(
+    container.querySelector(".usage-lower-bound:not(.usage-lower-bound--off)")?.textContent,
+  ).toContain("lower bound");
 });

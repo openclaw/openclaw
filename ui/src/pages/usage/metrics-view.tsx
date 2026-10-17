@@ -24,24 +24,24 @@ export function UsageMosaic(props: {
         tokens: props.overview?.weekdayTokens[index] ?? 0,
       })),
     };
-    const maxHour = Math.max(...stats.hourTotals, 1);
-    const maxWeekday = Math.max(...stats.weekdayTotals.map((d) => d.tokens), 1);
+    const maxHour = Math.max(...stats.hourTotals, 0);
+    const maxWeekday = Math.max(...stats.weekdayTotals.map((day) => day.tokens), 0);
+    const share = (value: number, max: number) => (max > 0 ? (value / max) * 100 : 0);
+    const weekdays = stats.weekdayTotals.map((day) => ({
+      ...day,
+      share: share(day.tokens, maxWeekday),
+      peak: maxWeekday > 0 && day.tokens === maxWeekday,
+    }));
+    const hours = stats.hourTotals.map((value, hour) => ({
+      hour,
+      share: share(value, maxHour),
+      // A selection takes the accent; the peak only marks itself when nothing is selected.
+      peak: selectedHours.length === 0 && maxHour > 0 && value === maxHour,
+      title: `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
+      selected: selectedHours.includes(hour),
+    }));
 
-    const hours = stats.hourTotals.map((value, hour) => {
-      const intensity = Math.min(value / maxHour, 1);
-      const bg =
-        value > 0
-          ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
-          : "transparent";
-      const title = `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`;
-      const border =
-        intensity > 0.7
-          ? "color-mix(in srgb, var(--accent) 60%, transparent)"
-          : "color-mix(in srgb, var(--accent) 24%, transparent)";
-      return { hour, bg, title, border, selected: selectedHours.includes(hour) };
-    });
-
-    return { stats, timeZone, maxWeekday, hours, onSelectHour };
+    return { stats, timeZone, weekdays, hours, onSelectHour };
   });
   return (
     <SettingsSection
@@ -63,47 +63,46 @@ export function UsageMosaic(props: {
         </div>
       }
     >
-      <div class="usage-panel usage-mosaic">
+      {/* One hairline-divided surface: day-of-week meters beside an hourly column chart. */}
+      <div class="usage-mosaic">
         {state().stats.hasData ? (
-          <div class="usage-mosaic-grid">
+          <>
             <div class="usage-mosaic-section">
               <div class="usage-mosaic-section-title">{t("usage.mosaic.dayOfWeek")}</div>
-              <div class="usage-daypart-grid">
-                <For each={state().stats.weekdayTotals}>
-                  {(part) => {
-                    const bg = () =>
-                      part.tokens > 0
-                        ? `color-mix(in srgb, var(--accent) ${(12 + Math.min(part.tokens / state().maxWeekday, 1) * 60).toFixed(1)}%, transparent)`
-                        : "transparent";
-                    return (
-                      <div class="usage-daypart-cell" style={{ background: bg() }}>
-                        <div class="usage-daypart-label">{part.label}</div>
-                        <div class="usage-daypart-value">{formatUsageTokens(part.tokens)}</div>
-                      </div>
-                    );
-                  }}
+              <ul class="usage-weekdays">
+                <For each={state().weekdays}>
+                  {(day) => (
+                    <li class={["usage-weekday", { "usage-weekday--peak": day.peak }]}>
+                      <span class="usage-weekday__label">{day.label}</span>
+                      <span class="usage-weekday__track" aria-hidden="true">
+                        <span class="usage-weekday__fill" style={{ width: `${day.share}%` }} />
+                      </span>
+                      <span class="usage-weekday__value">{formatUsageTokens(day.tokens)}</span>
+                    </li>
+                  )}
                 </For>
-              </div>
+              </ul>
             </div>
             <div class="usage-mosaic-section">
-              <div class="usage-mosaic-section-title">
-                <span>{t("usage.filters.hours")}</span>
-                <span class="usage-mosaic-sub">0 → 23</span>
-              </div>
+              <div class="usage-mosaic-section-title">{t("usage.filters.hours")}</div>
               <div class="usage-hour-grid">
                 <For each={state().hours} keyed={(hour) => hour.hour}>
                   {(hour) => (
                     <button
                       type="button"
-                      class={["usage-hour-cell", { selected: hour().selected }]}
-                      style={{ background: hour().bg, "border-color": hour().border }}
+                      class={[
+                        "usage-hour-cell",
+                        { selected: hour().selected, "usage-hour-cell--peak": hour().peak },
+                      ]}
                       title={hour().title}
                       aria-label={hour().title}
                       aria-pressed={hour().selected ? "true" : "false"}
                       onClick={(event: MouseEvent) =>
                         state().onSelectHour(hour().hour, event.shiftKey)
                       }
-                    />
+                    >
+                      <span class="usage-hour-cell__bar" style={{ height: `${hour().share}%` }} />
+                    </button>
                   )}
                 </For>
               </div>
@@ -115,12 +114,8 @@ export function UsageMosaic(props: {
                 <span>{t("usage.mosaic.fourPm")}</span>
                 <span>{t("usage.mosaic.eightPm")}</span>
               </div>
-              <div class="usage-hour-legend">
-                <span />
-                {t("usage.mosaic.legend")}
-              </div>
             </div>
-          </div>
+          </>
         ) : (
           <div class="usage-empty-block usage-empty-block--compact">
             {t("usage.mosaic.noTimelineData")}

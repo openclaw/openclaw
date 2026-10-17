@@ -171,7 +171,7 @@ suite.define(() => {
           await expect
             .poll(() => page.locator("html").getAttribute("data-theme-mode"))
             .toBe(colorScheme);
-          const expected = await resolvedBackground(page, "var(--accent-subtle)");
+          const expected = await resolvedBackground(page, "var(--bg-elevated)");
           const filters = page.locator(".usage-view-options");
           for (const label of ["Cost", "Tokens"]) {
             const selected = filters.getByRole("button", { name: label, exact: true });

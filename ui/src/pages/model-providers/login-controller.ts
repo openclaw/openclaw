@@ -400,7 +400,6 @@ export function createModelProviderLogin(options: LoginOptions) {
             authStatus: picker.authStatus,
             models: null,
             providerUsage: null,
-            costByProvider: null,
           }).filter((card) =>
             provider.authProviders.some((owner) => card.id === canonicalModelAuthProviderId(owner)),
           )

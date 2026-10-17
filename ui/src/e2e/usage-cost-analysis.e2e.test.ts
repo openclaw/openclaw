@@ -512,6 +512,8 @@ suite.define(() => {
           },
         });
 
+        // The chart draws the selected calendar range, so "today" must contain the mocked day.
+        await page.clock.setFixedTime(new Date("2026-05-14T12:00:00.000Z"));
         await page.goto(`${suite.server.baseUrl}usage`);
         const pendingRow = page.locator(".session-bar-row").filter({ hasText: "Pending session" });
         const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
@@ -522,7 +524,8 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ mode: "utc" });
         await expect.poll(() => cachedRow.count(), { timeout: 10_000 }).toBe(1);
-        await page.locator(".daily-bar-wrapper").click();
+        // A refreshing report still draws the whole range; pick the recorded day.
+        await page.locator(".daily-bar-wrapper:not(.daily-bar-wrapper--pending)").last().click();
 
         await expect.poll(() => cachedRow.count()).toBe(1);
         await expect.poll(() => pendingRow.count()).toBe(1);
@@ -890,12 +893,12 @@ suite.define(() => {
           .toBeGreaterThan(requestsBeforeRangeChange);
         await page.getByRole("button", { name: "Cost", exact: true }).click();
 
-        const windowCards = page.locator(".cost-window-card");
+        const windowCards = page.locator(".cost-window");
         await expect.poll(() => windowCards.count()).toBe(4);
         await expect
           .poll(async () => ({
-            labels: await windowCards.locator(".cost-window-card__label").allTextContents(),
-            values: (await windowCards.locator(".cost-window-card__value").allTextContents()).map(
+            labels: await windowCards.locator(".cost-window__label").allTextContents(),
+            values: (await windowCards.locator(".cost-window__value").allTextContents()).map(
               (value) => value.trim(),
             ),
           }))
@@ -905,12 +908,12 @@ suite.define(() => {
           });
         await expect
           .poll(() => page.locator(".daily-chart-scale span").allTextContents())
-          .toEqual(["$11.00", "$5.50", "$0.00"]);
+          .toEqual(["$20", "$10", "$0"]);
         await expect
           .poll(() =>
             page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent(),
           )
-          .toContain("openai");
+          .toContain("OpenAI");
         const messagesHint = page.locator("#usage-summary-hint-messages");
         const messagesTooltipHost = messagesHint.locator("xpath=..");
         const messagesTooltip = messagesTooltipHost.locator(".tooltip-surface[popover]");
@@ -972,7 +975,7 @@ suite.define(() => {
         await page.locator(".usage-query-input").press("Enter");
         const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
         await expect.poll(() => topProviders.textContent()).toContain("No provider data");
-        await expect.poll(() => topProviders.textContent()).not.toContain("openai");
+        await expect.poll(() => topProviders.textContent()).not.toContain("OpenAI");
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const artifactDir = path.join(suite.artifactDir, "provider-plans");

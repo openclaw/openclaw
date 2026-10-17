@@ -120,10 +120,10 @@ suite.define(() => {
         await expect.poll(() => rows.count()).toBe(50);
         await expect
           .poll(() => page.locator(".session-bar-meta").first().textContent())
-          .toContain("msgs:2");
+          .toContain("2 msgs");
         await expect
           .poll(() => page.locator(".session-bar-meta").first().textContent())
-          .toContain("dur:1m");
+          .toContain("1m");
         const fullHeight = await page
           .locator(".usage-page")
           .evaluate((element) => Math.ceil(element.scrollHeight) + 400);
@@ -140,7 +140,7 @@ suite.define(() => {
         await page.setViewportSize({ width: 1440, height: 1100 });
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
-          .toEqual(["125.0K Tokens", "$125.00 Cost", "1250 sessions"]);
+          .toEqual(["125.0K Tokens", "$125.00 Cost", "1,250 Sessions"]);
         expect((await gateway.getRequests("sessions.usage"))[0]?.params).toMatchObject({
           projection: "overview",
           limit: 50,
@@ -163,7 +163,7 @@ suite.define(() => {
         });
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
-          .toEqual(["125.0K Tokens", "$125.00 Cost", "1250 sessions"]);
+          .toEqual(["125.0K Tokens", "$125.00 Cost", "1,250 Sessions"]);
         await capture("second-page");
         await page.locator(".usage-query-input").fill("label:Needle");
         await page.locator(".usage-query-input").press("Enter");
@@ -175,7 +175,7 @@ suite.define(() => {
         expect(filtered).not.toHaveProperty("offset");
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
-          .toEqual(["100 Tokens", "$0.10 Cost", "1 session"]);
+          .toEqual(["100 Tokens", "$0.10 Cost", "1 Sessions"]);
         await capture("filtered-beyond-thousand");
         await writeFile(
           path.join(artifacts, "requests.json"),

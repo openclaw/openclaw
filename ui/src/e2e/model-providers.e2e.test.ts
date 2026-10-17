@@ -22,6 +22,7 @@ import {
   resolveConfigMutation,
   providerConfig,
   createProviderProofCapture,
+  expandProvider,
 } from "./model-providers.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -122,7 +123,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           setupComplete: false,
         },
         "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
       },
     });
 
@@ -142,6 +142,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(async () => providerReadiness.textContent())
         .toContain("Credentials configured");
       await expect.poll(async () => providerReadiness.textContent()).not.toContain("Signed in");
+      await expandProvider(page, "openai");
       await expect.poll(async () => (await profileStatus.textContent())?.trim()).toBe("Signed in");
       expect(
         (await gateway.getRequests("models.list")).filter(
@@ -168,7 +169,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
             page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
           )
           .toBe(true);
-        const providerTitle = openaiCard.locator(".settings-row__title").first();
+        const providerTitle = openaiCard.locator(".provider-row__name").first();
         await expect
           .poll(() => providerTitle.evaluate((node) => node.getBoundingClientRect().width))
           .toBeGreaterThan(40);
@@ -231,7 +232,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.authStatus": { ts: NOW, providers: [] },
         "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
       },
     });
 
@@ -258,7 +258,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     }
   });
 
-  it("lists configured providers with auth state, quota, billing, and local spend", async () => {
+  it("lists configured providers with auth state, quota, and billing", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -314,45 +314,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
             },
           ],
         },
-        "sessions.usage": {
-          updatedAt: NOW,
-          sessions: [],
-          totals: null,
-          aggregates: {
-            messages: {
-              total: 0,
-              user: 0,
-              assistant: 0,
-              toolCalls: 0,
-              toolResults: 0,
-              errors: 0,
-            },
-            tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-            byModel: [],
-            byProvider: [
-              {
-                provider: "anthropic",
-                count: 3,
-                totals: {
-                  input: 100,
-                  output: 50,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 1_500_000,
-                  totalCost: 4.2,
-                  inputCost: 4.2,
-                  outputCost: 0,
-                  cacheReadCost: 0,
-                  cacheWriteCost: 0,
-                  missingCostEntries: 0,
-                },
-              },
-            ],
-            byAgent: [],
-            byChannel: [],
-            daily: [],
-          },
-        },
       },
     });
 
@@ -364,20 +325,22 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const claudeCard = page.locator(".model-providers__row", { hasText: "Claude" });
       await claudeCard.waitFor();
       // Alias auth row (claude-cli) merges onto the canonical anthropic card.
-      await expect
-        .poll(async () => claudeCard.locator(".settings-row__desc").first().textContent())
-        .toContain("anthropic");
+      await expect.poll(async () => claudeCard.getAttribute("data-provider-id")).toBe("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
       await expect.poll(async () => claudeCard.textContent()).toContain("Credentials configured");
       const claudeReadiness = claudeCard.locator(".model-providers__head");
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expired");
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expiring");
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Not signed in");
+      await expandProvider(page, "anthropic");
       await expect
         .poll(async () => claudeCard.locator(".model-providers__profile").textContent())
         .toContain("Expired");
-      await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
-      await claudeCard.locator(".provider-usage-progress").first().waitFor();
+      // The open row trades its summary chips for the full window tiles.
+      expect(await claudeCard.locator(".provider-usage__chip").count()).toBe(0);
+      const fiveHour = claudeCard.locator(".provider-usage__window", { hasText: "5h" });
+      await expect.poll(() => fiveHour.textContent()).toContain("62% left");
+      await expect.poll(() => fiveHour.textContent()).toContain("Resets");
       await expect.poll(() => page.getByText("Model auth expired: Claude").count()).toBe(0);
 
       if (recordVisuals) {
@@ -386,11 +349,16 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
+      await expandProvider(page, "openrouter");
       await openrouterCard.getByRole("button", { name: "Set API key", exact: true }).waitFor();
       expect(await openrouterCard.locator(".model-providers__profile").textContent()).toContain(
         "openrouter:default",
       );
-      await expect.poll(async () => openrouterCard.textContent()).toContain("$12.34");
+      await expect
+        .poll(async () =>
+          page.locator('.provider-row[data-provider-id="openrouter"]').textContent(),
+        )
+        .toContain("$12.34");
 
       // openai qualifies via its available catalog model despite having no
       // auth row; the shared label map renders "OpenAI", not "Openai".
@@ -403,6 +371,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const googleCard = page.locator(".model-providers__row", { hasText: "Google" });
       await googleCard.waitFor();
       await expect.poll(async () => googleCard.textContent()).toContain("0 of 1 models available");
+      // Without credentials or a usable model it sits in the quiet group.
+      expect(
+        await page
+          .locator(".provider-list--quiet .provider-row")
+          .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-provider-id"))),
+      ).toEqual(["google"]);
       const fallback = page.locator(
         '[data-provider-id="ß-provider"] .provider-brand-icon--fallback',
       );
@@ -584,7 +558,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           results: [{ label: "Config API key", status: "ok", latencyMs: 87 }],
         },
         "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
       },
     });
 
@@ -614,6 +587,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         await captureProviderProof("01-configured.png", openaiCard);
       }
 
+      await expandProvider(page, "openai");
       await openaiCard.getByRole("button", { name: "Set API key" }).click();
       await openaiCard.getByLabel("API key").fill(openaiInputValue);
       const keyWriteCount = (await gateway.getRequests("models.authSetApiKey")).length;
@@ -767,7 +741,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "config.get": snapshot(),
         "models.authStatus": { ts: NOW, providers: [] },
         "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
       },
     });
     const observations: unknown[] = [];
@@ -893,7 +866,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           ],
         },
         "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
       },
     });
 

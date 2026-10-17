@@ -4,8 +4,9 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
-    unavailable:
-      "Token usage and cost are unknown because a response ended before final usage arrived. Select an unaffected session to view its usage.",
+    lowerBoundShort: "≥ Lower bound",
+    lowerBound:
+      "≥ marks a lower bound: some responses ended before their final usage arrived, so their tokens and cost are partly counted.",
     presets: {
       today: "Today",
       last7d: "7d",
@@ -71,6 +72,7 @@ const enUsage = {
       json: "JSON",
     },
     cacheStatus: {
+      checking: "Updating",
       warning: "Usage data may be incomplete. Checking for updated totals automatically.",
       paused:
         "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
@@ -98,6 +100,9 @@ const enUsage = {
       title: "Daily Usage",
       total: "Total",
       byType: "By Type",
+      byProvider: "By Provider",
+      other: "Other",
+      pending: "not loaded yet",
       tokensTitle: "Daily Token Usage",
       costTitle: "Daily Cost",
       compressedScaleHint: "Square-root scale keeps low-usage days visible.",
@@ -110,6 +115,7 @@ const enUsage = {
       perDay: "/ day",
     },
     overview: {
+      unpriced: "Unpriced",
       messages: "Messages",
       messagesHint: "Total user and assistant messages in range.",
       messagesAbbrev: "msgs",

@@ -59,7 +59,6 @@ export function renderSessionSummary(
   const toolItems = baseTools.map((tool) => ({
     label: tool.name,
     value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : hasInterval ? t("usage.common.emptyValue") : tool.count}`,
-    sub: t("usage.overview.calls"),
   }));
   const toolCallCount = toolCounts
     ? [...toolCounts.values()].reduce((sum, count) => sum + count, 0)
@@ -86,7 +85,7 @@ export function renderSessionSummary(
           {" "}
           {hasInterval && !messageCounts
             ? t("usage.common.emptyValue")
-            : `${messageCounts?.user ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${messageCounts?.assistant ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
+            : `${(messageCounts?.user ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${(messageCounts?.assistant ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
           {hasInterval ? (
             <>
               {" "}
@@ -151,7 +150,9 @@ export function renderSessionSummary(
           {({ labelKey, value, meta }) => (
             <div class="stat session-summary-card">
               <div class="session-summary-title">{t(labelKey)}</div>
-              <div class="stat-value session-summary-value">{value}</div>
+              <div class="stat-value session-summary-value">
+                {typeof value === "number" ? value.toLocaleString() : value}
+              </div>
               <div class="session-summary-meta">{meta}</div>
             </div>
           )}

@@ -1,10 +1,16 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo } from "solid-js";
+import {
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../../../src/infra/session-cost-usage-totals.js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { formatIsoDate } from "./helpers.ts";
@@ -110,6 +116,50 @@ function renderFilterChips(
   );
 }
 
+/** Daily cost per calendar day of a window, zero-filled; null for ranges too long to draw as columns. */
+function windowDailyCosts(costs: Map<string, number>, endDate: string, days: number) {
+  if (days < 2 || days > 92) {
+    return null;
+  }
+  const start = Date.parse(endDate) - (days - 1) * 86_400_000;
+  return Array.from(
+    { length: days },
+    (_, index) => costs.get(new Date(start + index * 86_400_000).toISOString().slice(0, 10)) ?? 0,
+  );
+}
+
+/** Carapace mini columns: quiet bars, the newest period in accent. */
+function CostColumns(props: { values: number[]; label: string }) {
+  const max = () => Math.max(...props.values, 0);
+  return (
+    <svg
+      class="usage-bars"
+      viewBox={`0 0 ${props.values.length * 10} 28`}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={props.label}
+    >
+      <For each={props.values}>
+        {(value, index) => {
+          const height = () => (max() > 0 && value > 0 ? Math.max(1.5, (value / max()) * 26) : 0);
+          return (
+            <rect
+              class={[
+                "usage-bars__bar",
+                { "usage-bars__bar--current": index() === props.values.length - 1 },
+              ]}
+              x={index() * 10 + 1}
+              y={28 - height()}
+              width={8}
+              height={height()}
+            />
+          );
+        }}
+      </For>
+    </svg>
+  );
+}
+
 function renderCostWindowComparison(
   daily: CostDailyEntry[],
   rangeStartDate: string,
@@ -122,48 +172,48 @@ function renderCostWindowComparison(
   }
 
   const today = formatIsoDate(new Date(), timeZone);
+  const costs = new Map(daily.map((day) => [day.date, day.totalCost]));
 
   return (
-    <section class="cost-window-analysis">
-      <div class="cost-window-header">
-        <div>
-          <div class="card-title usage-section-title">{t("usage.costWindows.title")}</div>
-          <div class="card-sub">
-            {t("usage.costWindows.subtitle", { date: formatFullDate(rangeEndDate) })}
-          </div>
-        </div>
-        <div class="cost-window-range-label">
+    <SettingsSection
+      title={t("usage.costWindows.title")}
+      description={t("usage.costWindows.subtitle", { date: formatFullDate(rangeEndDate) })}
+      actions={
+        <span class="usage-section-meta cost-window-range">
           {formatDayLabel(rangeStartDate)} – {formatDayLabel(rangeEndDate)}
-        </div>
-      </div>
-      <div class="cost-window-grid">
+        </span>
+      }
+    >
+      <div class="usage-summary-strip usage-summary-strip--windows">
         <For each={Array.from(windows.entries())}>
           {([index, summary]) => {
-            const isRange = index === 0;
-            const label = () =>
-              isRange
+            const label =
+              index === 0
                 ? t("usage.costWindows.selectedRange")
                 : summary.days === 1
                   ? summary.endDate === today
                     ? t("usage.presets.today")
                     : formatDayLabel(summary.endDate)
                   : t("usage.costWindows.lastDays", { count: String(summary.days) });
-            const averageDailyCost = summary.totals.totalCost / summary.days;
+            const columns = windowDailyCosts(costs, summary.endDate, summary.days);
             return (
-              <div class={["cost-window-card", { "cost-window-card--range": isRange }]}>
-                <div class="cost-window-card__label">{label()}</div>
-                <div class="cost-window-card__value">
-                  {formatAnalysisCost(summary.totals.totalCost)}
+              <div class={["cost-window", { "cost-window--range": index === 0 }]}>
+                <div class="cost-window__label">{label}</div>
+                <div class="cost-window__value">{formatAnalysisCost(summary.totals.totalCost)}</div>
+                <div class="cost-window__meta">
+                  {formatUsageTokens(summary.totals.totalTokens)}{" "}
+                  {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+                  {summary.days > 1
+                    ? ` · ${formatAnalysisCost(summary.totals.totalCost / summary.days)} ${t("usage.costWindows.perDay")}`
+                    : undefined}
                 </div>
-                <div class="cost-window-card__meta">
-                  {`${formatUsageTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} · ${formatAnalysisCost(averageDailyCost)} ${t("usage.costWindows.perDay")}`}
-                </div>
+                {columns ? <CostColumns values={columns} label={label} /> : undefined}
               </div>
             );
           }}
         </For>
       </div>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -194,16 +244,11 @@ function renderInsightList(
                 </div>
               ) : (
                 <div class="usage-list-item">
-                  <span>{item.agentId ? <AgentRowChip agentId={item.agentId} /> : item.label}</span>
-                  <span class="usage-list-value">
-                    <span>{item.value}</span>
-                    {item.sub ? (
-                      <>
-                        {" "}
-                        <span class="usage-list-sub">{item.sub}</span>{" "}
-                      </>
-                    ) : undefined}
+                  <span class="usage-list-label" title={item.label}>
+                    {item.agentId ? <AgentRowChip agentId={item.agentId} /> : item.label}
                   </span>
+                  <span class="usage-list-value">{item.value}</span>
+                  {item.sub ? <span class="usage-list-sub">{item.sub}</span> : undefined}
                 </div>
               )
             }
@@ -261,7 +306,7 @@ export function UsageInsights(props: {
       .map((day) => ({
         label: formatDayLabel(day.date),
         value: `${((day.errors / day.messages) * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens, day.usageReport)}`,
+        sub: `${day.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages.toLocaleString()} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens, day.usageReport)}`,
       }));
 
     const costAttribution = (
@@ -271,15 +316,24 @@ export function UsageInsights(props: {
     ) => ({
       label,
       ...(agent ? { agentId: label } : {}),
-      value: formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
+      // Usage with no known price is unpriced, never free.
+      value:
+        entryTotals.totalCost === 0 && entryTotals.missingCostEntries > 0
+          ? t("usage.overview.unpriced")
+          : formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
       sub: [
-        showCostShares && entryTotals.usageReport?.state !== "unavailable" && totals.totalCost > 0
+        showCostShares &&
+        entryTotals.usageReport?.state !== "unavailable" &&
+        entryTotals.totalCost > 0 &&
+        totals.totalCost > 0
           ? t("usage.overview.costShare", {
               percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
             })
           : null,
         formatUsageTokens(entryTotals.totalTokens, entryTotals.usageReport),
-        count === undefined ? null : `${count} ${t("usage.overview.messagesAbbrev")}`,
+        count === undefined
+          ? null
+          : `${count.toLocaleString()} ${t("usage.overview.messagesAbbrev")}`,
       ]
         .filter((part): part is string => part !== null)
         .join(" · "),
@@ -288,13 +342,37 @@ export function UsageInsights(props: {
     const topModels = aggregates.byModel
       .slice(0, 5)
       .map((entry) => costAttribution(entry.model ?? t("usage.common.unknown"), entry));
-    const topProviders = aggregates.byProvider
+    // Aliases such as claude-cli fold into the provider they bill through.
+    const providerTotals = Map.groupBy(
+      aggregates.byProvider,
+      (entry) => canonicalModelAuthProviderId(entry.provider ?? "") || entry.provider || "",
+    );
+    const topProviders = [...providerTotals]
+      .map(([id, entries]) => {
+        const merged = createEmptyCostUsageTotals();
+        for (const entry of entries) {
+          addCostUsageTotals(merged, entry.totals);
+        }
+        return {
+          id,
+          totals: merged,
+          count: entries.reduce((sum, entry) => sum + entry.count, 0),
+        };
+      })
+      .toSorted(
+        (a, b) =>
+          b.totals.totalCost - a.totals.totalCost || b.totals.totalTokens - a.totals.totalTokens,
+      )
       .slice(0, 5)
-      .map((entry) => costAttribution(entry.provider ?? t("usage.common.unknown"), entry));
+      .map((entry) =>
+        costAttribution(
+          entry.id ? providerDisplayLabel(entry.id) : t("usage.common.unknown"),
+          entry,
+        ),
+      );
     const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
       label: tool.name,
-      value: `${tool.count}`,
-      sub: t("usage.overview.calls"),
+      value: `${tool.count.toLocaleString()} ${t("usage.overview.calls")}`,
     }));
     const topAgents = aggregates.byAgent
       .slice(0, 5)
@@ -337,15 +415,13 @@ export function UsageInsights(props: {
                   hintId="messages"
                   metric="messages"
                   value={insights().aggregates.messages.total}
-                  sub={`${insights().aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${insights().aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
-                  class="usage-summary-card--hero"
+                  sub={`${insights().aggregates.messages.user.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${insights().aggregates.messages.assistant.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
                 />
                 <SummaryStat
                   hintId="throughput"
                   metric="throughput"
                   value={insights().throughputLabel}
                   sub={insights().throughputCostLabel}
-                  class="usage-summary-card--hero usage-summary-card--throughput"
                   compactValue
                 />
                 <SummaryStat
@@ -353,16 +429,14 @@ export function UsageInsights(props: {
                   metric="toolCalls"
                   value={insights().aggregates.tools.totalCalls}
                   sub={`${insights().aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`}
-                  class="usage-summary-card--half"
                 />
                 <SummaryStat
                   hintId="average-tokens"
                   metric="avgTokens"
                   value={formatUsageTokens(insights().avgTokens)}
                   sub={t("usage.overview.acrossMessages", {
-                    count: String(insights().aggregates.messages.total || 0),
+                    count: (insights().aggregates.messages.total || 0).toLocaleString(),
                   })}
-                  class="usage-summary-card--half"
                 />
                 <SummaryStat
                   hintId="cache-hit-rate"
@@ -377,7 +451,6 @@ export function UsageInsights(props: {
                         ? "warn"
                         : "bad"
                   }
-                  class="usage-summary-card--medium"
                 />
                 <SummaryStat
                   hintId="error-rate"
@@ -392,7 +465,6 @@ export function UsageInsights(props: {
                         ? "warn"
                         : "good"
                   }
-                  class="usage-summary-card--medium"
                 />
                 <SummaryStat
                   hintId="average-cost"
@@ -404,23 +476,20 @@ export function UsageInsights(props: {
                   )}
                   value={formatAnalysisCost(insights().avgCost)}
                   sub={`${formatAnalysisCost(insights().totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
-                  class="usage-summary-card--compact"
                 />
                 <SummaryStat
                   hintId="sessions"
                   metric="sessions"
                   value={props.sessionCount}
                   sub={t("usage.overview.sessionsInRange", {
-                    count: String(props.totalSessions),
+                    count: props.totalSessions.toLocaleString(),
                   })}
-                  class="usage-summary-card--compact"
                 />
                 <SummaryStat
                   hintId="errors"
                   metric="errors"
                   value={insights().aggregates.messages.errors}
-                  sub={`${insights().aggregates.messages.toolResults} ${t("usage.overview.toolResults")}`}
-                  class="usage-summary-card--compact"
+                  sub={`${insights().aggregates.messages.toolResults.toLocaleString()} ${t("usage.overview.toolResults")}`}
                 />
               </div>
               <div class="usage-insights-grid">
@@ -439,11 +508,7 @@ export function UsageInsights(props: {
                   t("usage.overview.peakErrorHours"),
                   props.errorHours,
                   t("usage.overview.noErrorData"),
-                  {
-                    error: true,
-                    className: "usage-insight-card--wide",
-                    listClassName: "usage-error-list--hours",
-                  },
+                  { error: true, listClassName: "usage-error-list--hours" },
                 )}
               </div>
             </div>

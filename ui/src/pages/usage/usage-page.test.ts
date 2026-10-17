@@ -118,9 +118,12 @@ describe("UsagePage cache convergence", () => {
 
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
       expect(Boolean(page.querySelector(".usage-overview-card"))).toBe(committed);
-      expect(Boolean(page.querySelector(".usage-header-metrics .usage-metric-badge"))).toBe(
-        committed,
-      );
+      // Badges keep their slots; uncomputed totals show placeholders, never values.
+      expect(
+        [...page.querySelectorAll(".usage-summary-strip .usage-metric-badge strong")].every(
+          (node) => node.textContent === "—",
+        ),
+      ).toBe(!committed);
       expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
       expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
@@ -489,27 +492,21 @@ describe("UsagePage provider usage outcome", () => {
       const page = await createPage({ request } as unknown as GatewayBrowserClient);
       page.routeData = {
         ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
-        providerUsage:
-          loadSource === "preload"
-            ? {
-                state: "settled",
-                result: { ok: false, error: { kind: "request-failed" } },
-              }
-            : { state: "pending" },
+        // A preload leaves fresh session usage; the page still reads provider plans itself.
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
       };
       await page.updateComplete;
       const refresh = () => page.refresh();
       if (loadSource === "direct") {
         await refresh();
-        await vi.waitFor(() => {
-          if (failed) {
-            expect(page.providerUsageUnavailable).toBe(true);
-          } else {
-            expect(page.read().data.providerUsage).toEqual(summary.providers);
-          }
-        });
       }
+      await vi.waitFor(() => {
+        if (failed) {
+          expect(page.providerUsageUnavailable).toBe(true);
+        } else {
+          expect(page.read().data.providerUsage).toEqual(summary.providers);
+        }
+      });
       const previousCalls = request.mock.calls.filter(
         ([method]) => method === "usage.status",
       ).length;

@@ -475,7 +475,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               <Show when={view().error}>
                 <div class="settings-row">
                   <div class="settings-row__text">
-                    <span class="settings-row__desc provider-usage-error" role="alert">
+                    <span class="settings-row__desc provider-usage__error" role="alert">
                       {view().error}
                     </span>
                   </div>

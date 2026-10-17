@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For, createMemo } from "solid-js";
+import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
@@ -16,17 +17,22 @@ const SESSION_SORT_OPTIONS = [
   { value: "tokens", labelKey: "usage.metrics.tokens" },
 ] as const;
 
-const buildSessionMeta = (session: UsageSessionEntry): string[] =>
-  [
-    session.channel && `channel:${session.channel}`,
-    (session.modelProvider || session.providerOverride) &&
-      `provider:${session.modelProvider ?? session.providerOverride}`,
-    session.model && `model:${session.model}`,
-    session.usage?.messageCounts && `msgs:${session.usage.messageCounts.total}`,
-    session.usage?.toolUsage && `tools:${session.usage.toolUsage.totalCalls}`,
-    session.usage?.messageCounts && `errors:${session.usage.messageCounts.errors}`,
-    session.usage?.durationMs && `dur:${formatDurationCompact(session.usage.durationMs) ?? "—"}`,
+/** Plain facts for a session row: where it ran, on what, and how much happened. */
+const buildSessionMeta = (session: UsageSessionEntry): string[] => {
+  const provider = session.modelProvider ?? session.providerOverride;
+  const counts = session.usage?.messageCounts;
+  const tools = session.usage?.toolUsage?.totalCalls;
+  return [
+    session.channel,
+    provider && providerDisplayLabel(provider),
+    session.model,
+    counts && `${counts.total.toLocaleString()} ${t("usage.overview.messagesAbbrev")}`,
+    tools && `${tools.toLocaleString()} ${t("usage.overview.calls")}`,
+    counts?.errors &&
+      `${counts.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}`,
+    session.usage?.durationMs && formatDurationCompact(session.usage.durationMs),
   ].filter((part): part is string => typeof part === "string" && part.length > 0);
+};
 
 export function SessionsCard(props: {
   sessions: UsageSessionEntry[];
@@ -60,7 +66,7 @@ export function SessionsCard(props: {
           <div class="sessions-card-count">
             {t("usage.sessions.shown", { count: String(props.sessions.length) })}
             {props.totalSessions !== props.sessions.length
-              ? ` · ${t("usage.sessions.total", { count: String(props.totalSessions) })}`
+              ? ` · ${t("usage.sessions.total", { count: props.totalSessions.toLocaleString() })}`
               : ""}
           </div>
         </div>
@@ -70,7 +76,7 @@ export function SessionsCard(props: {
               {averageLabel()} {t("usage.sessions.avg")}
             </span>
             <span>
-              {props.overview?.tableTotals.errors ?? 0}{" "}
+              {(props.overview?.tableTotals.errors ?? 0).toLocaleString()}{" "}
               {normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}
             </span>
           </div>

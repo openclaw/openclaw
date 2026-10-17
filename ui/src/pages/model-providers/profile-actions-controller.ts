@@ -11,7 +11,7 @@ import {
   modelProviderErrorMessage,
   modelProviderMutationWarnings,
 } from "./config-mutation.ts";
-import type { ModelProviderLogoutTarget } from "./data.ts";
+import type { ModelProviderLogoutTarget, ModelProviderRemovalTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
 import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.tsx";
 import { updateRecordEntry } from "./record-state.ts";
@@ -120,7 +120,11 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     }
   }
 
-  async function logout(cardId: string, target: ModelProviderLogoutTarget): Promise<void> {
+  /** Account targets sign out their profiles; removal targets clear a provider or its API key. */
+  async function logout(
+    cardId: string,
+    targets: Array<ModelProviderLogoutTarget | ModelProviderRemovalTarget>,
+  ): Promise<void> {
     const client = options.getClient();
     const key = `logout:${cardId}`;
     if (!client || !options.canMutate() || options.isBusy(key)) {
@@ -133,12 +137,21 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     try {
       const result = await options.getConfig().runExternalMutation(
         async (activeClient) => {
-          const receipt = await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
-            ...target,
-            agentId,
-          });
-          invalidateModelAuthStatusRequests(activeClient);
-          return receipt;
+          const receipts: ModelAuthLogoutResult[] = [];
+          try {
+            for (const target of targets) {
+              receipts.push(
+                await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
+                  ...target,
+                  agentId,
+                }),
+              );
+            }
+          } finally {
+            invalidateModelAuthStatusRequests(activeClient);
+          }
+          const warning = receipts.flatMap((receipt) => receipt.warning ?? []).join(" ");
+          return { ...receipts.at(-1)!, ...(warning ? { warning } : {}) };
         },
         { canDispatch: () => isCurrent() && options.canMutate() },
       );

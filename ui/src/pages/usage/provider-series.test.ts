@@ -1,6 +1,4 @@
-/* @vitest-environment jsdom */
-
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   appendSessionUsageRollupContribution,
   buildSessionCostSummaryFromRollup,
@@ -8,13 +6,7 @@ import {
 } from "../../../../src/infra/session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
-import { i18n } from "../../i18n/index.ts";
-import { buildModelProviderCards } from "./data.ts";
-import { mount, props, text } from "./view.test-support.tsx";
-
-beforeEach(async () => {
-  await i18n.setLocale("en");
-});
+import { buildProviderSeries } from "./provider-series.ts";
 
 it.each([
   {
@@ -46,7 +38,7 @@ it.each([
     messageCount: 3,
   },
 ])(
-  "labels real local-cost contributions as messages across $name",
+  "rolls real local usage up to one provider row across $name",
   ({ sessions, models, sessionCount, messageCount }) => {
     const accumulator = createUsageAggregateAccumulator();
     const start = Date.UTC(2026, 0, 1);
@@ -92,21 +84,48 @@ it.each([
     expect(aggregates.byProvider.reduce((total, entry) => total + entry.count, 0)).toBe(
       messageCount,
     );
-    const cards = buildModelProviderCards({
-      authStatus: null,
-      models: null,
-      providerUsage: null,
-      costByProvider: aggregates.byProvider,
-    });
-    expect(cards).toHaveLength(1);
-    expect(cards[0]?.localCost).toMatchObject({
-      totalTokens: messageCount * 100,
-      totalCost: messageCount,
-    });
-    const container = mount(props({ cards }));
-    const row = container.querySelector('[data-provider-id="anthropic"]');
-    expect(text(row?.querySelector(".model-providers__local-cost-detail") ?? null)).toBe(
-      `${messageCount * 100} tokens · ${messageCount} messages`,
-    );
+    const series = buildProviderSeries(aggregates.modelDaily ?? []);
+    expect(series.map(({ id, tokens }) => ({ id, tokens }))).toEqual([
+      { id: "anthropic", tokens: messageCount * 100 },
+    ]);
+    expect([...series[0]!.byDate]).toEqual([
+      ["2026-01-01", { tokens: messageCount * 100, cost: messageCount }],
+    ]);
   },
 );
+
+it("keeps known providers on fixed colors and folds overflow into the shared tone", () => {
+  const day = (provider: string, tokens: number) => ({
+    date: "2026-01-01",
+    provider,
+    model: "m",
+    tokens,
+    cost: 0,
+    count: 1,
+  });
+  const series = buildProviderSeries([
+    day("openai", 10),
+    day("fresh-a", 900),
+    day("fresh-b", 800),
+    day("fresh-c", 700),
+    day("fresh-d", 600),
+    day("fresh-e", 500),
+  ]);
+  const colorOf = (id: string) => series.find((entry) => entry.id === id)?.color;
+  // Ranked by volume, but openai keeps its slot even with the least usage.
+  expect(series.map((entry) => entry.id)).toEqual([
+    "fresh-a",
+    "fresh-b",
+    "fresh-c",
+    "fresh-d",
+    "fresh-e",
+    "openai",
+  ]);
+  expect(colorOf("openai")).toBe("var(--chart-series-1)");
+  // Four free slots go to the largest unknown providers; the rest share the "other" tone.
+  expect(new Set(["fresh-a", "fresh-b", "fresh-c", "fresh-d"].map(colorOf)).size).toBe(4);
+  expect(["fresh-a", "fresh-b", "fresh-c", "fresh-d"].map(colorOf)).not.toContain(
+    "var(--chart-series-1)",
+  );
+  expect(colorOf("fresh-e")).toBe("var(--oc-border-strong)");
+});

@@ -72,7 +72,6 @@ suite.define(() => {
                 ],
               },
               "usage.status": { updatedAt: Date.now(), providers: [] },
-              "sessions.usage": { aggregates: { byProvider: [] } },
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/model-providers`);

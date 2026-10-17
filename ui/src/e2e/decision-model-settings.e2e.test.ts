@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -54,7 +55,7 @@ suite.define(() => {
             "models.authStatus": { ts: 1, providers: [] },
             "config.get": snapshot(),
             "usage.status": { updatedAt: 1, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
+            "sessions.usage": sessionsUsageResponse(),
           },
         });
         const saveSnapshot = async () => {

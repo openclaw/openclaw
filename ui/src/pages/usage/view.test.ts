@@ -432,10 +432,11 @@ describe("renderUsage", () => {
     expect(card?.textContent).toContain("$5.00 / $20.00");
     expect(
       Array.from(
-        container.querySelectorAll(".provider-usage-billing-row strong"),
+        container.querySelectorAll(".provider-usage__row .oc-menu-panel-usage-value"),
         (value) => value.textContent,
       ),
     ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
+    expect(card?.querySelector(".provider-usage__window-value")?.textContent).toBe("75% left");
   });
 
   it("keeps complete insights and history beyond the visible page", () => {
@@ -539,9 +540,13 @@ describe("renderUsage", () => {
     );
     flush();
 
-    const messagesValue = container.querySelector(
-      ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
-    );
+    const messagesValue = [
+      ...container.querySelectorAll(".usage-overview-card .usage-summary-card"),
+    ]
+      .find((card) =>
+        card.querySelector(".usage-summary-title")?.textContent?.startsWith("Messages"),
+      )
+      ?.querySelector(".usage-summary-value");
     expect(messagesValue?.textContent?.trim()).toBe("100");
     expect(container.textContent).toContain(
       "Cost data is missing for some or all sessions in this range.",
@@ -554,9 +559,7 @@ describe("renderUsage", () => {
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
     expect(
-      container
-        .querySelector(".cost-window-card--range .cost-window-card__value")
-        ?.textContent?.trim(),
+      container.querySelector(".cost-window--range .cost-window__value")?.textContent?.trim(),
     ).toBe("$10.00");
   });
 

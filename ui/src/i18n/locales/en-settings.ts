@@ -669,10 +669,18 @@ const enSettings = {
     models: "{count} models",
     modelOne: "1 model",
     modelsAvailable: "{available} of {count} models available",
-    globalUsage: "Global usage and cost",
     noStats: "No live usage data reported by this provider.",
-    localCost: "Global session spend · {days}d",
-    localCostDetail: "{tokens} tokens · {messages} messages",
+    viewUsage: "View usage",
+    row: {
+      accounts: "Accounts",
+      notConnected: "Not connected",
+      catalogOnly: "{models} in the catalog, no saved credentials",
+      noCredentials: "No saved credentials",
+      managedOutside: "Credentials managed outside OpenClaw",
+    },
+    limits: {
+      title: "Plan limits",
+    },
     saving: "Saving…",
     requestFailed: "Request failed.",
     configUnavailable: "Configuration is unavailable. Refresh and try again.",
@@ -689,7 +697,10 @@ const enSettings = {
     profiles: {
       title: "Provider profiles",
       accountOne: "1 account",
-      account: "Account {number}",
+      kindApiKey: "API key",
+      kindToken: "Access token",
+      kindOauth: "Signed-in account",
+      kindNumbered: "{kind} {number}",
       details: "Details",
       accounts: "{count} accounts",
       reorderHint: "Drag to set your preferred account order.",
@@ -715,9 +726,7 @@ const enSettings = {
       placeholder: "Enter provider API key",
       replacePlaceholder: "Secret saved. Enter a new key to replace it.",
       set: "Set API key",
-      remove: "Remove key",
       saved: "Secret saved.",
-      removed: "Saved API keys removed.",
       authModeBlocked: 'API key changes are unavailable while auth mode is "{mode}".',
     },
     probe: {
@@ -756,6 +765,13 @@ const enSettings = {
         "Remove the saved sign-in for {provider} from OpenClaw? You can add this account again later.",
       loggingOut: "Logging out…",
       done: "Logged out.",
+    },
+    remove: {
+      action: "Remove provider",
+      title: "Remove {provider}",
+      confirm:
+        "Sign out every saved account and delete the saved API key for {provider}? Runs using it stop. You can connect it again later.",
+      kept: "{source} stays; remove it there to disconnect fully.",
     },
     add: {
       title: "Add provider",

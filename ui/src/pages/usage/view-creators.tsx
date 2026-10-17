@@ -88,7 +88,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
           <th scope="col">{t("usage.creators.identity")}</th>
           <th scope="col">{t("usage.metrics.tokens")}</th>
           <th scope="col">{t("usage.metrics.cost")}</th>
-          <th scope="col">{t("usage.metrics.sessions")}</th>
+          <th scope="col">{t("usage.overview.sessions")}</th>
         </tr>
       </thead>
       <tbody>
