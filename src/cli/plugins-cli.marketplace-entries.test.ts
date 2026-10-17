@@ -352,6 +352,35 @@ describe("plugins marketplace list", () => {
       },
     );
   }
+  it("strips terminal controls from marketplace and plugin labels", async () => {
+    mocks.listMarketplacePlugins.mockResolvedValueOnce({
+      ok: true,
+      sourceLabel: source,
+      manifest: {
+        name: "Evil\u001b]0;pwned\u0007MKT_MARKER",
+        version: "1.0.0",
+        plugins: [
+          {
+            name: "plug\u001b]0;x\u0007PLUGIN_MARKER",
+            description: "desc\u001b]0;y\u0007DESC_MARKER",
+            source: { kind: "path", path: "./plugins/demo" },
+          },
+        ],
+      },
+    });
+
+    await list(source, {});
+
+    const raw = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(raw).not.toContain("Evil\u001b]0;pwned\u0007MKT_MARKER");
+    expect(raw).not.toContain("plug\u001b]0;x\u0007PLUGIN_MARKER");
+    expect(raw).not.toContain("desc\u001b]0;y\u0007DESC_MARKER");
+    expect(raw).not.toContain("\u0007");
+    expect(raw).toContain("MKT_MARKER");
+    expect(raw).toContain("PLUGIN_MARKER");
+    expect(raw).toContain("DESC_MARKER");
+  });
+
   it.each([false, true])(
     "renders marketplace versions and routes progress (json=%s)",
     async (json) => {
