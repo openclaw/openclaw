@@ -12,16 +12,26 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
  */
 export type NewSessionVisibility = "normal" | "draft" | "incognito";
 export type DraftSessionCreateOverrides = Partial<
-  Pick<SessionCreateParams, "message" | "attachments" | "displayName">
-> & { mentions?: readonly HumanMention[]; visibility?: NewSessionVisibility };
+  Pick<SessionCreateParams, "message" | "attachments" | "displayName" | "displayNameSource">
+> & {
+  mentions?: readonly HumanMention[];
+  visibility?: NewSessionVisibility;
+  preparedTitle?: string;
+};
 export type DraftSessionCreateSelection = Partial<
   Pick<
     SessionCreateParams,
-    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
+    | "attachments"
+    | "permissionMode"
+    | "catalogId"
+    | "category"
+    | "displayName"
+    | "displayNameSource"
   >
 > & {
   message: string;
   mentions?: readonly HumanMention[];
+  preparedTitle?: string;
   visibility: NewSessionVisibility;
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
 };
@@ -36,6 +46,7 @@ export function buildDraftSessionCreateParams(draft: {
   message: string;
   mentions?: readonly HumanMention[];
   displayName?: string;
+  displayNameSource?: SessionCreateParams["displayNameSource"];
   deferInitialTurn?: boolean;
   model?: string;
   agentRuntime?: string;
@@ -107,6 +118,9 @@ export function buildDraftSessionCreateParams(draft: {
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(displayName ? { displayName } : {}),
+    ...(displayName && draft.displayNameSource
+      ? { displayNameSource: draft.displayNameSource }
+      : {}),
     ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),

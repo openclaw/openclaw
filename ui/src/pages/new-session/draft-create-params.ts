@@ -9,8 +9,12 @@ export function buildSelectedSessionCreateParams(
   place: DraftPlaceState,
   params: DraftSessionCreateSelection,
 ): SessionCreateParams {
+  const { preparedTitle, ...selection } = params;
   return buildDraftSessionCreateParams({
-    ...params,
+    ...selection,
+    ...(preparedTitle
+      ? { displayName: preparedTitle, displayNameSource: "generated" as const }
+      : {}),
     deferInitialTurn: place.remotePlacement,
     agentId: place.agentId,
     model: place.modelControl.modelForSubmission(),

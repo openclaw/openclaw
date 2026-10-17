@@ -1,6 +1,7 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { maybeRefineDashboardSessionTitle } from "../dashboard-session-title-refinement.js";
 import {
   buildDashboardSessionTitleSource,
   isDashboardSessionTitleCandidate,
@@ -18,6 +19,7 @@ type DashboardSessionTitleRequest = {
   context: GatewayRequestContext;
   request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
   sessionKey: string;
+  skipNextRefinementMessage?: boolean;
   storePath: string;
 };
 
@@ -33,7 +35,7 @@ export function scheduleCreatedDashboardSessionTitle(
   context: GatewayRequestContext,
   titleSource?: string,
 ): void {
-  if (!created.isNew || created.entry.incognito || !titleSource) {
+  if (!created.isNew || created.entry.incognito || created.entry.displayName || !titleSource) {
     return;
   }
   scheduleChatDashboardSessionTitle({
@@ -43,6 +45,7 @@ export function scheduleCreatedDashboardSessionTitle(
     context,
     request: { rawMessage: titleSource, normalizedAttachments: [] },
     sessionKey: created.key,
+    skipNextRefinementMessage: true,
     storePath: created.storePath,
   });
 }
@@ -63,7 +66,8 @@ export function scheduleChatDashboardSessionTitle(
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     // Naming only patches metadata under the title writer's session identity check.
     // It must not hold a turn admission while waiting on a model.
-    await maybeGenerateDashboardSessionTitle({
+    let joinedTitleRequest = false;
+    const titled = await maybeGenerateDashboardSessionTitle({
       cfg: params.cfg,
       agentId: params.agentId,
       sessionId: params.admittedSessionId,
@@ -71,6 +75,7 @@ export function scheduleChatDashboardSessionTitle(
       storePath: params.storePath,
       currentUserMessage: params.request.rawMessage,
       userMessage: titleSource,
+      ...(params.skipNextRefinementMessage ? { skipNextRefinementMessage: true } : {}),
       ...(retryAfter ? { retryAfter } : {}),
       onFallback: () =>
         params.context.logGateway.warn(
@@ -82,7 +87,33 @@ export function scheduleChatDashboardSessionTitle(
           sessionId: params.admittedSessionId,
           agentId: params.agentId,
         }),
+      markJoined: (joined: boolean) => {
+        joinedTitleRequest = joined;
+      },
     });
+    // Opt-in one-time refinement runs after the initial title pass; it never
+    // creates a title, only refines an existing generated one. The turn that
+    // persisted the initial title is not a "later" turn: skip counting it so
+    // the threshold counts subsequent task messages only. A caller that joined
+    // an in-flight title request did NOT persist the title, so its message is
+    // a genuine later task and must count (Codex 4303083912).
+    if (!titled || joinedTitleRequest) {
+      await maybeRefineDashboardSessionTitle({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionId: params.admittedSessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        currentUserMessage: params.request.rawMessage,
+        userMessage: titleSource,
+        onTitleStateChanged: () =>
+          emitSessionTitleChanged(params.context, {
+            sessionKey: params.sessionKey,
+            sessionId: params.admittedSessionId,
+            agentId: params.agentId,
+          }),
+      });
+    }
   }, "chat-send:background").catch((err: unknown) => {
     params.context.logGateway.warn(
       `dashboard session title generation failed: ${formatForLog(err)}`,

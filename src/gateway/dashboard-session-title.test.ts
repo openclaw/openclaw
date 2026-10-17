@@ -31,12 +31,13 @@ vi.mock("./session-transcript-title-reader.js", () => ({
 }));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { ChatAttachment } from "./chat-attachments.js";
+import { maybeRefineDashboardSessionTitle } from "./dashboard-session-title-refinement.js";
 import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
@@ -166,6 +167,52 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
+  it("counts the first later chat task after an ordinary generated title", async () => {
+    const refineCfg = {
+      ...cfg,
+      session: { autoTitle: { refine: true, refineAfterMessages: 1 } },
+    } as OpenClawConfig;
+    let current: InternalSessionEntry = { ...baseEntry };
+    updateSessionEntry.mockImplementation(async (_scope, update) => {
+      const patch = await update({ ...current });
+      current = patch ? { ...current, ...patch } : current;
+      loadSessionEntry.mockReturnValue(current);
+      return current;
+    });
+    generateConversationLabelWithFallback
+      .mockResolvedValueOnce("Release Planning")
+      .mockResolvedValueOnce("Better Title");
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({ ...titleParams(current), cfg: refineCfg }),
+    ).resolves.toBe(true);
+    await maybeRefineDashboardSessionTitle({
+      ...titleParams(current),
+      cfg: refineCfg,
+      currentUserMessage: "Investigate the follow-up bug",
+      userMessage: "Investigate the follow-up bug",
+    });
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
+    expect(current.displayName).toBe("Better Title");
+    expect(current.titleRefinement).toMatchObject({
+      taskMessagesSinceTitle: 1,
+      refinementDone: true,
+      generatedName: "Better Title",
+    });
+  });
+
+  it("skips the opening task only when a worktree title was prepared first", async () => {
+    await expect(
+      generateWorktreeSessionTitle({ ...titleParams(), onError: vi.fn() }),
+    ).resolves.toBe("Release Planning");
+
+    expect(loadSessionEntry().titleRefinement).toMatchObject({
+      taskMessagesSinceTitle: 0,
+      skipNextMessage: true,
+    });
+  });
+
   it.each([
     ['Instruction to reply exactly "ok"', 'Instruction to reply exactly "ok"'],
     ["Reply with ok’", "Reply with ok"],
@@ -179,7 +226,14 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
 
     const update = updateSessionEntry.mock.calls[0]?.[1];
-    expect(await update?.({ ...baseEntry })).toEqual({ displayName: expected });
+    expect(await update?.({ ...baseEntry })).toEqual({
+      displayName: expected,
+      titleRefinement: expect.objectContaining({
+        generatedName: expected,
+        refinementDone: false,
+        taskMessagesSinceTitle: 0,
+      }),
+    });
   });
 
   it("skips a persisted display name even when supplied an older entry", async () => {
@@ -206,7 +260,14 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ).resolves.toBe(true);
 
     const update = updateSessionEntry.mock.calls[0]?.[1];
-    expect(await update?.({ ...entry })).toEqual({ displayName: "Release Planning" });
+    expect(await update?.({ ...entry })).toEqual({
+      displayName: "Release Planning",
+      titleRefinement: expect.objectContaining({
+        generatedName: "Release Planning",
+        refinementDone: false,
+        taskMessagesSinceTitle: 0,
+      }),
+    });
   });
 
   it("retries a historical session from the transcript's first user message", async () => {

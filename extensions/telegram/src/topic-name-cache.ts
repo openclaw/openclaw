@@ -34,6 +34,22 @@ function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
 }
 
+/**
+ * Account-scoped topic-name cache scope: two Telegram accounts routed to the
+ * same owner agent resolve to the same session-store path, so one account's
+ * colliding chat/topic names would leak into the other account's
+ * manual-rename guard. Namespacing the cache by account id keeps each
+ * account's entries separate (Codex 4302875118); every topic-name cache
+ * caller must derive its scope through this helper.
+ */
+export function appendTopicNameCacheAccountScope(
+  storeScope: string,
+  accountId?: string | null,
+): string {
+  const account = accountId?.trim();
+  return account ? `${storeScope}\0telegram-account:${account}` : storeScope;
+}
+
 function resolveTopicNameCacheNamespace(scope: string): string {
   const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;

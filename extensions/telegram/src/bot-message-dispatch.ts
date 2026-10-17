@@ -1,7 +1,9 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
@@ -23,6 +25,7 @@ import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
   resolveAutoTopicLabelConfig,
+  resolveAutoTopicLabelRefineConfig,
   resolveChunkMode,
 } from "./bot-message-dispatch.runtime.js";
 import type {
@@ -39,6 +42,12 @@ import {
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveStickerVisionSupport } from "./sticker-vision.js";
+import {
+  armTopicLabelRefinement,
+  attachTopicLabelRefinementLabel,
+  maybeRefineTopicLabel,
+} from "./topic-label-refinement.js";
+import { appendTopicNameCacheAccountScope, updateTopicName } from "./topic-name-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
@@ -189,17 +198,55 @@ async function prepareTelegramSticker(params: {
   logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
 }
 
-function scheduleDmTopicLabel(params: {
+async function scheduleDmTopicLabel(params: {
   bot: DispatchTelegramMessageParams["bot"];
   cfg: DispatchTelegramMessageParams["cfg"];
   context: TelegramMessageContext;
   isFirstTurnInSession: boolean;
   telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
+  userMessage: string;
+  accountAbortSignal?: AbortSignal;
 }) {
   const { context } = params;
   const isDmTopic =
     !context.isGroup && context.threadSpec.scope === "dm" && context.threadSpec.id != null;
-  if (!isDmTopic || !params.isFirstTurnInSession) {
+  if (!isDmTopic) {
+    return;
+  }
+  const directAutoTopicLabel =
+    context.groupConfig && "autoTopicLabel" in context.groupConfig
+      ? context.groupConfig.autoTopicLabel
+      : undefined;
+  const topicThreadId = context.threadSpec.id!;
+  const assertAccountCurrent = () => {
+    if (params.accountAbortSignal?.aborted) {
+      throw new Error("telegram account stopped; refinement cancelled");
+    }
+  };
+  if (!params.isFirstTurnInSession) {
+    // Later turns: opt-in one-time bounded refinement of the auto label.
+    // This must run before any first-turn-only early return so that later
+    // turns can actually reach the refinement state machine.
+    const refineCfg = resolveAutoTopicLabelRefineConfig({
+      directConfig: directAutoTopicLabel,
+      accountConfig: params.telegramCfg.autoTopicLabel,
+    });
+    if (!refineCfg.enabled || !params.userMessage.trim()) {
+      return;
+    }
+    void maybeRefineTopicLabel({
+      botId: params.bot.botInfo?.id,
+      accountId: context.route.accountId,
+      bot: params.bot,
+      assertServiceCurrent: assertAccountCurrent,
+      cfg: params.cfg,
+      agentId: context.route.agentId,
+      chatId: context.chatId,
+      threadId: topicThreadId,
+      userMessage: params.userMessage,
+      afterMessages: refineCfg.afterMessages,
+      logVerbose,
+    });
     return;
   }
   const userMessage = truncateUtf16Safe(
@@ -209,10 +256,6 @@ function scheduleDmTopicLabel(params: {
   if (!userMessage.trim()) {
     return;
   }
-  const directAutoTopicLabel =
-    context.groupConfig && "autoTopicLabel" in context.groupConfig
-      ? context.groupConfig.autoTopicLabel
-      : undefined;
   const autoTopicConfig = resolveAutoTopicLabelConfig(
     directAutoTopicLabel,
     params.telegramCfg.autoTopicLabel,
@@ -220,7 +263,24 @@ function scheduleDmTopicLabel(params: {
   if (!autoTopicConfig) {
     return;
   }
-  const topicThreadId = context.threadSpec.id!;
+  const refineCfg = resolveAutoTopicLabelRefineConfig({
+    directConfig: directAutoTopicLabel,
+    accountConfig: params.telegramCfg.autoTopicLabel,
+  });
+  // Arm the refinement counter BEFORE the async first-turn label so a fast
+  // follow-up that lands while the label is still generating is counted on
+  // this turn's entry once it appears, instead of racing past the arming
+  // window (Codex 4300868452). Arming is idempotent for entries that are not
+  // done, and the label is attached after generation completes.
+  if (refineCfg.enabled) {
+    await armTopicLabelRefinement({
+      botId: params.bot.botInfo?.id,
+      accountId: context.route.accountId,
+      chatId: context.chatId,
+      threadId: topicThreadId,
+      label: "",
+    });
+  }
   void (async () => {
     try {
       const label = await generateTopicLabel({
@@ -237,7 +297,33 @@ function scheduleDmTopicLabel(params: {
       }
       logVerbose(`auto-topic-label: generated label (len=${label.length})`);
       await params.bot.api.editForumTopic(context.chatId, topicThreadId, { name: label });
+      // Cache the automatic label so the refinement's manual-rename guard can
+      // observe later human renames of DM topics (Codex 4302875124).
+      await updateTopicName(
+        context.chatId,
+        topicThreadId,
+        { name: label },
+        appendTopicNameCacheAccountScope(
+          resolveStorePath(params.cfg.session?.store, {
+            agentId: resolveTelegramAccountOwnerAgentId({
+              cfg: params.cfg,
+              accountId: context.route.accountId,
+            }),
+          }),
+          context.route.accountId,
+        ),
+      ).catch(() => {});
       logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
+      // Attach the generated label to the already-armed refinement entry.
+      if (refineCfg.enabled) {
+        await attachTopicLabelRefinementLabel({
+          botId: params.bot.botInfo?.id,
+          accountId: context.route.accountId,
+          chatId: context.chatId,
+          threadId: topicThreadId,
+          label,
+        });
+      }
     } catch (err) {
       logVerbose(`auto-topic-label: failed: ${String(err)}`);
     }
@@ -257,6 +343,7 @@ export const dispatchTelegramMessage = async (
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
+    opts,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
@@ -474,12 +561,17 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
-  scheduleDmTopicLabel({
+  void scheduleDmTopicLabel({
     bot,
     cfg,
     context: dispatchContext,
     isFirstTurnInSession,
     telegramCfg,
+    userMessage: truncateUtf16Safe(
+      dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "",
+      500,
+    ),
+    ...(opts.accountAbortSignal ? { accountAbortSignal: opts.accountAbortSignal } : {}),
   });
   if (status.controller) {
     status.finalizeInBackground(

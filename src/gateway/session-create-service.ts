@@ -61,6 +61,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { initializeTitleRefinementState } from "../sessions/session-title-refinement-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -821,6 +822,15 @@ async function createGatewaySessionInScope(
           ...patched.entry,
           ...inheritedWorkspace,
           ...(createdNewEntry && displayName ? { displayName } : {}),
+          ...(createdNewEntry && displayName && params.displayNameSource === "generated"
+            ? {
+                titleRefinement: initializeTitleRefinementState(
+                  patched.entry.sessionId,
+                  displayName,
+                  { skipNextMessage: true },
+                ),
+              }
+            : {}),
           ...projectSessionCreateSpawnModelSelection({
             entry: patched.entry,
             creation: params.creation,

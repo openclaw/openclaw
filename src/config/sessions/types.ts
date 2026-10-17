@@ -678,6 +678,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     }
   >;
   mainRestartRecovery?: MainRestartRecoveryState;
+  /** Bounded one-time automatic title refinement progress; keyed to the owning sessionId. */
+  titleRefinement?: import("../../sessions/session-title-refinement-state.js").SessionTitleRefinementState;
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

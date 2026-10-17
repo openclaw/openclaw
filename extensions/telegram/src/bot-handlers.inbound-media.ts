@@ -63,6 +63,7 @@ import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
+import { appendTopicNameCacheAccountScope } from "./topic-name-cache.js";
 
 type MediaAuthorization = {
   authorizationCfg: OpenClawConfig;
@@ -195,9 +196,12 @@ export function createTelegramInboundMedia({
       threadSpec.id !== undefined &&
       requireMentionInBotThreads !== undefined
     ) {
-      const topicScope = resolveStorePath(authorization.authorizationCfg.session?.store, {
-        agentId: ownerAgentId,
-      });
+      const topicScope = appendTopicNameCacheAccountScope(
+        resolveStorePath(authorization.authorizationCfg.session?.store, {
+          agentId: ownerAgentId,
+        }),
+        accountId,
+      );
       ({ creatorUserId } = await resolveTelegramForumTopicMetadata({
         msg,
         threadId: threadSpec.id,
