@@ -12,10 +12,7 @@ import {
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions } from "../../transcripts/capture-startup.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceProvider,
-} from "../../transcripts/provider-types.js";
+import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import {
@@ -41,11 +38,32 @@ const session = {
   source: { providerId: "voice", guildId: "team" },
   metadata: { agentId: "capture-agent" },
 };
-function registerActiveCapture(descriptor: TranscriptSessionDescriptor = session) {
-  activeSessions.set(descriptor.sessionId, {
+const selector = transcriptSessionSelector(session);
+type Authorize = NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"];
+function provider(authorize: Authorize) {
+  getProvider.mockReturnValue({
+    id: "voice",
+    name: "Voice",
+    accessControl: { channelId: "discord", authorize },
+  });
+}
+function writeNotes(text: string, descriptor = session) {
+  return store.writeSummary(
+    summarizeTranscripts({ session: descriptor, utterances: [{ text }] }),
+    descriptor,
+  );
+}
+function show(channel = false) {
+  return run({ action: "show", selector }, channel);
+}
+async function expectList(sessions: unknown[], channel = false, limit = 2) {
+  expect((await run({ action: "list", limit }, channel)).details).toMatchObject({ sessions });
+}
+function registerActiveCapture() {
+  activeSessions.set(session.sessionId, {
     appends: createTranscriptCaptureAppends(() => {}),
-    session: descriptor,
-    providerId: descriptor.source.providerId,
+    session,
+    providerId: session.source.providerId,
     stopProvider: async () => {
       throw new Error("Reading notes must not stop capture");
     },
@@ -66,13 +84,16 @@ function tool(channel = false) {
 function run(params: Record<string, unknown>, channel = false) {
   return tool(channel).execute("read", params);
 }
-function readThroughCatalog(params: Record<string, unknown>) {
+function readThroughCatalog() {
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool()] });
   const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(), {
     validateInput: true,
   });
-  return runtime.callValue("transcripts", params);
+  return runtime.callValue("transcripts", { action: "show", sessionId: "meeting" });
+}
+function expectNotes(result: Awaited<ReturnType<typeof run>>, text: string) {
+  expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(text) }]);
 }
 
 beforeEach(async () => {
@@ -91,35 +112,29 @@ afterEach(async () => {
 
 describe("transcripts read actions", () => {
   it("retains write-time chronology when a skill changes the warm worker timezone", async () => {
-    const early = { ...session, sessionId: "early", startedAt: "2026-08-20T06:00:00Z" };
-    const late = { ...session, sessionId: "late", startedAt: "2026-08-20T09:00:00Z" };
     const expected = [{ sessionId: "late" }, { sessionId: "early" }];
     let releaseSkill = () => {};
     try {
-      await store.writeSession(early);
-      await store.writeSession(late);
-      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: expected,
-      });
+      for (const [sessionId, hour] of [
+        ["early", "06"],
+        ["late", "09"],
+      ] as const) {
+        await store.writeSession({ ...session, sessionId, startedAt: `2026-08-20T${hour}:00:00Z` });
+      }
+      await expectList(expected);
       releaseSkill = applySkillEnvOverridesFromSnapshot({
         snapshot: { prompt: "", skills: [{ name: "chronology" }] },
         config: { skills: { entries: { chronology: { env: { TZ: "Pacific/Honolulu" } } } } },
       });
       expect(process.env.TZ).toBe("Pacific/Honolulu");
-      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: expected,
-      });
+      await expectList(expected);
       const pending = store.listReadEntries({ limit: 2 });
       releaseSkill();
       releaseSkill = () => {};
-      expect(
-        (await pending).entries.map(({ session: descriptor }) => ({
-          sessionId: descriptor.sessionId,
-        })),
-      ).toEqual(expected);
-      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: expected,
-      });
+      expect((await pending).entries.map(({ session: { sessionId } }) => ({ sessionId }))).toEqual(
+        expected,
+      );
+      await expectList(expected);
     } finally {
       releaseSkill();
       vi.unstubAllEnvs();
@@ -127,44 +142,34 @@ describe("transcripts read actions", () => {
   });
 
   it("rejects notes rewritten while active source authorization is pending", async () => {
-    const descriptor = session;
-    await store.writeSession(descriptor);
-    await store.writeSummary(
-      summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
-      descriptor,
-    );
-    registerActiveCapture(descriptor);
+    await writeNotes("Authorized notes");
+    registerActiveCapture();
     const entered = createDeferred();
     const release = createDeferred();
-    const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
-      async ({ source }) => {
-        if (source.guildId !== "team") {
-          return { ok: false, error: "denied" };
-        }
-        entered.resolve();
-        await release.promise;
-        return { ok: true, value: undefined };
-      },
-    );
+    const authorize = vi.fn<Authorize>(async ({ source }) => {
+      if (source.guildId !== "team") {
+        return { ok: false, error: "denied" };
+      }
+      entered.resolve();
+      await release.promise;
+      return { ok: true, value: undefined };
+    });
     getProvider.mockReturnValue({
       id: "voice",
       accessControl: { channelId: "discord", authorize },
     });
-    const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
+    const params = { action: "show", selector };
     const reading = run(params, true);
     try {
       await Promise.race([entered.promise, reading]);
       expect(authorize).toHaveBeenCalledOnce();
-      const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
+      const rewritten = { ...session, source: { providerId: "voice", guildId: "other" } };
       await store.writeSession(rewritten);
-      await store.writeSummary(
-        summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
-        rewritten,
-      );
+      await writeNotes("Other guild notes", rewritten);
       release.resolve();
       const shown = await reading;
       expect(shown.details).toMatchObject({
-        sessionId: descriptor.sessionId,
+        sessionId: session.sessionId,
         selector: params.selector,
         skipped: true,
         retryable: true,
@@ -184,10 +189,7 @@ describe("transcripts read actions", () => {
       text: "Ship the design",
       speaker: { label: "Ada" },
     });
-    await store.writeSummary(
-      summarizeTranscripts({ session, utterances: [{ text: "Ship the design" }] }),
-      session,
-    );
+    await writeNotes("Ship the design");
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const sql = observeMainThreadSql();
@@ -197,31 +199,21 @@ describe("transcripts read actions", () => {
         sessions: [{ sessionId: "meeting", participants: ["Ada"], utteranceCount: 1 }],
       });
       expect(listed.details).not.toHaveProperty("sessions.0.overview");
-      const shown = await run({ action: "show", selector: transcriptSessionSelector(session) });
-      expect(shown.content).toEqual([
-        { type: "text", text: expect.stringContaining("Ship the design") },
-      ]);
+      expectNotes(await show(), "Ship the design");
       sql.expectIdle();
     } finally {
       sql.restore();
     }
-    await expect(
-      run({ action: "stop", selector: transcriptSessionSelector(session) }),
-    ).rejects.toThrow("not found");
+    await expect(run({ action: "stop", selector })).rejects.toThrow("not found");
   });
 
   it("passes read actions to provider policy and hides unauthorized meetings", async () => {
-    const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
-      async ({ source, caller }) =>
-        caller.kind === "channel" && source.guildId === caller.groupSpace
-          ? { ok: true, value: undefined }
-          : { ok: false, error: "denied" },
+    const authorize = vi.fn<Authorize>(async ({ source, caller }) =>
+      caller.kind === "channel" && source.guildId === caller.groupSpace
+        ? { ok: true, value: undefined }
+        : { ok: false, error: "denied" },
     );
-    getProvider.mockReturnValue({
-      id: "voice",
-      name: "Voice",
-      accessControl: { channelId: "discord", authorize },
-    });
+    provider(authorize);
     for (const sessionId of ["hidden", "hidden-too"]) {
       await store.writeSession({
         ...session,
@@ -230,10 +222,8 @@ describe("transcripts read actions", () => {
         metadata: { providerPrivate: "x".repeat(600_000) },
       });
     }
-    expect((await run({ action: "list", limit: 1 }, true)).details).toMatchObject({
-      sessions: [{ sessionId: "meeting" }],
-    });
-    await run({ action: "show", selector: transcriptSessionSelector(session) }, true);
+    await expectList([{ sessionId: "meeting" }], true, 1);
+    await show(true);
     expect(authorize.mock.calls.map(([arg]) => arg.action)).toContain("show");
     await expect(run({ action: "show", sessionId: "hidden" }, true)).rejects.toThrow("not found");
     getProvider.mockReturnValue({ id: "voice", name: "Uncontrolled provider" });
@@ -241,66 +231,35 @@ describe("transcripts read actions", () => {
   });
 
   it("authorizes durable notes rather than a live capture's retained source", async () => {
-    const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
-      async ({ source }) =>
-        source.guildId === "team" ? { ok: true, value: undefined } : { ok: false, error: "denied" },
+    const authorize = vi.fn<Authorize>(async ({ source }) =>
+      source.guildId === "team" ? { ok: true, value: undefined } : { ok: false, error: "denied" },
     );
-    getProvider.mockReturnValue({
-      id: "voice",
-      name: "Voice",
-      accessControl: {
-        channelId: "discord",
-        authorize,
-      },
-    });
+    provider(authorize);
     registerActiveCapture();
     await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
-    await store.writeSummary(
-      summarizeTranscripts({ session, utterances: [{ text: "Other guild notes" }] }),
-      session,
-    );
-    await expect(
-      run({ action: "show", selector: transcriptSessionSelector(session) }, true),
-    ).rejects.toThrow("not found");
-    expect(authorize).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        action: "show",
-        source: { providerId: "voice", guildId: "other" },
-      }),
-    );
+    await writeNotes("Other guild notes");
+    const authorizedSource = expect.objectContaining({
+      action: "show",
+      source: { providerId: "voice", guildId: "other" },
+    });
+    await expect(show(true)).rejects.toThrow("not found");
+    expect(authorize).toHaveBeenLastCalledWith(authorizedSource);
     authorize.mockResolvedValue({ ok: true, value: undefined });
-    const shown = await run({ action: "show", sessionId: "meeting" }, true);
-    expect(shown.content).toEqual([
-      { type: "text", text: expect.stringContaining("Other guild notes") },
-    ]);
-    expect(authorize).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        action: "show",
-        source: { providerId: "voice", guildId: "other" },
-      }),
-    );
+    expectNotes(await run({ action: "show", sessionId: "meeting" }, true), "Other guild notes");
+    expect(authorize).toHaveBeenLastCalledWith(authorizedSource);
   });
 
   it("closes its read page before awaited source authorization writes and checkpoints state", async () => {
-    getProvider.mockReturnValue({
-      id: "voice",
-      name: "Voice",
-      accessControl: {
-        channelId: "discord",
-        authorize: async () => {
-          await store.appendUtteranceForSession(session, { text: "Written during authorization" });
-          const { db } = openOpenClawStateDatabase({
-            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-          });
-          // A pending SELECT would prevent the provider's committed write from checkpointing.
-          db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-          return { ok: true, value: undefined };
-        },
-      },
+    provider(async () => {
+      await store.appendUtteranceForSession(session, { text: "Written during authorization" });
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      // A pending SELECT would prevent the provider's committed write from checkpointing.
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      return { ok: true, value: undefined };
     });
-    expect((await run({ action: "list", limit: 1 }, true)).details).toMatchObject({
-      sessions: [{ sessionId: session.sessionId, utteranceCount: 0 }],
-    });
+    await expectList([{ sessionId: session.sessionId, utteranceCount: 0 }], true, 1);
     expect(await store.readUtterancesForSession(session)).toMatchObject([
       { text: "Written during authorization" },
     ]);
@@ -308,9 +267,7 @@ describe("transcripts read actions", () => {
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
     registerActiveCapture();
-    await expect(
-      readThroughCatalog({ action: "show", sessionId: "meeting" }),
-    ).resolves.toMatchObject({
+    await expect(readThroughCatalog()).resolves.toMatchObject({
       active: true,
       text: "No summary exists yet for this meeting. Capture is active.",
     });
@@ -323,13 +280,9 @@ describe("transcripts read actions", () => {
     assert(text?.type === "text", "missing notes text");
     expect(text.text.length).toBeLessThanOrEqual(12000);
     expect(text.text).toContain(
-      `[truncated; run openclaw transcripts show ${transcriptSessionSelector(session)} for the full notes]`,
+      `[truncated; run openclaw transcripts show ${selector} for the full notes]`,
     );
-    await expect(
-      readThroughCatalog({ action: "show", sessionId: "meeting" }),
-    ).resolves.toMatchObject({
-      text: text.text,
-    });
+    await expect(readThroughCatalog()).resolves.toMatchObject({ text: text.text });
     for (let index = 0; index < 50; index++) {
       await store.writeSession({
         ...session,

@@ -60,14 +60,19 @@ function harness() {
     vi.setSystemTime(new Date(`${date}T10:00:00.000Z`));
     return await execute({ action: "start", providerId: provider.id, sessionId: id });
   };
-  const configuredCapture = (accountId: string) =>
+  const configuredCapture = (accountId: string, sessionId = "notes") =>
     createTranscriptsAutoStartService({
       ...ctx,
       config: {
-        transcripts: { autoStart: [{ providerId: "capture", sessionId: "notes", accountId }] },
+        transcripts: { autoStart: [{ providerId: "capture", sessionId, accountId }] },
       },
     });
   return { ctx, execute, start, configuredCapture, store, requests, stop, authorize };
+}
+const mutatingActions = ["summarize", "stop"];
+const ambiguous = /ambiguous.*selector/i;
+function textOf(result: Awaited<ReturnType<ReturnType<typeof harness>["execute"]>>) {
+  return result.content.find((part) => part.type === "text")?.text ?? "";
 }
 
 const collision = [
@@ -85,7 +90,7 @@ describe("transcript tool selection", () => {
       h.authorize.mockClear();
       for (const action of ["stop", "summarize"]) {
         await expect(h.execute({ action, sessionId: collision[0]!.sessionId })).rejects.toThrow(
-          /ambiguous.*selector/i,
+          ambiguous,
         );
       }
       expect(h.authorize).not.toHaveBeenCalled();
@@ -102,30 +107,26 @@ describe("transcript tool selection", () => {
       });
     }
     const status = await h.execute({ action: "status" });
-    expect(status).toMatchObject({
-      details: {
-        active: expect.arrayContaining(
-          collision.map(({ sessionId, selector }) =>
-            expect.objectContaining({ sessionId, selector }),
-          ),
+    expect(status.details).toMatchObject({
+      active: expect.arrayContaining(
+        collision.map(({ sessionId, selector }) =>
+          expect.objectContaining({ sessionId, selector }),
         ),
-      },
+      ),
     });
-    const statusText = status.content.find((part) => part.type === "text")?.text ?? "";
+    const statusText = textOf(status);
     const shownSelectors = [...statusText.matchAll(/^active: (.+)$/gm)].map((match) => match[1]);
     expect(shownSelectors).toEqual(collision.map(({ selector }) => selector).toSorted());
     for (const target of collision) {
       const selector = shownSelectors.find((value) => value === target.selector);
       for (const action of ["summarize", "stop", "stop"]) {
         const result = await h.execute({ action, selector });
-        expect(result).toMatchObject({
-          details: {
+        expect(result.details).toMatchObject({
+          sessionId: target.sessionId,
+          selector: target.selector,
+          summary: {
             sessionId: target.sessionId,
-            selector: target.selector,
-            summary: {
-              sessionId: target.sessionId,
-              transcript: [`Notes for ${target.sessionId}`],
-            },
+            transcript: [`Notes for ${target.sessionId}`],
           },
         });
         expect(result.content).toContainEqual({
@@ -140,42 +141,39 @@ describe("transcript tool selection", () => {
     }
   });
 
-  it.each(["2026-07-03/raw-id"])(
-    "prefers the current exact raw %s only without another identity",
-    async (sessionId) => {
-      const h = harness();
-      for (const date of ["2026-07-01", "2026-07-02"]) {
-        vi.setSystemTime(new Date(`${date}T10:00:00.000Z`));
-        await h.execute({ action: "import", sessionId, transcript: `Historical ${date}` });
-      }
-      await h.start(sessionId, "2026-07-04");
-      for (const action of ["summarize", "stop"]) {
-        await expect(h.execute({ action, sessionId })).resolves.toMatchObject({
-          details: {
-            sessionId,
-            summary: { transcript: [`Notes for ${sessionId}`] },
-          },
-        });
-      }
-      expect(h.stop).toHaveBeenCalledOnce();
-      for (const action of ["summarize", "stop"]) {
-        await expect(h.execute({ action, sessionId })).rejects.toThrow(/ambiguous.*selector/i);
-        await expect(
-          h.execute({ action, selector: `2026-07-01/${sessionId}` }),
-        ).resolves.toMatchObject({
-          details: { sessionId, summary: { transcript: ["Speaker: Historical 2026-07-01"] } },
-        });
-      }
-      expect(h.stop).toHaveBeenCalledOnce();
-    },
-  );
+  it("prefers the current exact raw ID only without another identity", async () => {
+    const sessionId = "2026-07-03/raw-id";
+    const h = harness();
+    for (const date of ["2026-07-01", "2026-07-02"]) {
+      vi.setSystemTime(new Date(`${date}T10:00:00.000Z`));
+      await h.execute({ action: "import", sessionId, transcript: `Historical ${date}` });
+    }
+    await h.start(sessionId, "2026-07-04");
+    for (const action of mutatingActions) {
+      expect((await h.execute({ action, sessionId })).details).toMatchObject({
+        sessionId,
+        summary: { transcript: [`Notes for ${sessionId}`] },
+      });
+    }
+    expect(h.stop).toHaveBeenCalledOnce();
+    for (const action of mutatingActions) {
+      await expect(h.execute({ action, sessionId })).rejects.toThrow(ambiguous);
+      expect(
+        (await h.execute({ action, selector: `2026-07-01/${sessionId}` })).details,
+      ).toMatchObject({
+        sessionId,
+        summary: { transcript: ["Speaker: Historical 2026-07-01"] },
+      });
+    }
+    expect(h.stop).toHaveBeenCalledOnce();
+  });
 
   it("bounds model-visible status selectors without truncating recovery handles", async () => {
     const h = harness();
     const selectors: string[] = [];
     for (const index of [3, 2, 1, 0]) {
       const result = await h.start(`notes-${index}-${"x".repeat(900)}`, "2026-07-04");
-      const text = result.content.find((part) => part.type === "text")?.text ?? "";
+      const text = textOf(result);
       const selector = text.match(/\nSelector: (.+)$/)?.[1];
       if (!selector) {
         throw new Error("Start must expose a complete selector to the model");
@@ -189,7 +187,7 @@ describe("transcript tool selection", () => {
     failure.mockRestore();
 
     const result = await h.execute({ action: "status" });
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const text = textOf(result);
     const shown = [...text.matchAll(/^(?:pending|active): (.+)$/gm)].map((match) => match[1]);
     expect(shown).toEqual([selectors[0], ...selectors.slice(1).toSorted().slice(0, 2)]);
     expect(text).toContain(`pending: ${selectors[0]}`);
@@ -198,8 +196,8 @@ describe("transcript tool selection", () => {
     expect(text.slice(text.indexOf("Selectors:")).length).toBeLessThanOrEqual(1024);
     expect(text).not.toContain("x".repeat(900));
     for (const selector of shown) {
-      await expect(h.execute({ action: "summarize", selector })).resolves.toMatchObject({
-        details: { selector },
+      expect((await h.execute({ action: "summarize", selector })).details).toMatchObject({
+        selector,
       });
     }
   });
@@ -218,10 +216,8 @@ describe("transcript tool selection", () => {
         metadata: { agentId: "research" },
       });
     }
-    for (const action of ["summarize", "stop"]) {
-      await expect(h.execute({ action, sessionId: "foo-bar" })).rejects.toThrow(
-        /ambiguous.*selector/i,
-      );
+    for (const action of mutatingActions) {
+      await expect(h.execute({ action, sessionId: "foo-bar" })).rejects.toThrow(ambiguous);
     }
     expect(h.stop).not.toHaveBeenCalled();
   });
@@ -255,10 +251,8 @@ describe("transcript tool selection", () => {
       }
       expect(h.stop).not.toHaveBeenCalled();
       expect(await h.store.readSummary(privateSession)).toEqual({});
-      await expect(h.execute({ action: "status" })).resolves.toMatchObject({
-        details: {
-          active: [{ sessionId: collision[0]!.sessionId, selector: collision[0]!.selector }],
-        },
+      expect((await h.execute({ action: "status" })).details).toMatchObject({
+        active: [{ sessionId: collision[0]!.sessionId, selector: collision[0]!.selector }],
       });
     },
   );
@@ -304,20 +298,7 @@ describe("transcript tool selection", () => {
     const h = harness();
     await h.start(collision[1]!.sessionId, collision[1]!.date);
     vi.setSystemTime(new Date("2026-07-04T10:00:00.000Z"));
-    const service = createTranscriptsAutoStartService({
-      ...h.ctx,
-      config: {
-        transcripts: {
-          autoStart: [
-            {
-              providerId: "capture",
-              sessionId: collision[0]!.sessionId,
-              accountId: "public-account",
-            },
-          ],
-        },
-      },
-    });
+    const service = h.configuredCapture("public-account", collision[0]!.sessionId);
     try {
       await service.start().settled;
       expect(activeSessions.has(collision[0]!.sessionId)).toBe(true);
