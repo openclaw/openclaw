@@ -25,7 +25,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
