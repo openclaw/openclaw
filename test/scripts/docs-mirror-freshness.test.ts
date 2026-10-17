@@ -16,9 +16,10 @@ const newestSha = "c".repeat(40);
 const excludedSha = "d".repeat(40);
 const baseCommit = { sha: baseSha, minutes: 360 };
 type CommitFile = { filename: string; previous_filename?: string };
+type Commit = { sha: string; minutes: number };
 type Scenario = {
-  mirror: string;
-  history: Record<string, { sha: string; minutes: number }[]>;
+  mirror?: string;
+  history?: Record<string, Commit[]>;
   files?: Record<string, CommitFile[] | null>;
   workflow?: string;
   grace?: number;
@@ -28,7 +29,8 @@ type Request = { method: string; pathname: string; search: string };
 const commitFiles = (...filenames: string[]): CommitFile[] =>
   filenames.map((filename) => ({ filename }));
 
-function runScenario(scenario: Scenario) {
+function runScenario(options: Scenario) {
+  const scenario = { mirror: baseSha, history: {}, ...options };
   const root = createTempDir("openclaw-docs-mirror-");
   mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
   writeFileSync(
@@ -128,6 +130,13 @@ function expectRecovery(run: ReturnType<typeof runScenario>, stale: boolean, sha
   expect(run.requests.filter((request) => request.method === "POST")).toHaveLength(stale ? 1 : 0);
   expect(stale ? run.result.stderr : run.result.stdout).toContain(sha);
 }
+function runDocs(commits: Commit[], files: NonNullable<Scenario["files"]>, inspectBase = true) {
+  return runScenario({
+    workflow: syncWorkflow,
+    history: { docs: [...commits, baseCommit] },
+    files: { ...(inspectBase ? { [baseSha]: commitFiles("docs/guide.md") } : {}), ...files },
+  });
+}
 
 describe("docs mirror freshness", () => {
   it.each<[string, string, number, boolean, boolean, number, number, number]>([
@@ -195,15 +204,7 @@ describe("docs mirror freshness", () => {
       true,
     ],
   ])("handles %s using the publish workflow's paths", (_name, files, stale) => {
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: { docs: [{ sha: newestSha, minutes: 90 }, baseCommit] },
-      files: {
-        [newestSha]: files,
-        [baseSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
+    const run = runDocs([{ sha: newestSha, minutes: 90 }], { [newestSha]: files });
     expectRecovery(run, stale, stale ? newestSha : baseSha);
   });
 
@@ -212,17 +213,10 @@ describe("docs mirror freshness", () => {
       sha: (index + 4096).toString(16).padStart(40, "0"),
       minutes: 90 + index,
     }));
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: { docs: [...excluded, baseCommit] },
-      files: {
-        ...Object.fromEntries(
-          excluded.map((commit) => [commit.sha, [{ filename: "docs/AGENTS.md" }]]),
-        ),
-        [baseSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
+    const run = runDocs(
+      excluded,
+      Object.fromEntries(excluded.map((commit) => [commit.sha, commitFiles("docs/AGENTS.md")])),
+    );
     expectRecovery(run, false, baseSha);
     expect(
       run.requests.some(
@@ -233,39 +227,20 @@ describe("docs mirror freshness", () => {
     ).toBe(true);
   });
 
-  it("does not let a recent excluded edit hide an overdue public change", () => {
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: {
-        docs: [{ sha: excludedSha, minutes: 10 }, { sha: oldSha, minutes: 120 }, baseCommit],
+  it.each([false, true])("skips excluded edits (grace-cutoff lookup: %s)", (cutoff) => {
+    const run = runDocs(
+      [
+        ...(cutoff ? [{ sha: newestSha, minutes: 10 }] : []),
+        { sha: excludedSha, minutes: cutoff ? 90 : 10 },
+        { sha: oldSha, minutes: 120 },
+      ],
+      {
+        ...(cutoff ? { [newestSha]: commitFiles("docs/new-guide.md") } : {}),
+        [excludedSha]: commitFiles(cutoff ? "docs/.i18n/README.md" : "docs/AGENTS.md"),
+        [oldSha]: commitFiles("docs/guide.md"),
       },
-      files: {
-        [excludedSha]: [{ filename: "docs/AGENTS.md" }],
-        [oldSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
-    expectRecovery(run, true, oldSha);
-  });
-
-  it("skips excluded edits during the grace-cutoff lookup too", () => {
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: {
-        docs: [
-          { sha: newestSha, minutes: 10 },
-          { sha: excludedSha, minutes: 90 },
-          { sha: oldSha, minutes: 120 },
-          baseCommit,
-        ],
-      },
-      files: {
-        [newestSha]: [{ filename: "docs/new-guide.md" }],
-        [excludedSha]: [{ filename: "docs/.i18n/README.md" }],
-        [oldSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
+      false,
+    );
     expectRecovery(run, true, oldSha);
   });
 
@@ -273,7 +248,6 @@ describe("docs mirror freshness", () => {
     const run = runScenario({
       workflow:
         "on:\n  push:\n    paths:\n      - docs/**\n      - \"!docs/AGENTS.md\"\n      - 'docs/AGENTS.md'\n",
-      mirror: baseSha,
       history: {
         docs: [{ sha: newestSha, minutes: 90 }],
         "docs/AGENTS.md": [{ sha: newestSha, minutes: 90 }],
@@ -286,8 +260,6 @@ describe("docs mirror freshness", () => {
   it.each(["!docs/**", "docs/*.md"])("rejects unsupported filter %s", (filter) => {
     const run = runScenario({
       workflow: 'on:\n  push:\n    paths:\n      - docs/**\n      - "' + filter + '"\n',
-      mirror: baseSha,
-      history: {},
     });
     expect(run.result.status).toBe(1);
     expect(run.result.stderr).toContain("unsupported glob in sync path filter");

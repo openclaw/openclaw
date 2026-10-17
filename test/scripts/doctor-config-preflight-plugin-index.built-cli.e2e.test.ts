@@ -1,4 +1,3 @@
-// Built-CLI proof for durable plugin-index refresh after Gateway readiness.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,64 +16,60 @@ import {
 } from "../helpers/openclaw-test-instance.js";
 
 const instances: OpenClawTestInstance[] = [];
+async function createInstance(name: string, env: NodeJS.ProcessEnv) {
+  const instance = await createOpenClawTestInstance({
+    name,
+    env: { OPENCLAW_TEST_FAST: "1", ...env },
+    startTimeoutMs: 90_000,
+  });
+  instances.push(instance);
+  return instance;
+}
+function clearState() {
+  clearPluginMetadataLifecycleCaches();
+  closeOpenClawStateDatabaseForTest();
+}
 
 afterEach(async () => {
   await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
-  clearPluginMetadataLifecycleCaches();
-  closeOpenClawStateDatabaseForTest();
+  clearState();
 });
 
 describe("Doctor plugin index persistence built CLI proof", () => {
   it("keeps an empty legacy state dir separate when the canonical root exists", async () => {
-    const instance = await createOpenClawTestInstance({
-      name: "doctor-empty-legacy-state-dir",
-      env: {
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-        OPENCLAW_TEST_FAST: "1",
-      },
-      startTimeoutMs: 90_000,
+    const instance = await createInstance("doctor-empty-legacy-state-dir", {
+      OPENCLAW_CONFIG_PATH: undefined,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: undefined,
     });
-    instances.push(instance);
     const legacyDir = path.join(instance.homeDir, ".clawdbot");
     fs.mkdirSync(legacyDir, { recursive: true });
+    const expectLegacyDir = (output: string, separate = true) => {
+      expect(fs.lstatSync(legacyDir).isDirectory(), output).toBe(true);
+      expect(fs.readdirSync(legacyDir)).toEqual([]);
+      if (separate) {
+        expect(fs.realpathSync(legacyDir), output).not.toBe(fs.realpathSync(instance.stateDir));
+      }
+    };
 
     await instance.startGateway();
 
-    expect(fs.lstatSync(legacyDir).isDirectory(), instance.logs()).toBe(true);
-    expect(fs.readdirSync(legacyDir)).toEqual([]);
+    expectLegacyDir(instance.logs(), false);
 
     await instance.stopGateway();
     const repaired = await instance.cli(["doctor", "--repair", "--yes", "--non-interactive"]);
-    expect(repaired.code, repaired.stderr).toBe(0);
-    expect(repaired.signal).toBeNull();
-    expect(fs.lstatSync(legacyDir).isDirectory(), repaired.stdout).toBe(true);
-    expect(fs.readdirSync(legacyDir)).toEqual([]);
-    expect(fs.realpathSync(legacyDir), repaired.stdout).not.toBe(
-      fs.realpathSync(instance.stateDir),
-    );
+    expect(repaired, repaired.stderr).toMatchObject({ code: 0, signal: null });
+    expectLegacyDir(repaired.stdout);
     await instance.startGateway();
-    expect(fs.lstatSync(legacyDir).isDirectory(), instance.logs()).toBe(true);
-    expect(fs.readdirSync(legacyDir)).toEqual([]);
-    expect(fs.realpathSync(legacyDir), instance.logs()).not.toBe(
-      fs.realpathSync(instance.stateDir),
-    );
+    expectLegacyDir(instance.logs());
   }, 120_000);
 
   it("starts with current metadata and refreshes the stale persisted index after readiness", async ({
     signal,
   }) => {
-    const instance = await createOpenClawTestInstance({
-      name: "doctor-plugin-index-persistence",
-      env: {
-        OPENCLAW_TEST_FAST: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      },
-      startTimeoutMs: 90_000,
+    const instance = await createInstance("doctor-plugin-index-persistence", {
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
     });
-    instances.push(instance);
-    const workspaceDir = resolveDefaultAgentWorkspaceDir(instance.env);
 
     const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8")) as OpenClawConfig;
     const pluginId = "legacy-doctor-index";
@@ -88,21 +83,12 @@ describe("Doctor plugin index persistence built CLI proof", () => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
       openclaw: Record<string, unknown>;
     };
-    fs.writeFileSync(
-      packageJsonPath,
-      JSON.stringify({
-        ...packageJson,
-        openclaw: {
-          ...packageJson.openclaw,
-          build: {
-            bundledDist: false,
-            openclawVersion: "2026.7.2",
-            pluginSdkVersion: "2026.7.2",
-          },
-        },
-      }),
-      "utf8",
-    );
+    packageJson.openclaw.build = {
+      bundledDist: false,
+      openclawVersion: "2026.7.2",
+      pluginSdkVersion: "2026.7.2",
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson), "utf8");
     fs.writeFileSync(
       path.join(pluginDir, "doctor-contract-api.cjs"),
       "module.exports = { stateMigrations: [] };\n",
@@ -113,7 +99,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       config,
       env: instance.env,
       stateDir: instance.stateDir,
-      workspaceDir,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(instance.env),
     });
     const legacyIndex = {
       ...current.index,
@@ -127,8 +113,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       }),
     };
     await writePersistedInstalledPluginIndex(legacyIndex, { env: instance.env });
-    clearPluginMetadataLifecycleCaches();
-    closeOpenClawStateDatabaseForTest();
+    clearState();
 
     expect(await instance.entrypoint()).toEqual([
       expect.stringMatching(/^dist\/index\.(?:js|mjs)$/u),
@@ -147,16 +132,14 @@ describe("Doctor plugin index persistence built CLI proof", () => {
         child.off("close", closed);
         signal.removeEventListener("abort", aborted);
       };
-      const closed = () => {
+      const fail = (error: Error) => {
         cleanup();
-        reject(
-          new Error(`Gateway stopped before registry maintenance settled\n${instance.logs()}`),
-        );
+        reject(error);
       };
-      const aborted = () => {
-        cleanup();
-        reject(new Error("Registry maintenance aborted", { cause: signal.reason }));
-      };
+      const closed = () =>
+        fail(new Error(`Gateway stopped before registry maintenance settled\n${instance.logs()}`));
+      const aborted = () =>
+        fail(new Error("Registry maintenance aborted", { cause: signal.reason }));
       const check = () => {
         if (
           /startup (?:phase|trace): startup\.maintenance\.plugin-registry [\d.]+ms total=/u.test(
@@ -178,8 +161,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       check();
     });
 
-    clearPluginMetadataLifecycleCaches();
-    closeOpenClawStateDatabaseForTest();
+    clearState();
     const persisted = readPersistedInstalledPluginIndexSync({ env: instance.env });
     const persistedPlugin = persisted?.plugins.find((plugin) => plugin.pluginId === pluginId);
     expect(persistedPlugin, instance.logs()).toMatchObject({
@@ -195,16 +177,16 @@ describe("Doctor plugin index persistence built CLI proof", () => {
     // Source readers intentionally select different bundled Doctor contracts.
     // Observe the repaired index through the same built host as the Gateway.
     const listed = await instance.cli(["plugins", "list", "--json"]);
-    expect(listed.code, listed.stderr).toBe(0);
-    expect(listed.signal).toBeNull();
+    expect(listed, listed.stderr).toMatchObject({ code: 0, signal: null });
     const reread = JSON.parse(listed.stdout) as {
       registry: { source: string; diagnostics: unknown[] };
     };
-    expect(reread.registry.source, instance.logs()).toBe("persisted");
-    expect(reread.registry.diagnostics, instance.logs()).toStrictEqual([]);
+    expect(reread.registry, instance.logs()).toMatchObject({
+      source: "persisted",
+      diagnostics: [],
+    });
 
-    clearPluginMetadataLifecycleCaches();
-    closeOpenClawStateDatabaseForTest();
+    clearState();
     expect(readPersistedInstalledPluginIndexSync({ env: instance.env })).toEqual(persisted);
   }, 120_000);
 });

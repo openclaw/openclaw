@@ -22,6 +22,45 @@ const navGroup = (name: string, pages: NavGroup["pages"]): NavGroup => ({ group:
 const navFixture = (tab: string, name: string, pages: NavGroup["pages"]) => ({
   tabs: [{ tab, groups: [navGroup(name, pages)] }],
 });
+function files(root: string) {
+  return {
+    read: (name: string) => fs.readFileSync(path.join(root, name), "utf8"),
+    json: (name: string) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")),
+    write(name: string, content: string) {
+      fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+      fs.writeFileSync(path.join(root, name), content);
+    },
+    exists: (name: string) => fs.existsSync(path.join(root, name)),
+  };
+}
+function publisherFixture(
+  version = sourceSlugifyVersion,
+  { sourceSha, index }: { sourceSha?: string; index?: string } = { index: "# ClawHub\n" },
+) {
+  const root = tempDirs.make("openclaw-docs-sync-");
+  const publishRoot = path.join(root, "publish");
+  const clawhubRoot = path.join(root, "clawhub");
+  fs.mkdirSync(publishRoot);
+  fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
+  if (index !== undefined) {
+    files(clawhubRoot).write("docs/index.md", index);
+  }
+  writePublisherDependencies(publishRoot, publisherDependencies(version));
+  const sync = (env?: NodeJS.ProcessEnv) =>
+    execFileSync(
+      process.execPath,
+      [
+        "scripts/docs-sync-publish.mjs",
+        "--target",
+        publishRoot,
+        "--clawhub-repo",
+        clawhubRoot,
+        ...(sourceSha ? ["--source-sha", sourceSha] : []),
+      ],
+      { stdio: "pipe", ...(env && { env }) },
+    );
+  return { root, publishRoot, sync, ...files(publishRoot) };
+}
 
 function publisherDependencies(version: string, markdownVersion = "15.0.0") {
   const devDependencies = { [slugifyPackage]: version, "markdown-it": markdownVersion };
@@ -43,84 +82,61 @@ function writePublisherDependencies(
   publishRoot: string,
   dependencies: ReturnType<typeof publisherDependencies>,
 ) {
-  fs.writeFileSync(
-    path.join(publishRoot, "package.json"),
-    JSON.stringify(dependencies.packageJson),
-  );
-  fs.writeFileSync(
-    path.join(publishRoot, "package-lock.json"),
-    JSON.stringify(dependencies.packageLock),
-  );
+  const { write } = files(publishRoot);
+  write("package.json", JSON.stringify(dependencies.packageJson));
+  write("package-lock.json", JSON.stringify(dependencies.packageLock));
 }
 
 function readPublisherDependencies(publishRoot: string): ReturnType<typeof publisherDependencies> {
+  const { json } = files(publishRoot);
   return {
-    packageJson: JSON.parse(fs.readFileSync(path.join(publishRoot, "package.json"), "utf8")),
-    packageLock: JSON.parse(fs.readFileSync(path.join(publishRoot, "package-lock.json"), "utf8")),
+    packageJson: json("package.json"),
+    packageLock: json("package-lock.json"),
   };
 }
 
-function collectPages(entry: unknown, pages: string[] = []): string[] {
+type NavEntry =
+  | string
+  | { page?: string; pages?: NavEntry[]; groups?: NavEntry[]; tabs?: NavEntry[] };
+function collectPages(entry: NavEntry | NavEntry[] | undefined): string[] {
+  if (!entry) {
+    return [];
+  }
   if (typeof entry === "string") {
-    pages.push(entry);
-    return pages;
+    return [entry];
   }
   if (Array.isArray(entry)) {
-    for (const item of entry) {
-      collectPages(item, pages);
-    }
-    return pages;
+    return entry.flatMap((item) => collectPages(item));
   }
-  if (!entry || typeof entry !== "object") {
-    return pages;
-  }
-  const record = entry as Record<string, unknown>;
-  if (typeof record.page === "string") {
-    pages.push(record.page);
-  }
-  collectPages(record.pages, pages);
-  collectPages(record.groups, pages);
-  collectPages(record.tabs, pages);
-  return pages;
+  return [
+    ...(entry.page ? [entry.page] : []),
+    ...collectPages(entry.pages),
+    ...collectPages(entry.groups),
+    ...collectPages(entry.tabs),
+  ];
 }
-
-function findNestedGroup(
-  pages: unknown,
-  groupName: string,
-): { group: string; pages?: unknown } | undefined {
-  if (!Array.isArray(pages)) {
-    return undefined;
-  }
-  for (const entry of pages) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+function findNestedGroup(pages: NavGroup["pages"] | undefined, name: string): NavGroup | undefined {
+  for (const entry of pages ?? []) {
+    if (typeof entry === "string") {
       continue;
     }
-    if ("group" in entry && entry.group === groupName) {
-      return entry;
-    }
-    const nested = findNestedGroup(entry.pages, groupName);
-    if (nested) {
-      return nested;
+    const found = entry.group === name ? entry : findNestedGroup(entry.pages, name);
+    if (found) {
+      return found;
     }
   }
-  return undefined;
 }
-
-function findNestedGroupByPage(pages: unknown, page: string) {
-  if (!Array.isArray(pages)) {
-    return undefined;
-  }
-  return pages.find((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return false;
-    }
-    return "pages" in entry && collectPages(entry.pages).includes(page);
-  });
+const findNestedGroupByPage = (pages: NavGroup["pages"] | undefined, page: string) =>
+  pages?.find((entry) => typeof entry !== "string" && collectPages(entry.pages).includes(page));
+function expectFirstLabels(locale: { tabs: NavTab[] } | undefined, tab: string, group: string) {
+  const first = locale!.tabs[0];
+  expect({ tab: first?.tab, group: first?.groups?.[0]?.group }).toEqual({ tab, group });
 }
 
 describe("docs-sync-publish", () => {
   it("reuses only exact successful page checks and checks docs.json on warm runs", () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-mdx-cache-"));
+    const { read, write, json } = files(root);
     const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
     fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
     for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
@@ -132,19 +148,17 @@ describe("docs-sync-publish", () => {
       "junction",
     );
     fs.mkdirSync(path.join(root, "node_modules"));
-    // Synthetic requested/installed lock inputs; dependency code stays in the
-    // read-only shared install. This fixture never runs npm.
+    // Synthetic lock inputs; dependency code stays in the read-only shared install.
     for (const name of ["package.json", "package-lock.json", "node_modules/.package-lock.json"]) {
-      fs.writeFileSync(path.join(root, name), "{}\n");
+      write(name, "{}\n");
     }
-    fs.mkdirSync(path.join(root, "docs"));
     const page = path.join(root, "docs", "a.md");
     const config = path.join(root, "docs", "docs.json");
     const cache = path.join(root, "cache.json");
     const reportPath = path.join(root, "report.json");
-    fs.writeFileSync(page, "# A\n");
-    fs.writeFileSync(path.join(root, "docs", "b.mdx"), "# B\n");
-    fs.writeFileSync(config, "{}");
+    write("docs/a.md", "# A\n");
+    write("docs/b.mdx", "# B\n");
+    write("docs/docs.json", "{}");
     const run = (status = 0) => {
       const result = spawnSync(
         process.execPath,
@@ -152,14 +166,14 @@ describe("docs-sync-publish", () => {
         { cwd: root, encoding: "utf8" },
       );
       expect(result.status, result.stderr).toBe(status);
-      return JSON.parse(fs.readFileSync(reportPath, "utf8"));
+      return json("report.json");
     };
     expect(run().cacheHits).toBe(0);
     expect(run().cacheHits).toBe(2);
-    const successful = fs.readFileSync(cache, "utf8");
+    const successful = read("cache.json");
     fs.writeFileSync(page, "---\nsummary: functions.exec\n---\n# A\n");
     expect(run(1).errors[0].type).toBe("poison-text");
-    expect(fs.readFileSync(cache, "utf8")).toBe(successful);
+    expect(read("cache.json")).toBe(successful);
     fs.writeFileSync(page, "# Changed\n");
     expect(run().cacheHits).toBe(1);
     fs.writeFileSync(config, '{"navigation":{"language":"unknown"}}');
@@ -168,7 +182,7 @@ describe("docs-sync-publish", () => {
     fs.unlinkSync(page);
     fs.renameSync(path.join(root, "docs", "b.mdx"), path.join(root, "docs", "b.MD"));
     expect(run().cacheHits).toBe(0);
-    expect(Object.keys(JSON.parse(fs.readFileSync(cache, "utf8")).files)).toEqual(["docs/b.MD"]);
+    expect(Object.keys(json("cache.json").files)).toEqual(["docs/b.MD"]);
     for (const name of [
       ".openclaw-sync/check-docs-mdx.mts",
       "package-lock.json",
@@ -182,48 +196,28 @@ describe("docs-sync-publish", () => {
   });
 
   it("executes the copied MDX checker and shared anchor runtime closures", () => {
-    const tempRoot = tempDirs.make("openclaw-docs-sync-runtime-");
-    const publishRoot = path.join(tempRoot, "publish");
-    const clawhubRoot = path.join(tempRoot, "clawhub");
-    const minimalMdx = path.join(tempRoot, "valid.mdx");
-
-    fs.mkdirSync(publishRoot, { recursive: true });
-    fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
-    writePublisherDependencies(publishRoot, publisherDependencies(sourceSlugifyVersion));
-    fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
-    fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
-    fs.mkdirSync(path.join(publishRoot, "docs", "fa"), { recursive: true });
+    const { root, publishRoot, read, write, json, sync } = publisherFixture();
+    const minimalMdx = path.join(root, "valid.mdx");
+    files(root).write("valid.mdx", "# Valid MDX\n\nThis file is valid.\n");
     const translation = "<Note>\n  </Note>\n";
-    fs.writeFileSync(path.join(publishRoot, "docs", "fa", "index.md"), translation);
+    write("docs/fa/index.md", translation);
     fs.symlinkSync(
       path.resolve("node_modules"),
       path.join(publishRoot, "node_modules"),
       process.platform === "win32" ? "junction" : "dir",
     );
-
-    execFileSync(
-      process.execPath,
-      ["scripts/docs-sync-publish.mjs", "--target", publishRoot, "--clawhub-repo", clawhubRoot],
-      { stdio: "pipe" },
-    );
+    sync();
     execFileSync(
       process.execPath,
       [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
       { cwd: publishRoot, stdio: "pipe" },
     );
-    expect(fs.readFileSync(path.join(publishRoot, "docs", "fa", "index.md"), "utf8")).toBe(
-      translation,
-    );
+    expect(read("docs/fa/index.md")).toBe(translation);
     // Repository instruction exclusions must not hide the public workspace template.
-    expect(
-      fs.readFileSync(
-        path.join(publishRoot, "docs", "reference", "templates", "AGENTS.md"),
-        "utf8",
-      ),
-    ).toBe(fs.readFileSync(path.join("docs", "reference", "templates", "AGENTS.md"), "utf8"));
-    const published = JSON.parse(
-      fs.readFileSync(path.join(publishRoot, "docs", "docs.json"), "utf8"),
+    expect(read("docs/reference/templates/AGENTS.md")).toBe(
+      fs.readFileSync("docs/reference/templates/AGENTS.md", "utf8"),
     );
+    const published = json("docs/docs.json");
     expect(
       published.navigation.languages.map((entry: { language: string }) => entry.language),
     ).toEqual(expect.arrayContaining(["fa", "th"]));
@@ -274,15 +268,19 @@ describe("docs-sync-publish", () => {
     { fault: "exit", error: "npm lock failure" },
     { fault: "stale", error: "publisher manifest and lock must both pin" },
   ])("syncs an independent publisher lock with $fault outcome", async ({ fault, error }) => {
-    const fixture = tempDirs.make("openclaw-docs-sync-dependencies-");
-    const publishRoot = path.join(fixture, "publish");
-    const clawhubRoot = path.join(fixture, "clawhub");
-    const bin = path.join(fixture, "bin");
-    fs.mkdirSync(publishRoot);
-    fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
+    const {
+      root,
+      publishRoot,
+      sync: runSync,
+      exists,
+      read,
+      write,
+    } = publisherFixture("2.2.0", {
+      sourceSha: "fixture-source",
+    });
+    const bin = path.join(root, "bin");
     fs.mkdirSync(bin);
     const baseline = publisherDependencies("2.2.0");
-    writePublisherDependencies(publishRoot, baseline);
     // npm's graph resolution has separate real-install proof. This CLI fixture
     // injects lock-generation failures without network or root dependency leakage.
     fs.writeFileSync(
@@ -303,43 +301,27 @@ const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
 manifest.devDependencies[name] = version;
 lock.packages[''].devDependencies[name] = version;
 if (fault !== 'stale') lock.packages['node_modules/' + name].version = version;
-if (fault === 'unrelated') lock.packages['node_modules/markdown-it'].version = '15.0.1';
 fs.writeFileSync('package.json', JSON.stringify(manifest));
 fs.writeFileSync('package-lock.json', JSON.stringify(lock));
 `,
       { mode: 0o755 },
     );
     const sync = () =>
-      execFileSync(
-        process.execPath,
-        [
-          "scripts/docs-sync-publish.mjs",
-          "--target",
-          publishRoot,
-          "--clawhub-repo",
-          clawhubRoot,
-          "--source-sha",
-          "fixture-source",
-        ],
-        {
-          stdio: "pipe",
-          env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
-        },
-      );
+      runSync({ ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` });
     if (error) {
       expect(sync).toThrow(error);
-      expect(fs.existsSync(path.join(publishRoot, ".openclaw-sync", "source.json"))).toBe(false);
+      expect(exists(".openclaw-sync/source.json")).toBe(false);
       return;
     }
     sync();
     expect(readPublisherDependencies(publishRoot)).toEqual(
       publisherDependencies(sourceSlugifyVersion),
     );
-    expect(fs.existsSync(path.join(publishRoot, "node_modules"))).toBe(false);
+    expect(exists("node_modules")).toBe(false);
     const { validateDocsSyncDependencies } = await import("../../scripts/docs-sync-publish.mjs");
     validateDocsSyncDependencies(publishRoot, baseline);
     sync();
-    expect(fs.readFileSync(path.join(publishRoot, "npm-calls"), "utf8")).toBe("called\n");
+    expect(read("npm-calls")).toBe("called\n");
 
     // Post-rebase validation compares with fresh publisher main, not the clone's
     // old dependency snapshot. Losing an unrelated maintainer update must fail.
@@ -350,10 +332,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     const rebased = publisherDependencies(sourceSlugifyVersion, "15.0.1");
     writePublisherDependencies(publishRoot, rebased);
     const reordered = Object.fromEntries(Object.entries(rebased.packageLock).toReversed());
-    fs.writeFileSync(
-      path.join(publishRoot, "package-lock.json"),
-      JSON.stringify(reordered, null, 4),
-    );
+    write("package-lock.json", JSON.stringify(reordered, null, 4));
     expect(() => validateDocsSyncDependencies(publishRoot, freshMain)).not.toThrow();
     fs.appendFileSync(
       path.join(publishRoot, ".openclaw-sync", "lib", "docs-markdown.mjs"),
@@ -373,29 +352,20 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "--clawhub-source-repo",
       "--clawhub-source-sha",
     ]) {
-      expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
-      expect(() => parseArgs([flag, "--target", "generated-docs"])).toThrow(
-        `${flag} requires a value`,
-      );
-      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+      for (const tail of [[], ["--target", "generated-docs"], ["-h"]]) {
+        expect(() => parseArgs([flag, ...tail])).toThrow(`${flag} requires a value`);
+      }
     }
   });
 
   it("defers orphan locale deletion to translation finalization", () => {
     const docsDir = tempDirs.make("openclaw-docs-sync-");
-    const mirroredEnglish = path.join(docsDir, "clawhub", "api.md");
-    const localizedMirror = path.join(docsDir, "de", "clawhub", "api.md");
-    const orphan = path.join(docsDir, "de", "removed.md");
-
-    fs.mkdirSync(path.dirname(mirroredEnglish), { recursive: true });
-    fs.mkdirSync(path.dirname(localizedMirror), { recursive: true });
-    fs.writeFileSync(mirroredEnglish, "# ClawHub API\n");
-    fs.writeFileSync(localizedMirror, "# ClawHub-API\n");
-    fs.writeFileSync(orphan, "# Removed\n");
-
+    const { write, exists } = files(docsDir);
+    write("clawhub/api.md", "# ClawHub API\n");
+    write("de/clawhub/api.md", "# ClawHub-API\n");
+    write("de/removed.md", "# Removed\n");
     expect(reportOrphanLocaleDocs(docsDir)).toBe(1);
-    expect(fs.existsSync(localizedMirror)).toBe(true);
-    expect(fs.existsSync(orphan)).toBe(true);
+    expect([exists("de/clawhub/api.md"), exists("de/removed.md")]).toEqual([true, true]);
   });
 
   it("overlays deep groups without changing the input or ambiguously labeling siblings", () => {
@@ -413,13 +383,12 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     );
     expect(source).toEqual(before);
     expect(collectPages(result)).toEqual(collectPages(source));
-    expect(result.tabs[0].groups[0]).toEqual({
-      group: "Kılavuzlar",
-      pages: [
-        { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
-        { group: "Search", pages: ["tr/search"] },
-      ],
-    });
+    expect(result.tabs[0].groups[0]).toEqual(
+      navGroup("Kılavuzlar", [
+        navGroup("Tarayıcı", [navGroup("Kurulum", ["tr/browser/setup"])]),
+        navGroup("Search", ["tr/search"]),
+      ]),
+    );
   });
 
   it("covers every published Swedish navigation label with a matching English anchor", () => {
@@ -491,8 +460,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       }
     }
 
-    expect(simplifiedChinese!.tabs[0]?.tab).toBe("快速开始");
-    expect(simplifiedChinese!.tabs[0]?.groups?.[0]?.group).toBe("首页");
+    expectFirstLabels(simplifiedChinese, "快速开始", "首页");
     expect(
       simplifiedChinese!.tabs
         .find((tab) => tab.tab === "发布")
@@ -503,10 +471,8 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
         .find((tab) => tab.tab === "贡献")
         ?.groups?.map((group) => group.group),
     ).toEqual(["成熟度", "测试与 CI"]);
-    expect(swedish!.tabs[0]?.tab).toBe("Kom igång");
-    expect(swedish!.tabs[0]?.groups?.[0]?.group).toBe("Översikt");
-    expect(german!.tabs[0]?.tab).toBe("Loslegen");
-    expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
+    expectFirstLabels(swedish, "Kom igång", "Översikt");
+    expectFirstLabels(german, "Loslegen", "Überblick");
 
     const simplifiedChineseGateway = simplifiedChinese!.tabs
       .find((tab) => tab.tab === "网关与运维")
@@ -537,28 +503,13 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "Yardım",
     ]);
     expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
-    for (const { tab, parent, child, page } of [
-      { tab: "Kurulum", parent: "Bakım", child: "Geçiş", page: "tr/install/migrating" },
-      {
-        tab: "Ajanlar",
-        parent: "Oturumlar ve bellek",
-        child: "Active Memory",
-        page: "tr/concepts/active-memory/enabling",
-      },
-      {
-        tab: "Yetenekler",
-        parent: "Plugin kılavuzları",
-        child: "Codex harness",
-        page: "tr/plugins/codex-harness/placement",
-      },
-      { tab: "Yetenekler", parent: "Araçlar", child: "Tarayıcı", page: "tr/tools/browser/setup" },
-      {
-        tab: "Gateway ve operasyonlar",
-        parent: "Gateway",
-        child: "OpenTelemetry",
-        page: "tr/gateway/opentelemetry/setup",
-      },
-      { tab: "Başvuru", parent: "CLI komutları", child: "Gateway", page: "tr/cli/gateway/running" },
+    for (const [tab, parent, child, page] of [
+      ["Kurulum", "Bakım", "Geçiş", "tr/install/migrating"],
+      ["Ajanlar", "Oturumlar ve bellek", "Active Memory", "tr/concepts/active-memory/enabling"],
+      ["Yetenekler", "Plugin kılavuzları", "Codex harness", "tr/plugins/codex-harness/placement"],
+      ["Yetenekler", "Araçlar", "Tarayıcı", "tr/tools/browser/setup"],
+      ["Gateway ve operasyonlar", "Gateway", "OpenTelemetry", "tr/gateway/opentelemetry/setup"],
+      ["Başvuru", "CLI komutları", "Gateway", "tr/cli/gateway/running"],
     ]) {
       const parentGroup = turkish!.tabs
         .find((entry) => entry.tab === tab)

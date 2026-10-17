@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 const SCRIPT_PATH = "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs";
 const MAX_STATS_SAMPLE_LINE_BYTES = 1024 * 1024;
 const tempRoots: string[] = [];
-const sample = (MemUsage = "128MiB / 2GiB", CPUPerc = "25.0%") =>
-  JSON.stringify({ MemUsage, CPUPerc }) + "\n";
+const sample = (MemUsage = "128MiB / 2GiB", CPUPerc = "25.0%", ending = "\n") =>
+  JSON.stringify({ MemUsage, CPUPerc }) + ending;
 
 function writeStats(contents: string): string {
   const root = mkdtempSync(join(tmpdir(), "openclaw-docker-stats-"));
@@ -62,32 +62,30 @@ afterEach(() => {
 });
 
 describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
-  it.each([false, true])(
-    "keeps resource ceilings local errors and Actions warnings (Actions: %s)",
-    (actions) => {
-      const statsFile = writeStats('{"MemUsage":"513MiB / 2GiB","CPUPerc":"101.0%"}\n');
-      const summary = join(dirname(statsFile), "summary.md");
-      const result = runAssert(statsFile, "512", "100", {
-        CI: "1",
-        GITHUB_ACTIONS: actions ? "true" : "",
-        GITHUB_STEP_SUMMARY: summary,
-      });
+  it.each([false, true])("reports ceilings as local errors or Actions warnings: %s", (actions) => {
+    const statsFile = writeStats(sample("513MiB / 2GiB", "101.0%"));
+    const summary = join(dirname(statsFile), "summary.md");
+    const result = runAssert(statsFile, "512", "100", {
+      CI: "1",
+      GITHUB_ACTIONS: actions ? "true" : "",
+      GITHUB_STEP_SUMMARY: summary,
+    });
 
-      expect(result.status, result.stderr).toBe(actions ? 0 : 1);
-      expect(result.stderr).toContain("memory peak 513.0MiB exceeded 512MiB");
-      expect(result.stderr).toContain(
-        actions ? "CPU peak 101.0%25 exceeded 100%25" : "CPU peak 101.0% exceeded 100%",
-      );
-      if (actions) {
-        expect(result.stderr).toContain(`::warning file=${SCRIPT_PATH},line=1,col=0`);
-        expect(readFileSync(summary, "utf8")).toContain("Docker memory budget");
-        expect(readFileSync(summary, "utf8")).toContain("Docker CPU budget");
-        expect(readFileSync(summary, "utf8")).toContain("CPU peak 101.0% exceeded 100%");
-      } else {
-        expect(result.stderr).not.toContain("::warning");
-      }
-    },
-  );
+    expect(result.status, result.stderr).toBe(actions ? 0 : 1);
+    expect(result.stderr).toContain("memory peak 513.0MiB exceeded 512MiB");
+    expect(result.stderr).toContain(
+      actions ? "CPU peak 101.0%25 exceeded 100%25" : "CPU peak 101.0% exceeded 100%",
+    );
+    if (actions) {
+      expect(result.stderr).toContain(`::warning file=${SCRIPT_PATH},line=1,col=0`);
+      const report = readFileSync(summary, "utf8");
+      expect(report).toContain("Docker memory budget");
+      expect(report).toContain("Docker CPU budget");
+      expect(report).toContain("CPU peak 101.0% exceeded 100%");
+    } else {
+      expect(result.stderr).not.toContain("::warning");
+    }
+  });
 
   it("rejects invalid resource limits instead of disabling the ceiling", () => {
     for (const memory of ["nope", "1e3"]) {
@@ -109,13 +107,13 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     const result = runAssert(
       writeStats(
         [
-          '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n',
+          sample(),
           `${paddedLine}\n`,
           `${cappedLine}\r\n`,
-          '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\r',
-          '{"MemUsage":"64MiB / 2GiB","CPUPerc":"15.0%"}\r',
-          '{"MemUsage":"512B / 2GiB","CPUPerc":"0.5%"}\n',
-          '{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n',
+          sample(undefined, undefined, "\r"),
+          sample("64MiB / 2GiB", "15.0%", "\r"),
+          sample("512B / 2GiB", "0.5%"),
+          sample("0B / 0B", "0.0%"),
         ].join(""),
       ),
       "256.5",
@@ -137,12 +135,11 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(result.stderr).not.toContain("was not valid JSON");
   });
 
-  it("still fails when only terminal zero-capacity samples were captured", () => {
-    expectRejected(sample("0B / 0B", "0.0%"), "no docker stats samples captured");
-  });
-
-  it("rejects zero-memory Docker stats samples as invalid proof", () => {
-    expectRejected(sample("0B / 2GiB", "0.0%"), "had non-positive MemUsage");
+  it.each([
+    ["0B / 0B", "no docker stats samples captured"],
+    ["0B / 2GiB", "had non-positive MemUsage"],
+  ])("rejects unusable sample %s", (memory, message) => {
+    expectRejected(sample(memory, "0.0%"), message);
   });
 });
 
@@ -203,10 +200,9 @@ docker_e2e_print_log() { cat "$1"; }
 
     expect(result.status, result.stderr).toBe(runStatus);
     expect(result.stdout).toContain("::warning file=scripts/e2e/kitchen-sink-rpc-walk.mts");
-    expect(readFileSync(args, "utf8")).toContain("GITHUB_ACTIONS\n");
-    expect(readFileSync(args, "utf8")).toContain(
-      "GITHUB_STEP_SUMMARY=/tmp/openclaw-limits-summary.md\n",
-    );
+    const dockerArgs = readFileSync(args, "utf8");
+    expect(dockerArgs).toContain("GITHUB_ACTIONS\n");
+    expect(dockerArgs).toContain("GITHUB_STEP_SUMMARY=/tmp/openclaw-limits-summary.md\n");
     expect(readFileSync(summary, "utf8")).toContain("container resource warning");
   });
 });
