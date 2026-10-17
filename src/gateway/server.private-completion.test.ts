@@ -27,6 +27,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
 import {
   runExclusiveSessionLifecycleMutation,
@@ -65,6 +66,8 @@ import {
   agentCommandMock,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
+  onceMessage,
+  rpcReq,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
@@ -160,6 +163,59 @@ describe("private subagent completion processing receipts", () => {
       meta: { durationMs: 1, terminalReply: { disposition: "silent" } },
     } satisfies EmbeddedAgentRunResult;
   }
+
+  it("keeps private completion streams out of a subscribed conversation before its next public turn", async () => {
+    const { ws } = await harness.openClient({ scopes: ["operator.admin"] });
+    onTestFinished(() => ws.close());
+    expect((await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey })).ok).toBe(true);
+    const frames: unknown[] = [];
+    ws.on("message", (frame) => frames.push(JSON.parse(frame.toString())));
+    const privateText = "Internal review note after the permitted message-tool update";
+    const publicText = "The next ordinary answer is visible";
+    agentCommandMock.mockImplementation(async (input) => {
+      const command = input as AgentCommandOpts;
+      await command.userTurnTranscriptRecorder?.persistApproved();
+      await command.onExecutionStarted?.();
+      const text = command.privateCompletion ? privateText : publicText;
+      const currentRunId = expectDefined(command.runId, "Expected admitted run id");
+      emitAgentEvent({ runId: currentRunId, stream: "lifecycle", data: { phase: "start" } });
+      emitAgentEvent({
+        runId: currentRunId,
+        stream: "assistant",
+        data: { text, delta: text },
+      });
+      emitAgentEvent({ runId: currentRunId, stream: "lifecycle", data: { phase: "end" } });
+      return {
+        payloads: [{ text }],
+        meta: { durationMs: 1, terminalReply: { disposition: "visible", text } },
+      } satisfies EmbeddedAgentRunResult;
+    });
+    expect(await dispatch()).toMatchObject({ status: "ok" });
+    const nextRunId = `ordinary-after-${runId}`;
+    const visible = onceMessage(
+      ws,
+      (event) => event.type === "event" && JSON.stringify(event).includes(publicText),
+    );
+    expect(
+      await dispatchGatewayMethodInProcess(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: nextRunId,
+          message: "What is the current result?",
+          deliver: false,
+        },
+        {
+          expectFinal: true,
+          forceSyntheticClient: true,
+          operatorRoleActor: { kind: "system" },
+          resolveGatewayContext: () => kernel.gatewayRequestContext,
+        },
+      ),
+    ).toMatchObject({ status: "ok" });
+    await visible;
+    expect(JSON.stringify(frames)).not.toContain(privateText);
+  });
 
   it("binds a settle handoff to the source accepted by pending-input replay", async () => {
     const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;

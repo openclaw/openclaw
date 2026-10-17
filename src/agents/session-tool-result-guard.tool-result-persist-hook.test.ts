@@ -427,11 +427,21 @@ describe("guardSessionManager transcript visibility", () => {
       runId: "completion-run",
       inputProvenance: { ...childProvenance, sourceTool: "subagent_announce" },
     }).appendMessage(assistantText("Your bug is fixed and tested", 5));
+    guardSessionManager(sessionManager, {
+      runId: "private-completion-run",
+      privateCompletion: true,
+      inputProvenance: { ...childProvenance, sourceTool: "subagent_settle" },
+    }).appendMessage(assistantText("I sent the reviewed outcome to the requester", 6));
+    guardSessionManager(sessionManager, { runId: "next-human-run" }).appendMessage(
+      assistantText("The next user answer remains visible", 7),
+    );
     const messages = SessionManager.open(target).buildSessionContext().messages;
-    expect(messages).toHaveLength(5);
+    expect(messages).toHaveLength(7);
     expect(messages.map((message) => Reflect.get(message, "display") === false)).toEqual([
       true,
       false,
+      false,
+      true,
       false,
       true,
       false,

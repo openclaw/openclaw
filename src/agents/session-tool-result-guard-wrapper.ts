@@ -103,6 +103,7 @@ export function guardSessionManager(
     config?: OpenClawConfig;
     contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
+    privateCompletion?: true;
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
@@ -228,7 +229,7 @@ export function guardSessionManager(
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
-      hidden: opts?.trigger === "memory",
+      hidden: opts?.privateCompletion === true || opts?.trigger === "memory",
       inputProvenance,
       message,
     });
