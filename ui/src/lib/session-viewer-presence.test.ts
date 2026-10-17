@@ -1,8 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
-import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
+import { pendingSetRequests, watchedGateway } from "./gateway-stores.test-support.ts";
 import { sessionViewerPresenceForGateway } from "./session-viewer-presence.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
@@ -20,18 +19,13 @@ function createHello(mainSessionKey = "agent:main:main"): GatewayHelloOk {
 
 function createGatewayHarness() {
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ sessionKeys: [] });
-  const { gateway, publish: setSnapshot } = createApplicationGateway({
-    ...createApplicationGateway().gateway.snapshot,
+  const {
+    gateway,
+    publish: setSnapshot,
+    unsubscribe,
+  } = watchedGateway({
     client: { request } as unknown as GatewayBrowserClient,
-    phase: "connected",
     hello: createHello(),
-    assistantAgentId: "main",
-  });
-  const subscribe = gateway.subscribe.bind(gateway);
-  const unsubscribe = vi.fn((detach: () => void) => detach());
-  vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
-    const detach = subscribe(listener);
-    return () => unsubscribe(detach);
   });
   const store = sessionViewerPresenceForGateway(gateway);
   return { gateway, request, unsubscribe, setSnapshot, store, owner: {} };
@@ -39,36 +33,16 @@ function createGatewayHarness() {
 
 function createPendingGatewayHarness() {
   const harness = createGatewayHarness();
-  const ids: string[] = [];
-  const retired: string[] = [];
-  const pending = new GatewayPendingRequests({
-    createRequestId: () => "viewer",
-    nowMs: () => Date.now(),
-    onTiming: ({ errorCode }) => {
-      if (errorCode) {
-        retired.push(errorCode);
-      }
-    },
-  });
-  harness.request.mockImplementation((method, params, options) =>
-    pending.request({ send: () => undefined }, method, params, {
-      ...options,
-      onSent: (id) => ids.push(id),
-    }),
-  );
+  const requests = pendingSetRequests(harness.request, "viewer");
   cleanups.push(async () => {
     harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
     harness.store.unwatch(harness.owner);
-    pending.flush(new Error("test complete"));
+    requests.pending.flush(new Error("test complete"));
     await flushSync();
   });
   return {
     ...harness,
-    pending,
-    retired,
-    acknowledge(index: number) {
-      pending.handleResponse({ type: "res", id: ids[index]!, ok: true, payload: {} });
-    },
+    ...requests,
   };
 }
 

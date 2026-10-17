@@ -1,12 +1,10 @@
+import type { ProjectRecord, ProjectsListResult } from "@openclaw/gateway-protocol";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type {
-  ProjectRecord,
-  ProjectsListResult,
-} from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { markdownGitHubAliases } from "../components/markdown-github-repositories.ts";
-import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { watchedGateway } from "./gateway-stores.test-support.ts";
 import { projectsForGateway } from "./projects.ts";
 
 const project: ProjectRecord = {
@@ -19,39 +17,23 @@ const project: ProjectRecord = {
 
 function harness() {
   const request = vi.fn(async (): Promise<ProjectsListResult> => ({ projects: [project] }));
-  const { gateway, publish, publishEvent } = createApplicationGateway({
-    ...createApplicationGateway().gateway.snapshot,
+  const hello = gatewayHelloForMethods(["projects.list"], ["operator.read", "operator.write"]);
+  hello.auth!.recoveryScope = "principal-a";
+  const connection = watchedGateway({
     client: createTestGatewayClient(request),
-    phase: "connected",
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      features: { methods: ["projects.list"] },
-      auth: {
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-        recoveryScope: "principal-a",
-      },
-    },
+    hello,
     sessionKey: "agent:main:first",
-    assistantAgentId: "main",
   });
+  const { gateway, publish, publishEvent } = connection;
   const snapshot = gateway.snapshot;
-  const subscribe = gateway.subscribe.bind(gateway);
-  const unsubscribe = vi.fn((detach: () => void) => detach());
-  vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
-    const detach = subscribe(listener);
-    return () => unsubscribe(detach);
-  });
   const store = projectsForGateway(gateway);
   const detach = store.subscribe(vi.fn());
   onTestFinished(detach);
   return {
+    ...connection,
     request,
     snapshot,
-    gateway,
     store,
-    unsubscribe,
     detach,
     emitConfigChanged: () => publishEvent({ type: "event", event: "config.changed", payload: {} }),
     emit: () => publish(snapshot),
@@ -65,8 +47,7 @@ function harness() {
 it("shares one cold read across chat and the picker, preserving recents", async () => {
   const h = harness();
   const picker = projectsForGateway(h.gateway);
-  const detach = picker.subscribe(vi.fn());
-  onTestFinished(detach);
+  onTestFinished(picker.subscribe(vi.fn()));
   expect(picker).toBe(h.store);
   await h.store.refresh();
   expect(h.request).toHaveBeenCalledExactlyOnceWith("projects.list", {});

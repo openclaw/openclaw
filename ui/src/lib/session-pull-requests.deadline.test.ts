@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
+import type { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { pendingSetRequests } from "./gateway-stores.test-support.ts";
 import {
   createGatewayHarness,
   createHello,
@@ -8,58 +9,31 @@ import {
 } from "./session-pull-requests.test-support.ts";
 import { sessionPullRequestsForGateway } from "./session-pull-requests.ts";
 
-let harness: ReturnType<typeof createPendingHarness>;
+let harness: ReturnType<typeof createGatewayHarness>;
 let store: ReturnType<typeof sessionPullRequestsForGateway>;
 let owner: object;
+let pending: GatewayPendingRequests;
+let retired: string[];
+let acknowledge: ReturnType<typeof pendingSetRequests>["acknowledge"];
 const key = "agent:main:demo";
 
-function createPendingHarness() {
-  vi.useFakeTimers();
-  const gatewayHarness = createGatewayHarness();
-  const ids: string[] = [];
-  const retired: string[] = [];
-  const pending = new GatewayPendingRequests({
-    createRequestId: () => "pull-requests",
-    nowMs: () => Date.now(),
-    onTiming: ({ errorCode }) => {
-      if (errorCode) {
-        retired.push(errorCode);
-      }
-    },
-  });
-  gatewayHarness.request.mockImplementation((method, params, options) =>
-    pending.request({ send: () => undefined }, method, params, {
-      ...options,
-      onSent: (id) => ids.push(id),
-    }),
-  );
-  return {
-    ...gatewayHarness,
-    store: sessionPullRequestsForGateway(gatewayHarness.gateway),
-    owner: {},
-    pending,
-    retired,
-    hello(hello = createHello()) {
-      gatewayHarness.setSnapshot({ ...gatewayHarness.gateway.snapshot, hello });
-    },
-    params(index: number) {
-      return gatewayHarness.request.mock.calls[index]?.[1];
-    },
-    acknowledge(index: number) {
-      pending.handleResponse({ type: "res", id: ids[index]!, ok: true, payload: {} });
-    },
-  };
-}
-
 beforeEach(() => {
-  harness = createPendingHarness();
-  ({ store, owner } = harness);
+  vi.useFakeTimers();
+  harness = createGatewayHarness();
+  store = sessionPullRequestsForGateway(harness.gateway);
+  owner = {};
+  ({ pending, retired, acknowledge } = pendingSetRequests(harness.request, "pull-requests"));
 });
+
+const params = (index: number) => harness.request.mock.calls[index]?.[1];
+function hello(value = createHello()) {
+  harness.setSnapshot({ ...harness.gateway.snapshot, hello: value });
+}
 
 async function startRefresh() {
   store.watch(owner, [key]);
   await flushSync();
-  harness.acknowledge(0);
+  acknowledge(0);
   await flushSync();
   store.refresh(key);
   await flushSync();
@@ -68,14 +42,14 @@ async function startRefresh() {
 function expectDetached() {
   expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
   expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-  expect(harness.pending.hasPending).toBe(false);
+  expect(pending.hasPending).toBe(false);
   expect(vi.getTimerCount()).toBe(0);
 }
 
 afterEach(async () => {
   harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
   store.unwatch(owner);
-  harness.pending.flush(new Error("test complete"));
+  pending.flush(new Error("test complete"));
   await flushSync();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -85,41 +59,41 @@ afterEach(async () => {
 describe("pull request subscription acknowledgment lifetime", () => {
   it("retains refresh and unsubscribe intent while the connected gateway omits the capability", async () => {
     await startRefresh();
-    expect(harness.params(1)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
+    expect(params(1)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
     const refreshSignal = harness.request.mock.calls[1]?.[2]?.signal;
 
-    harness.hello({ ...createHello(), features: { methods: [] } });
+    hello({ ...createHello(), features: { methods: [] } });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(refreshSignal?.aborted).toBe(true);
-    expect(harness.retired).toEqual(["CLIENT_ABORTED"]);
-    expect(harness.pending.hasPending).toBe(false);
+    expect(retired).toEqual(["CLIENT_ABORTED"]);
+    expect(pending.hasPending).toBe(false);
     expect(harness.request).toHaveBeenCalledTimes(2);
 
-    harness.hello();
+    hello();
     await flushSync();
-    expect(harness.params(2)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
-    harness.acknowledge(1);
-    expect(harness.pending.hasPending).toBe(true);
-    harness.acknowledge(2);
+    expect(params(2)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
+    acknowledge(1);
+    expect(pending.hasPending).toBe(true);
+    acknowledge(2);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).toHaveBeenCalledTimes(3);
-    expect(harness.pending.hasPending).toBe(false);
+    expect(pending.hasPending).toBe(false);
     const passiveOwner = {};
     store.watch(passiveOwner, [key], { passive: true });
-    harness.hello({ ...createHello(), features: { methods: [] } });
+    hello({ ...createHello(), features: { methods: [] } });
     await flushSync();
     store.unwatch(owner);
-    harness.hello();
+    hello();
     await flushSync();
-    expect(harness.params(3)).toEqual({ sessionKeys: [] });
+    expect(params(3)).toEqual({ sessionKeys: [] });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).toHaveBeenCalledTimes(5);
-    expect(harness.params(4)).toEqual({ sessionKeys: [] });
-    harness.acknowledge(4);
+    expect(params(4)).toEqual({ sessionKeys: [] });
+    acknowledge(4);
     await flushSync();
-    harness.hello({ ...createHello(), features: { methods: [] } });
+    hello({ ...createHello(), features: { methods: [] } });
     await flushSync();
-    harness.hello();
+    hello();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).toHaveBeenCalledTimes(5);
     store.unwatch(passiveOwner);
@@ -135,21 +109,21 @@ describe("pull request subscription acknowledgment lifetime", () => {
     expect(harness.request).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(harness.pending.hasPending).toBe(false);
-    expect(harness.retired).toEqual(["CLIENT_TIMEOUT"]);
+    expect(pending.hasPending).toBe(false);
+    expect(retired).toEqual(["CLIENT_TIMEOUT"]);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(harness.request).toHaveBeenCalledTimes(3);
-    expect(harness.params(2)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
-    harness.acknowledge(1);
-    expect(harness.pending.hasPending).toBe(true);
-    harness.acknowledge(2);
+    expect(params(2)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
+    acknowledge(1);
+    expect(pending.hasPending).toBe(true);
+    acknowledge(2);
     await flushSync();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).toHaveBeenCalledTimes(3);
-    expect(harness.pending.hasPending).toBe(false);
+    expect(pending.hasPending).toBe(false);
 
     store.unwatch(owner);
-    expect(harness.params(3)).toEqual({ sessionKeys: [] });
+    expect(params(3)).toEqual({ sessionKeys: [] });
     expectDetached();
   });
 
@@ -160,8 +134,8 @@ describe("pull request subscription acknowledgment lifetime", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(settled).toHaveBeenCalledExactlyOnceWith(undefined);
     expect(harness.request).toHaveBeenCalledTimes(2);
-    expect(harness.params(1)).toEqual({ sessionKeys: [] });
-    expect(harness.retired).toEqual(["CLIENT_TIMEOUT", "CLIENT_ABORTED"]);
+    expect(params(1)).toEqual({ sessionKeys: [] });
+    expect(retired).toEqual(["CLIENT_TIMEOUT", "CLIENT_ABORTED"]);
     expectDetached();
   });
 
@@ -196,23 +170,23 @@ describe("pull request subscription acknowledgment lifetime", () => {
       }
       await flushSync();
       expect(firstSignal?.aborted).toBe(true);
-      expect(harness.retired).toEqual(
+      expect(retired).toEqual(
         change === "unwatch" ? ["CLIENT_ABORTED", "CLIENT_ABORTED"] : ["CLIENT_ABORTED"],
       );
       if (change !== "unavailable") {
         expect(harness.request).toHaveBeenCalledTimes(2);
         if (change === "hidden" || change === "unwatch") {
-          expect(harness.params(1)).toEqual({ sessionKeys: [] });
+          expect(params(1)).toEqual({ sessionKeys: [] });
         }
-        harness.acknowledge(1);
+        acknowledge(1);
       }
-      harness.acknowledge(0);
+      acknowledge(0);
       await flushSync();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(harness.request).toHaveBeenCalledTimes(change === "unavailable" ? 1 : 2);
-      expect(harness.pending.hasPending).toBe(false);
+      expect(pending.hasPending).toBe(false);
       store.unwatch(owner);
-      expect(harness.pending.hasPending).toBe(false);
+      expect(pending.hasPending).toBe(false);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
