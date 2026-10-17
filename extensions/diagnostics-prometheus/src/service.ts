@@ -69,6 +69,35 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "gateway.ws.event": {
+      if (!metadata.trusted) {
+        return;
+      }
+      const labels = { event: evt.event };
+      store.counter(
+        "openclaw_gateway_ws_events_total",
+        "Outbound Gateway WebSocket event frames accepted by the sender per socket.",
+        labels,
+        evt.count,
+      );
+      store.counter(
+        "openclaw_gateway_ws_event_bytes_total",
+        "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket.",
+        labels,
+        evt.bytes,
+      );
+      return;
+    }
+    case "gateway.ws.connections":
+      if (metadata.trusted) {
+        store.gauge(
+          "openclaw_gateway_ws_operator_connections",
+          "Connected authenticated Gateway operator WebSockets.",
+          {},
+          evt.operators,
+        );
+      }
+      return;
     case "worker.request":
       if (metadata.trusted) {
         recordWorkerRequest(store, evt);

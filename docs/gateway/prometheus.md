@@ -107,6 +107,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_cron_list_requests_total`                       | counter   | `client_kind`, `source`, `scope`, `compact`, `page`                                       |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
+| `openclaw_gateway_ws_events_total`                        | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_event_bytes_total`                   | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_operator_connections`                | gauge     | none                                                                                      |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_heap_delta_exclusive_total` | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_seconds`                    | histogram | `method`                                                                                  |
@@ -236,6 +239,21 @@ operator request start-queue wait, separately from command/session lane metrics.
 They measure elapsed time, not CPU time. Early acknowledgments and responses
 after handler return are distinct from completed agent work. See
 [Gateway RPC timing semantics](/gateway/opentelemetry#gateway-rpc).
+
+`openclaw_gateway_ws_events_total` counts outbound event frames accepted by the
+sender, once per socket, so a broadcast to ten sockets counts ten frames.
+`openclaw_gateway_ws_event_bytes_total` sums the encoded UTF-8 bytes of those full
+JSON frames before WebSocket framing or compression. Neither counter proves
+client receipt. Their only label is `event`: a known protocol event name, such as
+`chat` or `sessions.changed`, or `other` for an unrecognized name. No payload,
+session, user, or connection identifiers are exported. The
+`openclaw_gateway_ws_operator_connections` gauge reports connected authenticated
+operator sockets without labels. These observations use the existing bounded
+diagnostic queue and shared exporter series cap. Event observations are batched
+by event name within one event-loop turn while preserving per-socket frame and
+byte totals. Connection counts update on
+connect/disconnect and refresh every 30 seconds so a late-starting exporter or
+dropped snapshot can recover.
 
 Receipt begins after the connected client's request frame passes validation.
 These timings exclude CLI startup, local diagnostics, connection/authentication
@@ -817,6 +835,9 @@ attributes.
 ```promql
 # Gateway RPC requests per second by method
 sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
+
+# Outbound WebSocket event bytes per second by event, including fan-out
+sum by (event) (rate(openclaw_gateway_ws_event_bytes_total[5m]))
 
 # Model catalog calls per minute by caller and request shape over ten minutes
 60 * sum by (client_kind, source, view, scope, refresh, prepared_only)

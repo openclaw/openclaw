@@ -46,6 +46,19 @@ export function createDiagnosticsMetrics(
       "gateway.rpc.requests",
       "Authenticated Gateway WebSocket requests received",
     ),
+    gatewayWsEventsCounter: createCounter(
+      "gateway.ws.events",
+      "Outbound Gateway WebSocket event frames accepted by the sender per socket",
+    ),
+    gatewayWsEventBytesCounter: createCounter(
+      "gateway.ws.event_bytes",
+      "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket",
+      "By",
+    ),
+    gatewayWsOperatorConnectionsGauge: meter.createGauge(
+      `${metricNamePrefix}gateway.ws.operator_connections`,
+      { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },
+    ),
     gatewayRpcOutcomesCounter: createCounter(
       "gateway.rpc.outcomes",
       "Gateway RPC observations by phase and outcome",

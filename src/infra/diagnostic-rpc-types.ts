@@ -56,3 +56,8 @@ export type DiagnosticGatewayRpcFields = {
       response: "none" | "sent" | "unavailable" | "suppressed";
     }
 );
+
+/** Payload-free observations from the physical WebSocket transport. */
+export type DiagnosticGatewayWsFields =
+  | { type: "gateway.ws.event"; event: string; count: number; bytes: number }
+  | { type: "gateway.ws.connections"; operators: number };
