@@ -9,9 +9,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
-import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { hasErrnoCode } from "../../../../src/infra/errno.js";
 import { signalProcessTree } from "../../../../src/process/kill-tree.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
@@ -63,6 +64,42 @@ export type ToolsEffectiveResult = {
 };
 
 const CHILD_ENV_KEYS = ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec"] as const;
+
+export function startMcpGateway(
+  owner: ReturnType<typeof createQaGatewayChild>,
+  configure: (cfg: OpenClawConfig) => OpenClawConfig = (cfg) => cfg,
+): Promise<GatewayHandle> {
+  const repoRoot = process.cwd();
+  return owner.start({
+    repoRoot,
+    command: {
+      executablePath: process.execPath,
+      argsPrefix: ["dist/index.js"],
+      cwd: repoRoot,
+      usePackagedPlugins: true,
+    },
+    transportBaseUrl: "http://127.0.0.1",
+    controlUiEnabled: false,
+    runtimeEnvPatch: {
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+    },
+    mutateConfig: (cfg) =>
+      configure({
+        ...cfg,
+        plugins: { enabled: false },
+        gateway: {
+          ...cfg.gateway,
+          nodes: {
+            ...cfg.gateway?.nodes,
+            commands: { allow: [NODE_MCP_COMMAND] },
+            pairing: { ...cfg.gateway?.nodes?.pairing, autoApproveLocal: false },
+          },
+        },
+      }),
+  });
+}
 
 export async function waitForMcpFixtureGate(filePath: string, signal: AbortSignal): Promise<void> {
   try {

@@ -114,7 +114,13 @@ describe("Gateway node pending work", () => {
             );
           },
         });
-        await waitForApprovedNode(expectConnected(operator), identity.deviceId, gateway.logs);
+        await waitForNodeConnection(
+          expectConnected(operator),
+          identity.deviceId,
+          true,
+          gateway.logs,
+          true,
+        );
         return connected;
       };
 
@@ -132,16 +138,12 @@ describe("Gateway node pending work", () => {
           revision: number;
           queued: PendingWorkItem;
           wakeTriggered: boolean;
-        }>(
-          "node.pending.enqueue",
-          {
-            nodeId: identity.deviceId,
-            type: "location.request",
-            priority: "high",
-            wake: false,
-          },
-          { timeoutMs: REQUEST_TIMEOUT_MS },
-        );
+        }>("node.pending.enqueue", {
+          nodeId: identity.deviceId,
+          type: "location.request",
+          priority: "high",
+          wake: false,
+        });
         expect(enqueued).toMatchObject({
           nodeId: identity.deviceId,
           queued: {
@@ -159,7 +161,7 @@ describe("Gateway node pending work", () => {
           revision: number;
           items: PendingWorkItem[];
           hasMore: boolean;
-        }>("node.pending.drain", { maxItems: 2 }, { timeoutMs: REQUEST_TIMEOUT_MS });
+        }>("node.pending.drain", { maxItems: 2 });
         expect(drained).toMatchObject({
           nodeId: identity.deviceId,
           items: [
@@ -180,17 +182,13 @@ describe("Gateway node pending work", () => {
         const cameraParams = { facing: "back", maxWidth: 1280 };
         let invokeError: unknown;
         try {
-          await operator.request(
-            "node.invoke",
-            {
-              nodeId: identity.deviceId,
-              command: "camera.snap",
-              params: cameraParams,
-              timeoutMs: REQUEST_TIMEOUT_MS,
-              idempotencyKey: randomUUID(),
-            },
-            { timeoutMs: REQUEST_TIMEOUT_MS },
-          );
+          await operator.request("node.invoke", {
+            nodeId: identity.deviceId,
+            command: "camera.snap",
+            params: cameraParams,
+            timeoutMs: REQUEST_TIMEOUT_MS,
+            idempotencyKey: randomUUID(),
+          });
         } catch (error) {
           invokeError = error;
         }
@@ -222,7 +220,7 @@ describe("Gateway node pending work", () => {
         const pulled = await node.request<{
           nodeId: string;
           actions: PendingAction[];
-        }>("node.pending.pull", {}, { timeoutMs: REQUEST_TIMEOUT_MS });
+        }>("node.pending.pull", {});
         expect(pulled).toMatchObject({
           nodeId: identity.deviceId,
           actions: [
@@ -239,18 +237,14 @@ describe("Gateway node pending work", () => {
           nodeId: string;
           ackedIds: string[];
           remainingCount: number;
-        }>("node.pending.ack", { ids: [queuedActionId] }, { timeoutMs: REQUEST_TIMEOUT_MS });
+        }>("node.pending.ack", { ids: [queuedActionId] });
         expect(acked).toEqual({
           nodeId: identity.deviceId,
           ackedIds: [queuedActionId],
           remainingCount: 0,
         });
         await expect(
-          node.request<{ nodeId: string; actions: PendingAction[] }>(
-            "node.pending.pull",
-            {},
-            { timeoutMs: REQUEST_TIMEOUT_MS },
-          ),
+          node.request<{ nodeId: string; actions: PendingAction[] }>("node.pending.pull", {}),
         ).resolves.toEqual({
           nodeId: identity.deviceId,
           actions: [],
@@ -350,24 +344,15 @@ async function connectClient(params: {
       }
       resolve(client);
     };
+    const { gateway, ...options } = params;
     const client = new GatewayClient({
-      url: params.gateway.wsUrl,
-      token: params.gateway.token,
-      env: params.gateway.runtimeEnv,
-      role: params.role,
-      clientName: params.clientName,
-      clientDisplayName: params.clientDisplayName,
+      ...options,
+      url: gateway.wsUrl,
+      token: gateway.token,
+      env: gateway.runtimeEnv,
       clientVersion: "1.0.0",
-      platform: params.platform ?? process.platform,
-      deviceFamily: params.deviceFamily,
-      mode: params.mode,
-      scopes: params.scopes,
-      caps: params.caps,
-      commands: params.commands,
-      permissions: params.permissions,
-      deviceIdentity: params.deviceIdentity,
+      platform: options.platform ?? process.platform,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onEvent: params.onEvent,
       onHelloOk: () => finish(),
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
@@ -390,43 +375,30 @@ function isPairingRequired(error: unknown): boolean {
 }
 
 async function approvePendingNodePairing(operator: GatewayClient, nodeId: string): Promise<void> {
-  let deviceRequestId: string | undefined;
-  await vi.waitFor(
-    async () => {
-      const devices = await operator.request<{
-        pending?: Array<{ requestId?: string; deviceId?: string; role?: string }>;
-      }>("device.pair.list", {}, { timeoutMs: REQUEST_TIMEOUT_MS });
-      const pendingDevice = devices.pending?.find(
-        (entry) => entry.deviceId === nodeId || entry.role === "node",
-      );
-      expect(pendingDevice?.requestId).toBeTruthy();
-      deviceRequestId = pendingDevice?.requestId;
-    },
-    { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-  );
-  await operator.request(
-    "device.pair.approve",
-    { requestId: deviceRequestId },
-    { timeoutMs: REQUEST_TIMEOUT_MS },
-  );
-
-  let nodeRequestId: string | undefined;
-  await vi.waitFor(
-    async () => {
-      const nodes = await operator.request<{
-        pending?: Array<{ requestId?: string; nodeId?: string }>;
-      }>("node.pair.list", {}, { timeoutMs: REQUEST_TIMEOUT_MS });
-      const pendingNode = nodes.pending?.find((entry) => entry.nodeId === nodeId);
-      expect(pendingNode?.requestId).toBeTruthy();
-      nodeRequestId = pendingNode?.requestId;
-    },
-    { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-  );
-  await operator.request(
-    "node.pair.approve",
-    { requestId: nodeRequestId },
-    { timeoutMs: REQUEST_TIMEOUT_MS },
-  );
+  for (const kind of ["device", "node"] as const) {
+    let requestId: string | undefined;
+    await vi.waitFor(
+      async () => {
+        const { pending } = await operator.request<{
+          pending?: Array<{
+            requestId?: string;
+            deviceId?: string;
+            nodeId?: string;
+            role?: string;
+          }>;
+        }>(`${kind}.pair.list`, {});
+        const entry = pending?.find((candidate) =>
+          kind === "device"
+            ? candidate.deviceId === nodeId || candidate.role === "node"
+            : candidate.nodeId === nodeId,
+        );
+        expect(entry?.requestId).toBeTruthy();
+        requestId = entry?.requestId;
+      },
+      { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
+    );
+    await operator.request(`${kind}.pair.approve`, { requestId });
+  }
 }
 
 async function waitForNodeConnection(
@@ -434,14 +406,14 @@ async function waitForNodeConnection(
   nodeId: string,
   connected: boolean,
   logs: () => string,
+  approve = false,
 ): Promise<void> {
   await vi.waitFor(
     async () => {
-      const result = await operator.request<{ nodes?: NodeRead[] }>(
-        "node.list",
-        {},
-        { timeoutMs: REQUEST_TIMEOUT_MS },
-      );
+      if (approve) {
+        await approvePendingNodeSurface(operator, nodeId);
+      }
+      const result = await operator.request<{ nodes?: NodeRead[] }>("node.list", {});
       expect(
         result.nodes?.find((entry) => entry.nodeId === nodeId),
         logs(),
@@ -449,33 +421,7 @@ async function waitForNodeConnection(
         nodeId,
         paired: true,
         connected,
-      });
-    },
-    { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-  );
-}
-
-async function waitForApprovedNode(
-  operator: GatewayClient,
-  nodeId: string,
-  logs: () => string,
-): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      await approvePendingNodeSurface(operator, nodeId);
-      const result = await operator.request<{ nodes?: NodeRead[] }>(
-        "node.list",
-        {},
-        { timeoutMs: REQUEST_TIMEOUT_MS },
-      );
-      expect(
-        result.nodes?.find((entry) => entry.nodeId === nodeId),
-        logs(),
-      ).toMatchObject({
-        nodeId,
-        approvalState: "approved",
-        paired: true,
-        connected: true,
+        ...(approve ? { approvalState: "approved" } : {}),
       });
     },
     { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
@@ -485,14 +431,10 @@ async function waitForApprovedNode(
 async function approvePendingNodeSurface(operator: GatewayClient, nodeId: string): Promise<void> {
   const nodes = await operator.request<{
     pending?: Array<{ requestId?: string; nodeId?: string }>;
-  }>("node.pair.list", {}, { timeoutMs: REQUEST_TIMEOUT_MS });
+  }>("node.pair.list", {});
   for (const pending of nodes.pending ?? []) {
     if (pending.nodeId === nodeId && pending.requestId) {
-      await operator.request(
-        "node.pair.approve",
-        { requestId: pending.requestId },
-        { timeoutMs: REQUEST_TIMEOUT_MS },
-      );
+      await operator.request("node.pair.approve", { requestId: pending.requestId });
     }
   }
 }
@@ -507,19 +449,15 @@ async function rejectBackgroundInvocation(
     throw new Error(`invalid node.invoke.request: ${JSON.stringify(payload)}`);
   }
   requests.push(frame);
-  await node.request(
-    "node.invoke.result",
-    {
-      id: frame.id,
-      nodeId: frame.nodeId,
-      ok: false,
-      error: {
-        code: "NODE_BACKGROUND_UNAVAILABLE",
-        message: "NODE_BACKGROUND_UNAVAILABLE: camera commands require foreground",
-      },
+  await node.request("node.invoke.result", {
+    id: frame.id,
+    nodeId: frame.nodeId,
+    ok: false,
+    error: {
+      code: "NODE_BACKGROUND_UNAVAILABLE",
+      message: "NODE_BACKGROUND_UNAVAILABLE: camera commands require foreground",
     },
-    { timeoutMs: REQUEST_TIMEOUT_MS },
-  );
+  });
 }
 
 function readQueuedActionId(error: unknown): string {

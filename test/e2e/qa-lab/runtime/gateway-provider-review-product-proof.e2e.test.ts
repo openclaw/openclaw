@@ -176,13 +176,6 @@ async function connectOperator(gateway: OpenClawTestInstance, email: string, sig
 describe("Gateway provider review product proof", () => {
   it("dispatches the exact acknowledged steer and preserves session and device authority", async (context) => {
     const requests: ProviderRequest[] = [];
-    const startedAt = Date.now();
-    const mark = (phase: string) =>
-      console.log(
-        "[provider-review-proof]",
-        JSON.stringify({ phase, elapsedMs: Date.now() - startedAt, requests: requests.length }),
-      );
-    mark("start");
     const barrierEntered = createDeferred();
     const releaseBarrier = createDeferred();
     const cancelBarrier = () => barrierEntered.resolve();
@@ -211,7 +204,6 @@ describe("Gateway provider review product proof", () => {
         requests.push(body);
         const text = userTexts(body).at(-1) ?? "";
         if (text.includes(SEED_ALLOWED) || text.includes(SEED_REVOKED)) {
-          const statusCode = 403;
           const pauseResponse = {
             error: {
               code: "misalignment_policy_violation",
@@ -225,20 +217,9 @@ describe("Gateway provider review product proof", () => {
               },
             },
           };
-          console.log(
-            "[provider-review-runtime-proof]",
-            JSON.stringify({
-              phase: "provider-review-pause",
-              seed: text.includes(SEED_REVOKED) ? "revoked" : "allowed",
-              httpStatus: statusCode,
-              errorCode: pauseResponse.error.code,
-              runtimeCarriersSkipped: allUserTexts(body).filter(isInternalRuntimeContextCarrierText)
-                .length,
-              selectedSeed: text.includes(SEED_ALLOWED) || text.includes(SEED_REVOKED),
-            }),
-          );
+
           response
-            .writeHead(statusCode, { "content-type": "application/json" })
+            .writeHead(403, { "content-type": "application/json" })
             .end(JSON.stringify(pauseResponse));
           return;
         }
@@ -430,14 +411,14 @@ describe("Gateway provider review product proof", () => {
           },
           order: { openai: ["openai:review-proof"] },
         });
-        mark("gateway-starting");
+
         await gateway.startGateway();
         const connect = async (email: string) => {
           const client = await connectOperator(gateway!, email, signal);
           clients.push(client);
           return client;
         };
-        mark("gateway-ready");
+
         const admin = await connect("admin@example.test");
         const owner = await connect("owner@example.test");
         const viewer = await connect("viewer@example.test");
@@ -468,19 +449,7 @@ describe("Gateway provider review product proof", () => {
             sharingRole: "owner",
             providerReview: { continuationMessage: steer, canContinue: true },
           });
-          console.log(
-            "[provider-review-runtime-proof]",
-            JSON.stringify({
-              phase: "gateway-review-seed-paused",
-              gatewayRunStatus: pauseResult.status,
-              reviewPersisted: Boolean(session.providerReview),
-              canContinue: session.providerReview?.canContinue,
-              expectedContinuationReceived: session.providerReview?.continuationMessage === steer,
-              runtimeCarriersSkipped: allUserTexts(requests.at(-1)!).filter(
-                isInternalRuntimeContextCarrierText,
-              ).length,
-            }),
-          );
+
           return {
             sessionKey,
             sessionId: session.sessionId,
@@ -488,9 +457,8 @@ describe("Gateway provider review product proof", () => {
           };
         };
 
-        mark("allowed-seed-start");
         const allowed = await seed(SEED_ALLOWED, ALLOWED_STEER);
-        mark("one-provider-request");
+
         expect(requests).toHaveLength(1);
         await owner.call("session.visibility.set", {
           sessionKey: allowed.sessionKey,
@@ -509,16 +477,16 @@ describe("Gateway provider review product proof", () => {
           ok: false,
           error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
         });
-        mark("one-provider-request");
+
         expect(requests).toHaveLength(1);
-        mark("viewer-rejected");
+
         const acknowledgedAt = Date.now();
         const continued = (await owner.call("sessions.providerReview.continue", {
           ...allowed,
           idempotencyKey: randomUUID(),
         })) as { runId: string; status: string };
         expect(continued.status).toBe("started");
-        mark("allowed-acknowledged");
+
         await expect(wait(continued.runId)).resolves.toMatchObject({ status: "ok" });
         expect(requests).toHaveLength(2);
         expect(userTexts(requests[1]!)).toEqual([...userTexts(requests[0]!), ALLOWED_STEER]);
@@ -532,16 +500,15 @@ describe("Gateway provider review product proof", () => {
           (await describeSession(owner, allowed.sessionKey)).session.providerReview,
         ).toBeUndefined();
 
-        mark("allowed-verified");
         const revoked = await seed(SEED_REVOKED, REVOKED_STEER);
         expect(requests).toHaveLength(3);
-        mark("revoked-seeded");
+
         const admitted = (await owner.call("sessions.providerReview.continue", {
           ...revoked,
           idempotencyKey: randomUUID(),
         })) as { runId: string; status: string };
         expect(admitted.status).toBe("started");
-        mark("revoked-acknowledged");
+
         const terminal = wait(admitted.runId);
         await Promise.race([
           barrierEntered.promise,
@@ -552,11 +519,11 @@ describe("Gateway provider review product proof", () => {
           }),
         ]);
         signal.throwIfAborted();
-        mark("barrier-entered");
+
         await admin.call("device.pair.remove", { deviceId: owner.deviceId });
-        mark("device-removed");
+
         releaseBarrier.resolve();
-        mark("barrier-released");
+
         await expect(terminal).resolves.toMatchObject({ status: "error" });
         expect(requests).toHaveLength(3);
         expect(
@@ -569,7 +536,7 @@ describe("Gateway provider review product proof", () => {
       },
       () => {
         context.signal.removeEventListener("abort", cancelBarrier);
-        mark("cleanup");
+
         releaseBarrier.resolve();
       },
       async () => {

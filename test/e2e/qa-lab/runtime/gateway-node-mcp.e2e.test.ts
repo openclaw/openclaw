@@ -25,6 +25,7 @@ import {
   processIsAlive,
   readNode,
   startHttpFixture,
+  startMcpGateway,
   startNodeProcess,
   stopChild,
   waitForNode,
@@ -155,50 +156,20 @@ describe("Gateway and node-host MCP live process parity", () => {
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig, null, 2)}\n`, "utf8");
 
         phase = "starting Gateway";
-        gateway = await gatewayOwner.start({
-          repoRoot,
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: ["dist/index.js"],
-            cwd: repoRoot,
-            usePackagedPlugins: true,
-          },
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiEnabled: false,
-          runtimeEnvPatch: {
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          },
-          mutateConfig: (cfg) => {
-            return {
-              ...cfg,
-              plugins: { enabled: false },
-              mcp: { servers: sessionMcpServers },
-              agents: {
-                ...cfg.agents,
-                entries: {
-                  ...cfg.agents?.entries,
-                  [QA_AGENT_ID]: {
-                    ...cfg.agents?.entries?.[QA_AGENT_ID],
-                    tools: {
-                      ...cfg.agents?.entries?.[QA_AGENT_ID]?.tools,
-                      profile: "full",
-                    },
-                  },
-                },
+        gateway = await startMcpGateway(gatewayOwner, (cfg) => ({
+          ...cfg,
+          mcp: { servers: sessionMcpServers },
+          agents: {
+            ...cfg.agents,
+            entries: {
+              ...cfg.agents?.entries,
+              [QA_AGENT_ID]: {
+                ...cfg.agents?.entries?.[QA_AGENT_ID],
+                tools: { ...cfg.agents?.entries?.[QA_AGENT_ID]?.tools, profile: "full" },
               },
-              gateway: {
-                ...cfg.gateway,
-                nodes: {
-                  ...cfg.gateway?.nodes,
-                  commands: { allow: [NODE_MCP_COMMAND] },
-                  pairing: { ...cfg.gateway?.nodes?.pairing, autoApproveLocal: false },
-                },
-              },
-            };
+            },
           },
-        });
+        }));
 
         const gatewayPort = Number(new URL(gateway.baseUrl).port);
         const nodeEnv = createChildEnv({
@@ -224,6 +195,12 @@ describe("Gateway and node-host MCP live process parity", () => {
         node = startNodeProcess(gatewayPort, nodeEnv);
         phase = "approving node command surface";
         await approvePairing(gateway, "node", nodeId);
+
+        const invocation = { gateway, nodeId };
+        const invoke = (descriptor: NodePluginToolDescriptor, marker: string) =>
+          invokeNodeMcp({ ...invocation, descriptor, marker });
+        const invokePayload = (descriptor: NodePluginToolDescriptor, marker: string) =>
+          invokeNodeMcpPayload({ ...invocation, descriptor, marker });
 
         phase = "waiting for node MCP publication";
         const published = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
@@ -264,15 +241,7 @@ describe("Gateway and node-host MCP live process parity", () => {
           if (!server) {
             throw new Error(`node MCP descriptor ${descriptor.name} omitted its server`);
           }
-          nodeResults.set(
-            server,
-            await invokeNodeMcp({
-              gateway,
-              nodeId,
-              descriptor,
-              marker: `node-${server}`,
-            }),
-          );
+          nodeResults.set(server, await invoke(descriptor, `node-${server}`));
         }
 
         phase = "calling session MCP tools";
@@ -304,12 +273,7 @@ describe("Gateway and node-host MCP live process parity", () => {
           throw new Error("node Streamable HTTP descriptor was not published");
         }
         phase = "preserving MCP application errors";
-        const nodeError = await invokeNodeMcpPayload({
-          gateway,
-          nodeId,
-          descriptor: nodeStreamable,
-          marker: "error-node-streamableHttp",
-        });
+        const nodeError = await invokePayload(nodeStreamable, "error-node-streamableHttp");
         expect(nodeError).toMatchObject({
           ok: true,
           payload: {
@@ -333,12 +297,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         });
 
         phase = "rotating node MCP catalog";
-        await invokeNodeMcp({
-          gateway,
-          nodeId,
-          descriptor: nodeStreamable,
-          marker: "rotate-remove",
-        });
+        await invoke(nodeStreamable, "rotate-remove");
         let rotatedPublished: NodePluginToolDescriptor[] = [];
         const catalogGateway = gateway;
         await vi.waitFor(async () => {
@@ -363,14 +322,9 @@ describe("Gateway and node-host MCP live process parity", () => {
           if (!descriptor) {
             throw new Error(`healthy sibling ${server} disappeared during catalog rotation`);
           }
-          await expect(
-            invokeNodeMcp({
-              gateway,
-              nodeId,
-              descriptor,
-              marker: `node-after-rotation-${server}`,
-            }),
-          ).resolves.toMatchObject({ marker: `node-after-rotation-${server}` });
+          await expect(invoke(descriptor, `node-after-rotation-${server}`)).resolves.toMatchObject({
+            marker: `node-after-rotation-${server}`,
+          });
         }
 
         phase = "rotating session MCP catalog";
@@ -395,14 +349,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         if (!rotatedNodeStreamable) {
           throw new Error("rotated node Streamable HTTP descriptor was not published");
         }
-        await expect(
-          invokeNodeMcp({
-            gateway,
-            nodeId,
-            descriptor: rotatedNodeStreamable,
-            marker: "expire-session",
-          }),
-        ).rejects.toThrow();
+        await expect(invoke(rotatedNodeStreamable, "expire-session")).rejects.toThrow();
         await waitForNode(gateway, nodeId, 2);
         const recoveredPublished = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
         const recoveredStreamable = recoveredPublished.find(
@@ -412,12 +359,7 @@ describe("Gateway and node-host MCP live process parity", () => {
           throw new Error("node Streamable HTTP descriptor was not republished");
         }
         await expect(
-          invokeNodeMcp({
-            gateway,
-            nodeId,
-            descriptor: recoveredStreamable,
-            marker: "node-after-session-expiry",
-          }),
+          invoke(recoveredStreamable, "node-after-session-expiry"),
         ).resolves.toMatchObject({ marker: "node-after-session-expiry" });
         rotatedPublished = recoveredPublished;
 
@@ -460,13 +402,7 @@ describe("Gateway and node-host MCP live process parity", () => {
           if (!server) {
             throw new Error(`remaining descriptor ${descriptor.name} omitted its server`);
           }
-          const result = await invokeNodeMcp({
-            gateway,
-            nodeId,
-            descriptor,
-            marker: `node-after-stdio-stop-${server}`,
-          });
-          remainingResults.set(server, result);
+          remainingResults.set(server, await invoke(descriptor, `node-after-stdio-stop-${server}`));
         }
         expect(Object.fromEntries(remainingResults)).toEqual(
           expectedProbeResults("node", "node-after-stdio-stop", nodeHttpFixture.pid, [
@@ -482,12 +418,7 @@ describe("Gateway and node-host MCP live process parity", () => {
         if (!recoveredStdio) {
           throw new Error("node stdio MCP descriptor was not republished");
         }
-        const recoveredStdioResult = await invokeNodeMcp({
-          gateway,
-          nodeId,
-          descriptor: recoveredStdio,
-          marker: "node-after-stdio-recovery",
-        });
+        const recoveredStdioResult = await invoke(recoveredStdio, "node-after-stdio-recovery");
         expect(recoveredStdioResult.marker).toBe("node-after-stdio-recovery");
         expect(recoveredStdioResult.pid).not.toBe(nodeStdioPid);
 

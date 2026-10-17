@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
-  NODE_MCP_COMMAND,
   TEST_TIMEOUT_MS,
   WAIT_OPTIONS,
   approvePairing,
@@ -21,6 +20,7 @@ import {
   parseNodeMcpTextRecord,
   processIsAlive,
   startHttpFixture,
+  startMcpGateway,
   startNodeProcess,
   stopChild,
   waitForNode,
@@ -157,36 +157,7 @@ describe("Gateway/node MCP real-process stress", () => {
         };
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig, null, 2)}\n`, "utf8");
 
-        gateway = await gatewayOwner.start({
-          repoRoot,
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: ["dist/index.js"],
-            cwd: repoRoot,
-            usePackagedPlugins: true,
-          },
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiEnabled: false,
-          runtimeEnvPatch: {
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          },
-          mutateConfig: (cfg) => {
-            return {
-              ...cfg,
-              plugins: { enabled: false },
-              gateway: {
-                ...cfg.gateway,
-                nodes: {
-                  ...cfg.gateway?.nodes,
-                  commands: { allow: [NODE_MCP_COMMAND] },
-                  pairing: { ...cfg.gateway?.nodes?.pairing, autoApproveLocal: false },
-                },
-              },
-            };
-          },
-        });
+        gateway = await startMcpGateway(gatewayOwner);
         const nodeEnv = createChildEnv({
           home: nodeHome,
           tempDir: nodeTempDir,
@@ -206,6 +177,12 @@ describe("Gateway/node MCP real-process stress", () => {
         await stopChild(node);
         node = startNodeProcess(gatewayPort, nodeEnv);
         await approvePairing(gateway, "node", nodeId);
+
+        const invocation = { gateway, nodeId };
+        const invoke = (descriptor: NodePluginToolDescriptor, marker: string) =>
+          invokeNodeMcp({ ...invocation, descriptor, marker });
+        const invokePayload = (descriptor: NodePluginToolDescriptor, marker: string) =>
+          invokeNodeMcpPayload({ ...invocation, descriptor, marker });
 
         let descriptors = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
         expect(descriptorFor(descriptors, "stdio").mcp?.tool).toBe("parity_probe");
@@ -241,12 +218,7 @@ describe("Gateway/node MCP real-process stress", () => {
         await sessionRuntime.getCatalog();
 
         const stdioDescriptor = descriptorFor(descriptors, "stdio");
-        const nodeRich = await invokeNodeMcpPayload({
-          gateway,
-          nodeId,
-          descriptor: stdioDescriptor,
-          marker: "rich-result",
-        });
+        const nodeRich = await invokePayload(stdioDescriptor, "rich-result");
         const sessionRich = await sessionRuntime.callTool("stdio", "parity_probe", {
           marker: "rich-result",
         });
@@ -258,12 +230,7 @@ describe("Gateway/node MCP real-process stress", () => {
         });
         expect(sessionRich.structuredContent).toMatchObject({ marker: "rich-result", rich: true });
 
-        const nodeEmpty = await invokeNodeMcpPayload({
-          gateway,
-          nodeId,
-          descriptor: stdioDescriptor,
-          marker: "empty-error",
-        });
+        const nodeEmpty = await invokePayload(stdioDescriptor, "empty-error");
         const sessionEmpty = await sessionRuntime.callTool("stdio", "parity_probe", {
           marker: "empty-error",
         });
@@ -276,28 +243,13 @@ describe("Gateway/node MCP real-process stress", () => {
           descriptors = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
           const descriptor = descriptorFor(descriptors, server);
           const before = parseNodeMcpTextRecord(
-            await invokeNodeMcpPayload({
-              gateway,
-              nodeId,
-              descriptor,
-              marker: `before-${server}`,
-            }),
+            await invokePayload(descriptor, `before-${server}`),
           );
-          await invokeNodeMcp({
-            gateway,
-            nodeId,
-            descriptor,
-            marker: "break-notifications",
-          });
+          await invoke(descriptor, "break-notifications");
           await vi.waitFor(async () => {
             const current = (await waitForNode(gateway!, nodeId, 3)).nodePluginTools ?? [];
             const after = parseNodeMcpTextRecord(
-              await invokeNodeMcpPayload({
-                gateway: gateway!,
-                nodeId,
-                descriptor: descriptorFor(current, server),
-                marker: `after-${server}`,
-              }),
+              await invokePayload(descriptorFor(current, server), `after-${server}`),
             );
             expect(Number(after.generation)).toBeGreaterThan(Number(before.generation));
           }, WAIT_OPTIONS);
@@ -305,12 +257,7 @@ describe("Gateway/node MCP real-process stress", () => {
 
         for (let generation = 0; generation < 3; generation += 1) {
           descriptors = (await waitForNode(gateway, nodeId, 3)).nodePluginTools ?? [];
-          const result = await invokeNodeMcp({
-            gateway,
-            nodeId,
-            descriptor: descriptorFor(descriptors, "stdio"),
-            marker: "crash-generation",
-          });
+          const result = await invoke(descriptorFor(descriptors, "stdio"), "crash-generation");
           // runStressStdio appends this record before installing its request handler.
           const records = await readProcessRecords(nodeEvents);
           const record = records.find((entry) => entry.leaderPid === result.pid);
@@ -321,12 +268,10 @@ describe("Gateway/node MCP real-process stress", () => {
           await waitForGenerationExit(record, signal);
           await vi.waitFor(async () => {
             const current = (await waitForNode(gateway!, nodeId, 3)).nodePluginTools ?? [];
-            const recovered = await invokeNodeMcp({
-              gateway: gateway!,
-              nodeId,
-              descriptor: descriptorFor(current, "stdio"),
-              marker: `recovered-${generation}`,
-            });
+            const recovered = await invoke(
+              descriptorFor(current, "stdio"),
+              `recovered-${generation}`,
+            );
             expect(recovered.pid).not.toBe(result.pid);
           }, WAIT_OPTIONS);
         }
@@ -335,29 +280,14 @@ describe("Gateway/node MCP real-process stress", () => {
         const streamable = descriptorFor(descriptors, "streamableHttp");
         // The fixture admits both HTTP requests before expiring their shared session.
         const expired = await Promise.allSettled([
-          invokeNodeMcpPayload({
-            gateway,
-            nodeId,
-            descriptor: streamable,
-            marker: "expire-concurrent-session",
-          }),
-          invokeNodeMcpPayload({
-            gateway,
-            nodeId,
-            descriptor: streamable,
-            marker: "expire-concurrent-session",
-          }),
+          invokePayload(streamable, "expire-concurrent-session"),
+          invokePayload(streamable, "expire-concurrent-session"),
         ]);
         expect(expired.every((result) => result.status === "rejected")).toBe(true);
         await vi.waitFor(async () => {
           const current = (await waitForNode(gateway!, nodeId, 3)).nodePluginTools ?? [];
           const stats = parseNodeMcpTextRecord(
-            await invokeNodeMcpPayload({
-              gateway: gateway!,
-              nodeId,
-              descriptor: descriptorFor(current, "streamableHttp"),
-              marker: "expiry-stats",
-            }),
+            await invokePayload(descriptorFor(current, "streamableHttp"), "expiry-stats"),
           );
           expect(stats.expiryCalls).toBe(2);
         }, WAIT_OPTIONS);
