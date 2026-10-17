@@ -394,7 +394,8 @@ describe("cron job scratch store", () => {
       runOpenClawStateWriteTransaction(({ db }) => {
         const key = cronStoreKey(fixture.storePath);
         if (contents.length === 0) {
-          return replaceCronRows(db, key, { version: 1, jobs: [] });
+          replaceCronRows(db, key, { version: 1, jobs: [] });
+          return;
         }
         // Model the gap after job removal but before scratch cleanup.
         db.prepare("DELETE FROM cron_jobs WHERE store_key = ? AND job_id = ?").run(key, "job-1");

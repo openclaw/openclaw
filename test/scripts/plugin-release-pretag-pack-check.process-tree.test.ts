@@ -167,7 +167,7 @@ for (const [stage, timeoutMs, testTimeout] of [
         const build = stage === "runtime build";
         const releaseAndWait = build ? startProcessWatchdogFixture(start) : () => command;
         if (!build) {
-          start();
+          void start();
         }
         let pids: number[] = [];
         let readyAt = startedAt;

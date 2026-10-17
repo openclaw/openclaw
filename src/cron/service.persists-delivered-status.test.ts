@@ -615,8 +615,8 @@ describe("CronService persists delivered status", () => {
       lastDelivered: false,
       lastDeliveryStatus: "not-delivered",
       ...suppressed,
-      lastDeliveryError: undefined,
     });
+    expect.soft(persisted?.state.lastDeliveryError).toBeUndefined();
     expect.soft(events).toEqual([expect.objectContaining(suppressed)]);
     expect.soft(readHistory()).toEqual([expect.objectContaining(suppressed)]);
 

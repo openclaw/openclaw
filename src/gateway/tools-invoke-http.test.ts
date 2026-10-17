@@ -956,4 +956,3 @@ describe("tools.invoke Gateway RPC", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

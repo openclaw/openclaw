@@ -145,9 +145,9 @@ describe("sqlite WAL maintenance", () => {
       });
       configure(db, { databasePath });
       expect(realpath).toHaveBeenCalledWith(databasePath);
-      expect(db.prepare).toHaveBeenCalledWith(`PRAGMA journal_mode = ${journal};`);
+      expect(db["prepare"]).toHaveBeenCalledWith(`PRAGMA journal_mode = ${journal};`);
       if (journal === "DELETE") {
-        expect(db.exec).not.toHaveBeenCalled();
+        expect(db["exec"]).not.toHaveBeenCalled();
       }
     },
   );
@@ -289,10 +289,10 @@ describe("sqlite WAL maintenance", () => {
       const run = () => configure(db, { databasePath: path.join(tempDir, "openclaw.sqlite") });
       if (journal === "refuse") {
         expect(run).toThrow(/refusing to open/);
-        expect(db.exec).not.toHaveBeenCalled();
+        expect(db["exec"]).not.toHaveBeenCalled();
       } else {
         run();
-        expect(db.prepare).toHaveBeenCalledWith(`PRAGMA journal_mode = ${journal};`);
+        expect(db["prepare"]).toHaveBeenCalledWith(`PRAGMA journal_mode = ${journal};`);
       }
     },
   );

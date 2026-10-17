@@ -48,6 +48,7 @@ function thrownBy(operation: () => unknown): unknown {
   } catch (error) {
     return error;
   }
+  return undefined;
 }
 
 function expectObserverFailure(error: unknown, primary: unknown, observer: Error) {

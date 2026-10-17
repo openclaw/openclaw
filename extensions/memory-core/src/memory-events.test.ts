@@ -23,7 +23,7 @@ async function writeNote(workspaceDir: string, relativePath: string, content: st
 }
 
 function recall(relativePath: string, snippet: string, score: number, endLine = 3) {
-  return { path: relativePath, snippet, score, startLine: 3, endLine, source: "memory" };
+  return { path: relativePath, snippet, score, startLine: 3, endLine, source: "memory" as const };
 }
 
 const permissivePromotion = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };

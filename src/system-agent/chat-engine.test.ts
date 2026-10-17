@@ -38,7 +38,7 @@ async function driftFixture() {
   return {
     verifiedInference: await createAmbientVerifiedBinding(config),
     readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)),
-    drift() {
+    drift: () => {
       config = { agents: { defaults: { model: "anthropic/claude-opus-4-8" } } };
     },
   };

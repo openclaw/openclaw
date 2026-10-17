@@ -462,7 +462,7 @@ it.skipIf(process.platform === "win32").for([
             }
           } else if (mode === "uncertain-progress") {
             expectPendingHistory("validating");
-          } else if (mode === "fresh" || (receiptMode && mode !== "uncertain-progress")) {
+          } else if (mode === "fresh" || receiptMode) {
             expect(actual).toMatchObject({
               status: "failed",
               phase: "finished",

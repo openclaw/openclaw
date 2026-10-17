@@ -1,5 +1,5 @@
 import { emitModelTransportDebug } from "@openclaw/ai/diagnostics";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withModelTransportContext } from "../llm/model-transport-context.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
@@ -14,8 +14,13 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-vi.mock("../infra/net/proxy-env.js", () => ({ shouldUseEnvHttpProxyForUrl: () => false }));
-vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
+vi.mock("../infra/net/proxy-env.js", () => ({
+  shouldUseEnvHttpProxyForUrl: () => false,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => log,
+}));
 
 vi.mock("./provider-local-service.js", () => ({
   ensureModelProviderLocalService: async () => undefined,
@@ -37,142 +42,197 @@ const model = makeProviderModelFixture<"openai-responses">({
 });
 const requestUrl = "https://api.openai.com/v1/responses";
 
-beforeEach(() => {
-  fetchWithSsrFGuardMock.mockReset();
-  for (const logger of Object.values(log)) {
-    logger.mockClear();
+describe("emitModelTransportDebug", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_SSE", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function createLogger() {
+    const info = vi.fn();
+    const debug = vi.fn();
+    return {
+      log: { info, debug },
+      info,
+      debug,
+    };
   }
-  for (const name of ["MODEL_TRANSPORT", "MODEL_PAYLOAD", "SSE", "CODE_MODE"]) {
-    vi.stubEnv(`OPENCLAW_DEBUG_${name}`, undefined);
-  }
-});
 
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
-  await closeProviderTransportDispatcherPool();
-});
+  it.each([
+    "[model-fetch] start provider=openai api=chat model=gpt method=POST",
+    "[model-fetch] response provider=openai api=chat model=gpt status=200 elapsedMs=42",
+    "[model-sse] event type=response.output_text.delta",
+  ])("keeps transport diagnostics at debug by default: %s", (message) => {
+    const { log: logger, info, debug } = createLogger();
 
-const guardedResponse = (init: ResponseInit) => ({
-  response: new Response("ok", init),
-  finalUrl: requestUrl,
-  release: async () => undefined,
-});
+    emitModelTransportDebug(logger, message);
 
-const responseMessage = "[model-fetch] response provider=openai api=chat model=gpt status=200";
-it.each([
-  ["[model-sse] event type=response.output_text.delta", undefined, undefined],
-  [responseMessage, "OPENCLAW_DEBUG_MODEL_TRANSPORT", "1"],
-  [responseMessage, "OPENCLAW_DEBUG_MODEL_PAYLOAD", "summary"],
-  [responseMessage, "OPENCLAW_DEBUG_SSE", "events"],
-  [responseMessage, "OPENCLAW_DEBUG_CODE_MODE", "1"],
-] as const)("emits %s with %s=%s", (message, name, value) => {
-  if (name) {
+    expect(debug).toHaveBeenCalledWith(message);
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["OPENCLAW_DEBUG_MODEL_TRANSPORT", "1"],
+    ["OPENCLAW_DEBUG_MODEL_PAYLOAD", "summary"],
+    ["OPENCLAW_DEBUG_SSE", "events"],
+    ["OPENCLAW_DEBUG_CODE_MODE", "1"],
+  ])("promotes transport diagnostics when %s=%s", (name, value) => {
     vi.stubEnv(name, value);
-  }
-  emitModelTransportDebug(log, message);
-  expect(log[name ? "info" : "debug"]).toHaveBeenCalledWith(message);
-  expect(log[name ? "debug" : "info"]).not.toHaveBeenCalled();
-});
-it("keeps concurrent model fetches correlated across asynchronous response headers", async () => {
-  const pending: Array<() => void> = [];
-  fetchWithSsrFGuardMock.mockImplementation(async () => {
-    await new Promise<void>((resolve) => {
-      pending.push(resolve);
-    });
-    return guardedResponse({ headers: { "x-request-id": "req_upstream" } });
+    const { log: logger, info, debug } = createLogger();
+    const message = "[model-fetch] response provider=openai api=chat model=gpt status=200";
+
+    emitModelTransportDebug(logger, message);
+
+    expect(info).toHaveBeenCalledWith(message);
+    expect(debug).not.toHaveBeenCalled();
   });
-  const fetch = buildGuardedModelFetch(model);
-  const identities = ["1", '2\n\r\u001b[31m"\\'];
-  const requests = identities.map((number) =>
-    withModelTransportContext(
-      {
-        sessionKey: `session-${number}`,
-        runId: `run-${number}`,
-        requestId: `run-${number}:model:3`,
-      },
-      () => fetch(requestUrl),
-    ),
-  );
-  await Promise.resolve();
-  for (const resolve of pending.toReversed()) {
-    resolve();
-  }
-  const responses = await Promise.all(requests);
-  await Promise.all(responses.map((response) => response.text()));
-  for (const number of identities) {
-    const messages = log.debug.mock.calls.map(([message]) => String(message));
-    const correlated = messages.filter((message) =>
-      message.includes(`sessionKey=${JSON.stringify(`session-${number}`)} `),
-    );
-    expect(correlated).toHaveLength(2);
-    for (const message of correlated) {
-      expect(message).toContain(
-        `runId=${JSON.stringify(`run-${number}`)} requestId=${JSON.stringify(`run-${number}:model:3`)} requestNumber=3`,
-      );
-      for (const control of ["\n", "\r", "\u001b"]) {
-        expect(message).not.toContain(control);
-      }
-    }
-    expect(correlated.find((message) => message.includes("[model-fetch] response "))).toContain(
-      "httpRequestId=req_upstream",
-    );
-  }
 });
 
-it.each([
-  [200, 999, "debug"],
-  [299, 42, "debug"],
-  [200, 1_000, "debug"],
-  [200, 30_000, "debug"],
-  [300, 42, "info"],
-  [500, 42, "info"],
-] as const)("logs response status=%s elapsedMs=%s at %s", async (status, elapsedMs, level) => {
-  let now = 1_000;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
-  fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
-    now += elapsedMs;
-    return guardedResponse({ status });
-  });
-
-  const response = await buildGuardedModelFetch(model)(requestUrl, { method: "POST" });
-  await response.text();
-
-  expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] start "));
-  expect(log[level]).toHaveBeenCalledWith(
-    expect.stringContaining(`status=${status} elapsedMs=${elapsedMs}`),
-  );
-  expect(log.info).toHaveBeenCalledTimes(level === "info" ? 1 : 0);
-});
-
-it.each([
-  [false, new Error("network down"), "warn", false],
-  [false, new DOMException("upstream abort", "AbortError"), "warn", false],
-  [false, new DOMException("fetch deadline", "TimeoutError"), "warn", false],
-  [true, new DOMException("caller deadline", "TimeoutError"), "warn", false],
-  [true, new Error("unknown caller failure"), "warn", false],
-  [true, new DOMException("caller cancelled", "AbortError"), "debug", false],
-  [true, new DOMException("caller cancelled", "AbortError"), "debug", true],
-] as const)(
-  "logs caller abort=%s error=%s at %s (Request: %s)",
-  async (abort, error, level, request) => {
-    const controller = new AbortController();
-    fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
-      if (abort) {
-        controller.abort(error);
-      }
-      throw error;
+describe("guarded model fetch logging", () => {
+  it("keeps concurrent model fetches correlated across asynchronous response headers", async () => {
+    const pending: Array<() => void> = [];
+    fetchWithSsrFGuardMock.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        pending.push(resolve);
+      });
+      return {
+        response: new Response("ok", { headers: { "x-request-id": "req_upstream" } }),
+        finalUrl: requestUrl,
+        release: async () => undefined,
+      };
     });
     const fetch = buildGuardedModelFetch(model);
-    const pending = request
-      ? fetch(new Request(requestUrl, { signal: controller.signal }))
-      : fetch(requestUrl, { signal: controller.signal });
-
-    await expect(pending).rejects.toBe(error);
-
-    expect(log[level]).toHaveBeenCalledWith(
-      expect.stringContaining(`[model-fetch] ${level === "debug" ? "aborted" : "error"} `),
+    const identities = ["1", '2\n\r\u001b[31m"\\'];
+    const requests = identities.map((number) =>
+      withModelTransportContext(
+        {
+          sessionKey: `session-${number}`,
+          runId: `run-${number}`,
+          requestId: `run-${number}:model:3`,
+        },
+        () => fetch(requestUrl),
+      ),
     );
-    expect(log.warn).toHaveBeenCalledTimes(level === "warn" ? 1 : 0);
-  },
-);
+    await Promise.resolve();
+    for (const resolve of pending.toReversed()) {
+      resolve();
+    }
+    const responses = await Promise.all(requests);
+    await Promise.all(responses.map((response) => response.text()));
+    for (const number of identities) {
+      const messages = log.debug.mock.calls.map(([message]) => String(message));
+      const correlated = messages.filter((message) =>
+        message.includes(`sessionKey=${JSON.stringify(`session-${number}`)} `),
+      );
+      expect(correlated).toHaveLength(2);
+      expect(
+        correlated.every((message) =>
+          message.includes(
+            `runId=${JSON.stringify(`run-${number}`)} requestId=${JSON.stringify(`run-${number}:model:3`)} requestNumber=3`,
+          ),
+        ),
+      ).toBe(true);
+      for (const message of correlated) {
+        for (const control of ["\n", "\r", "\u001b"]) {
+          expect(message).not.toContain(control);
+        }
+      }
+      expect(correlated.find((message) => message.includes("[model-fetch] response "))).toContain(
+        "httpRequestId=req_upstream",
+      );
+    }
+  });
+
+  beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+    log.info.mockClear();
+    log.debug.mockClear();
+    log.warn.mockClear();
+    vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_SSE", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", undefined);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await closeProviderTransportDispatcherPool();
+  });
+
+  it.each([
+    { status: 200, elapsedMs: 999, level: "debug" },
+    { status: 299, elapsedMs: 42, level: "debug" },
+    { status: 200, elapsedMs: 1_000, level: "debug" },
+    { status: 200, elapsedMs: 30_000, level: "debug" },
+    { status: 300, elapsedMs: 42, level: "info" },
+    { status: 500, elapsedMs: 42, level: "info" },
+  ] as const)(
+    "logs response status=$status elapsedMs=$elapsedMs at $level",
+    async ({ status, elapsedMs, level }) => {
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
+        now += elapsedMs;
+        return {
+          response: new Response("ok", { status }),
+          finalUrl: requestUrl,
+          release: vi.fn(async () => undefined),
+        };
+      });
+
+      try {
+        const response = await buildGuardedModelFetch(model)(requestUrl, { method: "POST" });
+        await response.text();
+
+        expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] start "));
+        expect(log[level]).toHaveBeenCalledWith(
+          expect.stringContaining(`status=${status} elapsedMs=${elapsedMs}`),
+        );
+        expect(log.info).toHaveBeenCalledTimes(level === "info" ? 1 : 0);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { abort: false, error: new Error("network down"), level: "warn" },
+    { abort: false, error: new DOMException("upstream abort", "AbortError"), level: "warn" },
+    { abort: false, error: new DOMException("fetch deadline", "TimeoutError"), level: "warn" },
+    { abort: true, error: new DOMException("caller deadline", "TimeoutError"), level: "warn" },
+    { abort: true, error: new Error("unknown caller failure"), level: "warn" },
+    { abort: true, error: new DOMException("caller cancelled", "AbortError"), level: "debug" },
+    {
+      abort: true,
+      error: new DOMException("caller cancelled", "AbortError"),
+      level: "debug",
+      request: true,
+    },
+  ] as const)("logs $error at $level (caller abort: $abort, Request: $request)", async (test) => {
+    const controller = new AbortController();
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
+      if (test.abort) {
+        controller.abort(test.error);
+      }
+      throw test.error;
+    });
+    const fetch = buildGuardedModelFetch(model);
+    const pending =
+      "request" in test
+        ? fetch(new Request(requestUrl, { signal: controller.signal }))
+        : fetch(requestUrl, { signal: controller.signal });
+
+    await expect(pending).rejects.toBe(test.error);
+
+    expect(log[test.level]).toHaveBeenCalledWith(
+      expect.stringContaining(`[model-fetch] ${test.level === "debug" ? "aborted" : "error"} `),
+    );
+    expect(log.warn).toHaveBeenCalledTimes(test.level === "warn" ? 1 : 0);
+  });
+});

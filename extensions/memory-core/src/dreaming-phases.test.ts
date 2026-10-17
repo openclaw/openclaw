@@ -219,7 +219,14 @@ function read(relativePath = `memory/${DAY}.md`) {
 }
 
 function recallResult(sourcePath: string, snippet: string, score = 0.92, line = 1) {
-  return { path: sourcePath, snippet, score, startLine: line, endLine: line, source: "memory" };
+  return {
+    path: sourcePath,
+    snippet,
+    score,
+    startLine: line,
+    endLine: line,
+    source: "memory" as const,
+  };
 }
 
 async function readRecalls(now = BASE_TIME.getTime()) {

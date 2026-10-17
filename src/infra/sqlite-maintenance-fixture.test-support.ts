@@ -29,7 +29,7 @@ export function sqliteMaintenanceFixture() {
     }
   });
   const file = () => path.join(dirs.make("openclaw-sqlite-maintenance-"), "state.sqlite");
-  const open = (filename = ":memory:", options?: DatabaseSyncOptions, tracked = false) => {
+  const open = (filename = ":memory:", options: DatabaseSyncOptions = {}, tracked = false) => {
     const db = tracked
       ? openNodeSqliteDatabase(filename, options)
       : new (requireNodeSqlite().DatabaseSync)(filename, options);
@@ -114,6 +114,7 @@ export function thrownBy(operation: () => unknown): unknown {
   } catch (error) {
     return error;
   }
+  return undefined;
 }
 
 export function readEntryIds(db: DatabaseSync) {

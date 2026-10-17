@@ -883,4 +883,3 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     ).toMatchObject(expected);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
