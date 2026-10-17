@@ -15,7 +15,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat composer redesign",
 });
 const pickerPopup = (kind: "model" | "effort") =>
-  `.chat-controls__${kind}-picker > wa-popup[data-anchored-overlay] > [part="popup"]`;
+  `.chat-controls__${kind}-picker > [data-anchored-overlay]`;
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
@@ -190,32 +190,6 @@ suite.define(() => {
     });
   });
 
-  it("keeps offline outbox guidance in one bounded composer row", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.setOnline(false);
-
-      const statusBand = page.locator(".agent-chat__composer-status-band");
-      await expect
-        .poll(() => statusBand.locator("xpath=..").getAttribute("data-tone"))
-        .toBe("info");
-      await expect.poll(() => statusBand.textContent()).toContain("You can keep writing.");
-      await expect
-        .poll(() =>
-          statusBand.locator("svg").evaluate((node) => {
-            const bounds = node.getBoundingClientRect();
-            return [bounds.width, bounds.height];
-          }),
-        )
-        .toEqual([16, 16]);
-      await expect
-        .poll(() => statusBand.evaluate((node) => node.getBoundingClientRect().height))
-        .toBe(44);
-    });
-  });
-
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
@@ -258,9 +232,11 @@ suite.define(() => {
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
-        expect(menuBox.x).toBeGreaterThanOrEqual(12);
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(381);
-        expect(menuBox.width).toBeGreaterThanOrEqual(368);
+        // Fixed pickers use the shared 16px mobile gutter without the
+        // in-flow content shell’s additional 4px inset.
+        expect(menuBox.x).toBeCloseTo(16, 0);
+        expect(menuBox.x + menuBox.width).toBeCloseTo(393 - 16, 0);
+        expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(853);
@@ -274,7 +250,7 @@ suite.define(() => {
         .toBe(true);
       await effort.press("Tab");
       const focusedEffortControl = composer.locator(
-        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-toggle]:not([disabled])",
+        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-option]:not([disabled])",
       );
       await expect
         .poll(() =>
@@ -283,8 +259,22 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => effort.evaluate((node) => node === document.activeElement))
-        .toBe(true);
+        .poll(() =>
+          effort.evaluate((node) =>
+            node === document.activeElement
+              ? "effort trigger"
+              : JSON.stringify({
+                  activeTag: document.activeElement?.tagName ?? null,
+                  activeClass: document.activeElement?.getAttribute("class") ?? null,
+                  activeRole: document.activeElement?.getAttribute("role") ?? null,
+                  openPickers: [
+                    ...document.querySelectorAll("details[data-chat-native-picker][open]"),
+                  ].map((picker) => picker.className),
+                  openTooltips: document.querySelectorAll("openclaw-tooltip[open]").length,
+                }),
+          ),
+        )
+        .toBe("effort trigger");
     });
   });
 
@@ -387,7 +377,9 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       const composerShell = page.locator(".agent-chat__composer-shell");
       const chatContent = page.locator("main.content--chat");
-      const chatMain = page.locator(".chat-workbench__main");
+      // Details reserves a column; the composer stays centered in the conversation,
+      // not across the combined conversation and rail.
+      const chatMain = page.locator(".chat-main__conversation");
       const model = composer.locator('[data-chat-model-select="true"]');
       const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
@@ -401,7 +393,7 @@ suite.define(() => {
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
       const settings = page.locator(".chat-header-session-menu__trigger");
-      const splitView = page.getByRole("button", { name: "Open split view" });
+      const layout = page.getByRole("button", { name: "Layout", exact: true });
       const voice = page.getByRole("button", { name: "Start voice input" });
       const mobileDictation = page.getByRole("button", { name: "Dictation" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
@@ -438,9 +430,9 @@ suite.define(() => {
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
-      await expect.poll(() => splitView.isVisible()).toBe(true);
+      await expect.poll(() => layout.isVisible()).toBe(true);
       await expect
-        .poll(() => splitView.evaluate((node) => node.closest(".chat-pane__header") != null))
+        .poll(() => layout.evaluate((node) => node.closest(".chat-pane__header") != null))
         .toBe(true);
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
@@ -569,14 +561,14 @@ suite.define(() => {
 
       await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
-      const speedToggle = composer.locator("[data-chat-speed-toggle]");
+      const fastOption = composer.locator('[data-chat-speed-option="on"]');
       await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
       // OpenAI sessions toggle between the standard and priority tiers.
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("false");
       // Reasoning and speed commit immediately while the Effort picker stays open.
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
@@ -593,7 +585,7 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
-      await speedToggle.click();
+      await fastOption.click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -605,13 +597,13 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("true");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(false);
       await effort.click();
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
         .toBe(1);
@@ -700,6 +692,8 @@ suite.define(() => {
         .toBe(true);
 
       await page.setViewportSize({ width: 1280, height: 900 });
+      // Details releases its reserved column after the resize reaches its layout owner.
+      await page.locator(".chat-details--docked").waitFor({ state: "detached" });
       const [compactChatMainBox, compactComposerShellBox] = await Promise.all([
         chatMain.boundingBox(),
         composerShell.boundingBox(),
@@ -720,17 +714,22 @@ suite.define(() => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const viewDropdown = page.locator("wa-dropdown.chat-header-session-menu");
+      const viewDropdown = page.locator(".chat-header-session-menu");
       const viewMenu = viewDropdown.getByRole("menuitem", { name: "View", exact: true });
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await viewMenu.hover();
       await expect
         .poll(() =>
-          viewMenu
-            .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
+          viewDropdown
+            .getByRole("menu", { name: "View", exact: true })
+            .getByRole("menuitemcheckbox")
+            .locator(".session-menu__text")
             .allTextContents(),
         )
         .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
+      expect(
+        await viewDropdown.getByRole("menuitemcheckbox", { name: "Speech bubbles" }).count(),
+      ).toBe(0);
       const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.isVisible()).toBe(true);
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
@@ -739,7 +738,7 @@ suite.define(() => {
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await settings.click();
-      await expect.poll(() => viewDropdown.getAttribute("open")).toBeNull();
+      await expect.poll(() => settings.getAttribute("aria-expanded")).toBe("false");
 
       await textarea.fill("Send this message");
       await expect
@@ -776,15 +775,14 @@ suite.define(() => {
         "idempotencyKey" in sendRequest.params
           ? String(sendRequest.params.idempotencyKey)
           : "";
-      // Pre-first-token: the thread shows the working spark; the composer
-      // renders no visible run status (sr-only announcement only).
+      // Pre-first-token: the thread explains the active turn without a duplicate composer row.
       const spark = page.locator(".chat-reading-indicator");
       await expect.poll(() => spark.isVisible()).toBe(true);
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await expect.poll(() => spark.isVisible()).toBe(true);
       const announcement = composer.locator(".agent-chat__run-status-announcement");
       await expect.poll(() => announcement.textContent()).toContain("Rosita is");
-      await expect.poll(() => composer.locator(".agent-chat__composer-run-status").count()).toBe(0);
+      expect(await composerShell.locator(".agent-chat__composer-run-status").count()).toBe(0);
       await gateway.emitGatewayEvent("chat", {
         deltaText: "Working on it.",
         message: {
@@ -796,33 +794,12 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         state: "delta",
       });
-      // The working row stays attached with elapsed/token telemetry throughout streaming.
+      // Answer publication ends visual activity while queue and Stop stay owned.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.isVisible()).toBe(true);
-      await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
-      const [activeSplitViewBox, activeModelBox, activeChatContentBox] = await Promise.all([
-        splitView.boundingBox(),
-        model.boundingBox(),
-        chatContent.boundingBox(),
-      ]);
-      expect(activeSplitViewBox).not.toBeNull();
-      expect(activeModelBox).not.toBeNull();
-      expect(activeChatContentBox).not.toBeNull();
-      if (!activeSplitViewBox || !activeModelBox || !activeChatContentBox) {
-        throw new Error("expected chat content and composer controls to have layout boxes");
-      }
-      // The opener lives in the always-on pane header at the chat area's top edge.
-      const headerBox = await page.locator(".chat-pane__header").boundingBox();
-      expect(headerBox).not.toBeNull();
-      if (!headerBox) {
-        throw new Error("expected the pane header to have a layout box");
-      }
-      expect(
-        Math.abs(
-          activeChatContentBox.x + activeChatContentBox.width - (headerBox.x + headerBox.width),
-        ),
-      ).toBeLessThanOrEqual(24);
-      expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
+      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => announcement.textContent()).toBe("");
+      await expect.poll(() => layout.isVisible()).toBe(true);
+      await expect.poll(() => model.isVisible()).toBe(true);
       await textarea.fill("Steer this queued follow-up");
       const followUp = page.getByRole("button", {
         name: /^(Queue message|Steer into the active run)$/,
@@ -850,6 +827,7 @@ suite.define(() => {
       expect(activeMobileSettingsBox?.height).toBeGreaterThanOrEqual(44);
       expect(activeMobileStopBox?.width).toBeCloseTo(32, 2);
       expect(activeMobileStopBox?.height).toBeCloseTo(32, 2);
+      expect(await composerShell.locator(".agent-chat__composer-run-status").count()).toBe(0);
       await captureMobileState("mobile-composer-active-stop.png");
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
@@ -898,7 +876,7 @@ suite.define(() => {
         .toBe(true);
       await captureMobileState(
         "mobile-composer-permissions-open.png",
-        composer.locator('.chat-controls__permission-picker [part="menu"]'),
+        composer.locator(".chat-controls__permission-menu"),
         [composer.locator(".chat-controls__permission-option").first()],
       );
       await page.keyboard.press("Escape");
@@ -932,18 +910,16 @@ suite.define(() => {
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
       await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
-      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(
-        mobileContextBox.x + mobileContextBox.width - 1,
+      expect(
+        Math.abs(
+          mobileContextBox.y +
+            mobileContextBox.height / 2 -
+            (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(mobileContextBox.x + mobileContextBox.width).toBeLessThanOrEqual(
+        mobileModelSettingsBox.x,
       );
-      for (const control of [mobileModelSettingsBox, mobileContextBox]) {
-        expect(
-          Math.abs(
-            control.y +
-              control.height / 2 -
-              (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
-          ),
-        ).toBeLessThanOrEqual(2);
-      }
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
       expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);
       expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);
@@ -1000,7 +976,7 @@ suite.define(() => {
       expect(
         await composer
           .locator(".chat-controls__model-menu")
-          .getByText(/Effort|Fast mode/)
+          .getByText(/Effort|Speed/)
           .count(),
       ).toBe(0);
       await page.keyboard.press("Escape");
@@ -1038,7 +1014,9 @@ suite.define(() => {
         );
       }
       await page.mouse.move(0, 0);
-      await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".tooltip-surface[popover]:popover-open").count())
+        .toBe(0);
       await expect
         .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
         .toBe(0);

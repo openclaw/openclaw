@@ -3,12 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import {
+  applyLocaleNavLabelOverlay,
   composeDocsConfig,
   parseArgs,
   reportOrphanLocaleDocs,
-  writePublishedDocsMap,
 } from "../../scripts/docs-sync-publish.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -79,17 +78,47 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
   return pages;
 }
 
+function findNestedGroup(
+  pages: unknown,
+  groupName: string,
+): { group: string; pages?: unknown } | undefined {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  for (const entry of pages) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    if ("group" in entry && entry.group === groupName) {
+      return entry;
+    }
+    const nested = findNestedGroup(entry.pages, groupName);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function findNestedGroupByPage(pages: unknown, page: string) {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  return pages.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return "pages" in entry && collectPages(entry.pages).includes(page);
+  });
+}
+
 describe("docs-sync-publish", () => {
   it("reuses only exact successful page checks and checks docs.json on warm runs", () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mdx-cache-")));
     try {
       const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
       fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
-      for (const name of [
-        "check-docs-mdx.mts",
-        "lib/arg-utils.runtime.mjs",
-        "lib/mintlify-accordion.mjs",
-      ]) {
+      for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
         fs.copyFileSync(path.join("scripts", name), path.join(root, ".openclaw-sync", name));
       }
       fs.symlinkSync(
@@ -137,7 +166,6 @@ describe("docs-sync-publish", () => {
       expect(Object.keys(JSON.parse(fs.readFileSync(cache, "utf8")).files)).toEqual(["docs/b.MD"]);
       for (const name of [
         ".openclaw-sync/check-docs-mdx.mts",
-        ".openclaw-sync/lib/mintlify-accordion.mjs",
         "package-lock.json",
         "node_modules/.package-lock.json",
       ]) {
@@ -162,6 +190,9 @@ describe("docs-sync-publish", () => {
     writePublisherDependencies(publishRoot, publisherDependencies(sourceSlugifyVersion));
     fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
     fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
+    fs.mkdirSync(path.join(publishRoot, "docs", "fa"), { recursive: true });
+    const translation = "<Note>\n  </Note>\n";
+    fs.writeFileSync(path.join(publishRoot, "docs", "fa", "index.md"), translation);
     fs.symlinkSync(
       path.resolve("node_modules"),
       path.join(publishRoot, "node_modules"),
@@ -179,6 +210,22 @@ describe("docs-sync-publish", () => {
         [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
         { cwd: publishRoot, stdio: "pipe" },
       );
+      expect(fs.readFileSync(path.join(publishRoot, "docs", "fa", "index.md"), "utf8")).toBe(
+        translation,
+      );
+      // Repository instruction exclusions must not hide the public workspace template.
+      expect(
+        fs.readFileSync(
+          path.join(publishRoot, "docs", "reference", "templates", "AGENTS.md"),
+          "utf8",
+        ),
+      ).toBe(fs.readFileSync(path.join("docs", "reference", "templates", "AGENTS.md"), "utf8"));
+      const published = JSON.parse(
+        fs.readFileSync(path.join(publishRoot, "docs", "docs.json"), "utf8"),
+      );
+      expect(
+        published.navigation.languages.map((entry: { language: string }) => entry.language),
+      ).toEqual(expect.arrayContaining(["fa", "th"]));
       const anchors = execFileSync(
         process.execPath,
         [
@@ -227,7 +274,6 @@ describe("docs-sync-publish", () => {
   it.each([
     { fault: "none", error: undefined },
     { fault: "exit", error: "npm lock failure" },
-    { fault: "unrelated", error: "changed unrelated publisher dependencies" },
     { fault: "stale", error: "publisher manifest and lock must both pin" },
   ])("syncs an independent publisher lock with $fault outcome", async ({ fault, error }) => {
     const fixture = tempDirs.make("openclaw-docs-sync-dependencies-");
@@ -326,44 +372,6 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     );
   });
 
-  it("materializes the public docs map only in the publish tree", () => {
-    const targetDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-map-publish-"));
-    try {
-      const outputPath = writePublishedDocsMap(targetDocsDir);
-      expect(fs.readFileSync(outputPath, "utf8")).toBe(
-        renderDocsHeadingMap(path.resolve(import.meta.dirname, "../../docs")),
-      );
-    } finally {
-      fs.rmSync(targetDocsDir, { recursive: true, force: true });
-    }
-  });
-
-  it("parses docs sync provenance args", () => {
-    expect(
-      parseArgs([
-        "--target",
-        "generated-docs",
-        "--source-repo",
-        "openclaw/openclaw",
-        "--source-sha",
-        "abc123",
-        "--clawhub-repo",
-        "../clawhub",
-        "--clawhub-source-repo",
-        "openclaw/clawhub",
-        "--clawhub-source-sha",
-        "def456",
-      ]),
-    ).toMatchObject({
-      clawhubRepo: "../clawhub",
-      clawhubSourceRepo: "openclaw/clawhub",
-      clawhubSourceSha: "def456",
-      sourceRepo: "openclaw/openclaw",
-      sourceSha: "abc123",
-      target: "generated-docs",
-    });
-  });
-
   it("rejects missing docs sync option values", () => {
     for (const flag of [
       "--target",
@@ -402,6 +410,86 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     }
   });
 
+  it("overlays deep groups without changing the input or ambiguously labeling siblings", () => {
+    const source = {
+      tabs: [
+        {
+          tab: "Tools",
+          groups: [
+            {
+              group: "Guides",
+              pages: [
+                { group: "Browser", pages: [{ group: "Setup", pages: ["tr/browser/setup"] }] },
+                { group: "Search", pages: ["tr/search"] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const before = structuredClone(source);
+    const result = applyLocaleNavLabelOverlay(source, {
+      tabs: [
+        {
+          tab: "Araçlar",
+          groups: [
+            {
+              group: "Kılavuzlar",
+              pages: [
+                { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
+                { group: "Combined", pages: ["tr/browser/setup", "tr/search"] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(source).toEqual(before);
+    expect(collectPages(result)).toEqual(collectPages(source));
+    expect(result.tabs[0].groups[0]).toEqual({
+      group: "Kılavuzlar",
+      pages: [
+        { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
+        { group: "Search", pages: ["tr/search"] },
+      ],
+    });
+  });
+
+  it("covers every published Swedish navigation label with a matching English anchor", () => {
+    type NavGroup = { group: string; pages: Array<string | NavGroup> };
+    type NavTab = { tab: string; groups: NavGroup[] };
+    const source = JSON.parse(fs.readFileSync("docs/docs.json", "utf8")) as {
+      navigation: { languages: Array<{ language: string; tabs: NavTab[] }> };
+    };
+    const englishTabs = source.navigation.languages
+      .find((entry) => entry.language === "en")!
+      .tabs.filter((tab) => tab.tab !== "ClawHub");
+    const glossary = new Map<string, string>(
+      JSON.parse(fs.readFileSync("docs/.i18n/glossary.sv.json", "utf8")).map(
+        (entry: { source: string; target: string }) => [entry.source, entry.target],
+      ),
+    );
+    const label = (value: string) => {
+      expect(glossary.has(value), value).toBe(true);
+      return glossary.get(value)!;
+    };
+    const group = (entry: NavGroup, translated: boolean): NavGroup => ({
+      group: translated ? label(entry.group) : entry.group,
+      pages: entry.pages.map((page) =>
+        typeof page === "string" ? `sv/${page}` : group(page, translated),
+      ),
+    });
+    const overlay = JSON.parse(fs.readFileSync("docs/.i18n/sv-navigation.json", "utf8"));
+    const navigation = (translated: boolean) => ({
+      language: "sv",
+      tabs: englishTabs.map((tab) => ({
+        tab: translated ? label(tab.tab) : tab.tab,
+        groups: tab.groups.map((entry) => group(entry, translated)),
+      })),
+    });
+    expect(applyLocaleNavLabelOverlay(navigation(false), overlay)).toEqual(navigation(true));
+  });
+
   it("keeps generated locale navigation aligned with English routes", () => {
     const config = composeDocsConfig() as {
       navigation: {
@@ -423,166 +511,110 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     expect(english).toBeDefined();
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
-    expect(english!.tabs.slice(-5).map((tab) => tab.tab)).toEqual([
-      "Gateway & Ops",
-      "Reference",
-      "Releases",
-      "Contributing",
-      "Help",
-    ]);
+    const turkish = config.navigation.languages.find((entry) => entry.language === "tr");
+    expect(turkish).toBeDefined();
+    const swedish = config.navigation.languages.find((entry) => entry.language === "sv");
+    expect(swedish).toBeDefined();
+    const sourceConfig = JSON.parse(
+      fs.readFileSync(path.join("docs", "docs.json"), "utf8"),
+    ) as typeof config;
+    expect(english).toEqual(
+      sourceConfig.navigation.languages.find((entry) => entry.language === "en"),
+    );
 
-    const releaseTab = english!.tabs.find((tab) => tab.tab === "Releases");
-    const contributingTab = english!.tabs.find((tab) => tab.tab === "Contributing");
-    const releaseNotes = collectPages(releaseTab?.groups?.[0]);
-    expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
-      "Release notes",
-      "Release process",
-    ]);
-    expect(contributingTab?.groups?.map((group) => group.group)).toEqual([
-      "Maturity",
-      "Testing and CI",
-    ]);
-    // Releases may have a version page or subpages, so read the published routes from the
-    // navigation rather than pinning them here; only the index-first ordering and the version
-    // route shape are invariant. Pinning the list makes this assertion fail on release PRs whose
-    // change classification never selects this lane, so the break first lands on main.
-    expect(releaseNotes[0]).toBe("releases/index");
-    expect(releaseNotes.length).toBeGreaterThan(1);
-    const releaseRoutePattern = /^releases\/\d{4}\.\d{1,2}\.\d+(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
-    for (const page of releaseNotes.slice(1)) {
-      expect(page).toMatch(releaseRoutePattern);
-    }
-    expect("releases/not-a-version").not.toMatch(releaseRoutePattern);
-    expect("releases/2026.8.1/memory/nested").not.toMatch(releaseRoutePattern);
-    const releaseRoutes = [
-      ...releaseNotes,
-      "reference/RELEASING",
-      "reference/full-release-validation",
-      "reference/full-release-validation/dispatch",
-      "reference/full-release-validation/continuation",
-      "reference/full-release-validation/extended-stable",
-      "reference/full-release-validation/stages",
-      "reference/full-release-validation/release-checks",
-      "reference/full-release-validation/profiles",
-      "reference/full-release-validation/evidence",
-      "reference/release-performance-sweep",
-      "gateway/security/dependency-locking",
-    ];
-    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
-    expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);
-    const contributingRoutes = [
-      "maturity/scorecard",
-      "maturity/taxonomy",
-      "reference/test",
-      "reference/test/local",
-      "reference/test/lanes",
-      "reference/test/docker",
-      "reference/test/performance",
-      "reference/test/runner-internals",
-      "reference/test/remote-proof",
-      "ci",
-      "ci/pipeline",
-      "ci/watching-runs",
-      "ci/checkout",
-      "ci/scope-and-routing",
-      "ci/scope-and-routing/selection",
-      "ci/scope-and-routing/node-test-lanes",
-      "ci/scope-and-routing/job-budgets",
-      "ci/scope-and-routing/manual-dispatches",
-      "ci/runners",
-      "ci/capacity",
-      "ci/release-validation",
-      "ci/release-validation/full-release-validation",
-      "ci/release-validation/live-and-e2e-shards",
-      "ci/release-validation/package-acceptance",
-      "ci/release-validation/install-smoke-and-docker-e2e",
-      "ci/release-validation/plugin-prerelease",
-      "ci/scheduled-workflows",
-      "ci/local-proof",
-      "help/scripts",
-      "concepts/qa-e2e-automation",
-      "concepts/qa-e2e-automation/command-surface",
-      "concepts/qa-e2e-automation/operator-flow",
-      "concepts/qa-e2e-automation/scenario-coverage",
-      "concepts/qa-e2e-automation/channel-qa-reference",
-      "concepts/qa-e2e-automation/slack-qa",
-      "concepts/qa-e2e-automation/whatsapp-and-credentials",
-      "concepts/qa-e2e-automation/extending-the-stack",
-      "concepts/qa-e2e-automation/qa-reporting",
-      "concepts/personal-agent-benchmark-pack",
-      "help/testing",
-      "help/testing/suites",
-      "help/testing/live-workflows",
-      "help/testing/docker",
-      "help/testing/qa-runners",
-      "help/testing/contracts",
-      "help/testing/writing-tests",
-      "help/testing-updates-plugins",
-      "help/testing-live",
-      "help/testing-live/quick-smokes",
-      "help/testing-live/model-smoke",
-      "help/testing-live/cli-backends",
-      "help/testing-live/acp-and-codex",
-      "help/testing-live/long-context-and-matrix",
-      "help/testing-live/media-providers",
-      "concepts/mantis",
-      "concepts/mantis-slack-desktop-runbook",
-    ];
-    expect(collectPages(contributingTab)).toEqual(contributingRoutes);
-    expect(new Set(contributingRoutes)).toHaveLength(contributingRoutes.length);
-
-    const englishWithoutClawHub = {
-      ...english,
-      tabs: english!.tabs.filter((tab) => tab.tab !== "ClawHub"),
+    // Authored navigation owns the inventory; localization must preserve each tab and group.
+    const englishTabs = english!.tabs.filter((tab) => tab.tab !== "ClawHub");
+    const localeDirs: Record<string, string> = {
+      "zh-Hans": "zh-CN",
+      "zh-Hant": "zh-TW",
+      ja: "ja-JP",
     };
-    const expectedZhPages = collectPages(englishWithoutClawHub)
-      .map((page) => `zh-CN/${page}`)
-      .toSorted();
-    expect(collectPages(simplifiedChinese).toSorted()).toEqual(expectedZhPages);
+    for (const locale of config.navigation.languages.filter((entry) => entry.language !== "en")) {
+      const prefix = localeDirs[locale.language] ?? locale.language;
+      const localize = (page: string) => `${prefix}/${page}`;
+      expect(locale.tabs).toHaveLength(englishTabs.length);
+      for (const [index, tab] of englishTabs.entries()) {
+        expect(collectPages(locale.tabs[index])).toEqual(collectPages(tab).map(localize));
+        expect(locale.tabs[index]?.groups?.map((group) => collectPages(group))).toEqual(
+          tab.groups?.map((group) => collectPages(group).map(localize)),
+        );
+      }
+    }
+
     expect(simplifiedChinese!.tabs[0]?.tab).toBe("快速开始");
     expect(simplifiedChinese!.tabs[0]?.groups?.[0]?.group).toBe("首页");
-    const simplifiedChineseReleaseTab = simplifiedChinese!.tabs.find((tab) => tab.tab === "发布");
-    expect(simplifiedChineseReleaseTab?.groups?.map((group) => group.group)).toEqual([
-      "发布说明",
-      "发布流程",
-    ]);
-    expect(collectPages(simplifiedChineseReleaseTab?.groups?.[0])).toEqual(
-      releaseNotes.map((page) => `zh-CN/${page}`),
-    );
-    expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
-      releaseRoutes.map((page) => `zh-CN/${page}`),
-    );
-    expect(new Set(collectPages(simplifiedChineseReleaseTab))).toHaveLength(releaseRoutes.length);
-    const simplifiedChineseContributingTab = simplifiedChinese!.tabs.find(
-      (tab) => tab.tab === "贡献",
-    );
-    expect(simplifiedChineseContributingTab?.groups?.map((group) => group.group)).toEqual([
-      "成熟度",
-      "测试与 CI",
-    ]);
-    expect(collectPages(simplifiedChineseContributingTab)).toEqual(
-      contributingRoutes.map((page) => `zh-CN/${page}`),
-    );
-
-    expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
+    expect(
+      simplifiedChinese!.tabs
+        .find((tab) => tab.tab === "发布")
+        ?.groups?.map((group) => group.group),
+    ).toEqual(["发布说明", "发布流程"]);
+    expect(
+      simplifiedChinese!.tabs
+        .find((tab) => tab.tab === "贡献")
+        ?.groups?.map((group) => group.group),
+    ).toEqual(["成熟度", "测试与 CI"]);
+    expect(swedish!.tabs[0]?.tab).toBe("Kom igång");
+    expect(swedish!.tabs[0]?.groups?.[0]?.group).toBe("Översikt");
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
     expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
 
-    for (const locale of config.navigation.languages.filter(
-      (entry) => entry.language !== "en" && entry.language !== "zh-Hans",
-    )) {
-      const localeDir = collectPages(locale)[0]?.split("/")[0];
-      const localizedRoutes = releaseRoutes.map((page) => `${localeDir}/${page}`);
-      const localizedReleaseTab = locale.tabs.find((tab) =>
-        collectPages(tab).includes(`${localeDir}/releases/index`),
+    const simplifiedChineseGateway = simplifiedChinese!.tabs
+      .find((tab) => tab.tab === "网关与运维")
+      ?.groups?.find((group) => group.group === "网关");
+    for (const [page, group] of [
+      ["zh-CN/gateway/configuration", "Configuration"],
+      ["zh-CN/gateway/authentication", "Authentication and secrets"],
+      ["zh-CN/gateway/health", "Health and diagnostics"],
+      ["zh-CN/gateway/gateway-lock", "Scaling and operations"],
+    ] as const) {
+      expect(findNestedGroupByPage(simplifiedChineseGateway?.pages, page)).toEqual(
+        expect.objectContaining({ group }),
       );
-      const localizedContributingTab = locale.tabs.find((tab) =>
-        collectPages(tab).includes(`${localeDir}/maturity/scorecard`),
-      );
-      expect(collectPages(localizedReleaseTab)).toEqual(localizedRoutes);
-      expect(new Set(collectPages(localizedReleaseTab))).toHaveLength(localizedRoutes.length);
-      expect(collectPages(localizedContributingTab)).toEqual(
-        contributingRoutes.map((page) => `${localeDir}/${page}`),
+    }
+
+    expect(turkish!.tabs.map((tab) => tab.tab)).toEqual([
+      "Başlangıç",
+      "Kurulum",
+      "Kanallar",
+      "Ajanlar",
+      "Yetenekler",
+      "Modeller",
+      "Platformlar",
+      "Gateway ve operasyonlar",
+      "Başvuru",
+      "Sürümler",
+      "Katkıda bulunma",
+      "Yardım",
+    ]);
+    expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
+    for (const { tab, parent, child, page } of [
+      { tab: "Kurulum", parent: "Bakım", child: "Geçiş", page: "tr/install/migrating" },
+      {
+        tab: "Ajanlar",
+        parent: "Oturumlar ve bellek",
+        child: "Active Memory",
+        page: "tr/concepts/active-memory/enabling",
+      },
+      {
+        tab: "Yetenekler",
+        parent: "Plugin kılavuzları",
+        child: "Codex harness",
+        page: "tr/plugins/codex-harness/placement",
+      },
+      { tab: "Yetenekler", parent: "Araçlar", child: "Tarayıcı", page: "tr/tools/browser/setup" },
+      {
+        tab: "Gateway ve operasyonlar",
+        parent: "Gateway",
+        child: "OpenTelemetry",
+        page: "tr/gateway/opentelemetry/setup",
+      },
+      { tab: "Başvuru", parent: "CLI komutları", child: "Gateway", page: "tr/cli/gateway/running" },
+    ]) {
+      const parentGroup = turkish!.tabs
+        .find((entry) => entry.tab === tab)
+        ?.groups?.find((entry) => entry.group === parent);
+      expect(findNestedGroup(parentGroup?.pages, child)).toEqual(
+        expect.objectContaining({ pages: expect.arrayContaining([page]) }),
       );
     }
   });

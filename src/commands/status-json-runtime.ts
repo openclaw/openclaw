@@ -2,8 +2,8 @@
 // Keeps gateway health, usage, security audit, and service summaries behind explicit option gates.
 
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
+import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
-import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
@@ -11,7 +11,6 @@ import {
 import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import type { StatusJsonScanResult } from "./status.scan-result.ts";
 
-/** Builds the status JSON object from a completed scan plus optional runtime/deep probes. */
 export async function resolveStatusJsonOutput(params: {
   scan: StatusJsonScanResult;
   opts: StatusGatewayProbeBudget & {
@@ -44,11 +43,13 @@ export async function resolveStatusJsonOutput(params: {
       ...(scan.collection && opts.usage
         ? {
             resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
-              const { readConfigFileSnapshot } = await import("../config/config.js");
+              const { readConfigFileSnapshot, setAppliedRuntimeConfigSnapshot } =
+                await import("../config/config.js");
               const snapshot = await readConfigFileSnapshot({
                 observe: false,
                 pluginValidation: "core-only",
               });
+              await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
               return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
             },
           }
@@ -57,11 +58,12 @@ export async function resolveStatusJsonOutput(params: {
 
   const payload = buildStatusJsonPayload({
     summary: scan.summary,
-    surface: buildStatusOverviewSurfaceFromScan({
-      scan,
+    surface: {
+      ...scan,
       gatewayService,
       nodeService,
-    }),
+      databaseEngines: await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores),
+    },
     osSummary: scan.osSummary,
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,

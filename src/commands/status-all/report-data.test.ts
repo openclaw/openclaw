@@ -11,8 +11,9 @@ import { createStatusGatewayProbeBudget } from "../status.gateway-probe-budget.j
 import { baseStatusGatewaySnapshot, baseStatusOverviewSurface } from "../status.test-support.ts";
 
 const mocks = vi.hoisted(() => ({
-  listUpdateRuns: vi.fn<() => UpdateRunRecord[]>(() => []),
-  findActiveUpdateRun: vi.fn<() => UpdateRunRecord | undefined>(),
+  history: vi.fn<typeof import("../../infra/update-run-reader.js").getUpdateRunHistoryStatusAsync>(
+    async () => ({}),
+  ),
   getUpdateRun: vi.fn<(runId: string) => UpdateRunRecord | undefined>(),
   readRestartSentinelReadOnly: vi.fn<() => Promise<{ payload: RestartSentinelPayload } | null>>(
     async () => null,
@@ -31,6 +32,12 @@ const mocks = vi.hoisted(() => ({
     typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
   >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
   resolveStatusSummaryFromOverview: vi.fn(async () => ({})),
+}));
+
+// mock-isolation: Database inspection is covered at its owner, not by unrelated local diagnostics.
+vi.mock("../status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({ source: "admitted", stores: [] }),
 }));
 
 vi.mock("../../agents/exec-defaults.js", () => ({
@@ -53,10 +60,12 @@ vi.mock("../../infra/exec-approvals.js", () => ({
   loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
 }));
 vi.mock("../../infra/update-run-ledger.js", () => ({
-  findActiveUpdateRun: mocks.findActiveUpdateRun,
   getUpdateRun: mocks.getUpdateRun,
-  listUpdateRuns: mocks.listUpdateRuns,
-  reconcileAbandonedUpdateRuns: () => [],
+  getUpdateRunAsync: async (runId: string) => mocks.getUpdateRun(runId),
+  reconcileAbandonedUpdateRunsAsync: async () => [],
+}));
+vi.mock("../../infra/update-run-reader.js", () => ({
+  getUpdateRunHistoryStatusAsync: mocks.history,
 }));
 vi.mock("../../infra/restart-sentinel.js", () => ({
   readRestartSentinelReadOnly: mocks.readRestartSentinelReadOnly,
@@ -110,8 +119,7 @@ describe("buildStatusAllReportData", () => {
       missing: 0,
     });
     vi.spyOn(performance, "now").mockReturnValue(0);
-    mocks.listUpdateRuns.mockReturnValue([]);
-    mocks.findActiveUpdateRun.mockReturnValue(undefined);
+    mocks.history.mockResolvedValue({});
     mocks.getUpdateRun.mockReturnValue(undefined);
     mocks.readRestartSentinelReadOnly.mockResolvedValue(null);
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue({ ok: true, value: {} });
@@ -132,6 +140,7 @@ describe("buildStatusAllReportData", () => {
     "different-run",
     "same-prose",
     "generic-sentinel",
+    "failed-healthy",
   ] as const)(
     "keeps current update availability alongside %s history without observing config",
     async (history) => {
@@ -168,14 +177,17 @@ describe("buildStatusAllReportData", () => {
         "generic-sentinel",
       ].includes(history);
       if (hasRun) {
-        mocks.listUpdateRuns.mockReturnValue([completed]);
+        if (history === "failed-healthy") {
+          completed.status = "failed";
+          completed.reason = "post-update-failed";
+        }
+        mocks.history.mockResolvedValue({ lastRun: completed });
         mocks.getUpdateRun.mockReturnValue(completed);
       }
       if (history === "active") {
-        mocks.findActiveUpdateRun.mockReturnValue({
-          ...completed,
-          status: "running",
-          phase: "verifying",
+        mocks.history.mockResolvedValue({
+          lastRun: completed,
+          activeRun: { ...completed, status: "running", phase: "verifying" },
         });
       }
       if (hasSentinel) {
@@ -214,9 +226,13 @@ describe("buildStatusAllReportData", () => {
           gatewaySnapshot: {
             ...baseStatusGatewaySnapshot,
             gatewayReachable: false,
-            gatewayProbe: null,
+            gatewayProbe:
+              history === "failed-healthy"
+                ? { server: { version: "2026.9.2", buildId: "fixture-build" } }
+                : null,
             gatewayCallOverrides: undefined,
             remoteUrlMissing: false,
+            localGatewayHealthy: history === "failed-healthy",
           },
           secretDiagnostics: [],
           tailscaleMode: "off",
@@ -245,7 +261,11 @@ describe("buildStatusAllReportData", () => {
               {
                 Item: "Update run",
                 Value:
-                  history === "active" ? "⬆️ OpenClaw update in progress: verifying." : success,
+                  history === "active"
+                    ? "⬆️ OpenClaw update in progress: verifying."
+                    : history === "failed-healthy"
+                      ? "Last update run failed (post-update-failed) — Gateway is serving 2026.9.2; run `openclaw update` to clear the record."
+                      : success,
               },
             ]
           : []),

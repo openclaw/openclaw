@@ -22,8 +22,9 @@ const { sendZaloTextMock } = vi.hoisted(() => ({
   sendZaloTextMock: vi.fn(),
 }));
 
-vi.mock("./channel.runtime.js", () => ({
-  sendZaloText: sendZaloTextMock,
+vi.mock("./channel.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel.runtime.js")>()),
+  sendMessageZalo: sendZaloTextMock,
 }));
 
 type ZaloOutbound = NonNullable<typeof zaloPlugin.outbound>;
@@ -75,8 +76,8 @@ function createZaloHarness(params: OutboundPayloadHarnessParams) {
     params.sendResults?.map((result) => ({ ok: true, ...result })),
   );
   sendZaloTextMock.mockReset().mockImplementation(
-    async (nextCtx: { to: string; text: string; mediaUrl?: string }) =>
-      await sendZalo(nextCtx.to, nextCtx.text, {
+    async (to: string, text: string, nextCtx: { mediaUrl?: string }) =>
+      await sendZalo(to, text, {
         mediaUrl: nextCtx.mediaUrl,
       }),
   );
@@ -153,25 +154,27 @@ describe("Zalo outbound payload contract", () => {
   );
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
-    sendZaloTextMock.mockReset().mockImplementation(async (ctx: { mediaUrl?: string }) =>
-      ctx.mediaUrl
-        ? {
-            ok: true,
-            messageId: "zl-media-1",
-            receipt: createMessageReceiptFromOutboundResults({
-              results: [{ channel: "zalo", messageId: "zl-media-1" }],
-              kind: "media",
-            }),
-          }
-        : {
-            ok: true,
-            messageId: "zl-text-1",
-            receipt: createMessageReceiptFromOutboundResults({
-              results: [{ channel: "zalo", messageId: "zl-text-1" }],
-              kind: "text",
-            }),
-          },
-    );
+    sendZaloTextMock
+      .mockReset()
+      .mockImplementation(async (_to: string, _text: string, ctx: { mediaUrl?: string }) =>
+        ctx.mediaUrl
+          ? {
+              ok: true,
+              messageId: "zl-media-1",
+              receipt: createMessageReceiptFromOutboundResults({
+                results: [{ channel: "zalo", messageId: "zl-media-1" }],
+                kind: "media",
+              }),
+            }
+          : {
+              ok: true,
+              messageId: "zl-text-1",
+              receipt: createMessageReceiptFromOutboundResults({
+                results: [{ channel: "zalo", messageId: "zl-text-1" }],
+                kind: "text",
+              }),
+            },
+      );
     const sendText = requireZaloTextSender();
     const sendMedia = requireZaloMediaSender();
 

@@ -48,5 +48,5 @@ export function normalizeRequestInitHeadersForFetch<T extends { headers?: Header
   if (headers === init.headers) {
     return init;
   }
-  return { ...init, headers } as T;
+  return { ...init, headers };
 }

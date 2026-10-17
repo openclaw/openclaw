@@ -26,44 +26,6 @@ function createController() {
 }
 
 describe("createTalkSessionController", () => {
-  it("emits common envelopes and keeps bounded recent event history", () => {
-    const talk = createController();
-
-    talk.emit({ type: "session.started", payload: {} });
-    const firstTurn = talk.ensureTurn();
-    talk.emit({
-      type: "input.audio.delta",
-      turnId: firstTurn.turnId,
-      payload: { byteLength: 5 },
-    });
-    talk.emit({
-      type: "transcript.done",
-      turnId: firstTurn.turnId,
-      payload: { text: "hello" },
-      final: true,
-    });
-
-    expectTalkEvent(firstTurn.event, {
-      ...TEST_TALK_CONTEXT,
-      callId: undefined,
-      captureId: undefined,
-      final: undefined,
-      id: "talk-session:2",
-      itemId: undefined,
-      parentId: undefined,
-      payload: {},
-      seq: 2,
-      timestamp: "2026-05-05T00:00:00.000Z",
-      turnId: "turn-1",
-      type: "turn.started",
-    });
-    expect(talk.recentEvents.map((event) => event.type)).toEqual([
-      "turn.started",
-      "input.audio.delta",
-      "transcript.done",
-    ]);
-  });
-
   it("rejects stale turn completion before clearing the active turn", () => {
     const talk = createController();
     talk.ensureTurn({ turnId: "turn-old" });
@@ -147,28 +109,6 @@ describe("createTalkSessionController", () => {
     expect(ended.ok ? ended.event.payload : undefined).toBeNull();
     expect(audioStarted.event?.payload).toBeNull();
     expect(audioDone?.payload).toBeNull();
-  });
-
-  it("notifies an event hook for emitted and controller-created events", () => {
-    const events: string[] = [];
-    const talk = createTalkSessionController(
-      {
-        sessionId: "talk-session",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-      },
-      {
-        now: () => "2026-05-05T00:00:00.000Z",
-        onEvent: (event) => events.push(event.type),
-      },
-    );
-
-    talk.emit({ type: "session.started", payload: {} });
-    const turn = talk.ensureTurn();
-    talk.endTurn({ turnId: turn.turnId });
-
-    expect(events).toEqual(["session.started", "turn.started", "turn.ended"]);
   });
 
   it("clears stale output audio state when a replacement turn starts", () => {

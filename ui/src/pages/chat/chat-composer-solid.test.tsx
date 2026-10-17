@@ -1,0 +1,519 @@
+import { createSignal, merge } from "solid-js";
+/* @vitest-environment jsdom */
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  disposeComposer,
+  renderComposerInto,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
+import { createInitializationContext } from "./chat-pane.test-support.ts";
+import { keepVolatileQueuedMessage } from "./chat-queue.ts";
+import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
+import { createChatState } from "./chat-state-controller.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
+import type { ChatComposerProps } from "./components/chat-composer-types.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
+import {
+  admitStoredChatComposerQueueItem,
+  persistChatComposerState,
+} from "./composer-persistence.ts";
+
+afterEach(() => resetComposerFixture());
+
+function mountComposer(initial: ChatComposerProps) {
+  const container = document.body.appendChild(createComposerContainer());
+  let props = initial;
+  const paint = () => renderComposerInto(container, props);
+  onTestFinished(() => {
+    disposeComposer(container);
+  });
+  paint();
+  return {
+    container,
+    update: (next: (previous: typeof props) => typeof props) => {
+      props = next(props);
+      paint();
+    },
+  };
+}
+
+function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
+  const invalidate = vi.fn();
+  const owner = createChatState<ChatPageHost>({ invalidate, updateComplete: Promise.resolve() });
+  const state = createPageState(
+    createInitializationContext(),
+    owner.createRenderLifecycle(),
+    document.createElement("div"),
+  );
+  state.sessionKey = "agent:main:draft-source";
+  state.chatMessage = overrides.draft ?? "";
+  state.chatGoalDraftMode = overrides.goalDraftMode ?? null;
+  owner.attach(state);
+  onTestFinished(owner.dispose);
+  const view = mountComposer(
+    createComposerProps({
+      ...overrides,
+      sessionKey: state.sessionKey,
+      draftSource: owner.composerDraft,
+      getDraft: () => state.chatMessage,
+      getMentions: () => state.chatMentions ?? [],
+      onDraftChange: state.handleChatDraftChange,
+      onGoalDraftModeChange: (mode) => {
+        state.chatGoalDraftMode = mode;
+        state.handleChatDraftChange(state.chatMessage);
+        overrides.onGoalDraftModeChange?.(mode);
+      },
+    }),
+  );
+  const input = (value: string) => {
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.focus();
+    textarea.value = value;
+    textarea.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
+    );
+  };
+  const enter = () =>
+    view.container
+      .querySelector("textarea")!
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
+  return { owner, state, view, invalidate, input, enter };
+}
+
+it("updates edits and history from the draft owner without redrawing the pane", () => {
+  const { owner, state, view, invalidate } = mountOwnedComposer();
+  const textarea = view.container.querySelector("textarea")!;
+  textarea.value = "An ordinary edit";
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  flush();
+  expect(state.chatMessage).toBe("An ordinary edit");
+
+  state.handleChatDraftChange("@Alex restored", [{ profileId: "alex", start: 0, end: 5 }]);
+  flush();
+  expect(textarea.value).toBe("@Alex restored");
+  state.chatLocalInputHistoryBySession[state.sessionKey] = [{ text: "Earlier input", ts: 1 }];
+  state.handleChatInputHistoryKey({
+    key: "ArrowUp",
+    selectionStart: 0,
+    selectionEnd: 0,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    isComposing: false,
+    keyCode: 38,
+  });
+  flush();
+  expect(textarea.value).toBe("Earlier input");
+  expect(invalidate).not.toHaveBeenCalled();
+
+  const draftChanged = vi.fn();
+  onTestFinished(owner.composerDraft.subscribe(draftChanged));
+  state.chatStream = "An unrelated response";
+  state.requestUpdate?.();
+  flush();
+  expect(draftChanged).not.toHaveBeenCalled();
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+});
+
+it("publishes submitted and restored drafts without redrawing the pane", () => {
+  const { state, view, invalidate } = mountOwnedComposer({ draft: "A recoverable draft" });
+  state.client = createTestGatewayClient(async () => ({}));
+  state.connected = true;
+  const textarea = view.container.querySelector("textarea")!;
+  const snapshot = clearSubmittedComposerState(state, state.chatMessage, [], [], null);
+  expect(state.chatMessage).toBe("");
+  flush();
+  expect(textarea.value).toBe("");
+
+  const queued = {
+    id: "recover-draft",
+    text: "A recoverable draft",
+    createdAt: 1,
+    sendState: "held" as const,
+  };
+  keepVolatileQueuedMessage(state, state.sessionKey, queued);
+  expect(cancelChatDelivery(state, queued, snapshot)).toBe(true);
+  expect(state.chatMessage).toBe("A recoverable draft");
+  flush();
+  expect(textarea.value).toBe("A recoverable draft");
+  expect(invalidate).not.toHaveBeenCalled();
+});
+
+it("publishes a restored persisted draft and queue after adopting their revision", () => {
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  const { owner, state, view, invalidate } = mountOwnedComposer();
+  state.client = createTestGatewayClient(async () => ({}));
+  state.connected = true;
+  expect(persistChatComposerState(state, state.sessionKey, { draft: "Saved draft" })).toBe(true);
+  expect(
+    admitStoredChatComposerQueueItem(state, captureChatOutboxAdmission(state, state.sessionKey), {
+      id: "saved-input",
+      text: "Saved queued input",
+      createdAt: 1,
+      sendState: "held",
+    }),
+  ).toBe(true);
+  state.chatQueue = [];
+  const queue = mountSolid(() => (
+    <output>{state.chatQueue.map((item) => item.text).join(";")}</output>
+  ));
+  onTestFinished(queue.unmount);
+  flush();
+  expect(queue.container.textContent).toBe("");
+  expect(view.container.querySelector("textarea")!.value).toBe("");
+
+  expect(owner.composerPersistence.restore()).toBe(true);
+  expect(state.chatMessage).toBe("Saved draft");
+  expect(state.chatQueue[0]?.text).toBe("Saved queued input");
+  flush();
+  expect(queue.container.textContent).toBe("Saved queued input");
+  expect(view.container.querySelector("textarea")!.value).toBe("Saved draft");
+  expect(invalidate).not.toHaveBeenCalled();
+});
+
+it("restores the conversation draft when a restored goal edit is cancelled", () => {
+  const { state, view } = mountOwnedComposer({
+    draft: "Edit this objective",
+    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
+    onGoalSubmit: vi.fn(async () => false),
+  });
+  const cancel = view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-mode button")!;
+  expect(cancel).not.toBeNull();
+  cancel.click();
+  flush();
+  expect(state.chatGoalDraftMode).toBeNull();
+  expect(state.chatMessage).toBe("Conversation draft");
+  expect(view.container.querySelector("textarea")!.value).toBe("Conversation draft");
+  expect(view.container.querySelector(".agent-chat__goal-mode")).toBeNull();
+});
+
+it("starts a goal and admits only one same-turn submit", async () => {
+  const result = createDeferred<boolean>();
+  const onGoalSubmit = vi.fn(() => result.promise);
+  const { state, view, input, enter } = mountOwnedComposer({ onGoalSubmit });
+  input("/goal start ");
+  flush();
+  expect(state.chatGoalDraftMode).toEqual({ action: "start" });
+  expect(view.container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
+  expect(view.container.querySelector("textarea")!.value).toBe("");
+  input("Keep every literal space  ");
+  flush();
+  enter();
+  enter();
+  view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-mode button")!.click();
+  expect(state.chatGoalDraftMode).toEqual({ action: "start" });
+  expect(onGoalSubmit).toHaveBeenCalledExactlyOnceWith(
+    { action: "start", objective: "Keep every literal space  " },
+    expect.any(KeyboardEvent),
+  );
+  flush();
+  expect(view.container.querySelector("textarea")!.readOnly).toBe(true);
+  result.resolve(true);
+  await waitForSolid(() => expect(state.chatGoalDraftMode).toBeNull());
+  expect(view.container.querySelector(".agent-chat__goal-mode")).toBeNull();
+});
+
+it("does not clear a replacement goal mode when an earlier submit completes", async () => {
+  const result = createDeferred<boolean>();
+  const { state, view, enter } = mountOwnedComposer({
+    draft: "First objective",
+    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Old conversation" },
+    onGoalSubmit: () => result.promise,
+  });
+  enter();
+  state.chatGoalDraftMode = {
+    action: "edit",
+    goalId: "goal-two",
+    previousDraft: "New conversation",
+  };
+  state.handleChatDraftChange("Replacement objective");
+  result.resolve(true);
+  await result.promise;
+  flush();
+  expect(state.chatGoalDraftMode).toMatchObject({ action: "edit", goalId: "goal-two" });
+  expect(state.chatMessage).toBe("Replacement objective");
+  expect(view.container.querySelector("textarea")!.value).toBe("Replacement objective");
+});
+
+it.each([false, true])("settles an accepted goal after unmount (remount=%s)", async (remount) => {
+  const result = createDeferred<boolean>();
+  const onGoalSubmit = vi.fn(() => result.promise);
+  const { state, view, enter } = mountOwnedComposer({
+    draft: "Updated objective",
+    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
+    onGoalSubmit,
+  });
+  enter();
+  disposeComposer(view.container);
+  if (remount) {
+    view.update((props) => props);
+    expect(view.container.querySelector("textarea")!.readOnly).toBe(true);
+    enter();
+    expect(onGoalSubmit).toHaveBeenCalledOnce();
+  }
+  result.resolve(true);
+  await result.promise;
+  flush();
+  expect(state.chatGoalDraftMode).toBeNull();
+  expect(state.chatMessage).toBe("Conversation draft");
+});
+
+it("updates composer text on a live locale change without disturbing an IME draft", async () => {
+  onTestFinished(captureI18nStateForTesting());
+  await i18n.setLocale("en");
+  const onDraftChange = vi.fn();
+  const props = createComposerProps({
+    assistantName: "Locale fixture",
+    draft: "Unfinished draft",
+    permissionPicker: { canSelectFull: true, onSelect: vi.fn() },
+    onDraftChange,
+  });
+  const view = mountComposer(props);
+  view.container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!.click();
+  await waitForSolid(() =>
+    expect(
+      view.container.querySelector(".chat-controls__permission-menu")?.matches(":popover-open"),
+    ).toBe(true),
+  );
+  const textarea = view.container.querySelector("textarea")!;
+  const heading = view.container.querySelector(".chat-controls__permission-heading")!;
+  expect(heading.textContent).toBe("Execution permissions");
+  expect(textarea.placeholder).toBe("Message Locale fixture");
+
+  textarea.focus();
+  textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  textarea.value = "Unfinished 日本語";
+  textarea.setSelectionRange(11, 14);
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+  const writes = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
+
+  await i18n.setLocale("de");
+  flush();
+
+  expect(heading.textContent).toBe("Ausführungsberechtigungen");
+  expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
+  expect(view.container.querySelector(".chat-controls__permission-heading")).toBe(heading);
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(document.activeElement).toBe(textarea);
+  expect(textarea.value).toBe("Unfinished 日本語");
+  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([11, 14]);
+  expect(writes).not.toHaveBeenCalled();
+  expect(onDraftChange).not.toHaveBeenCalled();
+});
+
+it("updates an existing private draft recovery error when the locale changes", async () => {
+  onTestFinished(captureI18nStateForTesting());
+  await i18n.setLocale("en");
+  const controller = new AbortController();
+  const review = reviewPrivateComposerDraft({
+    text: "Recover this draft",
+    attachments: [{ id: "unavailable", fileName: "draft.txt", mimeType: "text/plain" }],
+    hasGoal: false,
+    pendingReads: 0,
+    isCurrent: () => true,
+    signal: controller.signal,
+  });
+  onTestFinished(async () => {
+    controller.abort();
+    await review;
+  });
+  const download = await waitForSolid(() => {
+    const button = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Download draft.txt",
+    );
+    expect(button).toBeDefined();
+    return button!;
+  });
+  download.click();
+  flush();
+  const error = document.querySelector('[role="alert"]')!;
+  expect(error.textContent).toBe(
+    "This attachment is no longer available to download. Keep the draft open and recover the original file before discarding it.",
+  );
+
+  await i18n.setLocale("de");
+  flush();
+
+  expect(document.querySelector('[role="alert"]')).toBe(error);
+  expect(error.textContent).toBe(
+    "Dieser Anhang kann nicht mehr heruntergeladen werden. Lassen Sie den Entwurf geöffnet und stellen Sie die Originaldatei wieder her, bevor Sie ihn verwerfen.",
+  );
+});
+
+it("retains the native input and IME draft across external composer updates", () => {
+  let draft = "hello";
+  const onDraftChange = vi.fn((value: string) => {
+    draft = value;
+  });
+  const view = mountComposer(
+    createComposerProps({
+      draft,
+      getDraft: () => draft,
+      onDraftChange,
+    }),
+  );
+  const textarea = view.container.querySelector("textarea")!;
+  const nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!;
+  const setValue = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
+  const edit = (value: string, composing = false) => {
+    nativeValue.set!.call(textarea, value);
+    textarea.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertText", isComposing: composing }),
+    );
+  };
+
+  edit("hello there");
+  view.update((previous) => ({ ...previous, stream: "Streaming a response", runActive: true }));
+  flush();
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(textarea.value).toBe("hello there");
+  expect(setValue).not.toHaveBeenCalled();
+
+  textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  edit("hello 日本語", true);
+  onDraftChange.mockClear();
+  view.update((previous) => ({
+    ...previous,
+    draft: "stale host snapshot",
+    stream: "More response",
+  }));
+  flush();
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(textarea.value).toBe("hello 日本語");
+  expect(setValue).not.toHaveBeenCalled();
+  expect(onDraftChange).not.toHaveBeenCalled();
+
+  textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  expect(onDraftChange).toHaveBeenCalledWith("hello 日本語", undefined);
+  expect(setValue).not.toHaveBeenCalled();
+});
+
+it("ends the old IME scope without writing into a newly selected session", () => {
+  const onOldDraftChange = vi.fn();
+  const onNewDraftChange = vi.fn();
+  const view = mountComposer(
+    createComposerProps({
+      sessionKey: "first",
+      draft: "first draft",
+      onDraftChange: onOldDraftChange,
+    }),
+  );
+  const oldInput = view.container.querySelector("textarea")!;
+  oldInput.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  oldInput.value = "unfinished composition";
+  oldInput.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+
+  view.update((previous) => ({
+    ...previous,
+    sessionKey: "second",
+    draft: "second draft",
+    onDraftChange: onNewDraftChange,
+  }));
+  flush();
+  const newInput = view.container.querySelector("textarea")!;
+  expect(newInput).not.toBe(oldInput);
+  expect(newInput.value).toBe("second draft");
+  oldInput.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  oldInput.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  expect(onOldDraftChange).not.toHaveBeenCalled();
+  expect(onNewDraftChange).not.toHaveBeenCalled();
+  expect(newInput.value).toBe("second draft");
+
+  newInput.value = "second draft edited";
+  newInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  expect(onNewDraftChange).toHaveBeenCalledWith("second draft edited", undefined);
+});
+
+it("retires an unfinished IME gesture when the same pane composer remounts", () => {
+  const { state, view, input } = mountOwnedComposer({ draft: "Canonical draft" });
+  const oldInput = view.container.querySelector("textarea")!;
+  oldInput.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  oldInput.value = "Unfinished composition";
+  oldInput.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+  disposeComposer(view.container);
+  view.update((props) => props);
+
+  const newInput = view.container.querySelector("textarea")!;
+  expect(newInput).not.toBe(oldInput);
+  expect(newInput.value).toBe("Canonical draft");
+  input("Typing after remount");
+  flush();
+  expect(state.chatMessage).toBe("Typing after remount");
+  oldInput.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  oldInput.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  expect(state.chatMessage).toBe("Typing after remount");
+});
+
+it("keeps the open permission picker through parent updates", async () => {
+  const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
+  const view = mountComposer(createComposerProps({ permissionPicker }));
+  const picker = view.container.querySelector(".chat-controls__permission-picker")!;
+  const trigger = picker.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+  trigger.click();
+  const surface = picker.querySelector<HTMLElement>('[role="menu"]')!;
+  await waitForSolid(() => expect(surface.matches(":popover-open")).toBe(true));
+  view.update((previous) => ({
+    ...previous,
+    stream: "More response",
+    permissionPicker: { ...permissionPicker },
+  }));
+  flush();
+  expect(view.container.querySelector(".chat-controls__permission-picker")).toBe(picker);
+  expect(picker.querySelector('[role="menu"]')).toBe(surface);
+  expect(surface.matches(":popover-open")).toBe(true);
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("keeps a pending dictation send bound to the action that started it", async () => {
+  const controller = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => {},
+    onError: () => {},
+  });
+  vi.spyOn(controller, "active", "get").mockReturnValue(true);
+  let finish!: (value: boolean) => void;
+  vi.spyOn(controller, "finishActive").mockReturnValue(
+    new Promise<boolean>((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const firstSend = vi.fn();
+  const laterSend = vi.fn();
+  const [props, setProps] = createSignal({
+    readDictation: () => controller,
+    onSend: firstSend,
+  });
+  const actionProps = merge(props);
+  const view = mountSolid(() => <ComposerDictationSendAction {...actionProps} />);
+  try {
+    view.container.querySelector<HTMLButtonElement>("button")!.click();
+    setProps({ readDictation: () => controller, onSend: laterSend });
+    flush();
+    finish(true);
+    await Promise.resolve();
+    expect(firstSend).toHaveBeenCalledOnce();
+    expect(laterSend).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+    controller.dispose();
+  }
+});

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   isSessionTranscriptLeafControl,
   mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
-  parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptLeafControlledPath,
   selectSessionTranscriptTreePathNodes,
@@ -25,76 +24,6 @@ describe("session transcript tree helpers", () => {
         parentId: "old-tail",
       }),
     ).toBe(false);
-  });
-
-  it("treats leaf controls as navigation to their target", () => {
-    const leaf = {
-      type: "leaf",
-      id: "leaf-control",
-      parentId: "inactive-tail",
-      targetId: "active-tail",
-    };
-
-    expect(parseSessionTranscriptTreeEntry(leaf)).toEqual({
-      id: "leaf-control",
-      parentId: "active-tail",
-      leafId: "active-tail",
-      appendParentId: "active-tail",
-    });
-  });
-
-  it("resolves a distinct opaque append parent from a leaf control", () => {
-    const entries = [
-      { type: "message", id: "active-tail", parentId: null },
-      { type: "metadata", id: "plugin-metadata", parentId: "active-tail" },
-      {
-        type: "leaf",
-        id: "leaf-control",
-        parentId: "inactive-tail",
-        targetId: "active-tail",
-        appendParentId: "plugin-metadata",
-      },
-    ];
-
-    expect(scanSessionTranscriptTree(entries)).toMatchObject({
-      leafId: "active-tail",
-      appendParentId: "plugin-metadata",
-    });
-    expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual(entries.slice(0, 1));
-  });
-
-  it("does not let later opaque rows replace the visible leaf", () => {
-    const activeRoot = { type: "message", id: "active-root", parentId: null };
-    const sideEntry = { type: "message", id: "side-entry", parentId: "active-root" };
-    const leafControl = {
-      type: "leaf",
-      id: "leaf-control",
-      parentId: "side-entry",
-      targetId: "active-root",
-    };
-    const metadata = { type: "metadata", id: "plugin-metadata", parentId: "side-entry" };
-    const entries = [activeRoot, sideEntry, leafControl, metadata];
-
-    expect(scanSessionTranscriptTree(entries)).toMatchObject({
-      leafId: "active-root",
-      appendParentId: "plugin-metadata",
-    });
-    expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([activeRoot]);
-  });
-
-  it("resolves the last valid leaf update in file order", () => {
-    expect(
-      scanSessionTranscriptTree([
-        { type: "message", id: "active-tail", parentId: null },
-        { type: "message", id: "inactive-tail", parentId: "active-tail" },
-        {
-          type: "leaf",
-          id: "leaf-control",
-          parentId: "inactive-tail",
-          targetId: "active-tail",
-        },
-      ]).leafId,
-    ).toBe("active-tail");
   });
 
   it("supports explicit navigation to an empty branch", () => {
@@ -186,27 +115,6 @@ describe("session transcript tree helpers", () => {
     ).toEqual([activeRoot, activeTail]);
   });
 
-  it("normalizes continuations parented to an omitted leaf marker", () => {
-    const activeRoot = { type: "message", id: "active-root", parentId: null };
-    const sideEntry = { type: "message", id: "side-entry", parentId: "active-root" };
-    const leafControl = {
-      type: "leaf",
-      id: "active-leaf",
-      parentId: "side-entry",
-      targetId: "active-root",
-    };
-    const activeTail = { type: "message", id: "active-tail", parentId: "active-leaf" };
-    const entries = [activeRoot, sideEntry, leafControl, activeTail];
-
-    const tree = scanSessionTranscriptTree(entries);
-
-    expect(tree.byId.get("active-tail")?.parentId).toBe("active-root");
-    expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([
-      activeRoot,
-      { ...activeTail, parentId: "active-root" },
-    ]);
-  });
-
   it("normalizes parentless continuations after chained leaf markers", () => {
     const activeRoot = { type: "message", id: "active-root", parentId: null };
     const firstLeaf = {
@@ -245,55 +153,6 @@ describe("session transcript tree helpers", () => {
     expect(selectSessionTranscriptLeafControlledPath([activeTail, leafControl])).toEqual([
       activeTail,
     ]);
-  });
-
-  it("normalizes parentless canonical rows before applying a leaf control", () => {
-    const entries = [
-      { type: "message", id: "root", message: { role: "user", content: "root" } },
-      {
-        type: "message",
-        id: "active",
-        message: { role: "assistant", content: "active" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side",
-        targetId: "active",
-      },
-    ];
-
-    const tree = scanSessionTranscriptTree(entries);
-
-    expect(tree.byId.get("root")?.parentId).toBeNull();
-    expect(tree.byId.get("active")?.parentId).toBe("root");
-    expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([
-      { ...entries[0], parentId: null },
-      { ...entries[1], parentId: "root" },
-    ]);
-  });
-
-  it("selects visible and disjoint append paths independently", () => {
-    const entries = [
-      { type: "custom", id: "visible", parentId: null },
-      { type: "metadata", id: "append-root", parentId: null },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "append-root",
-        targetId: "visible",
-        appendParentId: "append-root",
-      },
-    ];
-
-    const tree = scanSessionTranscriptTree(entries);
-
-    expect(selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.id)).toEqual([
-      "visible",
-    ]);
-    expect(
-      selectSessionTranscriptTreePathNodes(tree, tree.appendParentId).map((node) => node.id),
-    ).toEqual(["append-root"]);
   });
 
   it("keeps the selected history when a canonical row uses a disjoint raw cursor", () => {

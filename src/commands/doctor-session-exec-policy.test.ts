@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   listSessionEntriesCore,
   replaceSessionEntry,
@@ -48,7 +49,7 @@ describe("doctor legacy session exec policy", () => {
       name: "partial ask under agent deny overriding global full",
       cfg: {
         tools: { exec: { mode: "full" } },
-        agents: { list: [{ id: "worker", tools: { exec: { mode: "deny" } } }] },
+        agents: { entries: { worker: { tools: { exec: { mode: "deny" } } } } },
       },
       legacy: { execAsk: "off" },
       oldPolicy: { security: "deny", ask: "off" },
@@ -79,7 +80,7 @@ describe("doctor legacy session exec policy", () => {
       name: "partial security inherits agent ask always",
       cfg: {
         tools: { exec: { mode: "full" } },
-        agents: { list: [{ id: "worker", tools: { exec: { ask: "always" } } }] },
+        agents: { entries: { worker: { tools: { exec: { ask: "always" } } } } },
       },
       legacy: { execSecurity: "full" },
       oldPolicy: { security: "full", ask: "always" },
@@ -110,6 +111,8 @@ describe("doctor legacy session exec policy", () => {
     },
   ])("does not broaden $name", async ({ cfg, legacy, host, sandbox, oldPolicy, expected }) => {
     state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-base-" });
+    const config: OpenClawConfig = { ...cfg, plugins: { enabled: false } };
+    setRuntimeConfigSnapshot(config);
     const scope = { agentId: "worker", env: state.env, sessionKey: "agent:worker:exec-policy" };
     await replaceSessionEntry(scope, {
       sessionId: "legacy-policy",
@@ -119,7 +122,7 @@ describe("doctor legacy session exec policy", () => {
       ...legacy,
     });
     await noteSessionTranscriptHealth({
-      cfg: { ...cfg, plugins: { enabled: false } },
+      cfg: config,
       env: state.env,
       shouldRepair: true,
     });
@@ -144,6 +147,8 @@ describe("doctor legacy session exec policy", () => {
 
   it("migrates persisted restrictions without granting full access and reports each session once", async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-policy-" });
+    const config: OpenClawConfig = { plugins: { enabled: false } };
+    setRuntimeConfigSnapshot(config);
     const env = state.env;
     const cases: Array<{
       name: string;
@@ -210,7 +215,7 @@ describe("doctor legacy session exec policy", () => {
     }
     const run = (shouldRepair: boolean) =>
       noteSessionTranscriptHealth({
-        cfg: { plugins: { enabled: false } },
+        cfg: config,
         env,
         shouldRepair,
       });

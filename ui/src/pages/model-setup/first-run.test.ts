@@ -85,67 +85,24 @@ describe("model setup first-run redirect", () => {
   });
 
   it("recognizes default chat landings without accepting session deep links", () => {
-    expect(isDefaultChatLanding({ pathname: "/", search: "", hash: "" }, "", routeIdFromPath)).toBe(
-      true,
-    );
-    expect(
-      isDefaultChatLanding({ pathname: "/chat", search: "", hash: "" }, "", routeIdFromPath),
-    ).toBe(true);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/chat", search: "?session=agent%3Amain%3Amain", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/chat", search: "", hash: "#session=agent%3Amain%3Amain" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding({ pathname: "/chat/main", search: "", hash: "" }, "", routeIdFromPath),
-    ).toBe(true);
-    expect(
-      isDefaultChatLanding({ pathname: "/chat/main/", search: "", hash: "" }, "", routeIdFromPath),
-    ).toBe(true);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/openclaw/chat/main", search: "", hash: "" },
-        "/openclaw",
-        routeIdFromPath,
-      ),
-    ).toBe(true);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/chat/research", search: "", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/chat/main/existing-session", search: "", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/dashboard/main", search: "", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/settings/appearance", search: "", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
+    const cases = [
+      ["/", "", "", "", true],
+      ["/chat", "", "", "", true],
+      ["/chat", "?session=agent%3Amain%3Amain", "", "", false],
+      ["/chat", "", "#session=agent%3Amain%3Amain", "", false],
+      ["/chat/main", "", "", "", true],
+      ["/chat/main/", "", "", "", true],
+      ["/openclaw/chat/main", "", "", "/openclaw", true],
+      ["/chat/research", "", "", "", false],
+      ["/chat/main/existing-session", "", "", "", false],
+      ["/dashboard/main", "", "", "", false],
+      ["/settings/appearance", "", "", "", false],
+    ] as const;
+    for (const [pathname, search, hash, basePath, expected] of cases) {
+      expect(isDefaultChatLanding({ pathname, search, hash }, basePath, routeIdFromPath)).toBe(
+        expected,
+      );
+    }
   });
 
   it("installs a released session deep link without registering the first-run gate", async () => {
@@ -182,59 +139,15 @@ describe("model setup first-run redirect", () => {
     expect(replaceRoute).not.toHaveBeenCalled();
   });
 
-  it("redirects a restored default chat when no model has been configured", async () => {
-    const { context, replace } = createConnectedContext();
-
-    const dispose = await startModelSetupFirstRunRedirectAfterLocation({
-      context,
-      enabled: isDefaultChatLanding(defaultLanding, "", routeIdFromPath),
-      history: { location: () => defaultLanding, replace: () => undefined },
-      initialLocationReady: Promise.resolve(defaultLanding),
-    });
-
-    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    dispose();
-  });
-
   it.each([
-    {
-      name: "the default agent has no configured model",
-      options: {},
-      shouldRedirect: true,
-    },
     {
       name: "agent selection is unset",
       options: { selectedId: null },
       shouldRedirect: true,
     },
     {
-      name: "the selected agent is the custom default",
-      options: { selectedId: "research", defaultAgentId: "research" },
-      shouldRedirect: true,
-    },
-    {
-      name: "the default agent already has a configured model",
-      options: { modelConfigured: true },
-      shouldRedirect: false,
-    },
-    {
-      name: "a non-default agent is explicitly selected",
-      options: { selectedId: "research" },
-      shouldRedirect: false,
-    },
-    {
       name: "the operator lacks admin access",
       options: { admin: false },
-      shouldRedirect: false,
-    },
-    {
-      name: "the setup method is not advertised",
-      options: { advertised: false },
-      shouldRedirect: false,
-    },
-    {
-      name: "the handshake omits the model fact",
-      options: { includeModelConfigured: false },
       shouldRedirect: false,
     },
   ])("decides synchronously when $name", async ({ options, shouldRedirect }) => {
@@ -247,20 +160,6 @@ describe("model setup first-run redirect", () => {
     if (shouldRedirect) {
       expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
     }
-    dispose();
-  });
-
-  it("does not redirect after the operator leaves the default landing", async () => {
-    const { context, replace, request } = createConnectedContext();
-
-    const dispose = await startRedirect(context, {
-      pathname: "/settings/appearance",
-      search: "",
-      hash: "",
-    });
-
-    expect(request).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
     dispose();
   });
 
@@ -279,46 +178,27 @@ describe("model setup first-run redirect", () => {
     dispose();
   });
 
-  it("does not restore an activation owned by replaced Gateway credentials", async () => {
-    const { context, replace } = createConnectedContext({ modelConfigured: true });
-    persistFirstRunActivationReceipt(context, {
-      kind: "openai-api-key",
-      modelRef: "openai/expected",
+  it("settles the initial decision on a terminal stopped snapshot", async () => {
+    const phase = "stopped";
+    const onInitialDecision = vi.fn();
+    const context = {
+      gateway: {
+        snapshot: { phase, client: null, hello: null },
+        subscribe: () => () => undefined,
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      replace: vi.fn(),
+    } as unknown as ApplicationContext;
+
+    const dispose = await startModelSetupFirstRunRedirectAfterLocation({
+      context,
+      enabled: true,
+      history: { location: () => defaultLanding, replace: () => undefined },
+      initialLocationReady: Promise.resolve(defaultLanding),
+      onInitialDecision,
     });
-    context.gateway.connection.token = "different-owner-token";
 
-    const decision = createDeferred();
-    const dispose = await startRedirect(context, defaultLanding, decision.resolve);
-
-    await decision.promise;
-    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
-    expect(replace).not.toHaveBeenCalled();
+    expect(onInitialDecision).toHaveBeenCalledOnce();
     dispose();
   });
-
-  it.each(["reload-required", "stopped"] as const)(
-    "settles the initial decision on a terminal %s snapshot",
-    async (phase) => {
-      const onInitialDecision = vi.fn();
-      const context = {
-        gateway: {
-          snapshot: { phase, client: null, hello: null },
-          subscribe: () => () => undefined,
-        },
-        agentSelection: { state: { selectedId: "main" } },
-        replace: vi.fn(),
-      } as unknown as ApplicationContext;
-
-      const dispose = await startModelSetupFirstRunRedirectAfterLocation({
-        context,
-        enabled: true,
-        history: { location: () => defaultLanding, replace: () => undefined },
-        initialLocationReady: Promise.resolve(defaultLanding),
-        onInitialDecision,
-      });
-
-      expect(onInitialDecision).toHaveBeenCalledOnce();
-      dispose();
-    },
-  );
 });

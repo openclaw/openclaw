@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import {
   assertSingleWorkflowAttempt,
   loadBenchmarkManifest,
-  runVitestPairBenchmark,
   withTerminalManifest,
-} from "./lib/vitest-pair-benchmark.mts";
+} from "./lib/vitest-pair-benchmark-contract.mts";
+import { runVitestPairBenchmark } from "./lib/vitest-pair-benchmark.mts";
 
 function parseArgs(argv: string[]) {
   const values = new Map<string, string>();

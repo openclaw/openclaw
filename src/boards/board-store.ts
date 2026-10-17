@@ -8,6 +8,7 @@ import type {
   BoardWidgetGeneratedIdentity,
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
   BOARD_SIZE_PRESETS,
@@ -21,7 +22,7 @@ import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
-export type BoardWidgetHtmlDocument = {
+type BoardWidgetHtmlDocument = {
   html: string;
   revision: number;
   sha256: string;
@@ -31,15 +32,10 @@ export type BoardWidgetHtmlDocument = {
   resourceOrigins?: string[];
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
-export type BoardWidgetRegisteredDocument = {
+type BoardWidgetRegisteredDocument = Omit<BoardWidgetHtmlDocument, "html" | "resourceOrigins"> & {
   pluginKind: string;
   source: string;
   title?: string;
-  revision: number;
-  sha256: string;
-  viewGeneration: string;
-  grantState: "none" | "pending" | "granted" | "rejected";
-  declared?: BoardWidgetDeclared;
 };
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
@@ -61,7 +57,7 @@ export type BoardSnapshotWithHtmlViewMetadata = {
 export type BoardSessionTarget = { sessionKey: string; agentId?: string };
 
 export type BoardWriteOptions = {
-  /** Recheck the caller after write admission, inside the synchronous mutation. */
+  /** Check owner-held source authority at admission; admitted writes may finish after revocation. */
   assertCurrent?: () => void;
 };
 
@@ -110,7 +106,7 @@ export interface BoardStore {
 }
 
 const BOARD_MAX_WIDGETS = 48;
-const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
+const BOARD_MAX_REGISTERED_SOURCE_BYTES = 256 * 1024;
 type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
   kind: "generated";
 };
@@ -119,29 +115,8 @@ export type BoardWidgetNameIdentityMarker =
   | BoardWidgetGeneratedIdentityMarker
   | { kind: "invalid" };
 
-export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  return {
-    sessionKey: snapshot.sessionKey,
-    revision: snapshot.revision,
-    tabs: snapshot.tabs.map((tab) => ({ ...tab })),
-    widgets: snapshot.widgets.map((widget) => ({
-      ...widget,
-      ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
-      ...(widget.declaredSummary !== undefined
-        ? { declaredSummary: [...widget.declaredSummary] }
-        : {}),
-      ...(widget.declared !== undefined
-        ? {
-            declared: {
-              ...(widget.declared.netOrigins
-                ? { netOrigins: [...widget.declared.netOrigins] }
-                : {}),
-              ...(widget.declared.tools ? { tools: [...widget.declared.tools] } : {}),
-            },
-          }
-        : {}),
-    })),
-  };
+function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
+  return structuredClone(snapshot);
 }
 
 export function createBoardDeclaredSummary(
@@ -156,13 +131,6 @@ export function createBoardDeclaredSummary(
     ),
   ];
   return lines.length > 0 ? lines : undefined;
-}
-
-function generatedIdentityMatches(
-  left: BoardWidgetNameIdentityMarker | undefined,
-  right: BoardWidgetGeneratedIdentityMarker,
-): boolean {
-  return left?.kind === "generated" && left.source === right.source && left.key === right.key;
 }
 
 export function resolveBoardWidgetPutParams(
@@ -180,14 +148,14 @@ export function resolveBoardWidgetPutParams(
       "generated widget fallback name must differ from its preferred name",
     );
   }
-  const marker: BoardWidgetGeneratedIdentityMarker = {
-    kind: "generated",
-    source: generatedIdentity.source,
-    key: generatedIdentity.key,
-  };
-  const existingGenerated = prior.widgets.find((widget) =>
-    generatedIdentityMatches(nameIdentities.get(widget.name), marker),
-  );
+  const existingGenerated = prior.widgets.find((widget) => {
+    const identity = nameIdentities.get(widget.name);
+    return (
+      identity?.kind === "generated" &&
+      identity.source === generatedIdentity.source &&
+      identity.key === generatedIdentity.key
+    );
+  });
   if (existingGenerated) {
     return { ...params, name: existingGenerated.name };
   }
@@ -254,18 +222,6 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
   }
 }
 
-function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): void {
-  if (params.content.kind !== "registered") {
-    return;
-  }
-  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES) {
-    throw new BoardValidationError(
-      "invalid_operation",
-      `board registered widget source exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
-    );
-  }
-}
-
 export function createBoardWidgetPutSnapshot(
   prior: BoardSnapshot,
   params: BoardWidgetMaterializedPutParams,
@@ -276,14 +232,22 @@ export function createBoardWidgetPutSnapshot(
   },
 ): BoardSnapshot {
   validatePluginContent(params);
-  validateRegisteredContent(params);
   if (
-    params.content.kind === "html" &&
-    Buffer.byteLength(params.content.html, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES
+    params.content.kind === "registered" &&
+    Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_REGISTERED_SOURCE_BYTES
   ) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board widget HTML exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
+      `board registered widget source exceeds ${BOARD_MAX_REGISTERED_SOURCE_BYTES} UTF-8 bytes`,
+    );
+  }
+  if (
+    params.content.kind === "html" &&
+    Buffer.byteLength(params.content.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
+  ) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget HTML exceeds ${WIDGET_HTML_MAX_UTF8_BYTES} UTF-8 bytes`,
     );
   }
   let layout = normalizeBoardLayout(prior);
@@ -369,7 +333,7 @@ export function createBoardWidgetPutSnapshot(
         ? {
             pluginKind: params.content.pluginKind,
             ...(params.content.kind === "plugin" && params.content.props !== undefined
-              ? { props: structuredClone(params.content.props) }
+              ? { props: params.content.props }
               : {}),
           }
         : {}),

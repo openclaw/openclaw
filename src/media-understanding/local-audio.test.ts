@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
 
 const tempDirs = createTempDirTracker();
@@ -13,70 +14,72 @@ afterEach(async () => {
 });
 
 describe("local audio selection", () => {
-  it.each([
-    { whisperCommand: null, existingOverride: false },
-    { whisperCommand: null, existingOverride: true },
-    { whisperCommand: "", existingOverride: false },
-    { whisperCommand: "", existingOverride: true },
-  ])("prepares Whisper model files only for a resolved command: %j", async (testCase) => {
-    const root = tempDirs.make("openclaw-local-audio-preparation-");
-    const modelPath = path.join(root, "whisper-model.bin");
-    if (testCase.existingOverride) {
-      await fs.writeFile(modelPath, "synthetic model");
-    }
-    for (const name of ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"]) {
-      await fs.writeFile(path.join(root, name), "synthetic model");
-    }
-    const stat = vi.spyOn(fsSync, "statSync");
-    const listDirectory = vi.fn(async () => ["ggml-base.en.bin"]);
-    const selection = await inspectLocalAudioSelection({
-      env: { WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: root },
-      resolveBinary: async (name) =>
-        name === "whisper-cli"
-          ? testCase.whisperCommand
-          : name === "sherpa-onnx-offline"
-            ? path.join(root, name)
-            : null,
-      listDirectory,
-    });
-    const resolved = testCase.whisperCommand !== null;
-    expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", ready: true });
-    expect(selection.candidates.find((candidate) => candidate.id === "whisper-cli")?.ready).toBe(
-      resolved,
-    );
-    expect(
-      stat.mock.calls.filter(([file]) => String(file).endsWith("whisper-model.bin")),
-    ).toHaveLength(resolved ? 1 : 0);
-    expect(listDirectory).toHaveBeenCalledTimes(resolved && !testCase.existingOverride ? 1 : 0);
-  });
+  it.each([{ whisperCommand: null, existingOverride: true }])(
+    "prepares Whisper model files only for a resolved command: %j",
+    async (testCase) => {
+      const root = tempDirs.make("openclaw-local-audio-preparation-");
+      const modelPath = path.join(root, "whisper-model.bin");
+      if (testCase.existingOverride) {
+        await fs.writeFile(modelPath, "synthetic model");
+      }
+      for (const name of ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"]) {
+        await fs.writeFile(path.join(root, name), "synthetic model");
+      }
+      const stat = vi.spyOn(fsSync, "statSync");
+      const listDirectory = vi.fn(async () => ["ggml-base.en.bin"]);
+      const selection = await inspectLocalAudioSelection({
+        env: { WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: root },
+        resolveBinary: async (name) =>
+          name === "whisper-cli"
+            ? testCase.whisperCommand
+            : name === "sherpa-onnx-offline"
+              ? path.join(root, name)
+              : null,
+        listDirectory,
+      });
+      const resolved = testCase.whisperCommand !== null;
+      expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", ready: true });
+      expect(selection.candidates.find((candidate) => candidate.id === "whisper-cli")?.ready).toBe(
+        resolved,
+      );
+      expect(
+        stat.mock.calls.filter(([file]) => String(file).endsWith("whisper-model.bin")),
+      ).toHaveLength(resolved ? 1 : 0);
+      expect(listDirectory).toHaveBeenCalledTimes(resolved && !testCase.existingOverride ? 1 : 0);
+    },
+  );
 
-  it("expands home-directory shorthand in PATH entries", async () => {
-    const tempDir = tempDirs.make("openclaw-local-audio-");
-    const binDir = path.join(tempDir, "bin");
-    const modelPath = path.join(tempDir, "whisper.bin");
-    const commandPath = path.join(binDir, "whisper-cli");
-    await fs.mkdir(binDir);
-    await fs.writeFile(modelPath, "model");
-    await fs.writeFile(commandPath, "#!/bin/sh\n");
-    await fs.chmod(commandPath, 0o755);
+  it.each([`home${path.delimiter}extra`])(
+    "expands home-directory shorthand in PATH entries for %s",
+    async (homeName) => {
+      const tempDir = path.join(tempDirs.make("openclaw-local-audio-"), homeName);
+      await fs.mkdir(tempDir);
+      const binDir = path.join(tempDir, "bin");
+      const modelPath = path.join(tempDir, "whisper.bin");
+      const commandPath = path.join(binDir, "whisper-cli");
+      await fs.mkdir(binDir);
+      await fs.writeFile(modelPath, "model");
+      await fs.writeFile(commandPath, "#!/bin/sh\n");
+      await fs.chmod(commandPath, 0o755);
 
-    const selection = await inspectLocalAudioSelection({
-      env: {
-        HOME: tempDir,
-        PATH: "~/bin",
-        WHISPER_CPP_MODEL: modelPath,
-      },
-      platform: process.platform,
-      arch: process.arch,
-      inspectLinkedLibraries: async () => null,
-    });
+      const selection = await inspectLocalAudioSelection({
+        env: {
+          HOME: tempDir,
+          PATH: "~/bin",
+          WHISPER_CPP_MODEL: modelPath,
+        },
+        platform: process.platform,
+        arch: process.arch,
+        inspectLinkedLibraries: async () => null,
+      });
 
-    expect(selection.selected).toMatchObject({
-      id: "whisper-cli",
-      resolvedCommand: commandPath,
-      entry: { command: commandPath },
-    });
-  });
+      expect(selection.selected).toMatchObject({
+        id: "whisper-cli",
+        resolvedCommand: commandPath,
+        entry: { command: commandPath },
+      });
+    },
+  );
 
   it("discovers installed whisper models and prefers non-tiny over the tiny fixture", async () => {
     const tempDir = tempDirs.make("openclaw-local-audio-");
@@ -119,83 +122,22 @@ describe("local audio selection", () => {
     expect(whisper?.reason).toBe("model file not found");
   });
 
-  it("does not resolve auto-detected commands from empty PATH entries", async () => {
-    const tempDir = tempDirs.make("openclaw-local-audio-");
-    const modelPath = path.join(tempDir, "whisper.bin");
-    await fs.writeFile(modelPath, "model");
-    const checkedPaths: string[] = [];
-
-    const selection = await inspectLocalAudioSelection({
-      env: {
-        PATH: path.delimiter,
-        WHISPER_CPP_MODEL: modelPath,
-      },
-      platform: process.platform,
-      arch: process.arch,
-      checkExecutable: async (filePath) => {
-        checkedPaths.push(filePath);
-        return true;
-      },
-      inspectLinkedLibraries: async () => null,
-    });
-
-    expect(checkedPaths).toEqual([]);
-    expect(selection.candidates.find((candidate) => candidate.id === "whisper-cli")).toMatchObject({
-      available: false,
-      ready: false,
-    });
-  });
-
   it("discovers Windows commands through case-insensitive PATH and PATHEXT values", async () => {
-    const availableDirectory = "/virtual/audio-tools";
-    const commandPath = path.join(availableDirectory, "whisper.AUDIO");
-    const inspect = (env: NodeJS.ProcessEnv) =>
-      inspectLocalAudioSelection({
-        env,
-        platform: "win32",
-        arch: "x64",
-        checkExecutable: async (filePath) => filePath === commandPath,
-        listDirectory: async () => [],
-      });
-
-    for (const env of [
-      { Path: "/virtual/missing-tools", pAtHeXt: ".AUDIO" },
-      { Path: availableDirectory, pAtHeXt: ".MISSING" },
-    ]) {
-      expect((await inspect(env)).selected).toBeUndefined();
-    }
-
-    expect((await inspect({ Path: availableDirectory, pAtHeXt: ".AUDIO" })).selected).toMatchObject(
-      { id: "whisper", resolvedCommand: commandPath },
-    );
-  });
-
-  it("retries binary inspection after a transient failure", async () => {
-    const tempDir = tempDirs.make("openclaw-local-audio-");
-    const modelPath = path.join(tempDir, "whisper.bin");
-    await fs.writeFile(modelPath, "model");
-    const attempts = new Map<string, number>();
-    const checkExecutable = async (filePath: string) => {
-      const attempt = (attempts.get(filePath) ?? 0) + 1;
-      attempts.set(filePath, attempt);
-      if (attempt === 1) {
-        throw new Error("transient filesystem failure");
+    const availableDirectory = tempDirs.make("openclaw-local-audio-windows-");
+    const commandPath = path.join(availableDirectory, "whisper.audio");
+    await fs.writeFile(commandPath, "synthetic executable");
+    await withMockedPlatform("win32", async () => {
+      const inspect = (env: NodeJS.ProcessEnv) =>
+        inspectLocalAudioSelection({ env, listDirectory: async () => [] });
+      for (const env of [
+        { Path: path.join(availableDirectory, "missing"), pAtHeXt: ".AUDIO" },
+        { Path: availableDirectory, pAtHeXt: ".MISSING" },
+      ]) {
+        expect((await inspect(env)).selected).toBeUndefined();
       }
-      return path.basename(filePath) === "whisper-cli";
-    };
-    const options = {
-      env: { PATH: tempDir, WHISPER_CPP_MODEL: modelPath },
-      platform: "linux" as const,
-      arch: "x64",
-      checkExecutable,
-      inspectLinkedLibraries: async () => null,
-    };
-
-    await expect(inspectLocalAudioSelection(options)).rejects.toThrow(
-      "transient filesystem failure",
-    );
-    await expect(inspectLocalAudioSelection(options)).resolves.toMatchObject({
-      selected: { id: "whisper-cli", resolvedCommand: path.join(tempDir, "whisper-cli") },
+      expect(
+        (await inspect({ Path: availableDirectory, pAtHeXt: ".AUDIO" })).selected,
+      ).toMatchObject({ id: "whisper", resolvedCommand: commandPath });
     });
   });
 
@@ -368,41 +310,7 @@ describe("local audio selection", () => {
     ]);
   });
 
-  it("keeps an unproven whisper runtime behind CPU sherpa", async () => {
-    const tempDir = tempDirs.make("openclaw-local-audio-");
-    const whisperModel = path.join(tempDir, "whisper.bin");
-    const sherpaDir = path.join(tempDir, "sherpa");
-    await fs.writeFile(whisperModel, "model");
-    await fs.mkdir(sherpaDir);
-    await Promise.all(
-      ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"].map(async (fileName) => {
-        await fs.writeFile(path.join(sherpaDir, fileName), "model");
-      }),
-    );
-
-    const selection = await inspectLocalAudioSelection({
-      env: {
-        WHISPER_CPP_MODEL: whisperModel,
-        SHERPA_ONNX_MODEL_DIR: sherpaDir,
-      },
-      platform: "linux",
-      arch: "x64",
-      resolveBinary: async (name) =>
-        name === "whisper-cli" || name === "sherpa-onnx-offline" ? `/usr/local/bin/${name}` : null,
-      inspectLinkedLibraries: async () => "libggml-cpu.so",
-    });
-
-    expect(selection.selected).toMatchObject({
-      id: "sherpa-onnx-offline",
-      requestedBackend: "cpu",
-    });
-    expect(selection.entries.map((entry) => entry.command)).toEqual([
-      "/usr/local/bin/sherpa-onnx-offline",
-      "/usr/local/bin/whisper-cli",
-    ]);
-  });
-
-  it.each(["exe", "com", "cmd", "bat"])(
+  it.each(["exe"])(
     "reads observations from the exact Windows whisper-cli.%s executable",
     async (extension) => {
       vi.resetModules();

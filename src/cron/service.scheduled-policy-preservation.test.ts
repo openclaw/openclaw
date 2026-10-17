@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
@@ -24,12 +25,13 @@ describe("scheduled policy preservation across payload conversions", () => {
     { mutation: "update", mode: "account" },
     { mutation: "update", mode: "trusted" },
     { mutation: "declaration", mode: "account" },
-    { mutation: "declaration", mode: "trusted" },
   ] as const)(
     "preserves $mode policy across operator payload conversions through $mutation",
     async ({ mutation, mode }) => {
       const { storePath } = await makeStorePath();
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         log: logger,

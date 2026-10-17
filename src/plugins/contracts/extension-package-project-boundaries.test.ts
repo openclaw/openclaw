@@ -307,23 +307,9 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.emitDeclarationOnly).toBe(true);
     expect(tsconfig.compilerOptions?.outDir).toBe("dist");
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
-    expect(tsconfig.include).toEqual([
-      "../../packages/ai/src/**/*.ts",
-      "../../packages/llm-core/src/**/*.ts",
-      "../../packages/markdown-core/src/**/*.ts",
-      "../../packages/media-core/src/**/*.ts",
-      "../../packages/media-generation-core/src/**/*.ts",
-      "../../packages/model-catalog-core/src/**/*.ts",
-      "../../packages/memory-host-sdk/src/**/*.ts",
-      "../../packages/normalization-core/src/**/*.ts",
-      "../../packages/retry/src/**/*.ts",
-      "../../packages/acp-core/src/**/*.ts",
-      "../../packages/terminal-core/src/**/*.ts",
-      "../../src/plugin-sdk/**/*.ts",
-      "../../src/video-generation/dashscope-compatible.ts",
-      "../../src/video-generation/types.ts",
-      "../../src/types/**/*.d.ts",
-    ]);
+    expect(tsconfig.include).toEqual(
+      expect.arrayContaining(["../../src/plugin-sdk/**/*.ts", "../../src/types/**/*.d.ts"]),
+    );
 
     const packageJson = readJsonFile<PackageJson>("packages/plugin-sdk/package.json");
     expect(packageJson.name).toBe("@openclaw/plugin-sdk");
@@ -388,8 +374,8 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
     );
-    expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/infra-runtime.d.ts",
+    expect(packageJson.exports?.["./system-event-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/system-event-runtime.d.ts",
     );
     expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,

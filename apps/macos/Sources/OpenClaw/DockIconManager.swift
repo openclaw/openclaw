@@ -13,9 +13,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     override private init() {
         super.init()
         self.setupObservers()
-        Task { @MainActor in
-            self.updateDockVisibility()
-        }
+        self.updateDockVisibility()
     }
 
     deinit {
@@ -26,40 +24,34 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     func updateDockVisibility() {
         Task { @MainActor in
-            guard NSApp != nil else {
-                self.logger.warning("NSApp not ready, skipping Dock visibility update")
-                return
-            }
-
+            let app = NSApplication.shared
             let userWantsDockHidden = (AppDefaults.standard.object(forKey: showDockIconKey) as? Bool) == false
-            let visibleWindows = NSApp?.windows.filter { window in
+            let visibleWindows = app.windows.filter { window in
                 window.isVisible &&
                     window.frame.width > 1 &&
                     window.frame.height > 1 &&
                     !window.isKind(of: NSPanel.self) &&
                     "\(type(of: window))" != "NSPopupMenuWindow" &&
                     window.contentViewController != nil
-            } ?? []
+            }
 
             let hasVisibleWindows = !visibleWindows.isEmpty
             let policy = Self.activationPolicy(
                 launchPlan: .current,
                 userWantsDockHidden: userWantsDockHidden,
                 hasVisibleWindows: hasVisibleWindows)
-            guard NSApp.activationPolicy() != policy else { return }
-            NSApp.setActivationPolicy(policy)
+            guard app.activationPolicy() != policy else { return }
+            app.setActivationPolicy(policy)
         }
     }
 
     func temporarilyShowDock() {
         Task { @MainActor in
-            guard AppLaunchRuntimePlan.current.allowsDockIcon else { return }
-            guard NSApp != nil else {
-                self.logger.warning("NSApp not ready, cannot show Dock icon")
-                return
-            }
-            guard NSApp.activationPolicy() != .regular else { return }
-            NSApp.setActivationPolicy(.regular)
+            guard AppLaunchRuntimePlan.current.allowsDockIcon,
+                  AppLaunchRuntimePlan.current.allowsActivation else { return }
+            let app = NSApplication.shared
+            guard app.activationPolicy() != .regular else { return }
+            app.setActivationPolicy(.regular)
         }
     }
 
@@ -68,19 +60,13 @@ final class DockIconManager: NSObject, @unchecked Sendable {
         userWantsDockHidden: Bool,
         hasVisibleWindows: Bool) -> NSApplication.ActivationPolicy
     {
-        guard launchPlan.allowsDockIcon else { return .accessory }
+        guard launchPlan.allowsDockIcon, launchPlan.allowsActivation else { return .accessory }
         return !userWantsDockHidden || hasVisibleWindows ? .regular : .accessory
     }
 
     private func setupObservers() {
         Task { @MainActor [self] in
-            guard let app = NSApp else {
-                self.logger.warning("NSApp not ready, delaying Dock observers")
-                try? await Task.sleep(for: .milliseconds(200))
-                self.setupObservers()
-                return
-            }
-
+            let app = NSApplication.shared
             self.appearanceObservation = app.observe(\.effectiveAppearance, options: [
                 .initial,
                 .new,
@@ -97,21 +83,17 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 }
             }
 
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.didBecomeKeyNotification,
-                object: nil)
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.didResignKeyNotification,
-                object: nil)
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.windowVisibilityChanged),
-                name: NSWindow.willCloseNotification,
-                object: nil)
+            for name in [
+                NSWindow.didBecomeKeyNotification,
+                NSWindow.didResignKeyNotification,
+                NSWindow.willCloseNotification,
+            ] {
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(self.windowVisibilityChanged),
+                    name: name,
+                    object: nil)
+            }
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.dockPreferenceChanged),
@@ -122,9 +104,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     @objc
     private func windowVisibilityChanged(_: Notification) {
-        Task { @MainActor in
-            self.updateDockVisibility()
-        }
+        self.updateDockVisibility()
     }
 
     @objc

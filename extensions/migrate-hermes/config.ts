@@ -9,21 +9,22 @@ import {
   asNonArrayRecord,
   isRecord,
   normalizeOptionalString,
+  normalizeSingleOrTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
-import { importsMcpSensitiveValues, mapMcpServer, mcpManualItems } from "./config-mcp.js";
+import { planHermesMcpServer } from "./config-mcp.js";
 import { providerConfig } from "./config-provider-contract.js";
 import {
   addSelectedModelToProvider,
   collectHermesProviders,
   providerManualItems,
 } from "./config-providers.js";
-import { childRecord, readStringArray, sanitizeName } from "./helpers.js";
+import { sanitizeName } from "./helpers.js";
 
 function mapSkillEntries(config: Record<string, unknown>): Record<string, unknown> {
-  const skills = childRecord(config, "skills");
+  const skills = asNonArrayRecord(config.skills);
   const entries = new Map<string, { config?: Record<string, unknown>; enabled?: false }>();
-  for (const [skillKey, value] of Object.entries(childRecord(skills, "config"))) {
+  for (const [skillKey, value] of Object.entries(asNonArrayRecord(skills.config))) {
     if (isRecord(value)) {
       entries.set(skillKey, { config: value });
     }
@@ -38,8 +39,7 @@ function mapSkillEntries(config: Record<string, unknown>): Record<string, unknow
       // Hermes treats a malformed list string as a single skill name.
     }
   }
-  for (const value of readStringArray(Array.isArray(disabled) ? disabled : [disabled])) {
-    const skillKey = value.trim();
+  for (const skillKey of normalizeSingleOrTrimmedStringList(disabled)) {
     // Hermes always keeps its operating manual active, even in skills.disabled.
     if (skillKey !== "hermes-agent") {
       entries.set(skillKey, { ...entries.get(skillKey), enabled: false });
@@ -68,7 +68,7 @@ export function buildConfigItems(params: {
       }),
     );
   };
-  const memory = childRecord(params.config, "memory");
+  const memory = asNonArrayRecord(params.config.memory);
   const memoryProvider = normalizeOptionalString(memory.provider);
 
   if (params.hasMemoryFiles || memoryProvider) {
@@ -85,7 +85,7 @@ export function buildConfigItems(params: {
     const value = {
       honcho: {
         enabled: true,
-        config: childRecord(memory, "honcho"),
+        config: asNonArrayRecord(memory.honcho),
       },
     };
     addConfigPatch({
@@ -154,7 +154,17 @@ export function buildConfigItems(params: {
       if (!isRecord(rawServer)) {
         continue;
       }
-      const server = mapMcpServer(rawServer, Boolean(params.ctx.includeSecrets), mcpEnv);
+      const {
+        server,
+        sensitive,
+        items: manualItems,
+      } = planHermesMcpServer({
+        name,
+        raw: rawServer,
+        includeSecrets: Boolean(params.ctx.includeSecrets),
+        env: mcpEnv,
+        source: `${rawMcpSource}.${name}`,
+      });
       if (Object.keys(server).length > 0) {
         const value = { [name]: server };
         addConfigPatch({
@@ -163,18 +173,10 @@ export function buildConfigItems(params: {
           path: ["mcp", "servers"],
           value,
           message: `Import Hermes MCP server definition "${name}".`,
-          sensitive: importsMcpSensitiveValues(rawServer, Boolean(params.ctx.includeSecrets)),
+          sensitive,
         });
       }
-      items.push(
-        ...mcpManualItems({
-          name,
-          raw: rawServer,
-          includeSecrets: Boolean(params.ctx.includeSecrets),
-          env: mcpEnv,
-          source: `${rawMcpSource}.${name}`,
-        }),
-      );
+      items.push(...manualItems);
     }
   }
 

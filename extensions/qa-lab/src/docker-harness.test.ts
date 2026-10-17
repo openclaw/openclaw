@@ -2,7 +2,9 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 
@@ -20,6 +22,7 @@ function parseComposeServices(compose: string) {
       string,
       {
         build?: { context?: string };
+        healthcheck?: { test?: string[] };
         environment?: Record<string, string>;
         volumes?: string[];
       }
@@ -83,9 +86,43 @@ describe("qa docker harness", () => {
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
     expect(compose).toContain("      - sh");
     expect(compose).toContain("      - -lc");
-    expect(compose).toContain(
-      '        - fetch("http://127.0.0.1:18789/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
-    );
+    const healthcheck = services["openclaw-qa-gateway"]?.healthcheck?.test;
+    expect(healthcheck?.slice(0, 3)).toEqual(["CMD", "node", "-e"]);
+    const healthcheckScript = healthcheck?.[3];
+    if (!healthcheckScript) {
+      throw new Error("Gateway healthcheck script was not generated");
+    }
+    for (const outcome of ["ok", "http-error", "network-error"] as const) {
+      const events: string[] = [];
+      const fetch = vi.fn(async () => {
+        if (outcome === "network-error") {
+          throw new Error("connection refused");
+        }
+        return {
+          ok: outcome === "ok",
+          body: {
+            cancel: async () => {
+              await Promise.resolve();
+              events.push("body-cancelled");
+            },
+          },
+        };
+      });
+      await runInNewContext(healthcheckScript, {
+        fetch,
+        process: {
+          set exitCode(code: number) {
+            events.push("status:" + code);
+          },
+        },
+      });
+      expect(fetch).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:18789/healthz");
+      expect(events).toEqual(
+        outcome === "network-error"
+          ? ["status:1"]
+          : ["body-cancelled", outcome === "ok" ? "status:0" : "status:1"],
+      );
+    }
     expect(compose).toContain("--control-ui-proxy-target http://openclaw-qa-gateway:18789/");
     expect(compose).not.toContain("--control-ui-token");
     expect(compose).not.toContain("qa-token");
@@ -142,18 +179,22 @@ describe("qa docker harness", () => {
 
   it("builds the reusable QA image with bundled QA extensions", async () => {
     const calls: string[] = [];
-    const result = await buildQaDockerHarnessImage(
-      {
+    const runExec = vi
+      .spyOn(processRuntime, "runExec")
+      .mockImplementation(async (command, args, options) => {
+        const cwd = typeof options === "number" ? undefined : options?.cwd;
+        calls.push([command, ...args, `@${cwd}`].join(" "));
+        return { stdout: "", stderr: "" };
+      });
+    let result: Awaited<ReturnType<typeof buildQaDockerHarnessImage>>;
+    try {
+      result = await buildQaDockerHarnessImage({
         repoRoot: "/repo/openclaw",
         imageName: "openclaw:qa-local-prebaked",
-      },
-      {
-        async runCommand(command, args, cwd) {
-          calls.push([command, ...args, `@${cwd}`].join(" "));
-          return { stdout: "", stderr: "" };
-        },
-      },
-    );
+      });
+    } finally {
+      runExec.mockRestore();
+    }
 
     expect(result.imageName).toBe("openclaw:qa-local-prebaked");
     expect(calls).toEqual([

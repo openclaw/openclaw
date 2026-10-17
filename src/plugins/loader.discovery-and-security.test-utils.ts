@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
@@ -16,6 +16,7 @@ import {
   type PluginLoadConfig,
   type PluginRegistry,
   useNoBundledPlugins,
+  writeMultiEntryPluginPack,
   writePlugin,
 } from "./loader.test-fixtures.js";
 import {
@@ -53,32 +54,7 @@ describe("loadOpenClawPlugins", () => {
     useNoBundledPlugins();
     const stateDir = makePluginLoaderTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-      const packageDir = path.join(stateDir, "extensions", "pack");
-      mkdirSafe(packageDir);
-      fs.writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({
-          name: "pack",
-          version: "1.0.0",
-          openclaw: { extensions: ["./one.cjs", "./two.cjs"] },
-        }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({ id: "pack", configSchema: EMPTY_PLUGIN_SCHEMA }),
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "one.cjs"),
-        'module.exports = { id: "pack/one", register() {} };',
-        "utf8",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "two.cjs"),
-        'module.exports = { id: "pack/two", register() {} };',
-        "utf8",
-      );
+      writeMultiEntryPluginPack(path.join(stateDir, "extensions", "pack"));
 
       const registry = loadOpenClawPlugins({
         cache: false,
@@ -630,12 +606,12 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === selectedId)?.status).toBe("loaded");
   });
 
-  it("resolves duplicate plugin ids by source precedence", () => {
+  it("resolves duplicate plugin ids by source precedence", async () => {
     const scenarios = [
       {
         label: "config load overrides bundled",
         pluginId: "shadow",
-        bundledFilename: "shadow.cjs",
+        expectedDuplicateLevel: "info",
         loadRegistry: () => {
           const bundled = writeBundledPlugin({
             id: "shadow",
@@ -719,7 +695,8 @@ describe("loadOpenClawPlugins", () => {
             id: "demo-installed-duplicate",
             body: simplePluginBody("demo-installed-duplicate"),
           });
-          return withStateDir((stateDir) => {
+          const stateDir = makePluginLoaderTempDir();
+          return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
             const globalDir = path.join(stateDir, "extensions", "demo-installed-duplicate");
             mkdirSafe(globalDir);
             writePlugin({
@@ -728,7 +705,7 @@ describe("loadOpenClawPlugins", () => {
               dir: globalDir,
               filename: "index.cjs",
             });
-            refreshPersistedInstalledPluginIndex({
+            await refreshPersistedInstalledPluginIndex({
               stateDir,
               reason: "source-changed",
               installRecords: {
@@ -755,7 +732,7 @@ describe("loadOpenClawPlugins", () => {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
-        expectDuplicateWarning: false,
+        expectedDuplicateLevel: null,
         assert: expectPluginSourcePrecedence,
       },
       {
@@ -771,8 +748,10 @@ describe("loadOpenClawPlugins", () => {
             bundledDir: path.join(bundledPluginsDir, "demo-dev-source-duplicate"),
           });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-          return withEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }, () =>
-            withStateDir((stateDir) => {
+          const stateDir = makePluginLoaderTempDir();
+          return withEnvAsync(
+            { OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot, OPENCLAW_STATE_DIR: stateDir },
+            async () => {
               const globalDir = path.join(stateDir, "extensions", "demo-dev-source-duplicate");
               mkdirSafe(globalDir);
               writePlugin({
@@ -781,7 +760,7 @@ describe("loadOpenClawPlugins", () => {
                 dir: globalDir,
                 filename: "index.cjs",
               });
-              refreshPersistedInstalledPluginIndex({
+              await refreshPersistedInstalledPluginIndex({
                 stateDir,
                 reason: "source-changed",
                 installRecords: {
@@ -803,7 +782,7 @@ describe("loadOpenClawPlugins", () => {
                   },
                 },
               });
-            }),
+            },
           );
         },
         expectedLoadedOrigin: "bundled",
@@ -884,7 +863,7 @@ describe("loadOpenClawPlugins", () => {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
-        expectDuplicateWarning: false,
+        expectedDuplicateLevel: null,
         assert: (
           registry: PluginRegistry,
           scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
@@ -898,7 +877,9 @@ describe("loadOpenClawPlugins", () => {
       },
     ] as const;
 
-    runRegistryScenarios(scenarios, (scenario) => scenario.loadRegistry());
+    for (const scenario of scenarios) {
+      scenario.assert(await scenario.loadRegistry(), scenario);
+    }
   });
 
   it("warns about open allowlists only for auto-discovered plugins", () => {
@@ -1369,7 +1350,7 @@ describe("loadOpenClawPlugins", () => {
     useNoBundledPlugins();
     const scenarios = [
       {
-        label: "does not warn when loaded non-bundled plugin is in plugins.allow",
+        label: "warns about a missing global install record even when the plugin is allowed",
         loadRegistry: () => {
           return withStateDir((stateDir) => {
             const globalDir = path.join(stateDir, "extensions", "rogue");
@@ -1392,7 +1373,7 @@ describe("loadOpenClawPlugins", () => {
               },
             });
 
-            return { registry, warnings, pluginId: "rogue", expectWarning: false };
+            return { registry, warnings, pluginId: "rogue", expectWarning: true };
           });
         },
       },
@@ -1484,78 +1465,9 @@ describe("loadOpenClawPlugins", () => {
           };
         },
       },
-      {
-        label: "does not warn when install paths resolve through a symlinked state root",
-        loadRegistry: () => {
-          useNoBundledPlugins();
-          const stateDir = makePluginLoaderTempDir();
-          const realHome = path.join(stateDir, "real-home");
-          const linkedHome = path.join(stateDir, "linked-home");
-          mkdirSafe(realHome);
-          fs.symlinkSync(realHome, linkedHome, process.platform === "win32" ? "junction" : "dir");
-
-          const pluginDir = path.join(
-            realHome,
-            ".openclaw",
-            "npm",
-            "node_modules",
-            "@example",
-            "tracked-symlink-install",
-          );
-          mkdirSafe(pluginDir);
-          const plugin = writePlugin({
-            id: "tracked-symlink-install",
-            body: simplePluginBody("tracked-symlink-install"),
-            dir: pluginDir,
-            filename: "index.cjs",
-          });
-          refreshPersistedInstalledPluginIndex({
-            stateDir,
-            reason: "source-changed",
-            installRecords: {
-              [plugin.id]: {
-                source: "npm",
-                spec: "@example/tracked-symlink-install@1.0.0",
-                installPath: path.join(
-                  linkedHome,
-                  ".openclaw",
-                  "npm",
-                  "node_modules",
-                  "@example",
-                  "tracked-symlink-install",
-                ),
-                version: "1.0.0",
-              },
-            },
-          });
-
-          const warnings: string[] = [];
-          const registry = loadOpenClawPlugins({
-            cache: false,
-            logger: createWarningLogger(warnings),
-            env: {
-              ...process.env,
-              OPENCLAW_STATE_DIR: stateDir,
-              OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-            },
-            config: {
-              plugins: {
-                enabled: true,
-              },
-            },
-          });
-
-          return {
-            registry,
-            warnings,
-            pluginId: plugin.id,
-            expectWarning: false,
-          };
-        },
-      },
     ] as const;
 
-    runScenarioCases(scenarios, (scenario) => {
+    for (const scenario of scenarios) {
       const loadedScenario = scenario.loadRegistry();
       const expectedSource =
         "expectedSource" in loadedScenario && typeof loadedScenario.expectedSource === "string"
@@ -1566,7 +1478,7 @@ describe("loadOpenClawPlugins", () => {
         ...loadedScenario,
         expectedSource,
       });
-    });
+    }
   });
 
   it("uses the source runtime snapshot allowlist for plugin trust checks", () => {
@@ -1623,7 +1535,7 @@ describe("loadOpenClawPlugins", () => {
             message.includes("trusted-plugin") &&
             message.includes("OpenClaw can't verify where this plugin came from"),
         ),
-      ).toEqual([]);
+      ).toHaveLength(1);
     });
   });
 

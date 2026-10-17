@@ -1,4 +1,6 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_POLLING_LEASES_KEY = Symbol.for("openclaw.telegram.pollingLeases");
@@ -8,7 +10,6 @@ type TelegramPollingLeaseEntry = {
   accountId: string;
   abortSignal?: AbortSignal;
   done: Promise<void>;
-  owner: symbol;
   resolveDone: () => void;
   startedAt: number;
 };
@@ -45,18 +46,6 @@ function pollingLeaseRegistry(): TelegramPollingLeaseRegistry {
   return proc[TELEGRAM_POLLING_LEASES_KEY];
 }
 
-function createDuplicatePollingError(params: {
-  accountId: string;
-  existing: TelegramPollingLeaseEntry;
-  tokenFingerprint: string;
-}): Error {
-  const ageMs = Math.max(0, Date.now() - params.existing.startedAt);
-  const ageSeconds = Math.round(ageMs / 1000);
-  return new Error(
-    `Telegram polling already active for bot token ${params.tokenFingerprint} on account "${params.existing.accountId}" (${ageSeconds}s old); refusing duplicate poller for account "${params.accountId}". Stop the existing OpenClaw gateway/poller or use a different bot token.`,
-  );
-}
-
 async function waitForPreviousRelease(params: {
   done: Promise<void>;
   signal?: AbortSignal;
@@ -69,70 +58,12 @@ async function waitForPreviousRelease(params: {
     return "timeout";
   }
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-  try {
-    const waitMs = resolveTimerTimeoutMs(params.waitMs, DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS, 0);
-    const timeout = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), waitMs);
-      timer.unref?.();
-    });
-    const aborted = new Promise<"aborted">((resolve) => {
-      abortListener = () => resolve("aborted");
-      params.signal?.addEventListener("abort", abortListener, { once: true });
-    });
-    const released = params.done.then(() => "released" as const);
-    return await Promise.race([released, timeout, aborted]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (abortListener) {
-      params.signal?.removeEventListener("abort", abortListener);
-    }
-  }
-}
-
-function createLease(params: {
-  accountId: string;
-  abortSignal?: AbortSignal;
-  registry: TelegramPollingLeaseRegistry;
-  tokenFingerprint: string;
-  waitedForPrevious: boolean;
-  replacedStoppingPrevious: boolean;
-}): TelegramPollingLease {
-  let resolveDone!: () => void;
-  const done = new Promise<void>((resolve) => {
-    resolveDone = resolve;
-  });
-  const owner = Symbol(`telegram-polling:${params.accountId}`);
-  const entry: TelegramPollingLeaseEntry = {
-    accountId: params.accountId,
-    abortSignal: params.abortSignal,
-    done,
-    owner,
-    resolveDone,
-    startedAt: Date.now(),
-  };
-  params.registry.set(params.tokenFingerprint, entry);
-
-  let released = false;
-  return {
-    tokenFingerprint: params.tokenFingerprint,
-    waitedForPrevious: params.waitedForPrevious,
-    replacedStoppingPrevious: params.replacedStoppingPrevious,
-    release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      const current = params.registry.get(params.tokenFingerprint);
-      if (current?.owner === owner) {
-        params.registry.delete(params.tokenFingerprint);
-      }
-      resolveDone();
-    },
-  };
+  return await raceWithTimeout(
+    params.done.then(() => "released" as const),
+    resolveTimerTimeoutMs(params.waitMs, DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS, 0),
+    (): WaitForPreviousResult => "timeout",
+    { ref: false, signal: params.signal, onAbort: () => "aborted" },
+  );
 }
 
 export async function acquireTelegramPollingLease(
@@ -142,26 +73,20 @@ export async function acquireTelegramPollingLease(
   const fingerprint = fingerprintTelegramBotToken(opts.token);
   const waitMs = opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS;
   let waitedForPrevious = false;
+  let replacedStoppingPrevious = false;
 
   for (;;) {
     const existing = registry.get(fingerprint);
     if (!existing) {
-      return createLease({
-        accountId: opts.accountId,
-        abortSignal: opts.abortSignal,
-        registry,
-        tokenFingerprint: fingerprint,
-        waitedForPrevious,
-        replacedStoppingPrevious: false,
-      });
+      break;
     }
 
     if (!existing.abortSignal?.aborted) {
-      throw createDuplicatePollingError({
-        accountId: opts.accountId,
-        existing,
-        tokenFingerprint: fingerprint,
-      });
+      const ageMs = Math.max(0, Date.now() - existing.startedAt);
+      const ageSeconds = Math.round(ageMs / 1000);
+      throw new Error(
+        `Telegram polling already active for bot token ${fingerprint} on account "${existing.accountId}" (${ageSeconds}s old); refusing duplicate poller for account "${opts.accountId}". Stop the existing OpenClaw gateway/poller or use a different bot token.`,
+      );
     }
 
     waitedForPrevious = true;
@@ -176,23 +101,35 @@ export async function acquireTelegramPollingLease(
       );
     }
 
-    const current = registry.get(fingerprint);
-    if (current !== existing) {
-      continue;
-    }
-    if (waitResult === "released") {
+    if (registry.get(fingerprint) !== existing || waitResult === "released") {
       continue;
     }
 
-    return createLease({
-      accountId: opts.accountId,
-      abortSignal: opts.abortSignal,
-      registry,
-      tokenFingerprint: fingerprint,
-      waitedForPrevious,
-      replacedStoppingPrevious: true,
-    });
+    replacedStoppingPrevious = true;
+    break;
   }
+  const { promise: done, resolve: resolveDone } = createDeferred<void>();
+  const entry: TelegramPollingLeaseEntry = {
+    accountId: opts.accountId,
+    abortSignal: opts.abortSignal,
+    done,
+    resolveDone,
+    startedAt: Date.now(),
+  };
+  registry.set(fingerprint, entry);
+
+  return {
+    tokenFingerprint: fingerprint,
+    waitedForPrevious,
+    replacedStoppingPrevious,
+    release: () => {
+      const current = registry.get(fingerprint);
+      if (current === entry) {
+        registry.delete(fingerprint);
+      }
+      resolveDone();
+    },
+  };
 }
 
 export async function releaseStoppedTelegramPollingLease(

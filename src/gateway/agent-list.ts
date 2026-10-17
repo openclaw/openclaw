@@ -1,6 +1,6 @@
 // Gateway agent list projection.
 // Combines configured agents and existing on-disk agent state for lightweight UI use.
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -14,6 +14,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
+import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
 type GatewayAgentListRow = {
@@ -32,19 +33,12 @@ type GatewayAgentSelectionState = {
   selectionRequired: boolean;
 };
 
-const OWNER_ROSTER_ENTRIES = SYSTEM_AGENT_ROSTER_ENTRIES satisfies ReadonlyArray<{
-  id: string;
-  kind: GatewayAgentKind;
-}>;
-
-function listExistingAgentIdsFromDisk(): string[] {
+async function listExistingAgentIdsFromDisk(): Promise<string[]> {
   const agentsDir = path.join(resolveStateDir(), "agents");
   try {
-    return fs
-      .readdirSync(agentsDir, { withFileTypes: true })
+    return (await fs.readdir(agentsDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
-      .map((entry) => normalizeAgentId(entry.name))
-      .filter(Boolean);
+      .map((entry) => normalizeAgentId(entry.name));
   } catch {
     return [];
   }
@@ -74,13 +68,15 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
 }
 
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
-export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelectionState & {
-  mainKey: string;
-  scope: SessionScope;
-  agents: GatewayAgentListRow[];
-} {
+export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
+  GatewayAgentSelectionState & {
+    mainKey: string;
+    scope: SessionScope;
+    agents: GatewayAgentListRow[];
+  }
+> {
   const ownerEntries = new Map(
-    OWNER_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
+    SYSTEM_AGENT_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
   );
   const selection = resolveGatewayAgentSelectionState(cfg);
   const defaultId = selection.defaultId;
@@ -102,7 +98,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
     agentIds.add(id);
   }
 
-  for (const id of listExistingAgentIdsFromDisk()) {
+  for (const id of await listExistingAgentIdsFromDisk()) {
     diskIds.add(id);
     agentIds.add(id);
   }
@@ -124,21 +120,34 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
     orderedIds.push(mainKey);
   }
 
-  const agents: GatewayAgentListRow[] = orderedIds.map((id) => {
-    const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
-    const agent: GatewayAgentListRow = {
-      id,
-      kind:
-        !configuredById.has(id) && diskIds.has(id)
-          ? (ownerEntries.get(id)?.kind ?? "agent")
-          : "agent",
-      name: configuredById.get(id),
-    };
-    if (admissionRefusal) {
-      agent.status = "degraded";
-      agent.admissionRefusal = admissionRefusal;
-    }
-    return agent;
-  });
+  const { snapshot } = await prepareAgentDatabaseDeletionSnapshotRead(
+    {},
+    "runtime-discovery",
+  ).read();
+  const disposition = snapshot?.retainedDeletions;
+  const deletions =
+    disposition?.status === "present"
+      ? disposition.entries
+      : disposition?.status === "unavailable"
+        ? disposition.known?.entries
+        : undefined;
+  const agents: GatewayAgentListRow[] = orderedIds
+    .filter((id) => !deletions?.some((entry) => entry.agentId === id))
+    .map((id) => {
+      const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
+      const agent: GatewayAgentListRow = {
+        id,
+        kind:
+          !configuredById.has(id) && diskIds.has(id)
+            ? (ownerEntries.get(id)?.kind ?? "agent")
+            : "agent",
+        name: configuredById.get(id),
+      };
+      if (admissionRefusal) {
+        agent.status = "degraded";
+        agent.admissionRefusal = admissionRefusal;
+      }
+      return agent;
+    });
   return { ...selection, mainKey, scope, agents };
 }

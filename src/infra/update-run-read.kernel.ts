@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB, UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import {
@@ -6,6 +5,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import type {
+  UpdateRunReconciliationCandidate,
+  UpdateRunReconciliationInput,
+} from "./update-run-reconciliation.types.js";
 import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
@@ -22,7 +27,7 @@ export function decodeRun(row: UpdateRuns) {
   const metadata = Object.fromEntries(
     JSON_FIELDS.map((field) => [field, JSON.parse(row[`${field}_json`])]),
   );
-  return UpdateRunRecordSchema.parse({
+  const record = UpdateRunRecordSchema.parse({
     ...metadata,
     runId: row.run_id,
     createdAtMs: row.created_at_ms,
@@ -35,9 +40,20 @@ export function decodeRun(row: UpdateRuns) {
     finishedAtMs: row.finished_at_ms,
     downtimeMs: row.downtime_ms,
   });
+  if (record.origin.admission) {
+    record.admission = record.origin.admission;
+  }
+  if (record.verification.recovery?.serviceRestartSafe === false) {
+    const dataAtRisk = record.steps.find((step) => step.step === "finalize:data-at-risk")
+      ?.failureFacts?.[0]?.code;
+    if (dataAtRisk) {
+      record.verification.recovery.dataAtRisk = dataAtRisk;
+    }
+  }
+  return record;
 }
 
-export function readUpdateRunRecord(db: DatabaseSync, runId: string) {
+export function readUpdateRunRecord(db: EngineConnection, runId: string) {
   const query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
     .selectFrom("update_runs")
     .selectAll()
@@ -47,17 +63,17 @@ export function readUpdateRunRecord(db: DatabaseSync, runId: string) {
 }
 
 /** Read activity on the caller's connection so maintenance can fence its mutation. */
-export function readActiveUpdateRun(db: DatabaseSync) {
+export function readActiveUpdateRun(db: EngineConnection) {
   return readUpdateRuns(db, { limit: 1, active: true })[0];
 }
 
-export function readLatestUpdateRun(db: DatabaseSync) {
+export function readLatestUpdateRun(db: EngineConnection) {
   return readUpdateRuns(db, { limit: 1 })[0];
 }
 
 /** A descriptor reserves its history for fenced recovery, even when its driver died.
  * Presence is exclusion only: corrupt or older evidence never grants cleanup authority. */
-export function hasStoredUpdateRecovery(db: DatabaseSync, runId: string): boolean {
+export function hasStoredUpdateRecovery(db: EngineConnection, runId: string): boolean {
   return (
     tableExists(db, "config_machine_state") &&
     Boolean(
@@ -72,7 +88,7 @@ export function hasStoredUpdateRecovery(db: DatabaseSync, runId: string): boolea
   );
 }
 
-export function readInterruptedUpdateCandidate(db: DatabaseSync) {
+export function readInterruptedUpdateCandidate(db: EngineConnection) {
   const run = readLatestUpdateRun(db);
   return run && !hasStoredUpdateRecovery(db, run.runId) ? run : undefined;
 }
@@ -80,12 +96,13 @@ export function readInterruptedUpdateCandidate(db: DatabaseSync) {
 export type UpdateRunListInput = {
   limit?: number;
   active?: boolean;
+  succeeded?: boolean;
   reason?: string;
   excludeReason?: string;
   includeRunId?: string;
 };
 
-export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
+export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) {
   if (!tableExists(db, "update_runs")) {
     return [];
   }
@@ -94,6 +111,9 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
     .selectAll();
   if (input.active) {
     query = query.where("status", "=", "running");
+  }
+  if (input.succeeded) {
+    query = query.where("status", "=", "succeeded");
   }
   if (input.reason) {
     query = query.where("reason", "=", input.reason);
@@ -119,4 +139,28 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
     }
   }
   return runs;
+}
+
+export function canReconcileUpdateRunCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+): boolean {
+  return (
+    candidates.some(
+      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
+    ) &&
+    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
+  );
+}
+
+export function readUpdateRunStatusInDatabase(db: EngineConnection) {
+  return { activeRun: readActiveUpdateRun(db), lastRun: readLatestUpdateRun(db) };
+}
+
+export function readUpdateRunHistoryStatusInDatabase(db: EngineConnection) {
+  return {
+    activeRun: readActiveUpdateRun(db),
+    lastRun: readUpdateRuns(db, { limit: 1, excludeReason: "dry-run" })[0],
+    expiredRun: readUpdateRuns(db, { limit: 1, reason: LEGACY_UPDATE_RUN_EXPIRED_REASON })[0],
+  };
 }

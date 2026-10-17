@@ -55,7 +55,7 @@ class SidebarAttentionDisclosureTest {
       withTimeout(15000) { runtime.execApprovalInbox.first { it.approvals.size == 2 } }
       assertEquals(
         3,
-        runtime.chatQuestions.value
+        runtime.chat.questions.value
           .filter { it.status() == ChatQuestionStatus.Pending }
           .sumOf { it.record.questions.size },
       )
@@ -63,13 +63,13 @@ class SidebarAttentionDisclosureTest {
       assertTrue("An approval expiry must not close the tapped question disclosure", device.hasObject(By.text(preview)))
       device.takeScreenshot(File(proofDirectory, "attention-disclosure-background-expired.png"))
 
-      withTimeout(10000) { runtime.chatQuestions.first { prompts -> prompts.count { it.status() == ChatQuestionStatus.Pending } == 1 } }
+      withTimeout(10000) { runtime.chat.questions.first { prompts -> prompts.count { it.status() == ChatQuestionStatus.Pending } == 1 } }
       assertTrue("The same disclosure updates its count while remaining open", device.wait(Until.hasObject(By.text("2 questions need answers")), 5000))
       assertTrue(device.hasObject(By.text(preview)))
       assertTrue(device.hasObject(By.text("+1 more")))
       device.takeScreenshot(File(proofDirectory, "attention-disclosure-count-updated.png"))
 
-      withTimeout(10000) { runtime.chatQuestions.first { prompts -> prompts.none { it.status() == ChatQuestionStatus.Pending } } }
+      withTimeout(10000) { runtime.chat.questions.first { prompts -> prompts.none { it.status() == ChatQuestionStatus.Pending } } }
       assertTrue("Retiring the displayed request removes its disclosure", device.wait(Until.gone(By.text(preview)), 5000))
       device.takeScreenshot(File(proofDirectory, "attention-disclosure-retired.png"))
     }

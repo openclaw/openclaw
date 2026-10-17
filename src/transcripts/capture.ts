@@ -9,15 +9,20 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import {
+  activeSessions,
+  startingSessions,
   assertTranscriptCaptureEnabled,
   createStartupAbortScope,
+  revokeTranscriptStartRetries,
   TranscriptStartError,
+  type TranscriptStartRetry,
 } from "./capture-startup.js";
 import {
   createTranscriptSummaryUpdates,
   persistTranscriptSummary,
   readSummaryCaptureLiveness,
 } from "./capture-summary.js";
+import type { ActiveTranscriptsSession } from "./capture-types.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
 import { getTranscriptSourceProvider } from "./provider-registry.js";
@@ -49,47 +54,12 @@ export type TranscriptsLogger = {
 
 export type TranscriptsRuntimeContext = {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
 };
-
-type ActiveTranscriptsSession = {
-  appends: ReturnType<typeof createTranscriptCaptureAppends>;
-  directCapture?: { stateDir: string; drain: () => Promise<void> };
-  abortStartup?: () => void;
-  providerStopping?: Promise<string | undefined>;
-  session: TranscriptSessionDescriptor;
-  providerId: string;
-  // Cleanup belongs to the admitted provider, even after registry replacement.
-  stopProvider: NonNullable<TranscriptSourceProvider["stop"]>;
-  releaseProvider: () => Promise<void>;
-  // Diagnostic request identity, never authority. URLs retain presence only, not invitations.
-  configuredSource?: Readonly<
-    Pick<TranscriptSourceLocator, "providerId" | "accountId" | "guildId" | "channelId"> & {
-      meetingUrl: boolean;
-    }
-  >;
-  // Durable timestamps can collide; lifecycle cleanup must match this exact process-owned capture.
-  lifecycleToken?: symbol;
-  // Keep the capture reserved until provider and durable stop work both finish.
-  stopping?: true;
-  // Failed cleanup stays owned and cannot append until a later stop succeeds.
-  cleanupPending?: true;
-  phase: "starting" | "active" | "terminal" | "failed";
-  summaryUpdates?: Awaited<ReturnType<typeof createTranscriptSummaryUpdates>>;
-  finalization?: {
-    persisted: Promise<Awaited<ReturnType<typeof persistTranscriptSummary>>>;
-    released: Promise<Awaited<ReturnType<typeof persistTranscriptSummary>>>;
-  };
-};
-
-// Process-local ownership shared by tool-driven and configured transcript captures.
-export const activeSessions = new Map<string, ActiveTranscriptsSession>();
 
 export type TranscriptCaptureSelection = {
   session: TranscriptSessionDescriptor;
@@ -158,10 +128,6 @@ export function isTranscriptSessionActive(
           capture.sessionId === session.sessionId && capture.startedAt === session.startedAt,
       );
 }
-// Reserve ids across async provider startup so overlapping starts cannot
-// replace the only cleanup owner for an existing or still-starting capture.
-export const startingSessions = new Map<string, ActiveTranscriptsSession>();
-
 export function isTranscriptSessionStarting(sessionId: string): boolean {
   return startingSessions.has(sessionId);
 }
@@ -206,6 +172,7 @@ export function finalizeTranscriptCapture(params: {
       return await persistTranscriptSummary({
         config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
         cfg: params.ctx.config,
+        stateDir: params.ctx.stateDir,
         store: params.store,
         session: entry.session,
         assertCurrent,
@@ -325,7 +292,7 @@ export function resolveTranscriptSourceOwnership(params: {
   const providerSource = ownership
     ? { ...sourceForResolution, accountId: resolvedAccountId }
     : sourceForResolution;
-  if (params.configuredLifecycle && ownership && !providerSource.accountId?.trim()) {
+  if (params.configuredLifecycle && ownership && !resolvedAccountId) {
     throw new Error(
       `transcripts provider ${params.provider.id} could not resolve an account for configured auto-start`,
     );
@@ -397,12 +364,17 @@ export async function startTranscripts(params: {
   startupWaitMs?: number;
   configuredLifecycle?: true;
   lifecycleToken?: symbol;
+  retry?: TranscriptStartRetry;
   existingSession?: TranscriptSessionDescriptor;
   existingSessionCondition?: Parameters<TranscriptsStore["writeSession"]>[1];
   /** Configured capture retains the original choice before supplying its selected ID. */
   sessionIdOrigin?: "generated" | "supplied";
   onCaptureEnded?: () => void;
 }) {
+  const existingSession = params.retry?.session ?? params.existingSession;
+  const existingSessionCondition = params.retry
+    ? { expectedInputRevision: params.retry.revision, assertCurrent: params.retry.assertCurrent }
+    : params.existingSessionCondition;
   const getConfig = createRuntimeConfigReader(params.ctx.config ?? {});
   const assertEnabled = () =>
     assertTranscriptCaptureEnabled({ ...params.ctx, config: getConfig() });
@@ -445,9 +417,9 @@ export async function startTranscripts(params: {
   });
   const agentId = params.ctx.agentId ?? providerSource.agentId;
   if (
-    params.existingSession &&
+    existingSession &&
     agentId !== undefined &&
-    (params.existingSession.metadata?.agentId ?? "main") !== agentId
+    (existingSession.metadata?.agentId ?? "main") !== agentId
   ) {
     throw new TranscriptStartError(
       "id-conflict",
@@ -465,15 +437,14 @@ export async function startTranscripts(params: {
   assertEnabled();
   const requestedSessionId = readTranscriptStringParam(params.rawParams, "sessionId");
   const session: TranscriptSessionDescriptor = {
-    sessionId:
-      params.existingSession?.sessionId ?? requestedSessionId ?? createTranscriptSessionId(),
-    title: params.existingSession
-      ? params.existingSession.title
+    sessionId: existingSession?.sessionId ?? requestedSessionId ?? createTranscriptSessionId(),
+    title: existingSession
+      ? existingSession.title
       : readTranscriptStringParam(params.rawParams, "title"),
-    source: params.existingSession?.source ?? sanitizeTranscriptSourceLocator(providerSource),
-    startedAt: params.existingSession?.startedAt ?? new Date().toISOString(),
-    metadata: params.existingSession
-      ? params.existingSession.metadata
+    source: existingSession?.source ?? sanitizeTranscriptSourceLocator(providerSource),
+    startedAt: existingSession?.startedAt ?? new Date().toISOString(),
+    metadata: existingSession
+      ? existingSession.metadata
       : {
           ...(agentId ? { agentId } : {}),
           sessionIdOrigin:
@@ -537,24 +508,30 @@ export async function startTranscripts(params: {
     };
   }
   startingSessions.set(session.sessionId, entry);
-  let admitted = false;
+  let admission: Awaited<ReturnType<TranscriptsStore["writeSession"]>> | undefined;
   let retry: TranscriptStartError["retry"];
   try {
     try {
-      await params.store.writeSession(session, params.existingSessionCondition);
+      admission = await params.store.writeSession(session, existingSessionCondition);
     } catch (error) {
       if (error instanceof TranscriptsSummaryChangedError) {
         throw new TranscriptStartError("id-conflict", error);
       }
       throw error;
     }
-    admitted = true;
+    // A new capture admission adopts this row even if startup later restores the
+    // exact stopped tuple. Only continuation of its own live retry keeps custody.
+    if (!params.retry) {
+      revokeTranscriptStartRetries(params.ctx.stateDir, session);
+    }
+    let result: TranscriptsStartResult;
     try {
       assertEnabled();
       startupAbort.signal.throwIfAborted();
       entry.summaryUpdates = await createTranscriptSummaryUpdates({
         config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
         cfg: params.ctx.config,
+        stateDir: params.ctx.stateDir,
         store: params.store,
         session,
         logger: params.ctx.logger,
@@ -569,12 +546,6 @@ export async function startTranscripts(params: {
           }
         },
       });
-    } catch (error) {
-      entry.phase = "failed";
-      throw error;
-    }
-    let result: TranscriptsStartResult;
-    try {
       assertEnabled();
       acquired.assertOpen();
       startupAbort.signal.throwIfAborted();
@@ -637,7 +608,7 @@ export async function startTranscripts(params: {
     providerScope.move();
     activeSessions.set(session.sessionId, entry);
     // Retries and reopens retain the admitted title, including its absence.
-    if (!params.existingSession && !session.title) {
+    if (!existingSession && !session.title) {
       const title = truncateUtf16Safe(result.session.title?.trim() ?? "", 120);
       if (title) {
         session.title = title;
@@ -701,18 +672,21 @@ export async function startTranscripts(params: {
       }
       // Failed reopening must not erase the durable stop time: the next bounded
       // attempt still needs to find this same meeting, not create an empty sibling.
-      if (entry.phase === "failed") {
-        const restored = params.existingSession ?? {
+      if (entry.phase === "failed" && admission) {
+        const restored = existingSession ?? {
           ...session,
           stoppedAt: new Date().toISOString(),
         };
-        await params.store.writeSession(restored);
-        // Authority describes the durable tuple after restoration, including its
-        // original stop time. A failed restoration or revision read grants none.
-        const revision = await params.store.readSummaryInputRevision(restored);
-        if (revision !== undefined) {
-          retry = { session: restored, revision };
-        }
+        const { inputRevision } = await params.store.writeSession(restored, {
+          // Accepted speech may advance the summary revision; metadata custody must not change.
+          expectedSessionRevision: admission.sessionRevision,
+        });
+        // The write receipt binds authority before another writer can change the row.
+        retry = {
+          session: restored,
+          revision: inputRevision,
+          discardOnAbandon: admission.inserted,
+        };
       }
     } catch (cleanupError) {
       failure = settlementFailed
@@ -722,10 +696,10 @@ export async function startTranscripts(params: {
     }
     // Cleanup and restoration failures remain terminal admissions, never authority
     // to start another provider behind retained cleanup or an unrestored tuple.
-    if (!admitted && failure instanceof TranscriptSessionConflictError) {
+    if (!admission && failure instanceof TranscriptSessionConflictError) {
       throw new TranscriptStartError("id-conflict", failure);
     }
-    throw admitted ? new TranscriptStartError("admitted-start-failed", failure, retry) : failure;
+    throw admission ? new TranscriptStartError("admitted-start-failed", failure, retry) : failure;
   } finally {
     startupAbort.detach();
     try {

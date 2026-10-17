@@ -14,7 +14,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("admits a Doctor-renamed legacy key into an already resident store without reloading it", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const oldKey = "agent:main:dashboard:incognito-legacy";
     const newKey = "agent:main:dashboard:legacy-incognito-legacy";
     const existingKey = "agent:main:existing";

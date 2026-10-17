@@ -1,14 +1,12 @@
-// Renders `openclaw status --all` report data into terminal lines.
-// Styling is applied here so data builders remain color/theme agnostic.
-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { getTerminalTableWidth } from "../../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import type { BestEffortConfigSnapshot } from "../../config/io.js";
 import { formatStatusConfigDiagnosticEntries } from "../status.format.js";
 import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
+import type { buildStatusOverviewSurfaceRows } from "./format.js";
 import {
   buildStatusAgentTableRows,
   buildStatusChannelDetailSections,
@@ -17,13 +15,10 @@ import {
 } from "./report-tables.js";
 import { appendStatusReportHeading, appendStatusReportTable } from "./text-report.js";
 
-type OverviewRow = { Item: string; Value: string };
-
-/** Builds the complete status-all text report, including overview tables and diagnosis lines. */
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
   configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
-  overviewRows: OverviewRow[];
+  overviewRows: ReturnType<typeof buildStatusOverviewSurfaceRows>;
   channels: {
     rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
     details: Parameters<typeof buildStatusChannelDetailSections>[0]["details"];
@@ -54,7 +49,7 @@ export async function buildStatusAllReportLines(params: {
     );
   }
   lines.push(heading("OpenClaw status --all"));
-  const report = { lines, heading, width: tableWidth, renderTable };
+  const report = { lines, heading, width: tableWidth };
   const overviewColumns = [...statusOverviewTableColumns];
   const overviewRows = params.overviewRows;
   // Prepare every styled row before table rendering so callbacks retain their existing order.

@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentsListCommand } from "./agents.commands.list.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -28,58 +30,32 @@ vi.mock("./agents.providers.js", () => ({
 }));
 
 function instrumentParentSql() {
-  const native = requireNodeSqlite();
-  const counters = [
-    ...(["prepare", "exec", "close"] as const).map((method) =>
-      vi.spyOn(native.DatabaseSync.prototype, method),
-    ),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(native.StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const sql = observeMainThreadSql({ includeClose: true });
   try {
-    const calibration = new native.DatabaseSync(":memory:");
-    try {
-      calibration.exec("CREATE TABLE counter (value INTEGER)");
-      calibration.prepare("INSERT INTO counter VALUES (1)").run();
-      const statement = calibration.prepare("SELECT value FROM counter");
-      statement.get();
-      statement.all();
-      expect([...statement.iterate()]).toHaveLength(1);
-    } finally {
-      calibration.close();
-    }
-    for (const counter of counters) {
-      expect(counter.mock.calls.length).toBeGreaterThan(0);
-      counter.mockClear();
-    }
-    return counters;
+    sql.calibrate();
+    return sql;
   } catch (error) {
-    counters.forEach((counter) => counter.mockRestore());
+    sql.restore();
     throw error;
   }
 }
 
 function instrumentProvenanceWorkerRequests() {
   const commands: string[] = [];
-  // oxlint-disable-next-line typescript/unbound-method -- Every intercepted call supplies the original Worker receiver.
-  const originalPostMessage = Worker.prototype.postMessage;
-  const spy = vi
-    .spyOn(Worker.prototype, "postMessage")
-    .mockImplementation(function (this: Worker, message, transferList) {
-      if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
-        const command: unknown = deserialize(message.input);
-        if (
-          isRecord(command) &&
-          typeof command.type === "string" &&
-          command.type.startsWith("agentProvenance.")
-        ) {
-          commands.push(command.type);
-        }
+  const restore = onInternalDiagnosticEvent(
+    (event) => {
+      if (
+        event.type === "worker.request" &&
+        event.phase === "queued" &&
+        event.requestClass === "agentProvenance"
+      ) {
+        commands.push(event.kind);
       }
-      originalPostMessage.call(this, message, transferList);
-    });
-  return { commands, restore: () => spy.mockRestore() };
+    },
+    { include: ["worker.request"] },
+  );
+  return { commands, restore };
 }
 
 it("does not create provenance storage for an empty JSON roster", async () => {
@@ -104,11 +80,11 @@ it("does not create provenance storage for an empty JSON roster", async () => {
   );
 });
 
-it("creates an empty provenance database on the worker and closes without parent SQL", async () => {
+it("reads an absent provenance database without creating state or executing parent SQL", async () => {
   await withOpenClawTestState({ layout: "state-only", label: "provenance-cold" }, async (state) => {
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     expect(existsSync(databasePath)).toBe(false);
-    const counters = instrumentParentSql();
+    const sql = instrumentParentSql();
     try {
       const options = { env: { ...state.env }, path: databasePath };
       const ids = ["main"];
@@ -118,12 +94,12 @@ it("creates an empty provenance database on the worker and closes without parent
       options.path = laterPath;
       options.env.OPENCLAW_STATE_DIR = path.join(state.stateDir, "later");
       expect(await reading).toEqual([]);
-      expect(existsSync(databasePath)).toBe(true);
+      expect(existsSync(databasePath)).toBe(false);
       expect(existsSync(laterPath)).toBe(false);
       await closeOpenClawStateDatabaseAsync();
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
-      counters.forEach((counter) => counter.mockRestore());
+      sql.restore();
       await closeOpenClawStateDatabaseAsync();
     }
   });
@@ -143,20 +119,20 @@ it("serves actual JSON and tree command output from worker provenance through re
       },
     };
     recordAgentDatabaseAdmissions([], { env: state.env });
-    recordAgentProvenance("Main", { createdVia: "operator" }, { env: state.env, nowMs: 10 });
-    recordAgentProvenance(
+    await recordAgentProvenance("Main", { createdVia: "operator" }, { env: state.env, nowMs: 10 });
+    await recordAgentProvenance(
       "Child",
       { createdVia: "agent", creatorAgentId: "Main" },
       { env: state.env, nowMs: 20 },
     );
-    recordAgentProvenance("retired", { createdVia: "claw" }, { env: state.env, nowMs: 30 });
+    await recordAgentProvenance("retired", { createdVia: "claw" }, { env: state.env, nowMs: 30 });
     await closeOpenClawStateDatabaseAsync();
     const runtime = {
       ...createTestRuntime(),
       writeStdout: vi.fn<(value: string) => void>(),
       writeJson: vi.fn<(value: unknown) => void>(),
     };
-    const counters = instrumentParentSql();
+    const sql = instrumentParentSql();
     const requests = instrumentProvenanceWorkerRequests();
     try {
       await agentsListCommand({ json: true }, runtime);
@@ -174,7 +150,8 @@ it("serves actual JSON and tree command output from worker provenance through re
       if (Array.isArray(output)) {
         expect(output[2]).not.toHaveProperty("createdVia");
       }
-      expect(requests.commands).toHaveLength(1);
+      await waitForDiagnosticEventsDrained();
+      expect(requests.commands).toEqual(["stateRead"]);
       await agentsListCommand({ tree: true }, runtime);
       expect(runtime.log).toHaveBeenCalledWith("Agents:\n- main\n  - child\n- legacy");
       await closeOpenClawStateDatabaseAsync();
@@ -184,10 +161,10 @@ it("serves actual JSON and tree command output from worker provenance through re
         "retired",
       ]);
       await closeOpenClawStateDatabaseAsync();
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
       requests.restore();
-      counters.forEach((counter) => counter.mockRestore());
+      sql.restore();
       await closeOpenClawStateDatabaseAsync();
     }
   });
@@ -209,7 +186,11 @@ it("enriches a growing configured roster with bounded worker requests in configu
       };
       recordAgentDatabaseAdmissions([], { env: state.env });
       for (const [index, id] of ids.entries()) {
-        recordAgentProvenance(id, { createdVia: "operator" }, { env: state.env, nowMs: index });
+        await recordAgentProvenance(
+          id,
+          { createdVia: "operator" },
+          { env: state.env, nowMs: index },
+        );
       }
       await closeOpenClawStateDatabaseAsync();
       const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
@@ -221,7 +202,8 @@ it("enriches a growing configured roster with bounded worker requests in configu
             expect.objectContaining({ id, createdVia: "operator", createdAt: index }),
           ),
         );
-        expect(requests.commands).toHaveLength(2);
+        await waitForDiagnosticEventsDrained();
+        expect(requests.commands).toEqual(["stateRead", "stateRead"]);
       } finally {
         requests.restore();
         await closeOpenClawStateDatabaseAsync();

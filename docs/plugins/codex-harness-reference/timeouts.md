@@ -15,6 +15,15 @@ The timeout budgets around a Codex turn, and how OpenClaw settles a completed tu
 Client startup and app-server control-request budgets measure elapsed time, so
 system-clock adjustments do not shorten or extend them.
 
+Shared app-server startup has its own budget of ten times
+`appServer.requestTimeoutMs` (ten minutes by default). A shared discovery or
+control scope starts its request budget once the client is ready. A caller
+that cancels or exhausts a separate acquisition deadline stops waiting without
+closing the initializing client. Later calls can join that startup, including
+after all earlier waiters have left. The five-minute idle grace starts after the client is ready.
+Isolated clients remain owned by their caller's deadline, and Gateway shutdown
+still cancels shared startup.
+
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
 first available timeout in this order:

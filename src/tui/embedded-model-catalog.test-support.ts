@@ -1,7 +1,7 @@
 import { expect, it, type Mock } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -38,111 +38,73 @@ export function registerEmbeddedModelCatalogTests({
   };
   flushMicrotasks: () => Promise<void>;
 }) {
-  it("lists the published configured replace-mode models without a second catalog read", async () => {
-    const config = {
-      models: {
-        mode: "replace" as const,
-        providers: {
-          fixture: {
-            baseUrl: "https://fixture.invalid",
-            models: [{ id: "configured", name: "Configured" }],
+  it.each([undefined, "work"])(
+    "lists the published projection for agent %s without rediscovery",
+    async (agentId) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { modelPolicy: { allow: ["fixture/*"] } },
+            ...(agentId ? { work: { modelPolicy: { allow: ["openai/*"] } } } : {}),
           },
         },
-      },
-    };
-    getRuntimeConfigMock.mockReturnValue(config);
-    const models = [{ id: "configured", name: "Configured", provider: "fixture", available: true }];
-    buildModelsListResultMock.mockResolvedValue({ models });
-
-    await expect(createBackend().listModels()).resolves.toEqual(models);
-    expect(loadPreparedModelCatalogMock).not.toHaveBeenCalled();
-    expect(withPreparedModelCatalogOwnerMock).toHaveBeenCalledWith(
-      { config, agentId: "main", readOnly: true },
-      expect.any(Function),
-    );
-  });
-
-  it("preserves an empty published replace catalog without fallback discovery", async () => {
-    getRuntimeConfigMock.mockReturnValue({ models: { mode: "replace", providers: {} } });
-    await expect(createBackend().listModels()).resolves.toEqual([]);
-    expect(loadPreparedModelCatalogMock).not.toHaveBeenCalled();
-    expect(buildModelsListResultMock).toHaveBeenCalledOnce();
-  });
-
-  it("lists published discovered rows for a replace-mode provider wildcard", async () => {
-    getRuntimeConfigMock.mockReturnValue({
-      agents: { defaults: { modelPolicy: { allow: ["fixture/*"] } } },
-      models: { mode: "replace", providers: { fixture: { models: [{ id: "configured" }] } } },
-    });
-    const models = [{ id: "discovered", name: "Discovered", provider: "fixture" }];
-    buildModelsListResultMock.mockResolvedValue({ models });
-    await expect(createBackend().listModels()).resolves.toEqual(models);
-    expect(withPreparedModelCatalogOwnerMock).toHaveBeenCalledWith(
-      expect.objectContaining({ readOnly: true }),
-      expect.any(Function),
-    );
-    expect(loadPreparedModelCatalogMock).not.toHaveBeenCalled();
-  });
-
-  it("loads the selected agent published projection with its matching owner", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: { modelPolicy: { allow: ["fixture/main-model"] } },
-          work: { modelPolicy: { allow: ["fixture/work-model"] } },
+        models: {
+          mode: "replace",
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid",
+              models: [
+                {
+                  id: "configured",
+                  name: "Configured",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1024,
+                },
+              ],
+            },
+          },
         },
-      },
-    };
-    getRuntimeConfigMock.mockReturnValue(config);
-    buildModelsListResultMock.mockImplementation(async ({ source, agentId, params }) => {
-      expect(source.kind).toBe("published");
-      if (source.kind !== "published") {
-        throw new Error("Expected published owner");
-      }
-      expect(source.owner.agentId).toBe(agentId);
-      expect(source.owner.config).toBe(config);
-      expect(params).toEqual({ includeDetails: true });
-      const id = source.owner.agentId + "-model";
-      return { models: [{ id, name: id, provider: "fixture" }] };
-    });
-    await expect(createBackend().listModels({ agentId: "work" })).resolves.toEqual([
-      { id: "work-model", name: "work-model", provider: "fixture" },
-    ]);
-  });
-
-  it("preserves an empty restrictive published projection for the selected agent", async () => {
-    getRuntimeConfigMock.mockReturnValue({
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: { modelPolicy: { allow: ["openai/*"] } },
-          work: { modelPolicy: { allow: ["openai/*"] } },
-        },
-      },
-    });
-    await expect(createBackend().listModels({ agentId: "work" })).resolves.toEqual([]);
-    expect(buildModelsListResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "work" }),
-    );
-    expect(loadPreparedModelCatalogMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves canonical unavailable and unknown published model facts", async () => {
-    const models: TuiModelChoice[] = [
-      {
-        id: "waiting",
-        name: "Waiting",
-        provider: "fixture",
-        available: false,
-        unavailableReason: "cooldown",
-      },
-      { id: "unknown", name: "Unknown", provider: "fixture" },
-    ];
-    buildModelsListResultMock.mockResolvedValue({ models });
-    await expect(createBackend().listModels()).resolves.toEqual(models);
-    expect(loadPreparedModelCatalogMock).not.toHaveBeenCalled();
-  });
+      };
+      const models: TuiModelChoice[] = agentId
+        ? []
+        : [
+            { id: "configured", name: "Configured", provider: "fixture", available: true },
+            { id: "discovered", name: "Discovered", provider: "fixture" },
+            {
+              id: "waiting",
+              name: "Waiting",
+              provider: "fixture",
+              available: false,
+              unavailableReason: "cooldown",
+            },
+            { id: "unknown", name: "Unknown", provider: "fixture" },
+          ];
+      getRuntimeConfigMock.mockReturnValue(config);
+      buildModelsListResultMock.mockImplementation(async ({ source, agentId: owner, params }) => {
+        expect(source.kind).toBe("published");
+        if (source.kind !== "published") {
+          throw new Error("Expected published owner");
+        }
+        expect(owner).toBe(agentId ?? "main");
+        expect(source.owner.agentId).toBe(owner);
+        expect(source.owner.config).toBe(config);
+        expect(params).toEqual({ includeDetails: true });
+        return { models };
+      });
+      await expect(createBackend().listModels(agentId ? { agentId } : undefined)).resolves.toEqual(
+        models,
+      );
+      expect(buildModelsListResultMock).toHaveBeenCalledOnce();
+      expect(withPreparedModelCatalogOwnerMock).toHaveBeenCalledWith(
+        { config, agentId: agentId ?? "main", readOnly: true },
+        expect.any(Function),
+      );
+      expect(loadPreparedModelCatalogMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the published owner alive through asynchronous model projection", async () => {
     const projection = deferred<{ models: TuiModelChoice[] }>();
@@ -236,7 +198,7 @@ export async function withEmbeddedModelCatalogOwnerFixture(
       throw new Error("Catalog projection must not create execution stores");
     },
   };
-  setPreparedModelRuntimeAuthStore(snapshot, { version: 1, profiles: {} });
+  bindPreparedModelRuntimeAuth(snapshot, { store: { version: 1, profiles: {} } });
   try {
     return await read(snapshot);
   } finally {

@@ -12,9 +12,12 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 
 ## Presence
 
-- `system-presence` returns entries keyed by device identity, including
-  `deviceId`, `roles`, and `scopes`, so UIs can show one row per device even
-  when it connects as both operator and node.
+- `system-presence` returns one row per live operator connection, including
+  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  facts. Reconnecting removes offline rows for the same identity: device ID,
+  then client instance ID, then connection ID. When the last connection closes,
+  at most one offline row for that identity remains until the five-minute TTL.
+  Node connections retain device-keyed rows. UIs can group rows by device or person.
 - `node.list` includes optional `lastSeenAtMs` and `lastSeenReason`. Connected
   nodes report current connection time with reason `connect`; paired nodes can
   also report durable background presence via a trusted node event.
@@ -62,9 +65,11 @@ encoding in `payloadJSON`):
 1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
 has no load average; hosts omit the field when all three readings are zero.
 Memory and disk values are non-negative integer bytes, with free or available
-bytes no greater than their total. Disk fields appear together only when the
-host can read capacity for the volume containing its home directory, independent
-of the worker's current directory.
+bytes no greater than their total. On macOS, `memoryFreeBytes` includes
+reclaimable host memory, so idle file cache is not reported as used; other
+platforms retain host-wide free-memory readings. Disk fields appear together only
+when the host can read capacity for the volume containing its home directory,
+independent of the worker's current directory.
 
 The Gateway accepts updates only from the current node connection and stamps
 `updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
@@ -127,10 +132,12 @@ sessions do not passively receive session content
   `operator.admin` by default; explicit entries such as
   `plugin.approval.requested` / `plugin.approval.resolved` use
   `operator.approvals` instead.
-- Status/transport events (`heartbeat`, `presence`, `tick`, connect/disconnect
-  lifecycle) stay unrestricted so transport health is observable to every
+- Presence events require operator read access (`operator.read`, also satisfied
+  by `operator.write` or `operator.admin`). Watched-session references are filtered
+  for each recipient, including in hello snapshots and `system-presence` replies.
+- Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
-- Unknown broadcast event families are scope-gated by default (fail-closed)
+- Unknown broadcast event families are blocked unless the caller has the required scope
   unless a registered handler explicitly relaxes them.
 
 Each client connection keeps its own per-client sequence number, so broadcasts

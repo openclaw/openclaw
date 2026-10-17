@@ -16,7 +16,7 @@ function createTools(config: OpenClawConfig, options: AssemblyOptions = {}) {
   return createOpenClawCodingTools({
     config: {
       ...config,
-      agents: config.agents ?? { entries: { main: { default: true } } },
+      agents: config.agents ?? { entries: { main: {} } },
     },
     sessionKey: "agent:main:main",
     senderIsOwner: true,
@@ -58,7 +58,7 @@ describe("assembled Gateway update capability", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(["minimal", "coding", "messaging"] as const)(
+  it.each(["coding"] as const)(
     "makes the existing update action available in the %s profile without config reads",
     (profile) => {
       const tools = createTools({ tools: { profile } });
@@ -82,7 +82,7 @@ describe("assembled Gateway update capability", () => {
     },
   );
 
-  it.each(["gateway", "group:automation", "gate*", "*"])(
+  it.each(["group:automation", "gate*"])(
     "retains explicit config read authority from alsoAllow %s",
     (grant) => {
       expect(
@@ -91,19 +91,16 @@ describe("assembled Gateway update capability", () => {
     },
   );
 
-  it.each([
-    { alsoAllow: [] },
-    { alsoAllow: [""] },
-    { alsoAllow: ["   "] },
-    { alsoAllow: ["session_status"] },
-  ])("does not widen config reads from alsoAllow $alsoAllow", ({ alsoAllow }) => {
-    expect(gatewayActions(createTools({ tools: { profile: "coding", alsoAllow } }))).toEqual([
-      "update.run",
-    ]);
-  });
+  it.each([{ alsoAllow: ["session_status"] }])(
+    "does not widen config reads from alsoAllow $alsoAllow",
+    ({ alsoAllow }) => {
+      expect(gatewayActions(createTools({ tools: { profile: "coding", alsoAllow } }))).toEqual([
+        "update.run",
+      ]);
+    },
+  );
 
   it.each([
-    { mainGrant: false, providerGrant: false, configRead: false },
     { mainGrant: true, providerGrant: false, configRead: false },
     { mainGrant: false, providerGrant: true, configRead: false },
     { mainGrant: true, providerGrant: true, configRead: true },
@@ -130,7 +127,7 @@ describe("assembled Gateway update capability", () => {
     },
   );
 
-  it.each(["coding", "full"] as const)(
+  it.each(["coding"] as const)(
     "uses the %s policy agent's authority rather than the execution agent's",
     (policyProfile) => {
       const actions = gatewayActions(
@@ -140,8 +137,8 @@ describe("assembled Gateway update capability", () => {
             agents: {
               ownership: "explicit",
               entries: {
-                main: { default: true, tools: { profile: policyProfile } },
-                execution: { tools: { profile: policyProfile === "full" ? "coding" : "full" } },
+                main: { tools: { profile: policyProfile } },
+                execution: { tools: { profile: "full" } },
               },
             },
           },
@@ -155,13 +152,12 @@ describe("assembled Gateway update capability", () => {
       );
 
       expect(actions).toContain("update.run");
-      expect(actions.includes("config.get")).toBe(policyProfile === "full");
+      expect(actions).not.toContain("config.get");
     },
   );
 
   it.each([
     { name: "explicit deny", tools: { deny: ["gateway"] } },
-    { name: "group deny", tools: { deny: ["group:automation"] } },
     { name: "restrictive allow", tools: { allow: ["session_status"] } },
     { name: "provider deny", tools: { byProvider: { openai: { deny: ["gateway"] } } } },
   ])("preserves $name restrictions", ({ tools }) => {

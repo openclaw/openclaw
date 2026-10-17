@@ -1,4 +1,3 @@
-// Slack type declarations define plugin contracts.
 import type { AppMentionEvent, GenericMessageEvent, MessageAttachment } from "@slack/types";
 import type { ConversationsHistoryResponse } from "@slack/web-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -69,6 +68,6 @@ type SlackAppMentionBase = Omit<
 export type SlackAppMentionEvent = SlackAppMentionBase & {
   text?: string;
   parent_user_id?: string;
-  channel_type?: "im" | "mpim" | "channel" | "group";
+  channel_type?: NonNullable<SlackMessageEvent["channel_type"]>;
   attachments?: SlackAttachment[];
 };

@@ -277,7 +277,12 @@ kill -TERM "$PPID"
     stage(dir, "payload.txt", "clean\n");
     const bin = path.join(dir, "bin");
     symlinkSync(process.execPath, path.join(bin, "node"));
-    symlinkSync(run(dir, "which", ["git"]), path.join(bin, "git"));
+    const [git, gitPath] = [run(dir, "which", ["git"]), process.env.PATH ?? ""].map(
+      (value) => `'${value.replaceAll("'", "'\\''")}'`,
+    );
+    // Git may itself be a wrapper; only the formatter child must lack Bash.
+    writeExecutable(bin, "git", `#!/bin/sh\nPATH=${gitPath} exec ${git} "$@"\n`);
+    expect(run(dir, "git", ["rev-parse", "--show-toplevel"], { PATH: bin })).toBe(dir);
     const result = runFailure(dir, "/bin/bash", ["git-hooks/pre-commit"], { PATH: bin });
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");

@@ -1,57 +1,30 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { ThemeArtwork, ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
+import type { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
 
+export type LobsterPetProps = {
+  seed: number;
+  mode: LobsterPetMode;
+  visitsEnabled: boolean;
+  residentEnabled: boolean;
+  critters: readonly string[] | undefined;
+  critterArtwork: ThemeArtwork["critters"];
+  floorEnabled: boolean;
+  runOutcome: LobsterRunOutcome;
+  soundsEnabled: boolean;
+  gatewayVersion: string | null;
+  onVisitsDisabled: () => void;
+};
+
 export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
-export type LobsterPetPaletteId =
-  | "crimson"
-  | "blue"
-  | "gold"
-  | "lumen"
-  | "magma"
-  | "oilslick"
-  | "aurora"
-  | "nebula"
-  | "banana"
-  | "mood"
-  | "bee"
-  | "rubberduck"
-  | "watermelon"
-  | "clawtron"
-  | "selene"
-  | "geode"
-  | "ghost"
-  | "glass"
-  | "split"
-  | "sourdough"
-  | "zombie"
-  | "plush"
-  | "balloon"
-  | "cottoncandy"
-  | "cryptid"
-  | "flatpack"
-  | "tinfoil"
-  | "actual"
-  | "disco"
-  | "chimera"
-  | "pixel"
-  | "blueprint"
-  | "phosphor"
-  | "ascii"
-  | "portal"
-  | "notexture"
-  | "loading"
-  | "eclipse"
-  | "heisenbug"
-  | "invisible"
-  | "retro"
-  | "goldenretro";
+export type LobsterPetPaletteId = (typeof LOBSTER_PALETTE_WEIGHTS)[number][0]["id"];
 
 // Pass-through ledge visitors. Strangers are other lobsters; everyone else
 // is, at best, lobster-adjacent. None of them count for the Lobsterdex.
@@ -94,7 +67,6 @@ export type LobsterPetLook = {
   scale: number;
   accessory: LobsterPetAccessory;
   antennae: LobsterPetAntennae;
-  side: "left" | "right";
   spotPct: number;
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;

@@ -1,24 +1,14 @@
-/**
- * Browser CLI debugging commands for highlights, errors, requests, and traces.
- */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { BrowserNetworkRequest, BrowserPageError } from "../browser/pw-session-contracts.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
+  printBrowserList,
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
-function resolveDebugQuery(params: { targetId?: unknown; clear?: unknown; filter?: unknown }) {
-  return {
-    targetId: normalizeOptionalString(params.targetId),
-    filter: normalizeOptionalString(params.filter),
-    clear: Boolean(params.clear),
-  };
-}
-
-/** Registers Browser debugging and trace commands. */
 export function registerBrowserDebugCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -46,27 +36,20 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored errors after reading", false)
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      await runBrowserCliRequest<{
-        errors: Array<{ timestamp: string; name?: string; message: string }>;
-      }>({
+      await runBrowserCliRequest<{ errors: BrowserPageError[] }>({
         parent: parentOpts(cmd),
         method: "GET",
         path: "/errors",
-        query: resolveDebugQuery({
-          targetId: opts.targetId,
-          clear: opts.clear,
-        }),
-        print: (result) => {
-          if (!result.errors.length) {
-            defaultRuntime.log("No page errors.");
-            return;
-          }
-          defaultRuntime.log(
-            result.errors
-              .map((e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`)
-              .join("\n"),
-          );
+        query: {
+          targetId: normalizeOptionalString(opts.targetId),
+          clear: Boolean(opts.clear),
         },
+        print: (result) =>
+          printBrowserList(
+            result.errors,
+            "No page errors.",
+            (e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`,
+          ),
       });
     });
 
@@ -77,40 +60,22 @@ export function registerBrowserDebugCommands(
     .option("--clear", "Clear stored requests after reading", false)
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      await runBrowserCliRequest<{
-        requests: Array<{
-          timestamp: string;
-          method: string;
-          status?: number;
-          ok?: boolean;
-          url: string;
-          failureText?: string;
-        }>;
-      }>({
+      await runBrowserCliRequest<{ requests: BrowserNetworkRequest[] }>({
         parent: parentOpts(cmd),
         method: "GET",
         path: "/requests",
-        query: resolveDebugQuery({
-          targetId: opts.targetId,
-          filter: opts.filter,
-          clear: opts.clear,
-        }),
-        print: (result) => {
-          if (!result.requests.length) {
-            defaultRuntime.log("No requests recorded.");
-            return;
-          }
-          defaultRuntime.log(
-            result.requests
-              .map((r) => {
-                const status = typeof r.status === "number" ? ` ${r.status}` : "";
-                const ok = r.ok === true ? " ok" : r.ok === false ? " fail" : "";
-                const fail = r.failureText ? ` (${r.failureText})` : "";
-                return `${r.timestamp} ${r.method}${status}${ok} ${r.url}${fail}`;
-              })
-              .join("\n"),
-          );
+        query: {
+          targetId: normalizeOptionalString(opts.targetId),
+          filter: normalizeOptionalString(opts.filter),
+          clear: Boolean(opts.clear),
         },
+        print: (result) =>
+          printBrowserList(result.requests, "No requests recorded.", (r) => {
+            const status = typeof r.status === "number" ? ` ${r.status}` : "";
+            const ok = r.ok === true ? " ok" : r.ok === false ? " fail" : "";
+            const fail = r.failureText ? ` (${r.failureText})` : "";
+            return `${r.timestamp} ${r.method}${status}${ok} ${r.url}${fail}`;
+          }),
       });
     });
 

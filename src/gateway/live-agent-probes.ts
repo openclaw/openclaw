@@ -8,6 +8,10 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runExec } from "../process/exec.js";
 
@@ -45,7 +49,7 @@ export function resolveOpenClawCliProcessArgs(
 }
 
 /** Return true for live agents that expose Claude-style MCP tool names. */
-export function isClaudeLikeLiveAgent(raw: string): boolean {
+function isClaudeLikeLiveAgent(raw: string): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized === "claude" || normalized === "claude-cli";
 }
@@ -54,7 +58,7 @@ export function isClaudeLikeLiveAgent(raw: string): boolean {
 export function assertLiveImageProbeReply(text: string): void {
   const normalized = normalizeOptionalLowercaseString(text);
   if (normalized !== "cat" && !/(^|[^a-z])cat[.!?`'")\]]*$/.test(normalized ?? "")) {
-    throw new Error(`image probe expected 'cat', got: ${normalized}`);
+    throw new Error(`image check expected 'cat', got: ${normalized}`);
   }
 }
 
@@ -152,20 +156,27 @@ export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessE
   const cliArgs = args.includes("--timeout")
     ? args
     : [...args, "--timeout", String(OPENCLAW_CLI_GATEWAY_TIMEOUT_MS)];
-  const hasBuildOutput = ["entry.js", "entry.mjs"].some((entry) =>
-    fs.existsSync(path.join(process.cwd(), "dist", entry)),
-  );
-  const { stdout, stderr } = await runExec(
-    process.execPath,
-    resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput),
-    {
-      baseEnv: childEnv,
-      cwd: process.cwd(),
-      logOutput: false,
-      maxBuffer: 1024 * 1024,
-      timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
-    },
-  );
+  let invocation: ReturnType<typeof resolveOpenClawCliInvocation>;
+  if (isStandaloneRuntimeExecutable()) {
+    invocation = resolveOpenClawCliInvocation({ args: cliArgs });
+  } else {
+    const hasBuildOutput = ["entry.js", "entry.mjs"].some((entry) =>
+      fs.existsSync(path.join(process.cwd(), "dist", entry)),
+    );
+    const [entryPath, ...argsForEntry] = resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput);
+    invocation = resolveOpenClawCliInvocation({
+      entryPath,
+      execArgv: [],
+      args: argsForEntry,
+    });
+  }
+  const { stdout, stderr } = await runExec(invocation.command, invocation.args, {
+    baseEnv: childEnv,
+    cwd: process.cwd(),
+    logOutput: false,
+    maxBuffer: 1024 * 1024,
+    timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
+  });
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error(

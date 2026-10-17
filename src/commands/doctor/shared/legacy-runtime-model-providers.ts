@@ -1,6 +1,5 @@
 // Legacy model-provider aliases that encoded runtime/backend selection in model refs.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStaticProviderModelId } from "../../../agents/model-ref-shared.js";
 
 type LegacyRuntimeModelProviderAlias = {
@@ -52,20 +51,6 @@ const LEGACY_ALIAS_BY_PROVIDER = new Map(
     entry,
   ]),
 );
-
-/** Resolve the provider/runtime pair selected by a retired whole-agent CLI runtime. */
-export function resolveLegacyCliRuntimeAlias(
-  runtimeId: unknown,
-): { provider: string; runtime: string } | undefined {
-  const runtime = normalizeOptionalLowercaseString(runtimeId);
-  if (!runtime || runtime === "auto" || runtime === "openclaw") {
-    return undefined;
-  }
-  const alias = LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.find(
-    (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
-  );
-  return alias ? { provider: alias.provider, runtime: alias.runtime } : undefined;
-}
 
 export function resolveLegacyRuntimeModelProviderAlias(
   provider: string,

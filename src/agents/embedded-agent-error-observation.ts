@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core";
  */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
@@ -25,20 +26,6 @@ const OBSERVATION_EXTRA_REDACT_PATTERNS = [
   String.raw`"(?:api[-_]?key|api_key)"\s*:\s*"([^"]+)"`,
   String.raw`(?:\bCookie\b\s*[:=]\s*[^;=\s]+=|;\s*[^;=\s]+=)([^;\s\r\n]+)`,
 ];
-const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailureKind>([
-  "auth_html",
-  "auth_refresh",
-  "auth_scope",
-  "upstream_html",
-]);
-
-function resolveConfiguredRedactPatterns(): string[] {
-  const configured = readLoggingConfig()?.redactPatterns;
-  if (!Array.isArray(configured)) {
-    return [];
-  }
-  return configured.filter((pattern): pattern is string => typeof pattern === "string");
-}
 
 function truncateForObservation(text: string | undefined, maxChars: number): string | undefined {
   const trimmed = text?.trim();
@@ -49,13 +36,8 @@ function truncateForObservation(text: string | undefined, maxChars: number): str
 }
 
 function boundObservationInput(text: string | undefined): string | undefined {
-  const trimmed = text?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length > MAX_OBSERVATION_INPUT_CHARS
-    ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS)
-    : trimmed;
+  const trimmed = normalizeOptionalString(text);
+  return trimmed ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS) : undefined;
 }
 
 function replaceRequestIdPreview(
@@ -72,9 +54,10 @@ function redactObservationText(text: string | undefined): string | undefined {
   if (!text) {
     return text;
   }
-  // Observation logs must stay redacted even when operators disable general-purpose
-  // log redaction, otherwise raw provider payloads leak back into always-on logs.
-  const configuredPatterns = resolveConfiguredRedactPatterns();
+  // Client-visible error observations retain masking even when general-purpose
+  // log redaction is disabled. Include the default programmatic matchers as well
+  // as configured string patterns.
+  const configuredPatterns = filterStringEntries(readLoggingConfig()?.redactPatterns);
   return redactSensitiveText(text, {
     mode: "tools",
     patterns: [
@@ -85,14 +68,6 @@ function redactObservationText(text: string | undefined): string | undefined {
   });
 }
 
-export function shouldSuppressRawErrorConsoleSuffix(
-  providerRuntimeFailureKind?: ProviderRuntimeFailureKind,
-): boolean {
-  return providerRuntimeFailureKind
-    ? RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS.has(providerRuntimeFailureKind)
-    : false;
-}
-
 function buildObservationFingerprint(params: {
   raw: string;
   requestId?: string;
@@ -101,9 +76,7 @@ function buildObservationFingerprint(params: {
   message?: string;
 }): string | null {
   const boundedMessage =
-    params.message && params.message.length > MAX_FINGERPRINT_MESSAGE_CHARS
-      ? truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS)
-      : params.message;
+    params.message && truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS);
   const structured =
     params.httpCode || params.type || boundedMessage
       ? stableStringify({

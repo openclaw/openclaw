@@ -5,6 +5,8 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
+import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
@@ -22,7 +24,10 @@ import {
   service,
 } from "./test-helpers/lifecycle-core-harness.js";
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: lifecycleTestRuntime }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: lifecycleTestRuntime,
+}));
 vi.mock("./lifecycle-action-preflight.js", () => ({
   getServiceActionPreflightFailure: async () => null,
 }));
@@ -47,7 +52,6 @@ type LegacyLock = {
   stateDir: string;
   port: number;
 };
-
 const children: Array<{ child: ChildProcess; exited: Promise<unknown> }> = [];
 
 async function spawnServingChild(): Promise<LegacyLock> {
@@ -104,44 +108,56 @@ function beforeIntentWriteAdmission(operation: () => void) {
   );
 }
 
-function publishUnrelatedOwner(pid = process.pid) {
+function publishOwner(pid = process.pid, supervised = false) {
   const now = Date.now();
   openOpenClawStateDatabase()
     .db.prepare(
-      `INSERT INTO state_leases
-       (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
-       VALUES ('gateway-owner', 'global', 'unrelated-owner', ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO state_leases
+     (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+     VALUES ('gateway-owner', 'global', 'unrelated-owner', ?, ?, ?, ?, ?)`,
     )
     .run(
       now + 60_000,
       now,
       JSON.stringify({
-        owner: {
-          pid,
-          host: hostname(),
-          startedAt: getFileLockProcessStartTime(pid),
-        },
+        owner: { pid, host: hostname(), startedAt: getFileLockProcessStartTime(pid) },
         port: 18789,
-        mode: "foreground",
-        supervisor: null,
+        mode: supervised ? "supervised" : "foreground",
+        supervisor: supervised
+          ? process.platform === "darwin"
+            ? { kind: "launchd", name: resolveLaunchAgentLabel(process.env) }
+            : { kind: "systemd", name: resolveSystemdServiceName(process.env) }
+          : null,
       }),
       now,
       now,
     );
 }
 
-async function expectRestartTargets(pid: number) {
-  const { db } = openOpenClawStateDatabase();
+function readIntent() {
+  return openOpenClawStateDatabase()
+    .db.prepare("SELECT pid, reason FROM gateway_restart_intent")
+    .get();
+}
+
+async function expectRestartRefused(message?: string) {
+  await expect(runServiceRestart(createGatewayServiceRunArgs())).rejects.toThrow("__exit__:1");
+  expect(service.restart).not.toHaveBeenCalled();
+  expect(readIntent()).toBeUndefined();
+  if (message) {
+    expect(lifecycleRuntimeLogs.join("\n")).toContain(message);
+  }
+}
+
+async function expectRestartTargets(pid?: number) {
   let prepared: unknown;
   service.restart.mockImplementationOnce(async () => {
-    prepared = db.prepare("SELECT pid, reason FROM gateway_restart_intent").get();
+    prepared = readIntent();
     return { outcome: "completed" };
   });
-
   await expect(runServiceRestart(createGatewayServiceRunArgs())).resolves.toBe(true);
-
   expect(service.restart).toHaveBeenCalledOnce();
-  expect(prepared).toEqual({ pid, reason: "gateway.restart" });
+  expect(prepared).toEqual(pid === undefined ? undefined : { pid, reason: "gateway.restart" });
 }
 
 describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
@@ -173,21 +189,9 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       }
       await Promise.all(children.splice(0).map(({ exited }) => exited));
       closeOpenClawStateDatabaseForTest();
+      vi.useRealTimers();
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
-    });
-
-    it("prepares restart intent for the verified legacy serving child without a SQLite lease", async () => {
-      const lock = await spawnServingChild();
-      writeLegacyLock(lock);
-
-      await expectRestartTargets(lock.pid);
-
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT count(*) AS count FROM state_leases WHERE scope = 'gateway-owner'")
-          .get(),
-      ).toEqual({ count: 0 });
     });
 
     it.each([
@@ -196,15 +200,15 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       "missing start time",
       "foreign install root",
       "unrelated native main pid",
-      "missing native main pid",
       "different state directory",
       "different config path",
-      "existing unrelated owner lease",
+      "stopped service with dead SQLite owner and live legacy lock",
     ] as const)("refuses legacy restart admission with %s", async (failure) => {
       const lock = await spawnServingChild();
       switch (failure) {
         case "dead pid":
           await stopServingChild(lock.pid);
+          service.readRuntime.mockResolvedValue({ status: "running", pid: lock.pid });
           break;
         case "mismatched start time":
           lock.startTime = (lock.startTime ?? 0) + 1;
@@ -227,51 +231,81 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
             pid: (await spawnServingChild()).pid,
           });
           break;
-        case "missing native main pid":
-          service.readRuntime.mockResolvedValue({ status: "stopped" });
-          break;
         case "different state directory":
           lock.stateDir = tempDirs.make("openclaw-foreign-state-");
           break;
         case "different config path":
           lock.configPath = path.join(lock.stateDir, "another.json");
           break;
-        case "existing unrelated owner lease":
-          publishUnrelatedOwner();
+        case "stopped service with dead SQLite owner and live legacy lock": {
+          const deadOwner = await spawnServingChild();
+          await stopServingChild(deadOwner.pid);
+          publishOwner(deadOwner.pid);
+          service.readRuntime.mockResolvedValue({ status: "stopped" });
           break;
+        }
       }
       writeLegacyLock(lock);
-
-      await expect(runServiceRestart(createGatewayServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT count(*) AS count FROM gateway_restart_intent")
-          .get(),
-      ).toEqual({ count: 0 });
-      expect(lifecycleRuntimeLogs.join("\n")).toContain("GATEWAY_RESTART_PREPARATION_REFUSED");
+      await expectRestartRefused("GATEWAY_RESTART_PREPARATION_REFUSED");
       expect(lifecycleRuntimeLogs.join("\n")).toContain("Gateway was not signaled");
     });
 
-    it("refuses stopped-service startup when a dead SQLite owner coexists with a live legacy lock", async () => {
-      const deadOwner = await spawnServingChild();
-      await stopServingChild(deadOwner.pid);
-      publishUnrelatedOwner(deadOwner.pid);
-      writeLegacyLock(await spawnServingChild());
-      service.readRuntime.mockResolvedValue({ status: "stopped" });
-
-      await expect(runServiceRestart(createGatewayServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT count(*) AS count FROM gateway_restart_intent")
-          .get(),
-      ).toEqual({ count: 0 });
-      expect(lifecycleRuntimeLogs.join("\n")).toContain("GATEWAY_RESTART_PREPARATION_REFUSED");
-      expect(lifecycleRuntimeLogs.join("\n")).toContain("Gateway was not signaled");
-    });
+    it.each([
+      ["absent", "gateway"],
+      ["absent", "foreign process"],
+      ["absent", "timeout"],
+      ["dead", "gateway"],
+      ["dead", "foreign process"],
+      ["dead", "timeout"],
+    ] as const)(
+      "waits for a native startup owner before restart admission: %s → %s",
+      async (previous, publication) => {
+        const native = await spawnServingChild();
+        const published = publication === "foreign process" ? await spawnServingChild() : native;
+        if (previous === "dead") {
+          const retired = await spawnServingChild();
+          publishOwner(retired.pid);
+          writeLegacyLock(retired);
+          await stopServingChild(retired.pid);
+        }
+        const waiting = Promise.withResolvers<void>();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        service.readRuntime
+          .mockResolvedValueOnce({ status: "running", pid: native.pid })
+          .mockImplementation(async () => {
+            if (publication !== "timeout") {
+              setTimeout(() => {
+                writeLegacyLock(published);
+                publishOwner(published.pid, publication === "gateway");
+              }, 100);
+            }
+            waiting.resolve();
+            return { status: "running", pid: native.pid };
+          });
+        let recorded: unknown;
+        service.restart.mockImplementationOnce(async () => {
+          recorded = readIntent();
+          return { outcome: "completed" };
+        });
+        const result = runServiceRestart(createGatewayServiceRunArgs()).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await expect(
+          Promise.race([waiting.promise.then(() => "waiting"), result.then(() => "settled")]),
+        ).resolves.toBe("waiting");
+        expect(service.restart).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(publication === "timeout" ? 45_000 : 200);
+        if (publication === "gateway") {
+          await expect(result).resolves.toEqual({ value: true });
+          expect(recorded).toEqual({ pid: native.pid, reason: "gateway.restart" });
+        } else {
+          await expect(result).resolves.toHaveProperty("error");
+          expect(service.restart).not.toHaveBeenCalled();
+          expect(readIntent()).toBeUndefined();
+        }
+      },
+    );
 
     it.each(["dead pid", "mismatched start time"] as const)(
       "permits stopped-service startup without intent for a legacy lock with %s",
@@ -285,42 +319,30 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
         writeLegacyLock(lock);
         const { stateLockPath } = resolveGatewayLockPaths(process.env);
         const recordedLock = fs.readFileSync(stateLockPath, "utf8");
-        const { db } = openOpenClawStateDatabase();
-        let prepared: unknown;
         service.readRuntime.mockResolvedValue({ status: "stopped" });
-        service.restart.mockImplementationOnce(async () => {
-          prepared = db.prepare("SELECT count(*) AS count FROM gateway_restart_intent").get();
-          return { outcome: "completed" };
-        });
-
-        await expect(runServiceRestart(createGatewayServiceRunArgs())).resolves.toBe(true);
-
-        expect(service.restart).toHaveBeenCalledOnce();
-        expect(prepared).toEqual({ count: 0 });
+        await expectRestartTargets();
         expect(fs.readFileSync(stateLockPath, "utf8")).toBe(recordedLock);
       },
     );
 
-    it("targets the legacy lock replacement present at intent-write admission", async () => {
-      writeLegacyLock(await spawnServingChild());
-      const replacement = await spawnServingChild();
-      beforeIntentWriteAdmission(() => writeLegacyLock(replacement));
-
-      await expectRestartTargets(replacement.pid);
-    });
-
-    it("refuses legacy fallback when an unrelated SQLite owner appears at write admission", async () => {
-      writeLegacyLock(await spawnServingChild());
-      beforeIntentWriteAdmission(publishUnrelatedOwner);
-
-      await expect(runServiceRestart(createGatewayServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT count(*) AS count FROM gateway_restart_intent")
-          .get(),
-      ).toEqual({ count: 0 });
-    });
+    it.each(["legacy replacement", "unrelated SQLite owner"])(
+      "revalidates %s at intent-write admission",
+      async (owner) => {
+        writeLegacyLock(await spawnServingChild());
+        if (owner === "unrelated SQLite owner") {
+          beforeIntentWriteAdmission(publishOwner);
+          await expectRestartRefused();
+          return;
+        }
+        const replacement = await spawnServingChild();
+        beforeIntentWriteAdmission(() => writeLegacyLock(replacement));
+        await expectRestartTargets(replacement.pid);
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare("SELECT count(*) AS count FROM state_leases WHERE scope = 'gateway-owner'")
+            .get(),
+        ).toEqual({ count: 0 });
+      },
+    );
   },
 );

@@ -28,7 +28,7 @@ const writeClient = { connect: { scopes: ["operator.write"] } };
 function workspaceContext(workspace: string) {
   return {
     getRuntimeConfig: () => ({
-      agents: { list: [{ id: "main", default: true, workspace }] },
+      agents: { entries: { main: { workspace } } },
     }),
     nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
   };
@@ -252,6 +252,36 @@ describe("fs.listDir", () => {
       command: "fs.listDir",
       params: {},
     });
+  });
+
+  it("keeps node path errors as request errors and transport failures as unavailable", async () => {
+    const node = {
+      connId: "conn-1",
+      nodeId: "macbook",
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: ["fs.listDir"],
+    };
+    const missing = "Error: ENOENT: no such file or directory, scandir '/Users/de'";
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: { code: "INVALID_REQUEST", message: missing } })
+      .mockResolvedValueOnce({ ok: false, error: { code: "TIMEOUT", message: "node timed out" } });
+    const context = {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: { get: vi.fn().mockReturnValue(node), invoke },
+    };
+
+    const pathError = expectDefined(
+      await call({ nodeId: "macbook", path: "/Users/de" }, context),
+      "missing node directory response",
+    )[2];
+    expect(pathError).toMatchObject({ code: "INVALID_REQUEST", message: missing });
+    const transportError = expectDefined(
+      await call({ nodeId: "macbook" }, context),
+      "node transport failure response",
+    )[2];
+    expect(transportError).toMatchObject({ code: "UNAVAILABLE", message: "node timed out" });
   });
 
   it("rejects node listings blocked by the live command policy", async () => {

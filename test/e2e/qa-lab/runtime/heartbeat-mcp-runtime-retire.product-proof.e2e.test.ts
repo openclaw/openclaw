@@ -8,9 +8,15 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../helpers/fixture-receipts.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 /**
@@ -26,8 +32,6 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_TEXT = "HEARTBEAT_OK";
 const HEARTBEAT_RUNS = 3;
-// Bounded wait for post-run process state; a matching sample returns at once.
-const SETTLE_TIMEOUT_MS = 30_000;
 const TEST_TIMEOUT_MS = 600_000;
 const VARIANT =
   process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF_VARIANT === "main" ? "main" : "fixed";
@@ -91,10 +95,13 @@ async function startMockProvider() {
   // live while the fixture child is observed; a later zero then means retired.
   let releaseResponse: () => void = () => {};
   let responseGate = Promise.resolve();
+  let responseEntered = createDeferred();
   const holdNextResponse = () => {
+    responseEntered = createDeferred();
     responseGate = new Promise<void>((resolve) => {
       releaseResponse = resolve;
     });
+    return responseEntered.promise;
   };
   const server = createServer((request, response) => {
     void (async () => {
@@ -132,6 +139,7 @@ async function startMockProvider() {
         return;
       }
       responsesRequests += 1;
+      responseEntered.resolve();
       await responseGate;
       writeTextResponse(response, RESPONSE_TEXT);
     })().catch((error: unknown) => {
@@ -167,7 +175,7 @@ async function startMockProvider() {
 }
 
 /** Writes a minimal stdio MCP server whose cmdline carries a unique marker. */
-async function writeMcpProbeScript(repoRoot: string, marker: string) {
+async function writeMcpProbeScript(repoRoot: string, marker: string, receiptEndpoint: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-mcp-probe-"));
   cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
   const require = createRequire(path.join(repoRoot, "package.json"));
@@ -177,6 +185,7 @@ async function writeMcpProbeScript(repoRoot: string, marker: string) {
   await fs.writeFile(
     scriptPath,
     [
+      fixtureReceiptClientSource(receiptEndpoint),
       `const { McpServer } = await import(${JSON.stringify(mcpUrl)});`,
       `const { StdioServerTransport } = await import(${JSON.stringify(stdioUrl)});`,
       `const server = new McpServer({ name: ${JSON.stringify(marker)}, version: "1.0.0" });`,
@@ -184,6 +193,7 @@ async function writeMcpProbeScript(repoRoot: string, marker: string) {
       `  content: [{ type: "text", text: "pong:" + process.pid }],`,
       `}));`,
       `await server.connect(new StdioServerTransport());`,
+      `sendReceipt(${JSON.stringify(scriptPath)}, "connected");`,
       "",
     ].join("\n"),
     "utf8",
@@ -192,10 +202,10 @@ async function writeMcpProbeScript(repoRoot: string, marker: string) {
 }
 
 /** Counts live processes whose cmdline carries the probe marker (pgrep excludes itself). */
-async function countProbeProcesses(marker: string): Promise<ProbeCount> {
+async function countProbeProcesses(marker: string, signal?: AbortSignal): Promise<ProbeCount> {
   const pattern = `[${marker[0]}]${marker.slice(1)}`;
   try {
-    const { stdout } = await execFileAsync("pgrep", ["-f", pattern]);
+    const { stdout } = await execFileAsync("pgrep", ["-f", pattern], { signal });
     const pids = stdout
       .split("\n")
       .map((line) => Number.parseInt(line.trim(), 10))
@@ -245,13 +255,20 @@ function redact(text: string, replacements: Array<[string, string]>): string {
 describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
   "Isolated heartbeat bundle MCP runtime retirement product proof",
   () => {
+    let receipts: FixtureReceiptChannel;
+    beforeAll(async () => {
+      receipts = await openFixtureReceiptChannel();
+    });
+    afterAll(async () => {
+      await receipts.close();
+    });
     it(
       `retires the isolated heartbeat MCP stdio child after each run (${LABEL})`,
       { timeout: TEST_TIMEOUT_MS },
-      async () => {
+      async ({ signal }) => {
         const repoRoot = process.cwd();
         const marker = `hb-mcp-leak-probe-${randomUUID().slice(0, 8)}`;
-        const scriptPath = await writeMcpProbeScript(repoRoot, marker);
+        const scriptPath = await writeMcpProbeScript(repoRoot, marker, receipts.endpoint);
         const provider = await startMockProvider();
         cleanups.push(() => provider.stop());
 
@@ -266,19 +283,31 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
           console.log(JSON.stringify({ phase: "hb-mcp-count", variant: LABEL, ...entry }));
           return entry;
         };
-        // Run settlement is not a process-closure barrier: the agent cleanup
-        // step can return on its reporting timeout while the child is still
-        // tearing down. Poll for the expected state instead of sampling once
-        // after a fixed delay; the deadline sample is recorded as-is so the
-        // assertions below judge whatever state the wait left behind.
+        // Run settlement bounds cleanup reporting, not process closure. No owner
+        // exit receipt crosses the Gateway boundary, so keep one signal-bound census.
         const settle = async (stage: string, isExpected: (probe: ProbeCount) => boolean) => {
-          const deadline = Date.now() + SETTLE_TIMEOUT_MS;
-          let probe = await countProbeProcesses(marker);
-          while (!isExpected(probe) && Date.now() < deadline) {
-            await sleep(100);
-            probe = await countProbeProcesses(marker);
+          let probe: ProbeCount | undefined;
+          try {
+            for (;;) {
+              signal.throwIfAborted();
+              probe = await withinTest(countProbeProcesses(marker, signal), signal);
+              if (isExpected(probe)) {
+                return record(stage, probe);
+              }
+              await sleep(100, undefined, { signal });
+            }
+          } catch (error) {
+            if (!signal.aborted) {
+              throw error;
+            }
+            if (probe) {
+              await record(stage, probe);
+            }
+            throw new Error(
+              `MCP process census aborted during ${stage}; last census=${probe ? JSON.stringify(probe) : "unavailable"}`,
+              { cause: error },
+            );
           }
-          return record(stage, probe);
         };
         // The shared control keeps its first child for every run; the fixed
         // isolated build retires it; the main baseline keeps one child per run.
@@ -379,30 +408,28 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         }> = [];
         for (let run = 1; run <= HEARTBEAT_RUNS; run += 1) {
           const requestsBefore = provider.responsesRequests;
-          provider.holdNextResponse();
+          const responseEntered = provider.holdNextResponse();
           const forced = (await gateway.call(
             "cron.run",
             { id: monitor.id, mode: "force" },
             { timeoutMs: 15_000 },
           )) as { ok: boolean; enqueued: boolean; runId: string };
           expect(forced).toMatchObject({ ok: true, runId: expect.any(String) });
-          // The model request is held open until the fixture child is observed,
-          // so the run cannot start and retire between two samples. The child
-          // must exist mid-run for a later zero to mean "retired" rather than
-          // "never spawned".
-          let peak = { count: 0, pids: [] as number[] };
-          const observeDeadline = Date.now() + 60_000;
-          while (
-            Date.now() < observeDeadline &&
-            (peak.count === 0 || provider.responsesRequests === requestsBefore)
-          ) {
-            const live = await countProbeProcesses(marker);
-            if (live.count > peak.count) {
-              peak = live;
-            }
-            await sleep(100);
+          // Keep the provider held through the independent PID census: a later zero
+          // must mean retired, not never spawned or already finished before observation.
+          let peak: ProbeCount;
+          try {
+            await withinTest(
+              Promise.all([
+                receipts.waitFor(scriptPath, "connected", SESSION_MODE === "shared" ? 1 : run),
+                responseEntered,
+              ]),
+              signal,
+            );
+            peak = await countProbeProcesses(marker);
+          } finally {
+            provider.releaseResponse();
           }
-          provider.releaseResponse();
           let entry: CronRunEntry | undefined;
           const runDeadline = Date.now() + 120_000;
           while (!entry && Date.now() < runDeadline) {

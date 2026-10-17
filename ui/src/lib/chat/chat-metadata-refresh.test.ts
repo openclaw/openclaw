@@ -1,17 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
+import { loadModelCatalog, peekModelCatalog } from "../model-catalog-store.ts";
 import {
   invalidateChatMetadataForSessionEvent,
   invalidateChatMetadataStore,
   type ChatMetadataResult,
+  type ChatMetadataUpdate,
 } from "./chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
   loadChatMetadata,
   loadChatMetadataRefresh,
   peekChatMetadata,
-  revalidateChatMetadata,
+  retireChatMetadataRefresh,
   subscribeChatMetadata,
 } from "./chat-metadata-store.ts";
 
@@ -22,54 +28,201 @@ const models = [{ id: "fresh", name: "Fresh", provider: "test" }];
 afterEach(() => vi.useRealTimers());
 
 describe("automatic metadata admission", () => {
-  it.each(["visible", "hidden", "released", "global invalidation"])(
-    "coalesces session patches and rechecks admission when %s",
-    async (transition) => {
+  it("retains commands and catalogs across activity and refreshes one changed selection", async () => {
+    vi.useFakeTimers();
+    let sessionModelRevision = "selection-1";
+    const request = vi.fn(async (method: string) =>
+      method === "chat.metadata" ? commands : { models, sessionModelRevision },
+    );
+    const client = createTestGatewayClient(request);
+    const refreshes: ReturnType<typeof loadChatMetadataRefresh>[] = [];
+    const release = subscribeChatMetadata(client, scope, (update) => {
+      if (update.type === "invalidated") {
+        refreshes.push(loadChatMetadataRefresh(client, scope));
+      }
+    });
+    const publish = (revision: string) =>
+      invalidateChatMetadataForSessionEvent(
+        client,
+        {
+          ...scope,
+          reason: "patch",
+          session: { key: scope.sessionKey, sessionModelRevision: revision },
+        },
+        {},
+      );
+    try {
+      await loadChatMetadataRefresh(client, scope).completed;
+      request.mockClear();
+      for (let index = 0; index < 50; index++) {
+        publish(sessionModelRevision);
+        await vi.advanceTimersByTimeAsync(3_000);
+      }
+      expect(request).not.toHaveBeenCalled();
+      sessionModelRevision = "selection-2";
+      publish(sessionModelRevision);
+      await Promise.all(refreshes.map((refresh) => refresh.completed));
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["models.list"]);
+      publish(sessionModelRevision);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(request).toHaveBeenCalledOnce();
+      expect(peekChatMetadata(client, scope)).toEqual(commands);
+      expect(peekModelCatalog(client, scope)?.sessionModelRevision).toBe(sessionModelRevision);
+    } finally {
+      release();
+    }
+  });
+
+  it("hands a retiring automatic catalog to its foreground reader without replacing the read", async () => {
+    const pending = createDeferred<{ models: typeof models }>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockRejectedValue(new Error("Unexpected replacement"));
+    const client = createTestGatewayClient(request);
+    const release = subscribeChatMetadata(client, scope, () => {});
+    const automatic = loadChatMetadataRefresh(client, scope, { kind: "startup" });
+    const automaticCatalog = automatic.catalog.catch((error: unknown) => error);
+    retireChatMetadataRefresh(client, scope);
+    const foreground = loadModelCatalog(client, scope);
+    pending.resolve({ models });
+    try {
+      await expect(foreground).resolves.toEqual({ models });
+      await automatic.completed;
+      expect(await automaticCatalog).toEqual({ models });
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await automatic.completed;
+    }
+  });
+
+  it.each(["patch", "command-metadata"])(
+    "coalesces unrevisioned %s bursts and admits explicit catalog changes",
+    async (reason) => {
       vi.useFakeTimers();
       const request = vi.fn(async (method: string) =>
         method === "chat.metadata" ? commands : { models },
       );
       const client = createTestGatewayClient(request);
-      let active = true;
       const refreshes: ReturnType<typeof loadChatMetadataRefresh>[] = [];
-      const release = subscribeChatMetadata(
-        client,
-        scope,
-        (update) => {
-          if (update.type === "invalidated") {
-            refreshes.push(loadChatMetadataRefresh(client, scope));
-          }
-        },
-        () => active,
-      );
-      await loadChatMetadataRefresh(client, scope).completed;
-      request.mockClear();
-      for (let index = 0; index < 5; index++) {
-        invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-        await vi.advanceTimersByTimeAsync(500);
-      }
-      expect(request).not.toHaveBeenCalled();
-      if (transition === "hidden") {
-        active = false;
-      } else if (transition === "released") {
-        release();
-      } else if (transition === "global invalidation") {
-        invalidateChatMetadataStore(client);
-        expect(request).toHaveBeenCalledWith("chat.metadata", scope);
-      }
-      await vi.advanceTimersByTimeAsync(2_500);
-      await Promise.all(refreshes.map((refresh) => refresh.completed));
-      const admitted = transition === "visible" || transition === "global invalidation";
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
-        admitted ? 1 : 0,
-      );
-      if (transition === "hidden") {
-        active = true;
+      const release = subscribeChatMetadata(client, scope, (update) => {
+        if (update.type === "invalidated") {
+          refreshes.push(loadChatMetadataRefresh(client, scope));
+        }
+      });
+      try {
         await loadChatMetadataRefresh(client, scope).completed;
-        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(1);
+        request.mockClear();
+        for (let index = 0; index < 5; index++) {
+          invalidateChatMetadataForSessionEvent(client, { ...scope, reason }, {});
+          await vi.advanceTimersByTimeAsync(500);
+        }
+        expect(request).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(2_000);
+        await Promise.all(refreshes.map((refresh) => refresh.completed));
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["models.list"]);
+        request.mockClear();
+        invalidateChatMetadataForSessionEvent(client, { ...scope, reason }, {});
+        expect(request).not.toHaveBeenCalled();
+        invalidateChatMetadataForSessionEvent(
+          client,
+          { ...scope, reason, catalogChanged: true },
+          {},
+        );
+        await Promise.all(refreshes.map((refresh) => refresh.completed));
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["models.list"]);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        release();
       }
-      release();
-      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("cancels startup polling after a retired refresh loses its last subscriber", async () => {
+    vi.useFakeTimers();
+    const protocol = new GatewayPendingRequests({
+      createRequestId: () => "catalog",
+      nowMs: Date.now,
+    });
+    const request = createGatewayRequestMock((method, params, options) =>
+      protocol.request({ send: () => {} }, method, params, options),
+    );
+    const client = createTestGatewayClient(request);
+    const release = subscribeChatMetadata(client, scope, () => {});
+    const automatic = loadChatMetadataRefresh(client, scope, { kind: "startup" });
+    const catalog = automatic.catalog.catch((error: unknown) => error);
+    protocol.handleResponse({
+      type: "res",
+      id: "catalog",
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Agent is preparing",
+        retryable: true,
+        details: { code: "agent-database-inspection-pending" },
+        retryAfterMs: 250,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    retireChatMetadataRefresh(client, scope);
+    release();
+    await automatic.completed;
+    expect(await catalog).toHaveProperty("name", "AbortError");
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(request).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["ready", "failed"] as const)(
+    "publishes compact commands independently of a %s catalog after a session patch",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const metadata = createDeferred<ChatMetadataResult>();
+      const catalog = createDeferred<{ models: typeof models }>();
+      const updates: ChatMetadataUpdate[] = [];
+      const request = vi.fn((method: string) =>
+        method === "chat.metadata" ? metadata.promise : catalog.promise,
+      );
+      const client = createTestGatewayClient(request);
+      const release = subscribeChatMetadata(client, scope, (update) => updates.push(update));
+      invalidateChatMetadataForSessionEvent(
+        client,
+        { ...scope, reason: "patch", catalogChanged: true },
+        {},
+      );
+      const refresh = loadChatMetadataRefresh(client, scope);
+      const catalogResult = refresh.catalog.catch((error: unknown) => error);
+      try {
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "models.list",
+          "chat.metadata",
+        ]);
+        const commandsRead = loadChatMetadata(client, scope);
+        metadata.resolve(commands);
+        await expect(commandsRead).resolves.toEqual(commands);
+        expect(peekChatMetadata(client, scope)).toEqual(commands);
+        const failure = new Error("Catalog unavailable");
+        if (outcome === "failed") {
+          catalog.reject(failure);
+        } else {
+          catalog.resolve({ models });
+        }
+        await refresh.completed;
+        expect(await catalogResult).toEqual(outcome === "failed" ? failure : { models });
+        expect(updates.filter((update) => update.type === "result")).toEqual([
+          { type: "result", result: commands },
+        ]);
+        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+        expect(peekModelCatalog(client, scope)).toEqual(
+          outcome === "failed" ? undefined : { models },
+        );
+      } finally {
+        metadata.resolve(commands);
+        catalog.resolve({ models });
+        await refresh.completed;
+        release();
+      }
     },
   );
 
@@ -103,12 +256,9 @@ describe("automatic metadata admission", () => {
 
   it.each([
     { reason: "delete", sessionKey: scope.sessionKey },
-    { reason: "create", sessionKey: scope.sessionKey },
-    { reason: "new", sessionKey: scope.sessionKey },
-    { reason: "recovery", sessionKey: scope.sessionKey },
     { reason: "delete", sessionKey: undefined },
     { reason: "cleanup", sessionKey: undefined },
-  ])("retires cached sessions before remount after $reason ($sessionKey)", async (event) => {
+  ])("retains agent commands before remount after $reason ($sessionKey)", async (event) => {
     const retiredCommands: ChatMetadataResult = {
       commands: [
         {
@@ -137,65 +287,13 @@ describe("automatic metadata admission", () => {
     invalidateChatMetadataForSessionEvent(client, { ...event, agentId: "main" }, {});
     release = subscribeChatMetadata(client, scope, () => {});
     await loadChatMetadataRefresh(client, scope).completed;
-    expect(metadataReads).toBe(2);
-    expect(peekChatMetadata(client, scope)).toEqual(commands);
+    expect(metadataReads).toBe(1);
+    expect(peekChatMetadata(client, scope)).toEqual(retiredCommands);
     expect(peekChatMetadata(client, draft)).toEqual(commands);
     release();
   });
 
-  it.each(["metadata", "catalog"] as const)(
-    "rechecks hidden demand after both producers settle with %s first",
-    async (first) => {
-      const oldCommands = createDeferred<ChatMetadataResult>();
-      const oldCatalog = createDeferred<{ models: typeof models }>();
-      let metadataReads = 0;
-      let catalogReads = 0;
-      const client = createTestGatewayClient((method) => {
-        if (method === "chat.metadata") {
-          return ++metadataReads === 1 ? oldCommands.promise : Promise.resolve(commands);
-        }
-        return ++catalogReads === 1 ? oldCatalog.promise : Promise.resolve({ models });
-      });
-      let active = true;
-      const release = subscribeChatMetadata(
-        client,
-        scope,
-        () => {},
-        () => active,
-      );
-      const original = loadChatMetadataRefresh(client, scope);
-      invalidateChatMetadataStore(client, scope);
-      const successor = loadChatMetadataRefresh(client, scope);
-      active = false;
-      try {
-        if (first === "metadata") {
-          oldCommands.resolve(commands);
-        } else {
-          oldCatalog.resolve({ models });
-        }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        expect([metadataReads, catalogReads]).toEqual([1, 1]);
-        oldCommands.resolve(commands);
-        oldCatalog.resolve({ models });
-        await Promise.all([original.completed, successor.completed]);
-        expect([metadataReads, catalogReads]).toEqual([1, 1]);
-        active = true;
-        const visible = loadChatMetadataRefresh(client, scope);
-        await visible.completed;
-        expect(await visible.catalog).toEqual({ models });
-        expect([metadataReads, catalogReads]).toEqual([2, 2]);
-      } finally {
-        oldCommands.resolve(commands);
-        oldCatalog.resolve({ models });
-        await Promise.all([original.completed, successor.completed]);
-        release();
-      }
-    },
-  );
-
-  it.each(["visible", "invalidated", "remounted"] as const)(
+  it.each(["visible", "remounted"] as const)(
     "preserves a hidden startup fallback until %s demand returns",
     async (returning) => {
       const oldModels = [{ id: "old", name: "Old", provider: "test" }];
@@ -245,89 +343,6 @@ describe("automatic metadata admission", () => {
       } finally {
         pendingCatalog.resolve({ models: oldModels });
         await Promise.all([startup.completed, fallback.completed, visible.completed]);
-        release();
-      }
-    },
-  );
-
-  it.each(["visible metadata", "hidden metadata", "catalog only"] as const)(
-    "adopts an existing queued command only for current %s demand",
-    async (demand) => {
-      const oldCommands = createDeferred<ChatMetadataResult>();
-      const queuedCommands = createDeferred<ChatMetadataResult>();
-      const oldCatalog = createDeferred<{ models: typeof models }>();
-      const currentCommands: ChatMetadataResult = {
-        commands: [
-          {
-            name: "current",
-            description: "Current",
-            source: "native",
-            scope: "text",
-            acceptsArgs: false,
-          },
-        ],
-      };
-      let metadataReads = 0;
-      let catalogReads = 0;
-      const client = createTestGatewayClient((method) => {
-        if (method === "chat.metadata") {
-          metadataReads += 1;
-          return metadataReads === 1
-            ? oldCommands.promise
-            : metadataReads === 2
-              ? queuedCommands.promise
-              : Promise.resolve(currentCommands);
-        }
-        return ++catalogReads === 1 ? oldCatalog.promise : Promise.resolve({ models });
-      });
-      let active = true;
-      const published: ChatMetadataResult[] = [];
-      const release = subscribeChatMetadata(
-        client,
-        scope,
-        (update) => {
-          if (update.type === "result") {
-            published.push(update.result);
-          }
-        },
-        () => active,
-      );
-      const options = demand === "catalog only" ? { kind: "startup" as const } : undefined;
-      const original = loadChatMetadataRefresh(client, scope, options);
-      const explicit = demand === "catalog only" ? loadChatMetadata(client, scope) : undefined;
-      const queued = revalidateChatMetadata(client, scope);
-      const replacements = [];
-      active = demand !== "hidden metadata";
-      for (let index = 0; index < 5; index++) {
-        invalidateChatMetadataStore(client, scope);
-        replacements.push(loadChatMetadataRefresh(client, scope, options));
-      }
-      try {
-        expect([metadataReads, catalogReads]).toEqual([1, 1]);
-        oldCommands.resolve(commands);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        expect([metadataReads, catalogReads]).toEqual([2, 1]);
-        queuedCommands.resolve(currentCommands);
-        await queued;
-        const accepted = demand === "visible metadata";
-        expect(peekChatMetadata(client, scope)).toEqual(accepted ? currentCommands : undefined);
-        expect(published).toEqual(accepted ? [currentCommands] : []);
-        expect([metadataReads, catalogReads]).toEqual([2, 1]);
-        oldCatalog.resolve({ models });
-        await Promise.all(replacements.map((refresh) => refresh.completed));
-        expect([metadataReads, catalogReads]).toEqual([2, active ? 2 : 1]);
-      } finally {
-        oldCommands.resolve(commands);
-        queuedCommands.resolve(currentCommands);
-        oldCatalog.resolve({ models });
-        await Promise.all([
-          original.completed,
-          explicit,
-          queued,
-          ...replacements.map((refresh) => refresh.completed),
-        ]);
         release();
       }
     },

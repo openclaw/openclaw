@@ -17,6 +17,7 @@ import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderConfiguredContext,
 } from "./provider-types.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
@@ -45,25 +46,31 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
     }>;
   };
 
-type InternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean;
-  resolveBrowserSessionCapabilities?: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-    /** Effective per-session model after request overrides. */
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  }) => InternalRealtimeVoiceProviderCapabilities;
-  isGatewayRelayConfigured?: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean | undefined;
+export type InternalRealtimeVoiceProviderApi = {
+  /** @deprecated Use isBrowserSessionConfiguredAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
+  isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  isBrowserSessionConfiguredAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext,
+  ) => Promise<boolean>;
+  /** @deprecated Use resolveBrowserSessionCapabilitiesAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
+  resolveBrowserSessionCapabilities?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      /** Effective per-session model after request overrides. */
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => InternalRealtimeVoiceProviderCapabilities;
+  resolveBrowserSessionCapabilitiesAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => Promise<InternalRealtimeVoiceProviderCapabilities>;
+  /** @deprecated Use isGatewayRelayConfiguredAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
+  isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
+  isGatewayRelayConfiguredAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext,
+  ) => Promise<boolean | undefined>;
   resolveGatewayRelayCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
@@ -85,7 +92,7 @@ type InternalRealtimeVoiceProviderApi = {
   ) => Promise<void> | void;
 };
 
-function readInternalRealtimeVoiceProviderApi(
+export function readInternalRealtimeVoiceProviderApi(
   provider: RealtimeVoiceProviderPlugin,
 ): InternalRealtimeVoiceProviderApi | undefined {
   const value = Reflect.get(provider, INTERNAL_REALTIME_VOICE_PROVIDER) as unknown;
@@ -96,64 +103,6 @@ function readInternalRealtimeVoiceProviderApi(
   return typeof api.isBrowserSessionConfigured === "function"
     ? (api as InternalRealtimeVoiceProviderApi)
     : undefined;
-}
-
-export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-}): boolean | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-    agentId: params.agentId,
-  });
-}
-
-export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-  model?: string;
-  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-}): InternalRealtimeVoiceProviderCapabilities | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
-    {
-      cfg: params.cfg,
-      providerConfig: params.providerConfig,
-      agentId: params.agentId,
-      model: params.model,
-      ...(params.clientControl ? { clientControl: params.clientControl } : {}),
-    },
-  );
-}
-
-export function isInternalRealtimeVoiceGatewayRelayConfigured(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-}): boolean | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.isGatewayRelayConfigured?.({
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-    agentId: params.agentId,
-  });
-}
-
-export function resolveInternalRealtimeVoiceGatewayRelayCapabilities(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  model?: string;
-}): InternalRealtimeVoiceProviderCapabilities | undefined {
-  return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveGatewayRelayCapabilities?.({
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-    model: params.model,
-  });
 }
 
 export function projectInternalRealtimeVoicePublicConfig<

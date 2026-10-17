@@ -3,7 +3,6 @@ import SwiftUI
 enum ColorHexSupport {
     static func color(fromHex raw: String?) -> Color? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
         let hex = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
         guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
         let r = Double((value >> 16) & 0xFF) / 255.0

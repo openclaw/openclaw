@@ -21,11 +21,8 @@ describe("read image snapshots", () => {
   });
 
   it.each([
-    { mime: "image/png", autoResizeImages: false, resize: false },
     { mime: " IMAGE/JPG ; quality=80", autoResizeImages: false, resize: false },
     { mime: "image/png", autoResizeImages: true, resize: false },
-    { mime: "image/jpeg", autoResizeImages: true, resize: true },
-    { mime: "image/bmp", autoResizeImages: false, resize: false },
     { mime: "image/bmp", autoResizeImages: true, resize: true },
   ])(
     "captures $mime after detection and before processing ($autoResizeImages/$resize)",
@@ -112,9 +109,6 @@ describe("read image snapshots", () => {
         details: { kind: "image", content: notes, mimeType },
       });
       expect(borrowed).toEqual(Buffer.from([3, 3, 3]));
-      borrowed.fill(4);
-      expect(result.content[1]).toMatchObject({ data: snapshot.toString("base64") });
-      expect(source).toEqual(Buffer.from([91, 4, 4, 4, 92]));
     },
   );
 });

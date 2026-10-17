@@ -1,12 +1,17 @@
 // Classic setup tests keep every workspace-owned effect on the configured default agent.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
+  readAuthority: vi.fn(),
   readSnapshot: vi.fn(),
+  modelAuth: vi.fn(),
   writeConfig: vi.fn(),
   ensureWorkspaceAndSessions: vi.fn(),
   setupSkills: vi.fn(),
@@ -27,6 +32,7 @@ vi.mock("./setup.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./setup.shared.js")>();
   return {
     ...actual,
+    readSetupConfigAuthority: mocks.readAuthority,
     readSetupConfigFileSnapshot: mocks.readSnapshot,
     readValidSetupConfigFile: vi.fn(),
     requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
@@ -47,12 +53,9 @@ vi.mock("./setup.migration-import.js", () => ({
   runSetupMigrationImport: vi.fn(),
 }));
 
-vi.mock("./setup.model-auth.js", () => ({
-  runSetupModelAuthStep: async ({ config }: { config: OpenClawConfig }) => ({
-    config,
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  }),
+vi.mock("./setup.model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup.model-auth.js")>()),
+  runSetupModelAuthStep: mocks.modelAuth,
 }));
 
 vi.mock("./setup.workspace.js", () => ({
@@ -74,7 +77,6 @@ vi.mock("./setup.gateway-config.js", () => ({
       bind: "loopback",
       authMode: "token",
       gatewayToken: "test-token",
-      tailscaleMode: "off",
     },
   }),
 }));
@@ -109,7 +111,8 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 }));
 
 vi.mock("../commands/onboard-skills.js", () => ({ setupSkills: mocks.setupSkills }));
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   resolveGatewayPort: () => 18789,
   readConfigFileSnapshot: mocks.readSnapshot,
 }));
@@ -138,16 +141,47 @@ const prompter = {
   progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
 } as unknown as WizardPrompter;
 
+function runWizard(opts: OnboardOptions = {}) {
+  return runSetupWizard(
+    {
+      acceptRisk: true,
+      flow: "advanced",
+      mode: "local",
+      authChoice: "skip",
+      installDaemon: false,
+      skipChannels: true,
+      skipSkills: true,
+      skipSearch: true,
+      skipHealth: true,
+      skipHooks: true,
+      skipUi: true,
+      ...opts,
+    },
+    runtime,
+    prompter,
+  );
+}
+
 describe("runSetupWizard default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readAuthority.mockImplementation(async () => ({
+      snapshot: await mocks.readSnapshot(),
+      assertCurrent: () => {},
+    }));
+    mocks.modelAuth
+      .mockReset()
+      .mockImplementation(async ({ config }: { config: OpenClawConfig }) => ({
+        config,
+        authProfiles: [],
+        persistAuthProfiles: async () => {},
+      }));
     const config = {
       wizard: { securityAcknowledgedAt: "2026-07-01T00:00:00.000Z" },
       agents: {
         defaults: { workspace: "/tmp/global-workspace" },
         entries: {
           ops: {
-            default: true,
             agentDir: "/tmp/ops-agent",
             workspace: "/tmp/ops-workspace",
           },
@@ -182,50 +216,50 @@ describe("runSetupWizard default-agent ownership", () => {
     mocks.finalizeSetup.mockResolvedValue({ launchedTui: false });
   });
 
-  it.each([false, true])(
-    "retains the telemetry choice %s when reconciling an authored main roster",
-    async (enabled) => {
-      const config = {
-        gateway: { mode: "local", port: 18789 },
+  it("revokes provider requests when config changes during an earlier setup prompt", async () => {
+    await withOpenClawTestState({ label: "setup-parent-authority" }, async (state) => {
+      const config: OpenClawConfig = {
         agents: { entries: { main: {} } },
-      } satisfies OpenClawConfig;
-      mocks.readSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
-        config,
-        sourceConfig: config,
-        sourceConfigBeforeMigrations: config,
-        issues: [],
-      });
-      vi.mocked(prompter.select).mockResolvedValue(enabled);
-      let persisted: OpenClawConfig | undefined;
-      mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
-        persisted = nextConfig;
-        return { path: "/tmp/openclaw.json", nextConfig };
-      });
-
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          mode: "local",
-          authChoice: "skip",
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipHooks: true,
-          skipUi: true,
-          installDaemon: false,
+        models: {
+          providers: {
+            litellm: { baseUrl: "http://127.0.0.1:19479/original/v1", models: [] },
+          },
         },
-        runtime,
-        prompter,
+      };
+      await state.writeConfig(config);
+      const { readSetupConfigAuthority } =
+        await vi.importActual<typeof import("./setup.shared.js")>("./setup.shared.js");
+      mocks.readAuthority.mockImplementation(readSetupConfigAuthority);
+      let endpointReplaced = false;
+      vi.mocked(prompter.select).mockImplementationOnce(async () => {
+        await state.writeConfig({
+          ...config,
+          models: {
+            providers: {
+              litellm: { baseUrl: "http://127.0.0.1:19479/replacement/v1", models: [] },
+            },
+          },
+        });
+        endpointReplaced = true;
+        return false;
+      });
+      const sendCredentialRequest = vi.fn();
+      mocks.modelAuth.mockImplementationOnce(
+        async ({ assertCurrent }: { assertCurrent?: () => void }) => {
+          assertCurrent?.();
+          sendCredentialRequest();
+          return { config, authProfiles: [], persistAuthProfiles: async () => {} };
+        },
       );
 
-      expect(persisted?.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
-      expect(persisted?.agents?.entries).toEqual({ main: {} });
-    },
-  );
+      await expect(
+        runWizard({ authChoice: "litellm-api-key", workspace: state.workspaceDir }),
+      ).rejects.toBeInstanceOf(ConfigMutationConflictError);
+      expect(endpointReplaced).toBe(true);
+      expect(sendCredentialRequest).not.toHaveBeenCalled();
+      expect(mocks.writeConfig).not.toHaveBeenCalled();
+    });
+  });
 
   it("keeps concurrent gateway settings while carrying the telemetry choice", async () => {
     const config = {
@@ -257,27 +291,56 @@ describe("runSetupWizard default-agent ownership", () => {
       return { path: "/tmp/openclaw.json", nextConfig };
     });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        mode: "local",
-        authChoice: "skip",
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipHooks: true,
-        skipUi: true,
-        installDaemon: false,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ flow: "quickstart" });
 
     expect(persisted?.telemetry).toEqual({ enabled: false, consentedAt: expect.any(String) });
     expect(persisted?.gateway?.port).toBe(24444);
   });
+
+  it.each([false, true])(
+    "checks first-agent authority by authored revision (changed=%s)",
+    async (changed) => {
+      const onboarding = await import("../commands/onboard-agent.js");
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      const runtimeConfig: OpenClawConfig = {
+        ...config,
+        plugins: { entries: { litellm: { enabled: true } } },
+      };
+      const creation = vi.spyOn(onboarding, "ensureOnboardingAgent").mockResolvedValueOnce({
+        config: runtimeConfig,
+        configBase: runtimeConfig,
+        configHash: "created-revision",
+        agentId: "main",
+        createdAgent: true,
+        bootstrapPending: false,
+      });
+      mocks.readAuthority.mockResolvedValue({
+        snapshot: {
+          exists: true,
+          valid: true,
+          config,
+          hash: changed ? "foreign-revision" : "created-revision",
+        },
+        assertCurrent: () => {},
+      });
+
+      try {
+        const result = runWizard({ workspace: "/tmp/global-workspace", agentName: "main" });
+        if (changed) {
+          await expect(result).rejects.toBeInstanceOf(ConfigMutationConflictError);
+          expect(mocks.writeConfig).not.toHaveBeenCalled();
+        } else {
+          await result;
+          expect(mocks.writeConfig).toHaveBeenCalledWith(
+            expect.objectContaining({ plugins: runtimeConfig.plugins }),
+            expect.any(Object),
+          );
+        }
+      } finally {
+        creation.mockRestore();
+      }
+    },
+  );
 
   it("waits for recommendation persistence and propagates failure before finalization", async () => {
     const commitStarted = createDeferred();
@@ -292,24 +355,7 @@ describe("runSetupWizard default-agent ownership", () => {
     mocks.setupRecommendations.mockImplementation(
       async ({ config }: { config: OpenClawConfig }) => ({ config, commitResult }),
     );
-    const outcome = runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "local",
-        workspace: "/tmp/global-workspace",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipHooks: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    ).then(
+    const outcome = runWizard({ workspace: "/tmp/global-workspace" }).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -331,23 +377,7 @@ describe("runSetupWizard default-agent ownership", () => {
   });
 
   it("uses the keyed default-agent workspace for all classic agent-owned effects", async () => {
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "local",
-        workspace: "/tmp/global-workspace",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipHooks: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ workspace: "/tmp/global-workspace", skipSkills: false });
 
     expect(mocks.writeConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({

@@ -123,6 +123,59 @@ describe("git install target ownership", () => {
     },
   );
 
+  it("installs a local-path source without sharing its Git object files", async () => {
+    const commit = await git(sourceDir, "rev-parse", "HEAD");
+    const objectPath = path.join("objects", commit.slice(0, 2), commit.slice(2));
+    const sourceObject = path.join(sourceDir, ".git", objectPath);
+    let reviewedIndex: string | undefined;
+    const installed = await installPluginFromGitSpec({
+      spec: "git:" + path.join(sourceDir, ".git"),
+      onBeforePluginArtifactCommit: async ({ stagedArtifactDir }) => {
+        reviewedIndex = await fs.readFile(path.join(stagedArtifactDir, "index.js"), "utf8");
+      },
+    });
+    if (!installed.ok) {
+      throw new Error(installed.error);
+    }
+
+    expect(reviewedIndex).toBe('export default "1.0.0";\n');
+    await expect(fs.readFile(path.join(installed.targetDir, "index.js"), "utf8")).resolves.toBe(
+      reviewedIndex,
+    );
+    expect((await fs.stat(sourceObject)).nlink).toBe(1);
+    expect((await fs.stat(path.join(installed.targetDir, ".git", objectPath))).nlink).toBe(1);
+    expect(await git(installed.targetDir, "rev-parse", "HEAD")).toBe(commit);
+  });
+
+  it("restores the prior checkout when a deferred Git update is rolled back", async () => {
+    const installed = await installPluginFromGitSpec({ spec });
+    if (!installed.ok) {
+      throw new Error(installed.error);
+    }
+    await fs.writeFile(path.join(installed.targetDir, "operator-note.txt"), "keep this checkout");
+    const nextCommit = await commitPlugin("demo", "2.0.0");
+    const updated = await installPluginFromGitSpec(
+      requestDeferredPluginInstall({ spec, mode: "update", expectedPluginId: "demo" }),
+    );
+    if (!updated.ok) {
+      throw new Error(updated.error);
+    }
+    expect(await git(updated.targetDir, "rev-parse", "HEAD")).toBe(nextCommit);
+    const transaction = resolvePluginInstallTransaction(updated);
+    if (!transaction) {
+      throw new Error("Expected deferred Git update transaction");
+    }
+    await transaction.rollback();
+
+    expect(await git(installed.targetDir, "rev-parse", "HEAD")).toBe(installed.git.commit);
+    await expect(fs.readFile(path.join(installed.targetDir, "index.js"), "utf8")).resolves.toBe(
+      'export default "1.0.0";\n',
+    );
+    await expect(
+      fs.readFile(path.join(installed.targetDir, "operator-note.txt"), "utf8"),
+    ).resolves.toBe("keep this checkout");
+  });
+
   it.each([
     { pluginId: "demo", deferred: false },
     { pluginId: "renamed-demo", deferred: false },

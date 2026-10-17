@@ -1,18 +1,12 @@
 import { beginDiscordActiveTurnThreadRoute } from "../active-turn-thread-route.js";
-
-type DiscordReplyReference = {
-  peek: () => string | undefined;
-  use: () => string | undefined;
-  markSent: () => void;
-  hasReplied: () => boolean;
-};
+import type { DiscordReplyDeliveryPlan } from "./threading.types.js";
 
 export function createDiscordMessageActiveThreadRoute(params: {
   sessionKey?: string;
   accountId?: string;
   sourceChannelId: string;
   sourceMessageId: string;
-  sourceReplyReference: DiscordReplyReference;
+  sourceReplyReference: DiscordReplyDeliveryPlan["replyReference"];
   log: (message: string) => void;
 }) {
   let adoptedThreadId: string | undefined;

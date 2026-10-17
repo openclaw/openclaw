@@ -46,11 +46,11 @@ private actor SidebarFixtureTransport: OpenClawChatTransport {
         throw URLError(.unsupportedURL)
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        .init(defaultId: "main", agents: [
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(.init(defaultId: "main", agents: [
             .init(id: "main", name: "Assistant", emoji: "🦞"),
             .init(id: "research", name: "Research", emoji: "🔎"),
-        ])
+        ]))
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {

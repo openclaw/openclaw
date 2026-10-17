@@ -15,7 +15,7 @@ const sessionAccessorMocks = vi.hoisted(() => ({
 vi.mock("../config/sessions/session-accessor.js", () => sessionAccessorMocks);
 
 const sessionKeyResolverMocks = vi.hoisted(() => ({
-  resolveStoredSessionKeyForSessionId: vi.fn(() => ({
+  resolveStoredSessionKeyForSessionId: vi.fn(async () => ({
     sessionKey: "session-key",
     storePath: "/tmp/openclaw-session-suspension-test/sessions.json",
   })),
@@ -81,15 +81,36 @@ describe("session suspension", () => {
     ).resolves.toBe("unrelated-provider-ok");
   });
 
-  it("keeps the shared lane runnable when marker persistence fails", async () => {
-    sessionAccessorMocks.patchSessionEntryCore.mockRejectedValueOnce(new Error("disk busy"));
+  it.each(["session lookup", "marker persistence"])(
+    "keeps the shared lane and later suspensions runnable when %s fails",
+    async (failure) => {
+      let storedMarker: QuotaSuspension | undefined;
+      sessionAccessorMocks.patchSessionEntryCore.mockImplementation(async (_scope, update) => {
+        const entry = update({});
+        storedMarker = entry.quotaSuspension;
+        return entry;
+      });
+      if (failure === "session lookup") {
+        sessionKeyResolverMocks.resolveStoredSessionKeyForSessionId.mockRejectedValueOnce(
+          new Error("Session history database read was revoked"),
+        );
+      } else {
+        sessionAccessorMocks.patchSessionEntryCore.mockRejectedValueOnce(new Error("disk busy"));
+      }
 
-    await recordSuspension();
-
-    await expect(enqueueCommandInLane(CommandLane.Main, async () => "still-runs")).resolves.toBe(
-      "still-runs",
-    );
-  });
+      await expect(recordSuspension()).resolves.toBeUndefined();
+      expect(storedMarker).toBeUndefined();
+      await expect(enqueueCommandInLane(CommandLane.Main, async () => "still-runs")).resolves.toBe(
+        "still-runs",
+      );
+      await recordSuspension();
+      expect(storedMarker).toMatchObject({
+        state: "suspended",
+        failedProvider: "openai",
+        failedModel: "gpt-5.6-sol",
+      });
+    },
+  );
 
   it("resolves the session store with the explicit agent id, never the agentDir basename", async () => {
     const { suspendSession } = await import("./session-suspension.js");
@@ -142,67 +163,6 @@ describe("session suspension", () => {
       expect.objectContaining({ agentId: "research" }),
     );
   });
-
-  it.each([
-    {
-      name: "the previous marker",
-      previousQuotaSuspension: {
-        schemaVersion: 1,
-        suspendedAt: 100,
-        reason: "manual",
-        failedProvider: "previous-provider",
-        failedModel: "previous-model",
-        summary: "previous briefing",
-        snapshotRef: "previous-snapshot",
-        laneId: "previous-lane",
-        expectedResumeBy: 500,
-        state: "resuming",
-      } satisfies QuotaSuspension,
-    },
-    { name: "an absent marker", previousQuotaSuspension: undefined },
-  ])(
-    "restores $name when a committed write finishes after shutdown",
-    async ({ previousQuotaSuspension }) => {
-      const { fenceSessionSuspensionWritesForGatewayShutdown } =
-        await import("./session-suspension.js");
-      const committed = createDeferred();
-      const releaseWrite = createDeferred();
-      let storeEntry: { quotaSuspension?: QuotaSuspension } = {
-        quotaSuspension: previousQuotaSuspension,
-      };
-      let writeCount = 0;
-      sessionAccessorMocks.patchSessionEntryCore.mockImplementation(async (_scope, update) => {
-        writeCount += 1;
-        const patch = update(storeEntry) as typeof storeEntry | null;
-        if (patch && "quotaSuspension" in patch) {
-          storeEntry = patch.quotaSuspension ? { quotaSuspension: patch.quotaSuspension } : {};
-        }
-        if (writeCount === 1) {
-          committed.resolve();
-          await releaseWrite.promise;
-        }
-        return storeEntry;
-      });
-
-      const suspension = recordSuspension();
-      await committed.promise;
-      try {
-        expect(storeEntry.quotaSuspension).toMatchObject({
-          reason: "quota_exhausted",
-          failedProvider: "openai",
-          failedModel: "gpt-5.6-sol",
-          state: "suspended",
-        });
-        fenceSessionSuspensionWritesForGatewayShutdown();
-      } finally {
-        releaseWrite.resolve();
-        await suspension;
-      }
-
-      expect(storeEntry.quotaSuspension).toEqual(previousQuotaSuspension);
-      expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it("serializes same-session writes until the previous committed write returns", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);

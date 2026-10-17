@@ -30,11 +30,7 @@ export function isEmbeddedRunTerminalToolFailure(
   );
 }
 
-/**
- * Preserves one strictly allowlisted Code Mode catalog-miss fact for cron
- * history. All other tool errors stay on the existing generic presentation
- * path.
- */
+/** Only the allowlisted catalog miss can enter cron history; other errors stay generic. */
 export function resolveEmbeddedRunTerminalToolFailure(params: {
   trigger?: string | undefined;
   codeModeEngaged?: boolean | undefined;
@@ -51,10 +47,8 @@ export function resolveEmbeddedRunTerminalToolFailure(params: {
   ) {
     return undefined;
   }
-  const failureFirstLine =
-    typeof failure.error === "string" ? failure.error.split(/\r?\n/, 1)[0] : undefined;
-  const match = failureFirstLine ? SAFE_MCP_CATALOG_MISS.exec(failureFirstLine) : null;
-  if (!match) {
+  const failureFirstLine = failure.error?.split(/\r?\n/, 1)[0];
+  if (!failureFirstLine || !SAFE_MCP_CATALOG_MISS.test(failureFirstLine)) {
     return undefined;
   }
   return {

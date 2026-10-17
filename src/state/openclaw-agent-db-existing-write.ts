@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
@@ -17,7 +17,7 @@ const existingAgentLeaseSchema = ["schema_meta", "state_leases", "agent_database
 export function withExistingAgentLeaseWrite<T>(
   maintenance: OpenClawStateLeaseContext,
   options: OpenClawStateDatabaseOptions,
-  operation: (db: DatabaseSync) => T,
+  operation: (db: EngineConnection) => T,
 ): T {
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -30,7 +30,8 @@ export function withExistingAgentLeaseWrite<T>(
     {
       operationLabel: "agent.database.maintenance.admission",
       schemaSql: existingAgentLeaseSchema,
-      busyTimeoutMs: 0,
+      // Maintenance must drain published lease schemas before first-use provenance is added.
+      schemaCompatibility: { allowedMissingColumns: ["agent_database_leases.provenance"] },
     },
   );
 }

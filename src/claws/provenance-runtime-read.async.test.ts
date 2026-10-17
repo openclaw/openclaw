@@ -5,7 +5,13 @@ import type { ClawInstallSchemaVersionRow } from "./provenance-runtime-read.kern
 const worker = vi.hoisted(() => ({
   read: vi.fn<() => Promise<ClawInstallSchemaVersionRow[] | undefined>>(),
   assertCurrent: vi.fn<() => void>(),
+  lifecycle: vi.fn(),
 }));
+
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
+  return { ...actual, registerOpenClawStateDatabaseLifecycleListener: worker.lifecycle };
+});
 
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: worker.read,
@@ -25,7 +31,6 @@ import {
   cacheClawInstallSchemaVersion,
   captureClawInstallSchemaVersionFacts,
   deleteCachedClawInstallSchemaVersion,
-  initializeCachedClawInstallSchemaVersions,
   prepareClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
   withClawInstallSchemaVersionFacts,
@@ -40,6 +45,10 @@ const row = {
   agentConfigDigest: "original",
 };
 
+function schemaVersions(agentConfigDigest: string) {
+  return new Map([["worker", { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest }]]);
+}
+
 beforeEach(() => {
   options = { path: `/claw-consent-preparation-${++pathSequence}.sqlite` };
   worker.assertCurrent.mockReset();
@@ -47,6 +56,14 @@ beforeEach(() => {
 });
 
 describe("asynchronous Claw consent preparation", () => {
+  it("keeps published consent facts when another owner opens the database", async () => {
+    (await prepareClawInstallSchemaVersions(options)).publish();
+    const current = readCachedClawInstallSchemaVersions(options);
+    const listener = worker.lifecycle.mock.calls[0]?.[0];
+    listener({ kind: "opened", database: { path: options.path } });
+    expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
+  });
+
   it("hands off one task's facts without replacing newer host facts or retaining the scope", async () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
     const facts = structuredClone(captureClawInstallSchemaVersionFacts(options));
@@ -58,21 +75,15 @@ describe("asynchronous Claw consent preparation", () => {
       const captured = AsyncLocalStorage.snapshot();
       readAfterScope = () => captured(() => readCachedClawInstallSchemaVersions(options));
       for (let tick = 0; tick < 5; tick++) {
-        initializeCachedClawInstallSchemaVersions(options);
         expect(readCachedClawInstallSchemaVersions(options)).toEqual({
           kind: "ready",
-          schemaVersions: new Map([
-            [
-              "worker",
-              { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "original" },
-            ],
-          ]),
+          schemaVersions: schemaVersions("original"),
         });
         await Promise.resolve();
       }
-      expect(() =>
-        initializeCachedClawInstallSchemaVersions({ path: `${options.path}-other` }),
-      ).toThrow("outside their captured state scope");
+      expect(() => readCachedClawInstallSchemaVersions({ path: `${options.path}-other` })).toThrow(
+        "outside their captured state scope",
+      );
     });
     expect(readAfterScope).toThrow("outside their captured state scope");
     expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
@@ -88,6 +99,7 @@ describe("asynchronous Claw consent preparation", () => {
     async (state) => {
       if (state === "state-error") {
         (await prepareClawInstallSchemaVersions(options)).publish();
+        worker.lifecycle.mock.calls[0]?.[0]({ kind: "closed", path: options.path });
         worker.read.mockRejectedValueOnce(new Error("Unreadable provenance"));
         (await prepareClawInstallSchemaVersions(options)).publish();
       } else if (state === "invalid-row") {
@@ -97,7 +109,6 @@ describe("asynchronous Claw consent preparation", () => {
       const facts = structuredClone(captureClawInstallSchemaVersionFacts(options));
       worker.read.mockClear();
       await withClawInstallSchemaVersionFacts(facts, async () => {
-        initializeCachedClawInstallSchemaVersions(options);
         const snapshot = readCachedClawInstallSchemaVersions(options);
         if (state === "invalid-row") {
           expect(snapshot.kind).toBe("ready");
@@ -128,9 +139,7 @@ describe("asynchronous Claw consent preparation", () => {
 
     expect(readCachedClawInstallSchemaVersions(options)).toEqual({
       kind: "ready",
-      schemaVersions: new Map([
-        ["worker", { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "original" }],
-      ]),
+      schemaVersions: schemaVersions("original"),
     });
   });
 
@@ -151,18 +160,36 @@ describe("asynchronous Claw consent preparation", () => {
       expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
       expect(current).toEqual({
         kind: "ready",
-        schemaVersions:
-          mutation === "update"
-            ? new Map([
-                [
-                  "worker",
-                  { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "newer" },
-                ],
-              ])
-            : new Map(),
+        schemaVersions: mutation === "update" ? schemaVersions("newer") : new Map(),
       });
     },
   );
+
+  it("reuses committed changes until database closure requires a new read", async () => {
+    (await prepareClawInstallSchemaVersions(options)).publish();
+    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+    (await prepareClawInstallSchemaVersions(options)).publish();
+    expect(readCachedClawInstallSchemaVersions(options)).toEqual({
+      kind: "ready",
+      schemaVersions: schemaVersions("newer"),
+    });
+
+    deleteCachedClawInstallSchemaVersion("worker", options);
+    (await prepareClawInstallSchemaVersions(options)).publish();
+    expect(readCachedClawInstallSchemaVersions(options)).toEqual({
+      kind: "ready",
+      schemaVersions: new Map(),
+    });
+    expect(worker.read).toHaveBeenCalledTimes(1);
+
+    worker.lifecycle.mock.calls[0]?.[0]({ kind: "closed", path: options.path });
+    (await prepareClawInstallSchemaVersions(options)).publish();
+    expect(worker.read).toHaveBeenCalledTimes(2);
+    expect(readCachedClawInstallSchemaVersions(options)).toEqual({
+      kind: "ready",
+      schemaVersions: schemaVersions("original"),
+    });
+  });
 
   it("fails closed if database admission expires before publication", async () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
@@ -180,18 +207,5 @@ describe("asynchronous Claw consent preparation", () => {
       knownAgentIds: new Set(["worker"]),
       ownershipUnknown: true,
     });
-  });
-
-  it("does not let an obsolete failed read poison a newer consent snapshot", async () => {
-    (await prepareClawInstallSchemaVersions(options)).publish();
-    worker.read.mockRejectedValueOnce(new Error("Read failed"));
-    const failed = await prepareClawInstallSchemaVersions(options);
-    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
-    const current = readCachedClawInstallSchemaVersions(options);
-
-    failed.publish();
-
-    expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
-    expect(current.kind).toBe("ready");
   });
 });

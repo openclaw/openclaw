@@ -1,4 +1,4 @@
-import type { RedactMatch, ResolvedRedactPattern } from "./redact-pattern-runtime.js";
+import type { RedactContext, RedactMatch } from "./redact-pattern-runtime.js";
 
 export const PEM_REDACT_PATTERN_SOURCE = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`;
 
@@ -172,13 +172,24 @@ export const PEM_REDACT_MATCHER = {
   exec(text: string): Iterable<RedactMatch> {
     return matchPem(text, createState(), false);
   },
-  createContext(): {
-    pattern: ResolvedRedactPattern;
-    prepend: () => { consume: (text: string) => void; finish: () => boolean };
-  } {
+  createContext(): RedactContext {
     let whenClosed = false;
     let whenOpen = true;
     return {
+      resolve(active) {
+        whenClosed = active ? whenOpen : whenClosed;
+        whenOpen = whenClosed;
+      },
+      advance(text) {
+        const state = createState();
+        if (whenClosed) {
+          state.open = { start: -1, end: -1 };
+        }
+        for (const delimiter of readDelimiters(text, state.scanner)) {
+          consumeDelimiter(state, delimiter);
+        }
+        return state.open !== undefined;
+      },
       prepend() {
         const closed = createState();
         const open = createState();

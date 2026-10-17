@@ -1,30 +1,33 @@
-import { afterEach, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import type { WorkerInferenceStartParams } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import * as sessionAuthRuntime from "../../agents/auth-profiles/session-override.js";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
 import * as diagnosticModelCallRuntime from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/stream-resolution.js";
 import * as modelSelectionRuntime from "../../agents/model-selection.js";
+import type { PreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime-auth.js";
 import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import * as providerStreamRuntime from "../../agents/provider-stream.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
-import { createEmptyPluginMetadataSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as sessionEntryRuntime from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as diagnosticTraceRuntime from "../../infra/diagnostic-trace-context.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import {
-  executeWorkerInference,
-  type WorkerInferenceExecutionParams,
-} from "./inference-runtime.js";
-import * as sessionTargetRuntime from "./session-target.js";
+import type { WorkerInferenceExecutionParams } from "./inference-runtime.js";
+import { executeWorkerInference } from "./inference.js";
+import * as workerTurnOwners from "./placement-turn-claim-events.js";
+import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
 type Deps = {
   applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
@@ -50,6 +53,12 @@ export const PROFILE = ["gateway", "profile"].join("-");
 export const AUTH_MARKER = ["gateway", "profile", "value"].join("-");
 export const SESSION_ID = "session-runtime-test";
 export const SESSION_KEY = "agent:runtime-agent:main";
+const sessionTarget: BoundAgentRunSessionTarget = {
+  agentId: "runtime-agent",
+  sessionId: SESSION_ID,
+  sessionKey: SESSION_KEY,
+  storePath: "runtime-sessions.json",
+};
 export const TOOL_CALL = { type: "toolCall" as const, id: "call-1", name: "lookup", arguments: {} };
 const WORKSPACE_BASE = "/gateway-workspace";
 export const WORKSPACE = `${WORKSPACE_BASE}/runtime-agent`;
@@ -61,16 +70,15 @@ export const config = {
       models: { [`${PROVIDER}/${MODEL}`]: {} },
       workspace: WORKSPACE_BASE,
     },
-    list: [
-      { id: "main", default: true },
-      {
-        id: "runtime-agent",
+    entries: {
+      main: {},
+      "runtime-agent": {
         models: {
           [`${PROVIDER}/${MODEL}`]: { alias: ALIAS, agentRuntime: { id: "openclaw" } },
         },
         params: { temperature: 0.1 },
       },
-    ],
+    },
   },
 } satisfies OpenClawConfig;
 export const sessionEntry: SessionEntry = {
@@ -180,8 +188,12 @@ export function providerStream(message = finalMessage(), options: { omitToolEnd?
 export function setup(
   entry: SessionEntry = sessionEntry,
   options: {
+    config?: OpenClawConfig;
     catalogOnlyModel?: boolean;
+    accountCatalog?: PreparedAccountCatalogAccess;
+    metadataSnapshot?: preparedRuntime.PreparedModelRuntimeSnapshot["metadataSnapshot"];
     pluginRegistry?: PluginRegistry;
+    configuredRuntimeModel?: ProviderRuntimeModel;
     afterModelPreparation?: () => void;
     observeStage?: (
       stage: "factory" | "policy" | "wrapper" | "execution",
@@ -199,16 +211,17 @@ export function setup(
     prepareWorkspace?: string;
   } = {};
   const preparedModelRuntime = {
+    accountCatalog: options.accountCatalog,
     catalogOwner: undefined,
     agentDir: "/gateway-agent",
     activeProjectKeys: [],
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
-    config,
-    observationConfig: config,
+    config: options.config ?? config,
+    observationConfig: options.config ?? config,
     isCurrent: () => true,
     authModes: {},
-    metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),
+    metadataSnapshot: options.metadataSnapshot ?? createEmptyPluginMetadataSnapshot(WORKSPACE),
     pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
     modelCatalog: {
       entries: [
@@ -218,7 +231,7 @@ export function setup(
       routeVariants: [],
     },
     configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
+    findConfiguredRuntimeModel: () => options.configuredRuntimeModel,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;
@@ -275,6 +288,9 @@ export function setup(
     return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
   });
   const releaseRuntime = vi.fn(async () => {});
+  const readPromptCacheContext = vi
+    .spyOn(workerTurnOwners, "readWorkerTurnPromptCacheContext")
+    .mockReturnValue({ boundaryCount: 0 });
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
     const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
@@ -282,6 +298,7 @@ export function setup(
     return {
       snapshot: leased,
       pluginGeneration: {
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
         pluginMetadataSnapshot: leased.metadataSnapshot,
@@ -290,14 +307,12 @@ export function setup(
       [Symbol.asyncDispose]: releaseRuntime,
     };
   });
-  vi.spyOn(sessionTargetRuntime, "resolveWorkerSessionTarget").mockReturnValue({
-    agentId: "runtime-agent",
-    sessionEntry: entry,
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    sessionStore: { [SESSION_KEY]: entry },
-    storePath: "runtime-sessions.json",
-  });
+  const readSessionEntry = vi
+    .spyOn(sessionEntryRuntime, "readSessionEntryInWorker")
+    .mockImplementation(async (target) => {
+      expect(target).toEqual(sessionTarget);
+      return entry;
+    });
   vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
     acquireRuntimeLease,
   );
@@ -330,12 +345,41 @@ export function setup(
     traceId: "1".repeat(32),
     spanId: "2".repeat(16),
   });
+  const withPreparedInference = async <T>(
+    run: () => Promise<T>,
+    input = params(request(), vi.fn()),
+  ) => {
+    await using lease = await acquireRuntimeLease({
+      config: options.config ?? config,
+      agentId: sessionTarget.agentId,
+      agentDir: "/gateway-agent",
+    });
+    const { inference } = await prepareWorkerTurnModel({
+      target: sessionTarget,
+      modelRef: input.request.modelRef,
+      runtimeSnapshot: lease.snapshot,
+      inferencePlacement: "gateway",
+      turn: { abortSignal: input.signal, workspaceDir: WORKSPACE },
+      assertCurrent: () => {
+        if (!input.isCurrent()) {
+          throw new Error("Worker inference source is no longer current");
+        }
+      },
+    });
+    vi.spyOn(workerTurnOwners, "getWorkerTurnInference").mockReturnValue(inference);
+    return await run();
+  };
   return {
     applyStreamPolicy,
-    executor: executeWorkerInference,
+    executor: (input: Execution) =>
+      withPreparedInference(() => executeWorkerInference(input), input),
+    executePrepared: executeWorkerInference,
+    withPreparedInference,
     acquireRuntimeLease,
     prepareModel,
     releaseRuntime,
+    readSessionEntry,
+    readPromptCacheContext,
     resolveAuthSelection,
     scope,
     stream,
@@ -345,14 +389,13 @@ export function setup(
 export function params(
   inferenceRequest: WorkerInferenceStartParams,
   emit: Execution["emit"],
-  runtimeConfig: OpenClawConfig = config,
 ): Execution {
   return {
     identity,
+    sessionTarget,
     request: inferenceRequest,
     signal: new AbortController().signal,
     emit,
     isCurrent: () => true,
-    config: runtimeConfig,
   };
 }

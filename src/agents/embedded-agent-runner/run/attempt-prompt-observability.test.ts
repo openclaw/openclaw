@@ -87,7 +87,6 @@ function createInput(overrides: Partial<PromptObservabilityInput> = {}): PromptO
     isRawModelRun: false,
     llmBoundaryPromptForPrecheck: "[boundary] model prompt",
     promptForModel: "model prompt",
-    promptSubmissionRuntimeOnly: false,
     reserveTokens: 4_096,
     runTrace: {
       traceId: "1".repeat(32),

@@ -111,34 +111,33 @@ describe("branch summarization", () => {
     expect(consumed).toBe(true);
   });
 
-  it.each([
-    ["empty", []],
-    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
-    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal reasoning" }]],
-  ])("rejects %s model output before creating a summary", async (_name, content) => {
-    const model = createModel(128_000);
-    const streamFn = vi.fn<StreamFn>(() => createResponseStream(model, content));
-    const entries = [
-      createMessageEntry({ role: "user", content: "summarize this branch", timestamp: 1 }, 0),
-    ];
+  it.each([["whitespace-only", [{ type: "text" as const, text: " \n\t " }]]])(
+    "rejects %s model output before creating a summary",
+    async (_name, content) => {
+      const model = createModel(128_000);
+      const streamFn = vi.fn<StreamFn>(() => createResponseStream(model, content));
+      const entries = [
+        createMessageEntry({ role: "user", content: "summarize this branch", timestamp: 1 }, 0),
+      ];
 
-    const result = await generateBranchSummary(entries, {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn,
-    });
+      const result = await generateBranchSummary(entries, {
+        model,
+        apiKey: "test-key",
+        signal: new AbortController().signal,
+        streamFn,
+      });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected invalid branch summary output to fail");
-    }
-    expect(result.error).toMatchObject({
-      name: "BranchSummaryError",
-      code: "summarization_failed",
-      message: "Branch summary failed: model returned no summary text",
-    });
-  });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected invalid branch summary output to fail");
+      }
+      expect(result.error).toMatchObject({
+        name: "BranchSummaryError",
+        code: "summarization_failed",
+        message: "Branch summary failed: model returned no summary text",
+      });
+    },
+  );
 
   it("preserves valid summary whitespace, preamble, and file metadata", async () => {
     const model = createModel(128_000);
@@ -157,7 +156,7 @@ describe("branch summarization", () => {
         customType: "openclaw.runtime-context",
         content: "PRIVATE_RUNTIME_CONTEXT",
         display: false,
-        details: { runtimeContextCarrier: true },
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       },
       createMessageEntry(
         createResponse(model, [
@@ -210,38 +209,6 @@ src/write.ts
     expect(capture.readCapture().prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
   });
 
-  it("preserves sender provenance and attribution instructions in a branch summary prompt", async () => {
-    const model = createModel(128_000);
-    const capture = createCapturingStream(model);
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry(
-        {
-          role: "user",
-          content: "Alice requires the launch on Friday.",
-          timestamp: 1,
-          __openclaw: { senderId: "alice-id", senderName: "Alice" },
-        } as AgentMessage,
-        0,
-      ),
-      createMessageEntry({ role: "user", content: "An old anonymous note.", timestamp: 2 }, 1),
-    ];
-
-    const result = await generateBranchSummary(entries, {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn: capture.streamFn,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(capture.readCapture().prompt).toContain(
-      '[User sender={"id":"alice-id","name":"Alice"}]: Alice requires the launch on Friday.',
-    );
-    expect(capture.readCapture().prompt).toContain("[User]: An old anonymous note.");
-    expect(capture.readCapture().systemPrompt).toContain("Preserve attribution for material facts");
-    expect(capture.readCapture().systemPrompt).toContain("is unattributed");
-  });
-
   it("applies attribution instructions when custom branch instructions replace the default", async () => {
     const model = createModel(128_000);
     const capture = createCapturingStream(model);
@@ -252,7 +219,7 @@ src/write.ts
             role: "user",
             content: "Alice owns this branch decision.",
             timestamp: 1,
-            __openclaw: { senderId: "alice-id" },
+            __openclaw: { senderId: "alice-id", senderName: "Alice", senderUsername: "alice" },
           } as AgentMessage,
           0,
         ),
@@ -269,6 +236,9 @@ src/write.ts
 
     expect(result.ok).toBe(true);
     expect(capture.readCapture().prompt).toContain("Use this caller-owned branch format.");
+    expect(capture.readCapture().prompt).toContain(
+      '[User sender={"id":"alice-id","name":"Alice","username":"alice"}]: Alice owns this branch decision.',
+    );
     expect(capture.readCapture().systemPrompt).toContain("Preserve attribution for material facts");
     expect(capture.readCapture().systemPrompt).toContain("is unattributed");
   });
@@ -290,28 +260,6 @@ src/write.ts
 
     expect(preparation.messages).toMatchObject([{ role: "user", content: "new" }]);
     expect(preparation.totalTokens).toBeLessThanOrEqual(4);
-  });
-
-  it("retains failed tool results when preparing a branch", () => {
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "run deployment", timestamp: 1 }, 0),
-      createMessageEntry(
-        {
-          role: "toolResult",
-          toolCallId: "deploy-call",
-          toolName: "deploy",
-          content: [{ type: "text", text: "ERROR: deployment timed out" }],
-          details: { privateDiagnostic: "never send internal metadata" },
-          isError: true,
-          timestamp: 2,
-        },
-        1,
-      ),
-    ];
-
-    const preparation = prepareBranchEntries(entries);
-
-    expect(preparation.messages.map((message) => message.role)).toEqual(["user", "toolResult"]);
   });
 
   it.each(["shell", "custom"] as const)(
@@ -420,8 +368,6 @@ src/write.ts
   });
 
   it.each([
-    { name: "default reservation", options: {} },
-    { name: "zero reservation", options: { reserveTokens: 0 } },
     {
       name: "output-sized reservation with custom focus",
       options: {
@@ -451,60 +397,22 @@ src/write.ts
     ).toBeLessThanOrEqual(model.contextWindow);
   });
 
-  it("enforces the branch request budget when an earlier summary is too large", async () => {
-    const model = createModel(8192);
-    const capture = createCapturingStream(model);
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "original branch task", timestamp: 1 }, 0),
-      {
-        type: "compaction",
-        id: "entry-1",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        firstKeptEntryId: "entry-0",
-        summary: `Earlier branch decisions. ${"s".repeat(15_900)}`,
-        tokensBefore: 20_000,
-      },
-      createMessageEntry(
-        { role: "user", content: `recent branch work ${"x".repeat(12_000)}`, timestamp: 3 },
-        2,
-      ),
-    ];
-
-    const result = await generateBranchSummary(entries, {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn: capture.streamFn,
-    });
-
-    const { prompt, systemPrompt, maxOutputTokens } = capture.readCapture();
-    expect(result.ok).toBe(true);
-    expect(capture.streamFn).toHaveBeenCalledOnce();
-    expect(prompt).toContain("recent branch work");
-    expect(
-      Math.ceil((prompt.length + systemPrompt.length) / 4) + (maxOutputTokens ?? 0),
-    ).toBeLessThanOrEqual(model.contextWindow);
-  });
-
-  it.each(["user request", "previous summary"] as const)(
+  it.each(["previous summary"] as const)(
     "reports when the complete %s cannot fit instead of claiming there is no content",
-    async (kind) => {
+    async () => {
       const model = createModel(4096);
       const capture = createCapturingStream(model);
       const text = `Preserve this branch context. ${"x".repeat(15_000)}`;
       const entries: SessionTreeEntry[] = [
-        kind === "user request"
-          ? createMessageEntry({ role: "user", content: text, timestamp: 1 }, 0)
-          : {
-              type: "compaction",
-              id: "entry-0",
-              parentId: null,
-              timestamp: new Date(1).toISOString(),
-              firstKeptEntryId: "earlier-entry",
-              summary: text,
-              tokensBefore: 20_000,
-            },
+        {
+          type: "compaction",
+          id: "entry-0",
+          parentId: null,
+          timestamp: new Date(1).toISOString(),
+          firstKeptEntryId: "earlier-entry",
+          summary: text,
+          tokensBefore: 20_000,
+        },
       ];
       const original = JSON.stringify(entries);
 

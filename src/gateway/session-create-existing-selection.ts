@@ -1,10 +1,31 @@
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+
+/** Creation can adopt a key, but only an explicit settings mutation can replace its policy. */
+export function sessionCreatePolicyAdoptionError(
+  existing: SessionEntry | undefined,
+  projected: SessionEntry,
+  requested: Pick<Partial<SessionEntry>, "toolOverrides" | "communication">,
+): string | undefined {
+  if (existing) {
+    for (const field of ["toolOverrides", "communication"] as const) {
+      if (
+        requested[field] !== undefined &&
+        stableStringify(existing[field]) !== stableStringify(projected[field])
+      ) {
+        return "sessions.create " + field + " requires a new session";
+      }
+    }
+  }
+  return undefined;
+}
 
 export async function existingSessionSelectionWouldChange(params: {
   agentId: string;
@@ -64,13 +85,16 @@ export async function existingSessionSelectionWouldChange(params: {
     return true;
   }
   const catalog = await params.loadGatewayModelCatalogSnapshot();
-  const resolved = resolveSessionPatchModelSelection({
+  const selectionPolicy = {
     cfg: params.cfg,
     agentId: params.agentId,
     catalog: catalog.entries,
-    raw: requestedModel,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+  };
+  const resolved = resolveSessionPatchModelSelection({
+    ...selectionPolicy,
+    raw: requestedModel,
     subagentModelHint: params.subagentModelHint,
   });
   if (!resolved.ok) {
@@ -84,12 +108,8 @@ export async function existingSessionSelectionWouldChange(params: {
     normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
   if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
     const resolvedSubagentDefault = resolveSessionPatchModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      catalog: catalog.entries,
+      ...selectionPolicy,
       raw: params.subagentModelHint,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
     });
     if (!resolvedSubagentDefault.ok) {
       return true;
@@ -101,13 +121,19 @@ export async function existingSessionSelectionWouldChange(params: {
   }
   const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
   const requestedProfile = normalizeOptionalString(resolved.profile);
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const recordedProvider =
+    requestedProfile === undefined && existingProfile
+      ? await prepareAuthProfileProvider({ agentDir, profileId: existingProfile })
+      : undefined;
   const profileWouldChange =
     requestedProfile !== undefined
       ? requestedProfile !== existingProfile
       : existingProfile !== undefined &&
         !shouldPreserveSessionAuthProfileOverride({
           cfg: params.cfg,
-          agentDir: resolveAgentDir(params.cfg, params.agentId),
+          agentDir,
+          recordedProvider,
           currentProvider:
             params.existingEntry.providerOverride ??
             params.existingEntry.modelProvider ??

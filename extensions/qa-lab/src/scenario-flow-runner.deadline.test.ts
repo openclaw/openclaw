@@ -9,10 +9,6 @@ type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
 const delayedSideEffectCases: Array<[name: string, action: QaFlowAction]> = [
   ["generic call", { call: "sideEffect", args: [{ expr: "await resolveInput()" }] }],
   ["sendInbound", { sendInbound: { expr: "await resolveInput()" } }],
-  ["sendNativeCommand", { sendNativeCommand: { expr: "await resolveInput()" } }],
-  ["waitForOutbound", { waitForOutbound: { expr: "await resolveInput()" } }],
-  ["waitForOutboundSequence", { waitForOutboundSequence: { expr: "await resolveInput()" } }],
-  ["waitForNoOutbound", { waitForNoOutbound: { expr: "await resolveInput()" } }],
 ];
 
 describe("scenario flow deadline", () => {

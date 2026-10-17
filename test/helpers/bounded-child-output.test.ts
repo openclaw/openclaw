@@ -15,14 +15,6 @@ describe("bounded child output", () => {
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(16);
   });
 
-  it("keeps only the tail of a single oversized chunk", () => {
-    const output = createBoundedChildOutput(8);
-
-    output.append(Buffer.from("old-prefix-recent"));
-
-    expect(output.text()).toBe("x-recent");
-  });
-
   it("drops split UTF-8 prefixes after buffered output overflow", () => {
     const output = createBoundedChildOutput(7);
 

@@ -1,4 +1,5 @@
 // SQLite schema test support reads schema files for shape assertions.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
@@ -73,6 +74,18 @@ type IndexXInfoRow = {
   desc: number;
   key: number;
 };
+
+export function hashSqliteSchema(database: DatabaseSync): string {
+  const schema = database
+    .prepare(
+      `SELECT type, name, tbl_name, sql
+         FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name`,
+    )
+    .all();
+  return createHash("sha256").update(JSON.stringify(schema)).digest("hex");
+}
 
 /** Execute schema SQL in memory and return its comparable shape. */
 export function createSqliteSchemaShapeFromSql(schemaUrl: URL): SqliteSchemaShape {

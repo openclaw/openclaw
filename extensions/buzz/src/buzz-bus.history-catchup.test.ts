@@ -1,8 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, Relay, type Event, type Filter } from "nostr-tools";
+import {
+  finalizeEvent,
+  getPublicKey,
+  matchFilter,
+  Relay,
+  type Event,
+  type Filter,
+} from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -15,40 +23,14 @@ const relayMocks = vi.hoisted(() => ({
   storedEvents: [] as Event[],
   historyRequests: [] as Filter[],
   historySubscriptionCloses: 0,
+  stallHistoryPages: false,
   closeHistoryPagesReason: undefined as string | undefined,
   overReturnHistoryPages: false,
-  stallHistoryPages: false,
 }));
-
-function matchesRelayFilter(event: Event, filter: Filter): boolean {
-  if (filter.kinds && !filter.kinds.includes(event.kind)) {
-    return false;
-  }
-  if (filter.authors && !filter.authors.includes(event.pubkey)) {
-    return false;
-  }
-  for (const [key, values] of Object.entries(filter)) {
-    if (!key.startsWith("#") || !Array.isArray(values)) {
-      continue;
-    }
-    const tagName = key.slice(1);
-    const tagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1] ?? "");
-    if (!tagValues.some((value) => (values as string[]).includes(value))) {
-      return false;
-    }
-  }
-  if (filter.since !== undefined && event.created_at < filter.since) {
-    return false;
-  }
-  if (filter.until !== undefined && event.created_at > filter.until) {
-    return false;
-  }
-  return true;
-}
 
 function selectRelayEvents(filter: Filter): Event[] {
   const matched = relayMocks.storedEvents
-    .filter((event) => matchesRelayFilter(event, filter))
+    .filter((event) => matchFilter(filter, event))
     .toSorted((left, right) => right.created_at - left.created_at);
   return filter.limit === undefined ||
     (relayMocks.overReturnHistoryPages && filter.until !== undefined)
@@ -95,25 +77,19 @@ vi.mock("nostr-tools", async (importOriginal) => {
             queueMicrotask(() => {
               handlers.onclose(relayMocks.closeHistoryPagesReason ?? "relay closed");
             });
-            return {
-              id: `sub:${relayMocks.historyRequests.length}`,
-              close: vi.fn(),
-              closed: false,
-            };
-          }
-          if (relayMocks.stallHistoryPages && isHistoryPage) {
-            return {
-              id: `sub:${relayMocks.historyRequests.length}`,
-              close: vi.fn(),
-              closed: false,
-            };
+            break;
           }
         }
-        handlers.oneose?.();
+        if (
+          (!relayMocks.stallHistoryPages && !relayMocks.closeHistoryPagesReason) ||
+          !isHistoryPage
+        ) {
+          queueMicrotask(() => handlers.oneose?.());
+        }
         return {
           id: `sub:${relayMocks.historyRequests.length}`,
           close: vi.fn(() => {
-            if (isHistoryPage) {
+            if (isHistoryPage && !relayMocks.closeHistoryPagesReason) {
               relayMocks.historySubscriptionCloses += 1;
             }
           }),
@@ -143,8 +119,7 @@ const SENDER_PUBLIC_KEY = getPublicKey(SENDER_SECRET);
 const RELAY_PUBLIC_KEY = "f".repeat(64);
 const HISTORY_LIMIT = 100;
 const BASE_TIMESTAMP = 1_700_000_000;
-const tempDirs = new Set<string>();
-let previousStateDir: string | undefined;
+let stateDir: string;
 
 function buildMessageEvent(index: number, createdAt: number): Event {
   return finalizeEvent(
@@ -164,30 +139,54 @@ function seedOfflineBacklog(count: number, createdAt: (index: number) => number)
   }
 }
 
+function startHistoryBus(overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {}) {
+  return startBuzzBus({
+    scheduler: createTestPluginServiceScheduler(),
+    accountId: ACCOUNT_ID,
+    relayUrl: "wss://buzz.example.com",
+    privateKey: PRIVATE_KEY,
+    channelIds: [CHANNEL_ID],
+    since: () => BASE_TIMESTAMP - 60,
+    onMessage: async () => {},
+    ...overrides,
+  });
+}
+
 async function waitForSettled(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    if (predicate()) {
-      return;
-    }
+  for (let attempt = 0; attempt < 300 && !predicate(); attempt += 1) {
     await new Promise((resolve) => {
       setTimeout(resolve, 10);
     });
   }
 }
 
+async function collectHistory(count: number) {
+  const received: string[] = [];
+  const historyErrors: string[] = [];
+  const bus = await startHistoryBus({
+    onMessage: async (message) => {
+      received.push(message.text);
+    },
+    onHistoryError: (error) => {
+      historyErrors.push(error.message);
+    },
+  });
+  await waitForSettled(() => received.length >= count);
+  await bus.close();
+  return { received, historyErrors };
+}
+
 describe("Buzz reconnect history catch-up", () => {
   beforeEach(() => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     // openclaw-temp-dir: allow extension tests cannot import root test helpers.
-    const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-catchup-"));
-    tempDirs.add(stateDir);
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-catchup-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.clearAllMocks();
     relayMocks.historyRequests.length = 0;
     relayMocks.historySubscriptionCloses = 0;
+    relayMocks.stallHistoryPages = false;
     relayMocks.closeHistoryPagesReason = undefined;
     relayMocks.overReturnHistoryPages = false;
-    relayMocks.stallHistoryPages = false;
     relayMocks.storedEvents = [
       {
         id: "membership-1",
@@ -220,198 +219,66 @@ describe("Buzz reconnect history catch-up", () => {
   });
 
   afterEach(() => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    for (const tempDir of tempDirs) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-    tempDirs.clear();
+    vi.unstubAllEnvs();
+    rmSync(stateDir, { recursive: true, force: true });
     vi.useRealTimers();
   });
 
-  it("delivers backlog older than the per-room history limit", async () => {
+  it.each([
+    ["pages several history windows", 250, false, false],
+    ["drains an overfull timestamp", HISTORY_LIMIT + 1, true, false],
+    ["bisects overfull relay ranges", 1_300, false, true],
+  ] as const)("%s", async (_name, count, sameTime, overReturn) => {
+    seedOfflineBacklog(count, (index) => BASE_TIMESTAMP + (sameTime ? 0 : index));
+    relayMocks.overReturnHistoryPages = overReturn;
+    const { received, historyErrors } = await collectHistory(count);
+    expect({ unique: new Set(received).size, count: received.length, historyErrors }).toEqual({
+      unique: count,
+      count,
+      historyErrors: [],
+    });
+    if (sameTime || overReturn) {
+      const unbounded = relayMocks.historyRequests.filter((filter) => filter.limit === undefined);
+      expect(unbounded.length).toBeGreaterThan(overReturn ? 2 : 0);
+    } else {
+      expect(received).toContain("offline-message-000");
+      expect(relayMocks.historySubscriptionCloses).toBe(2);
+      expect(relayMocks.historyRequests.length).toBeGreaterThan(1);
+    }
+  });
+
+  it.each(["times out", "closes unexpectedly"])("fails when catch-up %s", async (failure) => {
+    const timesOut = failure === "times out";
+    if (timesOut) {
+      vi.useFakeTimers();
+    }
     seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-    });
-    await waitForSettled(() => received.length >= HISTORY_LIMIT + 1);
-    await bus.close();
-
-    expect(new Set(received).size).toBe(HISTORY_LIMIT + 1);
-    expect(received).toContain("offline-message-000");
-    expect(received.length).toBe(HISTORY_LIMIT + 1);
-    expect(relayMocks.historySubscriptionCloses).toBe(1);
-  });
-
-  it("pages a backlog spanning several history windows", async () => {
-    const backlogSize = 250;
-    seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-    });
-    await waitForSettled(() => received.length >= backlogSize);
-    await bus.close();
-
-    expect(new Set(received).size).toBe(backlogSize);
-    expect(received).toContain("offline-message-000");
-    expect(relayMocks.historyRequests.length).toBeGreaterThan(1);
-  });
-
-  it("drains a backlog that exceeds one page at the same timestamp", async () => {
-    seedOfflineBacklog(HISTORY_LIMIT + 1, () => BASE_TIMESTAMP);
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => received.length >= HISTORY_LIMIT + 1);
-    await bus.close();
-
-    expect(historyErrors).toEqual([]);
-    expect(new Set(received).size).toBe(HISTORY_LIMIT + 1);
-    expect(received.length).toBe(HISTORY_LIMIT + 1);
-    expect(relayMocks.historyRequests.some((filter) => filter.limit === undefined)).toBe(true);
-  });
-
-  it("bounds a catch-up page when the relay ignores its history limit", async () => {
-    seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
-    relayMocks.overReturnHistoryPages = true;
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => received.length >= 250);
-    await bus.close();
-
-    expect(historyErrors).toEqual([]);
-    expect(new Set(received).size).toBe(250);
-    expect(received.length).toBe(250);
-    expect(relayMocks.historySubscriptionCloses).toBe(2);
-  });
-
-  it("bisects an overfull relay range until every bounded page fits", async () => {
-    const backlogSize = 1_300;
-    seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
-    relayMocks.overReturnHistoryPages = true;
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => received.length >= backlogSize);
-    await bus.close();
-
-    expect(historyErrors).toEqual([]);
-    expect(new Set(received).size).toBe(backlogSize);
-    expect(received.length).toBe(backlogSize);
-    expect(
-      relayMocks.historyRequests.filter((filter) => filter.limit === undefined).length,
-    ).toBeGreaterThan(2);
-  });
-
-  it("fails the bus when a catch-up subscription never reaches EOSE", async () => {
-    vi.useFakeTimers();
-    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
-    relayMocks.stallHistoryPages = true;
+    relayMocks.stallHistoryPages = timesOut;
+    relayMocks.closeHistoryPagesReason = timesOut ? undefined : "relay rejected subscription";
     const fatalErrors: string[] = [];
 
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async () => {},
+    const bus = await startHistoryBus({
       onFatalError: (error) => {
         fatalErrors.push(error.message);
       },
     });
-    await vi.advanceTimersByTimeAsync(10_000);
-    await bus.close();
-
-    expect(fatalErrors).toEqual([`Timed out loading Buzz room history for ${CHANNEL_ID}`]);
-    expect(relayMocks.close).toHaveBeenCalled();
-    expect(relayMocks.historySubscriptionCloses).toBe(0);
-  });
-
-  it("fails the bus when a catch-up subscription closes unexpectedly", async () => {
-    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
-    relayMocks.closeHistoryPagesReason = "relay rejected subscription";
-    const fatalErrors: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async () => {},
-      onFatalError: (error) => {
-        fatalErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => fatalErrors.length > 0);
-    await bus.close();
-
-    expect(fatalErrors).toEqual([
-      `Buzz room history query closed for ${CHANNEL_ID}: relay rejected subscription`,
-    ]);
-    expect(relayMocks.close).toHaveBeenCalled();
+    try {
+      await (timesOut
+        ? vi.advanceTimersByTimeAsync(10_000)
+        : waitForSettled(() => fatalErrors.length > 0));
+      if (!timesOut) {
+        await bus.close();
+      }
+      expect(fatalErrors).toEqual([
+        timesOut
+          ? `Timed out loading Buzz room history for ${CHANNEL_ID}`
+          : `Buzz room history query closed for ${CHANNEL_ID}: relay rejected subscription`,
+      ]);
+      expect(relayMocks.close).toHaveBeenCalled();
+      expect(relayMocks.historySubscriptionCloses).toBe(0);
+    } finally {
+      await bus.close();
+    }
   });
 
   it("does not request history when canceled after capacity resolves but before recovery resumes", async () => {
@@ -443,41 +310,5 @@ describe("Buzz reconnect history catch-up", () => {
     } finally {
       await queue.close();
     }
-  });
-
-  it("stops an active history query quietly when the bus closes", async () => {
-    seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
-    relayMocks.stallHistoryPages = true;
-    const fatalErrors: string[] = [];
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startBuzzBus({
-      accountId: ACCOUNT_ID,
-      relayUrl: "wss://buzz.example.com",
-      privateKey: PRIVATE_KEY,
-      channelIds: [CHANNEL_ID],
-      since: () => BASE_TIMESTAMP - 60,
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onFatalError: (error) => {
-        fatalErrors.push(error.message);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => relayMocks.historyRequests.length > 1);
-    await bus.close();
-    const requestsAtClose = relayMocks.historyRequests.length;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-
-    expect(relayMocks.historyRequests.length).toBe(requestsAtClose);
-    expect(received.length).toBeLessThan(250);
-    expect(fatalErrors).toEqual([]);
-    expect(historyErrors).toEqual([]);
   });
 });

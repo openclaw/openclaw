@@ -7,6 +7,7 @@ import {
   quoteStructuredInputValue as quote,
   readStructuredInputText,
   snapshotStructuredInput,
+  STRUCTURED_INPUT_MAX_TEXT_CHARS,
   structuredInputEntries,
   structuredInputRecord as ownRecord,
   structuredInputString as ownString,
@@ -94,14 +95,19 @@ export function compileStructuredInputForm(params: {
   if (typeof required === "string") {
     return unsupported(required);
   }
-  const intro = readStructuredInputText(params.message ?? params.fallbackMessage, MAX_MESSAGE_TEXT);
+  const richDisplay = options.allowRichForms === true;
+  const intro = readStructuredInputText(
+    params.message ?? params.fallbackMessage,
+    richDisplay ? STRUCTURED_INPUT_MAX_TEXT_CHARS : MAX_MESSAGE_TEXT,
+    richDisplay,
+  );
   if (!intro) {
     return unsupported(
       `OpenClaw declined ${protocol} form display text that is invalid or over-limit.`,
     );
   }
 
-  const metadata = new Map<string, FieldMetadata>();
+  const validatedFields: Array<[string, StructuredInputRecord, FieldMetadata]> = [];
   const otherFields = new Map<string, { fieldId: string; secret: boolean }>();
   for (const [fieldId, rawSchema] of propertyEntries) {
     if (!validFieldName(fieldId) || !isStructuredInputRecord(rawSchema)) {
@@ -111,7 +117,7 @@ export function compileStructuredInputForm(params: {
     if (typeof fieldMetadata === "string") {
       return unsupported(`${protocol} form field ${quote(fieldId)} ${fieldMetadata}`);
     }
-    metadata.set(fieldId, fieldMetadata);
+    validatedFields.push([fieldId, rawSchema, fieldMetadata]);
     if (fieldMetadata.otherAnswer) {
       const target = fieldMetadata.otherQuestionId;
       if (!target || otherFields.has(target)) {
@@ -128,13 +134,9 @@ export function compileStructuredInputForm(params: {
 
   const usedQuestionIds = new Set<string>();
   const fields: StructuredInputField[] = [];
-  for (const [fieldId, rawSchema] of propertyEntries) {
-    const fieldMetadata = metadata.get(fieldId)!;
+  for (const [fieldId, fieldSchema, fieldMetadata] of validatedFields) {
     if (fieldMetadata.otherAnswer) {
       continue;
-    }
-    if (!isStructuredInputRecord(rawSchema)) {
-      return unsupported(`${protocol} form field ${quote(fieldId)} has an invalid schema.`);
     }
     const other = otherFields.get(fieldId);
     const field = compileStructuredInputField(
@@ -145,7 +147,7 @@ export function compileStructuredInputForm(params: {
         secret: fieldMetadata.secret || other?.secret === true,
         otherFieldId: other?.fieldId,
       },
-      rawSchema,
+      fieldSchema,
       options,
     );
     if (typeof field === "string") {
@@ -186,10 +188,8 @@ export function compileStructuredInputUrl(params: {
       `OpenClaw declined an invalid or over-limit ${params.protocolName} elicitation URL.`,
     );
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     return unsupported(`OpenClaw declined an invalid ${params.protocolName} elicitation URL.`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {

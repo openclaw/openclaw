@@ -1,10 +1,8 @@
-// Sms plugin module owns inbound Twilio media downloads and outbound MMS hosting.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   formatInboundMediaUnavailableText,
   toInboundMediaFactsWithMetadata,
-  type InboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -12,6 +10,8 @@ import { MediaFetchError, unlinkIfExists } from "openclaw/plugin-sdk/media-runti
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createHostedOutboundMediaStore,
+  resolveHostedOutboundMediaRequest,
+  resolveOutboundMediaAccess,
   type HostedOutboundMediaChunkRecord,
   type HostedOutboundMediaMetaRecord,
   type HostedOutboundMediaStore,
@@ -112,11 +112,6 @@ type PrepareHostedSmsMediaParams = {
   captionByteLength?: number;
 };
 
-type PreparedHostedSmsMedia = {
-  url: string;
-  cleanup: () => Promise<void>;
-};
-
 function normalizeBasePath(path: string): string {
   const withLeadingSlash = path.trim().startsWith("/") ? path.trim() : `/${path.trim()}`;
   return withLeadingSlash === "/" ? "" : withLeadingSlash.replace(/\/+$/u, "");
@@ -134,12 +129,7 @@ function toHostedStoreRoutePath(path: string): string {
 export function resolveSmsHostedMediaRoute(params: {
   webhookPath: string;
   publicWebhookUrl: string;
-}): {
-  localRoutePath: string;
-  publicBaseUrl: string;
-  publicRoutePath: string;
-  publicSearch: string;
-} {
+}) {
   if (!params.publicWebhookUrl.trim()) {
     throw new Error("MMS send requires channels.sms.publicWebhookUrl.");
   }
@@ -197,28 +187,7 @@ function getHostedSmsMediaStore(accountId: string): HostedOutboundMediaStore {
   return created;
 }
 
-function createHostedSmsMediaCleanup(
-  store: HostedOutboundMediaStore,
-  id: string,
-): () => Promise<void> {
-  let cleanup: Promise<void> | undefined;
-  return async () => {
-    const activeCleanup = cleanup ?? store.delete(id);
-    cleanup = activeCleanup;
-    try {
-      await activeCleanup;
-    } catch (error) {
-      if (cleanup === activeCleanup) {
-        cleanup = undefined;
-      }
-      throw error;
-    }
-  };
-}
-
-export async function prepareHostedSmsMedia(
-  params: PrepareHostedSmsMediaParams,
-): Promise<PreparedHostedSmsMedia> {
+export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams) {
   const route = resolveSmsHostedMediaRoute({
     webhookPath: params.account.webhookPath,
     publicWebhookUrl: params.account.publicWebhookUrl,
@@ -232,19 +201,6 @@ export async function prepareHostedSmsMedia(
   if (aggregateMediaBudget < 1) {
     throw new Error("Twilio MMS caption leaves no room for an attachment below 5,000,000 bytes.");
   }
-  const mediaAccess: OutboundMediaLoadOptions["mediaAccess"] = (() => {
-    const localRoots = params.mediaAccess?.localRoots ?? params.mediaLocalRoots;
-    const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
-    const workspaceDir = params.mediaAccess?.workspaceDir;
-    if (!localRoots && !readFile && !workspaceDir) {
-      return undefined;
-    }
-    return {
-      ...(localRoots ? { localRoots } : {}),
-      ...(readFile ? { readFile } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    };
-  })();
   const stagedUrl = new URL(
     await store.prepareUrl({
       mediaUrl: params.mediaUrl,
@@ -254,7 +210,31 @@ export async function prepareHostedSmsMedia(
         params.account.mediaMaxBytes ?? aggregateMediaBudget,
         aggregateMediaBudget,
       ),
-      mediaAccess,
+      mediaAccess: resolveOutboundMediaAccess(params),
+      validateBeforePersist: (media) => {
+        const contentType = media.contentType?.split(";", 1)[0]?.trim().toLowerCase();
+        if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE[contentType]) {
+          throw new Error(
+            `Twilio MMS does not support media type ${contentType || "unknown content type"}.`,
+          );
+        }
+        if (captionByteLength > 0 && TWILIO_MMS_MEDIA_ONLY_TYPES.has(contentType)) {
+          throw new Error(`Twilio MMS media type ${contentType} must be sent without a caption.`);
+        }
+        const maxBytes = TWILIO_MMS_LARGE_MEDIA_TYPES.has(contentType)
+          ? TWILIO_MMS_IMAGE_MAX_BYTES
+          : TWILIO_MMS_OTHER_MAX_BYTES;
+        if (media.buffer.byteLength > maxBytes) {
+          throw new Error(
+            `Twilio MMS media exceeds the ${maxBytes.toLocaleString("en-US")} byte limit for ${contentType}.`,
+          );
+        }
+        if (media.buffer.byteLength + captionByteLength >= TWILIO_MMS_IMAGE_MAX_BYTES) {
+          throw new Error(
+            "Twilio MMS attachment and caption must total less than 5,000,000 bytes.",
+          );
+        }
+      },
     }),
   );
   const id = stagedUrl.pathname.split("/").at(-1) ?? "";
@@ -262,37 +242,7 @@ export async function prepareHostedSmsMedia(
   if (!SMS_OUTBOUND_MEDIA_ID_RE.test(id) || !token) {
     throw new Error("Hosted MMS media URL could not be prepared.");
   }
-  const cleanup = createHostedSmsMediaCleanup(store, id);
-  const entry = await store.read(id);
-  if (!entry) {
-    throw new Error("Hosted MMS media expired before it could be sent.");
-  }
-  const contentType = entry.metadata.contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE[contentType]) {
-    await cleanup();
-    throw new Error(
-      `Twilio MMS does not support media type ${contentType || "unknown content type"}.`,
-    );
-  }
-  if (captionByteLength > 0 && TWILIO_MMS_MEDIA_ONLY_TYPES.has(contentType)) {
-    await cleanup();
-    throw new Error(`Twilio MMS media type ${contentType} must be sent without a caption.`);
-  }
-  const maxBytes = TWILIO_MMS_LARGE_MEDIA_TYPES.has(contentType)
-    ? TWILIO_MMS_IMAGE_MAX_BYTES
-    : TWILIO_MMS_OTHER_MAX_BYTES;
-  if (entry.metadata.byteLength > maxBytes) {
-    await cleanup();
-    throw new Error(
-      `Twilio MMS media exceeds the ${maxBytes.toLocaleString("en-US")} byte limit for ${
-        contentType || "unknown content type"
-      }.`,
-    );
-  }
-  if (entry.metadata.byteLength + captionByteLength >= TWILIO_MMS_IMAGE_MAX_BYTES) {
-    await cleanup();
-    throw new Error("Twilio MMS attachment and caption must total less than 5,000,000 bytes.");
-  }
+  const cleanup = () => store.delete(id);
 
   // The random media id namespaces the token parameter so existing proxy query
   // parameters survive without being overwritten or becoming the auth value.
@@ -389,7 +339,7 @@ export async function materializeSmsInboundMedia(params: {
   mediaRuntime: { media: Pick<PluginRuntime["channel"]["media"], "saveRemoteMedia"> };
   abortSignal?: AbortSignal;
   log?: { warn?: (message: string) => void };
-}): Promise<{ body: string; media: InboundMediaFacts[]; cleanup: () => Promise<void> }> {
+}) {
   const savedPaths: string[] = [];
   const cleanup = createInboundMediaCleanup(savedPaths);
   const declaredUnavailableCount = params.msg.unavailableMediaCount ?? 0;
@@ -515,40 +465,17 @@ export async function tryHandleHostedSmsMediaRequest(
   res: ServerResponse,
   accountId = "default",
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
-    return false;
+  const candidate = resolveHostedOutboundMediaRequest(
+    req,
+    res,
+    SMS_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX,
+  );
+  if (typeof candidate === "boolean") {
+    return candidate;
   }
-  const tokenCandidates = [...url.searchParams.entries()]
-    .filter(([key]) => key.startsWith(`${SMS_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX}_`))
-    .map(([key, token]) => ({
-      id: key.slice(SMS_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX.length + 1),
-      token,
-    }))
-    .filter((candidate) => SMS_OUTBOUND_MEDIA_ID_RE.test(candidate.id));
-  if (tokenCandidates.length === 0) {
-    return false;
-  }
-  if (tokenCandidates.length !== 1) {
-    res.statusCode = 400;
-    res.end("Bad Request");
-    return true;
-  }
-  const method = req.method ?? "GET";
-  if (method !== "GET" && method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "GET, HEAD");
-    res.end("Method Not Allowed");
-    return true;
-  }
+  const { url, method } = candidate;
   const routePath = toHostedStoreRoutePath(url.pathname);
   const store = getHostedSmsMediaStore(accountId);
-  const candidate = tokenCandidates[0];
-  if (!candidate) {
-    return false;
-  }
   const metadata = await store.readMetadata(candidate.id);
   if (!metadata || metadata.routePath !== routePath) {
     res.statusCode = 404;

@@ -33,7 +33,7 @@ describe("prepared worker builds", () => {
             entered.resolve();
             await release.promise;
           }
-          return { assertCurrent: () => {} };
+          return { isCurrent: () => true };
         },
       });
       const running = fixture.schedule(owner);
@@ -60,6 +60,7 @@ describe("prepared worker builds", () => {
         assertCurrent: () => {},
       }))!;
       expect(build).toBeDefined();
+      expect(build.environmentId).toBe(reserve?.environmentId ?? "build-b");
       const repeated = fixture.schedule(owner);
       release.resolve();
       await Promise.all([running, repeated]);

@@ -1,4 +1,3 @@
-// Requirement types describe runtime requirements advertised by shared surfaces.
 export type Requirements = {
   bins: string[];
   anyBins: string[];
@@ -36,18 +35,26 @@ function normalizeOsRequirementPlatform(platform: string): string {
   return normalized === "macos" ? "darwin" : normalized;
 }
 
+export function isOsRequirementSatisfied(
+  required: readonly string[],
+  platforms: readonly string[],
+): boolean {
+  if (required.length === 0) {
+    return true;
+  }
+  const normalizedRequired = new Set(required.map(normalizeOsRequirementPlatform));
+  return platforms.some((platform) =>
+    normalizedRequired.has(normalizeOsRequirementPlatform(platform)),
+  );
+}
+
 /** Evaluates entry requirements against the current host and optional remote capabilities. */
 export function evaluateRequirementsFromMetadataWithRemote(
   params: RequirementsEvaluationContext & {
     metadata?: RequirementsMetadata;
     remote?: RequirementRemote;
   },
-): {
-  required: Requirements;
-  missing: Requirements;
-  eligible: boolean;
-  configChecks: RequirementConfigCheck[];
-} {
+) {
   const required: Requirements = {
     bins: params.metadata?.requires?.bins ?? [],
     anyBins: params.metadata?.requires?.anyBins ?? [],
@@ -68,19 +75,12 @@ export function evaluateRequirementsFromMetadataWithRemote(
       ? []
       : required.anyBins;
 
-  let missingOs: string[] = [];
-  if (required.os.length > 0) {
-    const localPlatform = normalizeOsRequirementPlatform(params.localPlatform);
-    const requiredPlatforms = new Set(required.os.map(normalizeOsRequirementPlatform));
-    if (
-      !requiredPlatforms.has(localPlatform) &&
-      !params.remote?.platforms?.some((platform) =>
-        requiredPlatforms.has(normalizeOsRequirementPlatform(platform)),
-      )
-    ) {
-      missingOs = required.os;
-    }
-  }
+  const missingOs = isOsRequirementSatisfied(required.os, [
+    params.localPlatform,
+    ...(params.remote?.platforms ?? []),
+  ])
+    ? []
+    : required.os;
 
   const missingEnv = required.env.filter((envName) => !params.isEnvSatisfied(envName));
   const configChecks = required.config.map((path) => ({
@@ -98,13 +98,7 @@ export function evaluateRequirementsFromMetadataWithRemote(
     os: missingOs,
   };
 
-  const eligible =
-    missing.os.length === 0 &&
-    (params.always ||
-      (missing.bins.length === 0 &&
-        missing.anyBins.length === 0 &&
-        missing.env.length === 0 &&
-        missing.config.length === 0));
+  const eligible = Object.values(missing).every((requirements) => requirements.length === 0);
 
   return { required, missing, eligible, configChecks };
 }

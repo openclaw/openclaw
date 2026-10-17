@@ -9,52 +9,69 @@ import {
 import { abortQueuedChatTurnById } from "./chat-queued-turns.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { captureAbortedPartial } from "./server-methods/chat-aborted-partial.js";
+import {
+  captureAbortedPartial,
+  deferAbortedPartialPersistence,
+  prepareChatAbortSessionSnapshot,
+  retainChatAbortSessionSnapshot,
+  type ChatAbortSessionSnapshot,
+} from "./server-methods/chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
   GatewayRequestContext,
-  | "agentRunSeq"
-  | "broadcast"
-  | "cancelRunBoundApprovals"
-  | "chatAbortControllers"
+  | keyof Parameters<typeof createChatAbortOps>[0]
   | "chatQueuedTurns"
-  | "chatRunState"
-  | "getRuntimeConfig"
   | "logGateway"
-  | "nodeSendToSession"
-  | "removeChatRun"
   | "trackExecution"
 >;
 
 /** Retain authority before its execution or queue owner can arm cancellation. */
-export function retainGatewayOperatorRun(
+export async function retainGatewayOperatorRun(
   params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
     entry?: ChatAbortControllerEntry;
+    abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
   },
 ) {
-  const captured = captureGatewayOperatorRunAuthority(params);
+  const captured = await captureGatewayOperatorRunAuthority(params);
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;
-  const cancellation =
+  const partialSession =
     signal && params.entry
+      ? retainChatAbortSessionSnapshot(
+          params.abortSession
+            ? { ok: true, value: params.abortSession }
+            : await prepareChatAbortSessionSnapshot({
+                cfg: params.context.getRuntimeConfig(),
+                key: params.entry.sessionKey,
+                agentId: params.entry.agentId,
+              }),
+        )
+      : undefined;
+  const cancellation =
+    signal && params.entry && partialSession
       ? createGatewayOperatorRunCancellation({
           signal,
           runId: params.runId,
           entry: params.entry,
           context: params.context,
+          session: partialSession.read,
         })
       : undefined;
   return {
     authority: captured?.authority,
     armCancellation: () => cancellation?.arm(),
-    retireCancellation: () => cancellation?.release(),
+    retireCancellation: () => {
+      cancellation?.release();
+      partialSession?.release();
+    },
     release: () => {
       cancellation?.release();
+      partialSession?.release();
       releaseSource?.();
     },
   };
@@ -66,6 +83,7 @@ function createGatewayOperatorRunCancellation(params: {
   runId: string;
   entry: ChatAbortControllerEntry;
   context: OperatorRunCancellationContext;
+  session: () => ChatAbortSessionSnapshot;
 }) {
   const { signal, runId, entry, context } = params;
   const controller = entry.controller;
@@ -98,6 +116,7 @@ function createGatewayOperatorRunCancellation(params: {
       runId,
       sessionKey: queued.sessionKey,
       stopReason: "rpc",
+      diagnosticReason: "authority-revoked",
     });
   };
   const cancel = async () => {
@@ -121,15 +140,18 @@ function createGatewayOperatorRunCancellation(params: {
             runId,
             sessionKey,
             sessionId: entry.sessionId,
-            agentId: entry.agentId,
             text,
             abortOrigin: "rpc",
+            resolveTerminalProducer: entry.resolveTerminalProducer,
+            session: params.session(),
           })
         : undefined;
     const { aborted } = abortChatRunById(createChatAbortOps(context), {
       runId,
       sessionKey,
       stopReason: "rpc",
+      diagnosticReason: "authority-revoked",
+      onAbortCommitted: () => deferAbortedPartialPersistence(snapshot, context),
     });
     if (!aborted) {
       return;

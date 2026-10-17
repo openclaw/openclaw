@@ -4,23 +4,25 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export function registerSessionSandboxMutationTests({
   client,
   context,
+  withState,
 }: {
   client: () => GatewayClient;
   context: (cfg: OpenClawConfig) => GatewayRequestContext;
+  withState: (run: (state: OpenClawTestState) => Promise<void>) => Promise<void>;
 }) {
   describe("session sandbox mutations", () => {
     it.each([
@@ -31,7 +33,7 @@ export function registerSessionSandboxMutationTests({
     ] as const)(
       "$method refuses non-admin sandboxMode=$sandboxMode even when invoked directly",
       async ({ method, sandboxMode }) => {
-        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await withState(async (state) => {
           const key = "agent:main:sandbox-authority";
           const scope = { agentId: "main", env: state.env, sessionKey: key };
           const before = sandboxMode === null ? "off" : undefined;
@@ -63,7 +65,7 @@ export function registerSessionSandboxMutationTests({
     );
 
     it("persists only the selected chat's opt-out and restores inheritance with CAS", async () => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withState(async (state) => {
         const key = "agent:main:sandbox-choice";
         const sibling = "agent:main:sandbox-sibling";
         const scope = { agentId: "main", env: state.env, sessionKey: key };
@@ -101,8 +103,12 @@ export function registerSessionSandboxMutationTests({
           undefined,
         );
         expect(loadSessionEntry(scope)?.sandboxMode).toBe("off");
-        expect(resolveSandboxRuntimeStatus({ cfg, sessionKey: key }).sandboxed).toBe(false);
-        expect(resolveSandboxRuntimeStatus({ cfg, sessionKey: sibling }).sandboxed).toBe(true);
+        expect((await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey: key })).sandboxed).toBe(
+          false,
+        );
+        expect(
+          (await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey: sibling })).sandboxed,
+        ).toBe(true);
         expect(await patch(null, null)).toHaveBeenCalledWith(
           false,
           undefined,
@@ -113,7 +119,9 @@ export function registerSessionSandboxMutationTests({
         expect(loadSessionEntry(scope)?.sandboxMode).toBe("off");
         expect(await patch(null, "off")).toHaveBeenCalledWith(true, expect.any(Object), undefined);
         expect(loadSessionEntry(scope)).not.toHaveProperty("sandboxMode");
-        expect(resolveSandboxRuntimeStatus({ cfg, sessionKey: key }).sandboxed).toBe(true);
+        expect((await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey: key })).sandboxed).toBe(
+          true,
+        );
         expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
       });
     });
@@ -121,7 +129,7 @@ export function registerSessionSandboxMutationTests({
     it.each(["sessions.patch", "sessions.patchMany"] as const)(
       "%s cannot remove mandatory containment even for an admin",
       async (method) => {
-        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await withState(async (state) => {
           const key = "agent:main:required-sandbox";
           const scope = { agentId: "main", env: state.env, sessionKey: key };
           await upsertSessionEntryCore(scope, {
@@ -172,7 +180,7 @@ export function registerSessionSandboxMutationTests({
     );
 
     it("batch opt-out and reset honor each target's current sandbox expectation", async () => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withState(async (state) => {
         const keys = ["agent:main:batch-sandbox-one", "agent:main:batch-sandbox-two"];
         const scope = (sessionKey: string) => ({ agentId: "main", env: state.env, sessionKey });
         for (const key of keys) {
@@ -234,7 +242,7 @@ export function registerSessionSandboxMutationTests({
     it.each([{ expectedSessionId: "replaced" }, { expectedLifecycleRevision: "replaced" }])(
       "refuses stale sandbox recovery identity %j",
       async (expectation) => {
-        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await withState(async (state) => {
           const key = "agent:main:sandbox-replaced";
           const scope = { agentId: "main", env: state.env, sessionKey: key };
           await upsertSessionEntryCore(scope, {
@@ -264,7 +272,7 @@ export function registerSessionSandboxMutationTests({
     it.each(["off", null] as const)(
       "refuses sandbox transition to %s while an embedded run is active",
       async (sandboxMode) => {
-        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await withState(async (state) => {
           const key = "agent:main:sandbox-active";
           const sessionId = "sandbox-active";
           const scope = { agentId: "main", env: state.env, sessionKey: key };
@@ -303,7 +311,7 @@ export function registerSessionSandboxMutationTests({
     ] as const)(
       "$method rechecks $change at the final sandbox write fence",
       async ({ method, change }) => {
-        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await withState(async (state) => {
           const key = "agent:main:sandbox-fence";
           const sessionId = "sandbox-fence";
           const scope = { agentId: "main", env: state.env, sessionKey: key };

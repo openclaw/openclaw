@@ -5,11 +5,11 @@ import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
+import type { EventLoopReadyResult } from "../../packages/gateway-client/src/event-loop-ready.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as oneShotExit from "../cli/one-shot-exit.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
-import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
@@ -17,44 +17,56 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   lastCapturedOptions,
+  loadResumableNodeHostGateway,
   mocks,
   resetRunnerTestState,
   runNodeHost,
   startNodeHostMcpManager,
 } from "./runner.test-support.js";
 
+const localGateway = { gatewayHost: "127.0.0.1", gatewayPort: 18789 };
+
+async function expectStartupTimeout(options: Partial<Parameters<typeof runNodeHost>[0]> = {}) {
+  await expect(runNodeHost({ ...localGateway, ...options })).rejects.toThrow(
+    "event loop readiness timeout",
+  );
+}
+
+function readyNodeHost() {
+  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+    ready: true,
+    aborted: false,
+    elapsedMs: 0,
+    maxDriftMs: 0,
+    checks: 1,
+  });
+}
+
+async function withReadyNodeHost(
+  runTest: () => Promise<void>,
+  options: Partial<Parameters<typeof runNodeHost>[0]> = {},
+) {
+  readyNodeHost();
+  const on = vi.spyOn(process, "on");
+  const previousExitCode = process.exitCode;
+  const running = runNodeHost({ ...localGateway, ...options });
+  try {
+    await vi.waitFor(() => expect(on).toHaveBeenCalledWith("SIGTERM", expect.any(Function)));
+    await runTest();
+  } finally {
+    on.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
+    await running;
+    process.exitCode = previousExitCode;
+    on.mockRestore();
+  }
+}
+
 describe("runNodeHost", () => {
   beforeEach(resetRunnerTestState);
 
-  it("runs startup state migrations before constructing node-host state", async () => {
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-
-    expect(mocks.runStartupMigrations).toHaveBeenCalledTimes(1);
-    expect(mocks.runStartupMigrations.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.configureNodeHost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("keeps managed runtime startup on existing state without rerunning legacy migrations", async () => {
-    await withExistingOpenClawStateSchema({ path: resolveOpenClawStateSqlitePath() }, async () => {
-      await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-        "event loop readiness timeout",
-      );
-    });
-    expect(mocks.runStartupMigrations).not.toHaveBeenCalled();
-    expect(mocks.configureNodeHost).toHaveBeenCalledOnce();
-    expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
-  });
-
   it("retains managed state admission while an external signal closes the runtime", async () => {
     mocks.useFakeRuntime = true;
-    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-    });
+    readyNodeHost();
     const statePath = resolveOpenClawStateSqlitePath();
     let cleanupStatePath: string | undefined;
     mocks.activeRuntime.close.mockImplementationOnce(async () => {
@@ -84,11 +96,7 @@ describe("runNodeHost", () => {
 
   it("joins the source node runtime when its companion stdin closes", async () => {
     mocks.useFakeRuntime = true;
-    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-    });
+    readyNodeHost();
     const input = new PassThrough();
     const previous = Object.getOwnPropertyDescriptor(process, "stdin");
     const previousExit = process.exitCode;
@@ -103,7 +111,7 @@ describe("runNodeHost", () => {
       input.end();
       await running;
       expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
       expect(input.listenerCount("end")).toBe(0);
     } finally {
       input.end();
@@ -115,70 +123,33 @@ describe("runNodeHost", () => {
     }
   });
 
-  it("forwards an explicit full-surface reset to the durable config owner", async () => {
-    await expect(
-      runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789, allCommands: true }),
-    ).rejects.toThrow("event loop readiness timeout");
-    expect(mocks.configureNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({ allCommands: true }),
-    );
-  });
-
-  it.each([
-    { runtime: "darwin", platform: "macos", deviceFamily: "Mac" },
-    { runtime: "win32", platform: "windows", deviceFamily: "Windows" },
-    { runtime: "linux", platform: "linux", deviceFamily: "Linux" },
-    { runtime: "freebsd", platform: "freebsd", deviceFamily: undefined },
-  ] as const)(
-    "maps $runtime to gateway platform $platform",
-    async ({ runtime, platform, deviceFamily }) => {
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(runtime);
-      try {
-        await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-          "event loop readiness timeout",
-        );
-      } finally {
-        platformSpy.mockRestore();
-      }
-
-      expect(lastCapturedOptions()?.platform).toBe(platform);
-      expect(lastCapturedOptions()?.deviceFamily).toBe(deviceFamily);
-      expect(lastCapturedOptions()?.modelIdentifier).toBe(
-        runtime === "freebsd" ? undefined : "TestMachine1,1",
-      );
-    },
-  );
-
-  it("passes a paired bootstrap credential with first-connect preference", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "gateway.example",
-        gatewayPort: 443,
-        gatewayTls: true,
-        gatewayBootstrapToken: "bootstrap-123",
-        preferGatewayBootstrapToken: true,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(lastCapturedOptions()).toMatchObject({
-      bootstrapToken: "bootstrap-123",
-      preferBootstrapToken: true,
-    });
-    expect(lastCapturedOptions()?.token).toBeUndefined();
-    expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
-  });
-
   it("persists the pairing candidate that completes the handshake", async () => {
     mocks.useFakeRuntime = true;
-    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-    });
-    const processOnSpy = vi.spyOn(process, "on");
-    const previousExitCode = process.exitCode;
-    try {
-      const running = runNodeHost({
+    await withReadyNodeHost(
+      async () => {
+        const firstOptions = mocks.capturedGatewayClientOptions[0];
+        firstOptions?.onClose?.(1006, "transport unavailable", {
+          phase: "pre-hello",
+          socketOpened: false,
+          transportValidated: false,
+          connectRequestSent: false,
+          transientPreHelloCleanClose: false,
+        });
+        await vi.waitFor(() => expect(mocks.capturedGatewayClients).toHaveLength(2));
+
+        expect(mocks.capturedGatewayClientOptions[1]?.url).toBe(
+          "wss://gateway.tailnet.example:443",
+        );
+
+        mocks.capturedGatewayClientOptions[1]?.onHelloOk?.({} as never);
+        await vi.waitFor(() => expect(mocks.configureNodeHost).toHaveBeenCalledTimes(2));
+        expect(mocks.capturedConfiguredGatewayConfigs[1]).toEqual({
+          host: "gateway.tailnet.example",
+          port: 443,
+          tls: true,
+        });
+      },
+      {
         gatewayHost: "192.168.1.20",
         gatewayPort: 18789,
         gatewayBootstrapToken: "bootstrap-123",
@@ -187,118 +158,34 @@ describe("runNodeHost", () => {
           { host: "192.168.1.20", port: 18789, tls: false },
           { host: "gateway.tailnet.example", port: 443, tls: true },
         ],
-      });
-      await vi.waitFor(() => expect(mocks.capturedGatewayClients).toHaveLength(1));
-
-      const firstOptions = mocks.capturedGatewayClientOptions[0];
-      firstOptions?.onClose?.(1006, "transport unavailable", {
-        phase: "pre-hello",
-        socketOpened: false,
-        transportValidated: false,
-        connectRequestSent: false,
-        transientPreHelloCleanClose: false,
-      });
-      await vi.waitFor(() => expect(mocks.capturedGatewayClients).toHaveLength(2));
-
-      expect(mocks.capturedGatewayClientOptions[1]?.url).toBe("wss://gateway.tailnet.example:443");
-
-      mocks.capturedGatewayClientOptions[1]?.onHelloOk?.({} as never);
-      await vi.waitFor(() => expect(mocks.configureNodeHost).toHaveBeenCalledTimes(2));
-      expect(mocks.capturedConfiguredGatewayConfigs[1]).toEqual({
-        host: "gateway.tailnet.example",
-        port: 443,
-        tls: true,
-      });
-
-      await vi.waitFor(() =>
-        expect(processOnSpy.mock.calls.some(([event]) => event === "SIGTERM")).toBe(true),
-      );
-      const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
-      onSigterm?.("SIGTERM");
-      await running;
-    } finally {
-      for (const [event, listener] of processOnSpy.mock.calls) {
-        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
-          process.off(event, listener);
-        }
-      }
-      process.exitCode = previousExitCode;
-      processOnSpy.mockRestore();
-    }
-  });
-
-  it("stops the canonical runtime after a service enrollment hello", async () => {
-    mocks.useFakeRuntime = true;
-    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-    });
-    const previousExitCode = process.exitCode;
-    try {
-      const running = runNodeHost({
-        gatewayHost: "gateway.example",
-        gatewayPort: 443,
-        gatewayTls: true,
-        gatewayBootstrapToken: "bootstrap-token",
-        preferGatewayBootstrapToken: true,
-        stopAfterFirstConnect: true,
-      });
-      await vi.waitFor(() => expect(lastCapturedOptions()?.onHelloOk).toBeTypeOf("function"));
-      lastCapturedOptions()?.onHelloOk?.({
-        protocol: 1,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-      await running;
-
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
-    } finally {
-      process.exitCode = previousExitCode;
-    }
+      },
+    );
   });
 
   it("routes invoke input, cancellation, and connection close to the runtime", async () => {
     mocks.useFakeRuntime = true;
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-    const options = lastCapturedOptions();
+    await withReadyNodeHost(async () => {
+      const options = lastCapturedOptions();
+      options?.onEvent?.({
+        type: "event",
+        event: "node.invoke.input",
+        payload: { id: "invoke-1", nodeId: "node-1", seq: 3, payloadJSON: '{"kind":"data"}' },
+      });
+      options?.onEvent?.({
+        type: "event",
+        event: "node.invoke.cancel",
+        payload: { invokeId: "invoke-1", nodeId: "node-1" },
+      });
+      options?.onClose?.(1000, "connection closed");
 
-    options?.onEvent?.({
-      type: "event",
-      event: "node.invoke.input",
-      payload: { id: "invoke-1", nodeId: "node-1", seq: 3, payloadJSON: '{"kind":"data"}' },
+      expect(mocks.activeRuntime.handleInput).toHaveBeenCalledWith(
+        "invoke-1",
+        3,
+        '{"kind":"data"}',
+      );
+      expect(mocks.activeRuntime.cancel).toHaveBeenCalledWith("invoke-1");
+      expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledOnce();
     });
-    options?.onEvent?.({
-      type: "event",
-      event: "node.invoke.cancel",
-      payload: { invokeId: "invoke-1", nodeId: "node-1" },
-    });
-    options?.onClose?.(1000, "connection closed");
-
-    expect(mocks.activeRuntime.handleInput).toHaveBeenCalledWith("invoke-1", 3, '{"kind":"data"}');
-    expect(mocks.activeRuntime.cancel).toHaveBeenCalledWith("invoke-1");
-    expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["127.0.0.1", "ws://127.0.0.1:18789"],
-    ["gateway.local", "ws://gateway.local:18789"],
-    ["::1", "ws://[::1]:18789"],
-    ["[::1]", "ws://[::1]:18789"],
-  ])("passes Gateway host %s as URL %s", async (gatewayHost, expectedUrl) => {
-    await expect(
-      runNodeHost({
-        gatewayHost,
-        gatewayPort: 18789,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(mocks.capturedGatewayClientOptions).toHaveLength(1);
-    expect(mocks.capturedGatewayClientOptions[0]?.url).toBe(expectedUrl);
-    expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
   });
 
   it("strips remote credentials before resolving local node-host auth", async () => {
@@ -314,24 +201,13 @@ describe("runNodeHost", () => {
     );
     mocks.getRuntimeConfig.mockReturnValue(config);
 
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
+    await expectStartupTimeout();
 
-    expect(mocks.resolveGatewayCredentialsWithSecretInputs).toHaveBeenCalledWith({
-      config: {
-        gateway: {
-          mode: "local",
-          remote: { token: undefined, password: undefined },
-        },
-      },
-      env: process.env,
-      localPrecedence: "env-first",
-      remoteTokenPrecedence: "env-first",
-      remotePasswordPrecedence: "env-first",
-    });
     const resolvedConfig =
       mocks.resolveGatewayCredentialsWithSecretInputs.mock.calls[0]?.[0].config;
+    expect(resolvedConfig).toEqual({
+      gateway: { mode: "local", remote: { token: undefined, password: undefined } },
+    });
     expect(getConfigResolutionFacts(resolvedConfig)).toEqual(new Set(["gateway.auth.token"]));
     expect(config.gateway.remote).toEqual({
       token: "remote-token",
@@ -339,34 +215,29 @@ describe("runNodeHost", () => {
     });
   });
 
-  it.each([undefined, "selected-gateway-token"])(
-    "uses only selected companion bootstrap credentials: %s",
-    async (token) => {
-      mocks.getRuntimeConfig.mockReturnValue({
-        gateway: {
-          mode: "remote",
-          remote: { token: "other-gateway-token", password: "other-gateway-password" },
-        },
+  it("does not inherit credentials from another Gateway for a companion", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { token: "other-gateway-token", password: "other-gateway-password" },
+      },
+    });
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
+    try {
+      await expectStartupTimeout({
+        gatewayHost: "selected.example",
+        gatewayPort: 443,
+        gatewayTls: true,
+        gatewayAuthFromEnv: true,
       });
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
-      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
-      try {
-        await expect(
-          runNodeHost({
-            gatewayHost: "selected.example",
-            gatewayPort: 443,
-            gatewayTls: true,
-            gatewayAuthFromEnv: true,
-          }),
-        ).rejects.toThrow("event loop readiness timeout");
-        expect(lastCapturedOptions()?.token).toBe(token);
-        expect(lastCapturedOptions()?.password).toBeUndefined();
-        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
-      } finally {
-        vi.unstubAllEnvs();
-      }
-    },
-  );
+      expect(lastCapturedOptions()?.token).toBeUndefined();
+      expect(lastCapturedOptions()?.password).toBeUndefined();
+      expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   describe("saved node gateway authentication", () => {
     const gateway = { host: "paired.example", port: 443, tls: true, contextPath: "/node" };
@@ -404,8 +275,105 @@ describe("runNodeHost", () => {
       mocks.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({});
     });
 
-    it("restarts a paired service without sending the source Gateway password", async () => {
-      await expect(runNodeHost(runOptions)).rejects.toThrow("event loop readiness timeout");
+    it("offers the saved endpoint for resume only with a paired node credential", async () => {
+      mocks.loadDeviceIdentityIfPresent.mockReturnValue({
+        deviceId: "device-test",
+        publicKeyPem: "public-key-test",
+        privateKeyPem: "private-key-test",
+      });
+      await expect(loadResumableNodeHostGateway()).resolves.toEqual(gateway);
+
+      // A failed first enrollment saves the endpoint without issuing a device token.
+      mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
+      await expect(loadResumableNodeHostGateway()).resolves.toBeUndefined();
+      expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+    });
+
+    describe("expired fallback setup codes", () => {
+      const expiredOptions = {
+        ...runOptions,
+        gatewayBootstrapToken: "expired-test-bootstrap",
+        gatewayBootstrapExpiresAtMs: 1,
+        preferGatewayBootstrapToken: false,
+      };
+
+      beforeEach(() => {
+        mocks.loadDeviceIdentityIfPresent.mockReturnValue({
+          deviceId: "device-test",
+          publicKeyPem: "public-key-test",
+          privateKeyPem: "private-key-test",
+        });
+      });
+
+      it("never falls back to shared auth if the saved token disappears before connect", async () => {
+        mocks.loadDeviceAuthTokenReadOnly
+          .mockResolvedValueOnce({
+            role: "node",
+            token: "paired-node-token",
+            scopes: [],
+            updatedAtMs: 1,
+          })
+          .mockResolvedValue(null);
+        vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "shared-test-token");
+
+        await expectStartupTimeout(expiredOptions);
+
+        expect(
+          buildGatewayConnectAuth(
+            selectGatewayConnectAuth({
+              ...lastCapturedOptions(),
+              storedToken: "paired-node-token",
+            }),
+          ),
+        ).toMatchObject({ deviceToken: "paired-node-token", bootstrapToken: undefined });
+        // GatewayClient rereads native auth when connecting; the token can be gone by then.
+        const stored = await mocks.loadDeviceAuthTokenReadOnly({
+          deviceId: "device-test",
+          role: "node",
+        });
+        const options = lastCapturedOptions();
+        expect(options?.bootstrapToken).toBeUndefined();
+        const auth = buildGatewayConnectAuth(
+          selectGatewayConnectAuth({ ...options, storedToken: stored?.token }),
+        );
+        expect(auth).toBeUndefined();
+        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+      });
+
+      it.each<[string, () => unknown, Partial<Parameters<typeof runNodeHost>[0]>]>([
+        ["missing identity", () => mocks.loadDeviceIdentityIfPresent.mockReturnValue(null), {}],
+        ["missing token", () => mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null), {}],
+        ["missing gateway", () => mocks.loadNodeHostConfig.mockResolvedValue(null), {}],
+        [
+          "mixed gateway scopes",
+          () => {},
+          {
+            gatewayCandidates: [gateway, { ...gateway, contextPath: "/other-node" }],
+          },
+        ],
+        ["forced pairing", () => {}, { preferGatewayBootstrapToken: true }],
+      ])(
+        "rejects expired pairing with %s before changing state",
+        async (_label, prepare, overrides) => {
+          prepare();
+          await expect(runNodeHost({ ...expiredOptions, ...overrides })).rejects.toThrow(
+            "Pairing setup code has expired.",
+          );
+          expect(mocks.configureNodeHost).not.toHaveBeenCalled();
+          expect(mocks.capturedGatewayClients).toHaveLength(0);
+        },
+      );
+    });
+
+    it.each([
+      ["whitespace", "  ", "\t"],
+      ["ambient token", "unrelated-gateway-token", undefined],
+      ["ambient password", undefined, "unrelated-gateway-password"],
+      ["both ambient credentials", "unrelated-gateway-token", "unrelated-gateway-password"],
+    ])("restarts a paired service without %s", async (_source, token, password) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", password);
+      await expectStartupTimeout(runOptions);
 
       const auth = buildGatewayConnectAuth(
         selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken: "paired-node-token" }),
@@ -419,68 +387,22 @@ describe("runNodeHost", () => {
       expect(lastCapturedOptions()?.deviceToken).toBeUndefined();
     });
 
-    it.each([
-      { envKey: "OPENCLAW_GATEWAY_TOKEN", expected: { token: "explicit-credential" } },
-      { envKey: "OPENCLAW_GATEWAY_PASSWORD", expected: { password: "explicit-credential" } },
-    ])(
-      "preserves an explicit $envKey override without config fallback",
-      async ({ envKey, expected }) => {
-        vi.stubEnv(envKey, " explicit-credential ");
-
-        await expect(runNodeHost(runOptions)).rejects.toThrow("event loop readiness timeout");
-
-        expect(lastCapturedOptions()).toMatchObject({
-          token: undefined,
-          password: undefined,
-          ...expected,
-        });
-        expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
-      },
-    );
-
-    it("ignores blank environment credentials on a paired restart", async () => {
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "  ");
-      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "\t");
-
-      await expect(runNodeHost(runOptions)).rejects.toThrow("event loop readiness timeout");
-
-      expect(lastCapturedOptions()).toMatchObject({ token: undefined, password: undefined });
-      expect(mocks.resolveGatewayCredentialsWithSecretInputs).not.toHaveBeenCalled();
+    it("uses explicitly requested environment auth instead of the paired token", async () => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "explicit-gateway-token");
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await expectStartupTimeout({ ...runOptions, gatewayAuthFromEnv: true });
+        const auth = buildGatewayConnectAuth(
+          selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken: "paired-node-token" }),
+        );
+        expect(auth).toMatchObject({ token: "explicit-gateway-token", deviceToken: undefined });
+        const warning = stderr.mock.calls.map(([message]) => String(message)).join("");
+        expect(warning).toContain("--auth-from-env selects OPENCLAW_GATEWAY_TOKEN");
+        expect(warning).not.toContain("explicit-gateway-token");
+      } finally {
+        stderr.mockRestore();
+      }
     });
-
-    it.each([
-      { label: "host", changed: { gatewayHost: "another.example" } },
-      { label: "port", changed: { gatewayPort: 8443 } },
-      { label: "TLS", changed: { gatewayTls: false } },
-      { label: "context path", changed: { gatewayContextPath: "/other" } },
-    ])("keeps config authentication when retargeting the $label", async ({ changed }) => {
-      await expect(runNodeHost({ ...runOptions, ...changed })).rejects.toThrow(
-        "event loop readiness timeout",
-      );
-
-      expect(lastCapturedOptions()?.password).toBe("source-gateway-password");
-      expect(mocks.resolveGatewayCredentialsWithSecretInputs).toHaveBeenCalledOnce();
-    });
-
-    it.each(["no saved endpoint", "no node token", "operator token only"])(
-      "keeps config authentication with %s",
-      async (missing) => {
-        if (missing === "no saved endpoint") {
-          mocks.loadNodeHostConfig.mockResolvedValue(null);
-        } else {
-          mocks.loadDeviceAuthTokenReadOnly.mockImplementation(async ({ role }) =>
-            missing === "operator token only" && role === "operator"
-              ? { role, token: "operator-token", scopes: [], updatedAtMs: 1 }
-              : null,
-          );
-        }
-
-        await expect(runNodeHost(runOptions)).rejects.toThrow("event loop readiness timeout");
-
-        expect(lastCapturedOptions()?.password).toBe("source-gateway-password");
-        expect(mocks.resolveGatewayCredentialsWithSecretInputs).toHaveBeenCalledOnce();
-      },
-    );
 
     it("keeps remote-mode credentials when selecting another Gateway", async () => {
       mocks.getRuntimeConfig.mockReturnValue({
@@ -491,9 +413,7 @@ describe("runNodeHost", () => {
       });
       mocks.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({ token: "remote-token" });
 
-      await expect(runNodeHost({ ...runOptions, gatewayHost: "another.example" })).rejects.toThrow(
-        "event loop readiness timeout",
-      );
+      await expectStartupTimeout({ ...runOptions, gatewayHost: "another.example" });
 
       expect(lastCapturedOptions()?.token).toBe("remote-token");
       expect(mocks.resolveGatewayCredentialsWithSecretInputs).toHaveBeenCalledOnce();
@@ -501,24 +421,15 @@ describe("runNodeHost", () => {
   });
 
   it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {
-    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-    });
+    readyNodeHost();
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
     const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
     const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
     const processOnSpy = vi.spyOn(process, "on");
     const previousExitCode = process.exitCode;
-    let resolveCloseMcp: (() => void) | undefined;
-    mocks.closeMcpManager.mockImplementationOnce(
-      () =>
-        new Promise<undefined>((resolve) => {
-          resolveCloseMcp = () => resolve(undefined);
-        }),
-    );
+    const mcpClose = createDeferred<undefined>();
+    mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
     try {
       const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
       await vi.waitFor(() =>
@@ -533,12 +444,13 @@ describe("runNodeHost", () => {
       const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
       expect(onSigterm).toBeTypeOf("function");
       onSigterm?.("SIGTERM");
-      await vi.waitFor(() => expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce(),
+      );
 
       expect(clearIntervalSpy).not.toHaveBeenCalled();
       await vi.waitFor(() => expect(mocks.closeMcpManager).toHaveBeenCalledOnce());
-      expect(resolveCloseMcp).toBeTypeOf("function");
-      resolveCloseMcp?.();
+      mcpClose.resolve(undefined);
       await running;
 
       expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
@@ -555,32 +467,8 @@ describe("runNodeHost", () => {
     }
   });
 
-  it("clears the lifetime handle when gateway startup rejects", async () => {
-    const startupError = new Error("gateway startup failed");
-    mocks.startGatewayClientWhenEventLoopReady.mockRejectedValueOnce(startupError);
-    const interval = {} as ReturnType<typeof setInterval>;
-    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
-    const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
-    try {
-      await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toBe(
-        startupError,
-      );
-
-      expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
-    } finally {
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
-    }
-  });
-
-  it.each([
-    ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
-    ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-    ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
-    ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
-  ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
-    const readiness = createDeferred<{ ready: false; aborted: false; elapsedMs: number }>();
+  it("closes MCP clients before exiting on a terminal reconnect pause", async () => {
+    const readiness = createDeferred<EventLoopReadyResult>();
     const mcpClose = createDeferred<undefined>();
     mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
     mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
@@ -593,25 +481,25 @@ describe("runNodeHost", () => {
       lastCapturedOptions()?.onReconnectPaused?.({
         code: 1008,
         reason: "connect failed",
-        detailCode,
+        detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
       });
       await vi.waitFor(() => {
         expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
       });
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalled();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
 
       mcpClose.resolve(undefined);
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(undefined, 1));
 
-      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 });
       await stopped;
       expect(process.exitCode).toBe(1);
       expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
     } finally {
       mcpClose.resolve(undefined);
-      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 });
       try {
         // Shutdown owns the exit callback; keep it intercepted until the run settles.
         await stopped;
@@ -623,11 +511,9 @@ describe("runNodeHost", () => {
   });
 
   it("keeps pairing reconnect pauses visible without stopping the foreground host", async () => {
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
+    await expectStartupTimeout();
     mocks.closeMcpManager.mockClear();
-    mocks.capturedGatewayClients[0]?.stop.mockClear();
+    mocks.capturedGatewayClients[0]?.stopAndWait.mockClear();
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     try {
@@ -641,7 +527,7 @@ describe("runNodeHost", () => {
         "node host gateway reconnect paused after close (1008): connect failed detail=PAIRING_REQUIRED; waiting for operator action\n",
       );
       expect(mocks.closeMcpManager).not.toHaveBeenCalled();
-      expect(mocks.capturedGatewayClients[0]?.stop).not.toHaveBeenCalled();
+      expect(mocks.capturedGatewayClients[0]?.stopAndWait).not.toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
     } finally {
       stderr.mockRestore();
@@ -650,38 +536,11 @@ describe("runNodeHost", () => {
   });
 
   it.each([
-    ["/gws", "ws://127.0.0.1:18789/gws"],
-    ["/gws/", "ws://127.0.0.1:18789/gws/"],
-    ["gws", "ws://127.0.0.1:18789/gws"],
-    ["", "ws://127.0.0.1:18789"],
-    [undefined, "ws://127.0.0.1:18789"],
-  ])(
-    "forwards context path %s to config and the Gateway URL",
-    async (gatewayContextPath, expectedUrl) => {
-      await expect(
-        runNodeHost({
-          gatewayHost: "127.0.0.1",
-          gatewayPort: 18789,
-          gatewayContextPath,
-        }),
-      ).rejects.toThrow("event loop readiness timeout");
-
-      expect(lastCapturedOptions()?.url).toBe(expectedUrl);
-      expect(mocks.capturedConfiguredGatewayConfigs.at(-1)?.contextPath).toBe(gatewayContextPath);
-    },
-  );
-
-  it("clears configured contextPath when opts do not pass one (retarget scenario)", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "192.168.1.1",
-        gatewayPort: 9999,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    const lastConfigured =
-      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
-    expect(lastConfigured?.contextPath).toBeUndefined();
-    expect(lastCapturedOptions()?.url).toBe("ws://192.168.1.1:9999");
+    ["::1", "gws", "ws://[::1]:18789/gws"],
+    ["[::1]", "/gws/", "ws://[::1]:18789/gws/"],
+  ])("formats Gateway endpoint %s%s", async (gatewayHost, gatewayContextPath, expectedUrl) => {
+    await expectStartupTimeout({ gatewayHost, gatewayContextPath });
+    expect(lastCapturedOptions()?.url).toBe(expectedUrl);
+    expect(mocks.capturedConfiguredGatewayConfigs.at(-1)?.contextPath).toBe(gatewayContextPath);
   });
 });

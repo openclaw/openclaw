@@ -1,88 +1,38 @@
 import type { WhatsAppQaDriverObservedMessage } from "@openclaw/whatsapp/api.js";
+import { buildLiveTransportRttResult } from "../shared/live-transport-rtt.js";
 import type { WhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import {
-  buildWhatsAppQaScenarioResultBase,
   resolveWhatsAppQaMessageTargets,
   resolveWhatsAppQaScenarioTarget,
-  type WhatsAppObservedMessage,
   type WhatsAppQaMessageScenarioContext,
-  type WhatsAppQaScenarioImplementation,
-  type WhatsAppQaScenarioMetadata,
-  type WhatsAppQaScenarioResult,
+  type WhatsAppQaMessageScenarioRun,
   type WhatsAppQaScenarioRun,
 } from "./whatsapp-live.contracts.js";
 import {
   WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS,
-  assertWhatsAppScenarioMessageBatch,
   isTransientWhatsAppQaDriverError,
-  messageMatches,
   resolveWhatsAppQaNoReplyTarget,
   restartWhatsAppQaDriverSession,
   waitForNoWhatsAppReply,
-  waitForWhatsAppScenarioSutMessage,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.driver.js";
+import {
+  assertWhatsAppScenarioMessageBatch,
+  messageMatches,
+  waitForScenarioObservedMessage,
+} from "./whatsapp-live.observations.js";
 import { waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
-
-export {
-  whatsappQaGroupAudioGatingScenario,
-  whatsappQaGroupOutboundAudioScenario,
-  whatsappQaGroupOutboundMediaScenario,
-  whatsappQaGroupOutboundPollScenario,
-  whatsappQaInboundStructuredMessagesScenario,
-  whatsappQaMessageActionsScenario,
-  whatsappQaOutboundDocumentPreservesFilenameScenario,
-  whatsappQaOutboundPollScenario,
-  whatsappQaOutboundSendSerializationScenario,
-} from "./whatsapp-live.scenario-implementations.capabilities.js";
-export {
-  whatsappQaBroadcastGroupFanoutScenario,
-  whatsappQaCanaryScenario,
-  whatsappQaGroupActivationAlwaysScenario,
-  whatsappQaGroupPendingHistoryContextScenario,
-  whatsappQaGroupReplyToBotTriggersScenario,
-  whatsappQaGroupReplyToMessageScenario,
-  whatsappQaMentionGatingScenario,
-  whatsappQaReplyToMessageScenario,
-  whatsappQaReplyToModeBatchedScenario,
-  whatsappQaTopLevelReplyShapeScenario,
-} from "./whatsapp-live.scenario-implementations.conversation.js";
-export {
-  whatsappQaApprovalExecDenyNativeScenario,
-  whatsappQaApprovalExecGroupReactionNativeScenario,
-  whatsappQaApprovalExecNativeScenario,
-  whatsappQaApprovalExecReactionNativeScenario,
-  whatsappQaApprovalPluginNativeScenario,
-  whatsappQaGroupAllowlistBlockScenario,
-  whatsappQaReplyDeliveryShapeScenario,
-  whatsappQaStatusReactionLifecycleScenario,
-  whatsappQaStatusReactionsScenario,
-  whatsappQaStreamFinalMessageAccountingScenario,
-} from "./whatsapp-live.scenario-implementations.delivery.js";
-export {
-  whatsappQaAgentMessageActionReactScenario,
-  whatsappQaAgentMessageActionUploadFileScenario,
-  whatsappQaAudioPreflightScenario,
-  whatsappQaGroupAgentMessageActionReactScenario,
-  whatsappQaGroupAgentMessageActionUploadFileScenario,
-  whatsappQaInboundImageCaptionScenario,
-  whatsappQaInboundReactionNoTriggerScenario,
-  whatsappQaOutboundMediaMatrixScenario,
-  whatsappQaReplyContextIsolationScenario,
-} from "./whatsapp-live.scenario-implementations.user-path.js";
 
 async function runWhatsAppScenarioAttempt(params: {
   environment: WhatsAppQaScenarioEnvironment;
-  implementation: WhatsAppQaScenarioImplementation;
   run: WhatsAppQaScenarioRun;
-  scenario: WhatsAppQaScenarioMetadata;
-}): Promise<WhatsAppQaScenarioResult> {
+}) {
   const driver = params.environment.getDriver();
-  const runtimeEnv = params.environment.runtimeEnv;
+  const { runtimeEnv, scenario } = params.environment;
   const scenarioRun = params.run;
   const resolvedTarget = resolveWhatsAppQaScenarioTarget({
     groupJid: runtimeEnv.groupJid,
-    scenarioId: params.scenario.id,
+    scenarioId: scenario.id,
     target: scenarioRun.kind === "approval" ? (scenarioRun.target ?? "dm") : scenarioRun.target,
   });
   const targets =
@@ -105,45 +55,30 @@ async function runWhatsAppScenarioAttempt(params: {
       gateway: params.environment.gateway as never,
       observedMessages: params.environment.observedMessages,
       run: scenarioRun,
-      scenario: params.scenario,
+      scenario,
       sutAccountId: params.environment.sutAccountId,
       sutPhoneE164: runtimeEnv.sutPhoneE164,
       turnSourceTo: approvalTurnSourceTo,
     });
     return {
-      ...buildWhatsAppQaScenarioResultBase(params.scenario, params.implementation),
-      status: "pass",
       details: `${scenarioRun.approvalKind} approval ${approval.approvalId} resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
-      rttMs: approval.rttMs,
-      requestStartedAt: approval.requestStartedAt.toISOString(),
-      responseObservedAt: approval.responseObservedAt.toISOString(),
-      rttMeasurement: {
-        finalMatchedReplyRttMs: approval.rttMs,
-        requestStartedAt: approval.requestStartedAt.toISOString(),
-        responseObservedAt: approval.responseObservedAt.toISOString(),
-        source: "approval-request-to-resolution",
-      },
+      ...buildLiveTransportRttResult(approval, "approval-request-to-resolution"),
     };
   }
+  const send = (text: string, mode: WhatsAppQaMessageScenarioRun["sendMode"]) =>
+    mode?.kind === "media"
+      ? driver.sendMedia(target, text, mode.mediaBuffer, mode.mediaType, {
+          fileName: mode.fileName,
+        })
+      : driver.sendText(target, text);
   if (scenarioRun.quietInput !== undefined) {
     const quietStartedAt = new Date();
-    const quietSendMode = scenarioRun.quietSendMode ?? scenarioRun.sendMode;
-    if (quietSendMode?.kind === "media") {
-      await driver.sendMedia(
-        target,
-        scenarioRun.quietInput,
-        quietSendMode.mediaBuffer,
-        quietSendMode.mediaType,
-        { fileName: quietSendMode.fileName },
-      );
-    } else {
-      await driver.sendText(target, scenarioRun.quietInput);
-    }
+    await send(scenarioRun.quietInput, scenarioRun.quietSendMode ?? scenarioRun.sendMode);
     await waitForNoWhatsAppReply({
       ...(scenarioRun.quietMatchText
         ? {
             allowQuietWindowMessage: (message: WhatsAppQaDriverObservedMessage) =>
-              !messageMatches(message as WhatsAppObservedMessage, scenarioRun.quietMatchText!),
+              !messageMatches(message, scenarioRun.quietMatchText!),
           }
         : {}),
       driver,
@@ -161,16 +96,7 @@ async function runWhatsAppScenarioAttempt(params: {
     );
   }
   const requestStartedAt = new Date();
-  const sent =
-    scenarioRun.sendMode?.kind === "media"
-      ? await driver.sendMedia(
-          target,
-          scenarioRun.input,
-          scenarioRun.sendMode.mediaBuffer,
-          scenarioRun.sendMode.mediaType,
-          { fileName: scenarioRun.sendMode.fileName },
-        )
-      : await driver.sendText(target, scenarioRun.input);
+  const sent = await send(scenarioRun.input, scenarioRun.sendMode);
   const scenarioContext: WhatsAppQaMessageScenarioContext = {
     driver,
     driverPhoneE164: runtimeEnv.driverPhoneE164,
@@ -181,23 +107,18 @@ async function runWhatsAppScenarioAttempt(params: {
       params.environment.observedMessages.push({
         ...message,
         matchedScenario: true,
-        scenarioId: params.scenario.id,
-        scenarioTitle: params.scenario.title,
+        scenarioId: scenario.id,
+        scenarioTitle: scenario.title,
       });
     },
     requestStartedAt,
-    scenarioId: params.scenario.id,
-    scenarioTitle: params.scenario.title,
+    scenarioId: scenario.id,
+    scenarioTitle: scenario.title,
     sent,
     sutAccountId: params.environment.sutAccountId,
     sutPhoneE164: runtimeEnv.sutPhoneE164,
     target,
     targetKind: scenarioRun.target,
-    waitForReady: async () =>
-      await waitForWhatsAppChannelStable(
-        params.environment.gateway as never,
-        params.environment.sutAccountId,
-      ),
   };
   const afterSendDetails = await scenarioRun.afterSend?.(scenarioContext);
   if (!scenarioRun.expectReply) {
@@ -207,23 +128,20 @@ async function runWhatsAppScenarioAttempt(params: {
       driver,
       observedAfter: requestStartedAt,
       sutPhoneE164: runtimeEnv.sutPhoneE164,
-      windowMs: scenarioRun.quietWindowMs ?? params.scenario.timeoutMs,
+      windowMs: scenarioRun.quietWindowMs ?? scenario.timeoutMs,
       ...resolveWhatsAppQaNoReplyTarget({
         groupJid: runtimeEnv.groupJid,
         target: scenarioRun.target,
       }),
     });
     return {
-      ...buildWhatsAppQaScenarioResultBase(params.scenario, params.implementation),
-      status: "pass",
       details: ["no reply", afterSendDetails].filter(Boolean).join("; "),
     };
   }
-  const reply = await waitForWhatsAppScenarioSutMessage(scenarioContext, {
+  const reply = await waitForScenarioObservedMessage(scenarioContext, {
     observedAfter: requestStartedAt,
-    timeoutMs: params.scenario.timeoutMs,
-    targetKind: scenarioRun.target,
-    match: (message) => messageMatches(message as WhatsAppObservedMessage, scenarioRun.matchText),
+    timeoutMs: scenario.timeoutMs,
+    match: (message) => messageMatches(message, scenarioRun.matchText),
   });
   scenarioRun.verify?.(reply, scenarioContext);
   const afterReplyDetails = await scenarioRun.afterReply?.(reply, scenarioContext);
@@ -236,29 +154,22 @@ async function runWhatsAppScenarioAttempt(params: {
   const responseObservedAt = new Date(reply.observedAt);
   const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
   return {
-    ...buildWhatsAppQaScenarioResultBase(params.scenario, params.implementation),
-    status: "pass",
     details: [`reply matched in ${rttMs}ms`, afterSendDetails, afterReplyDetails, batchDetails]
       .filter(Boolean)
       .join("; "),
-    rttMs,
-    requestStartedAt: requestStartedAt.toISOString(),
-    responseObservedAt: responseObservedAt.toISOString(),
-    rttMeasurement: {
-      finalMatchedReplyRttMs: rttMs,
-      requestStartedAt: requestStartedAt.toISOString(),
-      responseObservedAt: responseObservedAt.toISOString(),
-      source: "request-to-observed-message",
-    },
+    ...buildLiveTransportRttResult(
+      { requestStartedAt, responseObservedAt, rttMs },
+      "request-to-observed-message",
+    ),
   };
 }
 
-export async function runWhatsAppScenario(
-  environment: WhatsAppQaScenarioEnvironment,
-  implementation: WhatsAppQaScenarioImplementation,
-) {
+export async function runWhatsAppScenario(environment: WhatsAppQaScenarioEnvironment) {
   const scenario = environment.scenario;
-  const { run: configuredRun } = await environment.configureScenario(implementation);
+  if (!environment.preparedScenario) {
+    throw new Error(`WhatsApp scenario ${scenario.id} has no prepared implementation`);
+  }
+  const { implementation, run: configuredRun } = environment.preparedScenario;
   for (let attempt = 1; attempt <= WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS; attempt += 1) {
     try {
       // Retry with fresh markers and callback state while retaining the gateway config
@@ -266,13 +177,17 @@ export async function runWhatsAppScenario(
       const run = attempt === 1 ? configuredRun : implementation.buildRun();
       const result = await runWhatsAppScenarioAttempt({
         environment,
-        implementation,
         run,
-        scenario,
       });
-      return attempt === 1
-        ? result
-        : { ...result, details: `${result.details}; driver reconnected ${attempt - 1}x` };
+      return {
+        id: scenario.id,
+        title: scenario.title,
+        posture: implementation.posture,
+        status: "pass" as const,
+        ...result,
+        details:
+          attempt === 1 ? result.details : `${result.details}; driver reconnected ${attempt - 1}x`,
+      };
     } catch (error) {
       if (
         attempt >= WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS ||

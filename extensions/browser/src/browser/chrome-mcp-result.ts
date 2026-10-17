@@ -1,17 +1,15 @@
-// Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   asNullableRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { toErrorObject } from "../infra/errors.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_CONNECTION_TOOL_ERROR_RE,
   DEVTOOLS_ACTIVE_PORT_RE,
-  STALE_SELECTED_PAGE_ERROR,
   type ChromeMcpStructuredPage,
   type ChromeMcpToolResult,
   type NormalizedChromeMcpProfileOptions,
@@ -138,11 +136,6 @@ function extractMessageText(result: ChromeMcpToolResult): string {
   return blocks.find((block) => block.trim()) ?? "";
 }
 
-function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
-  const message = extractMessageText(result).trim();
-  return message || `Chrome MCP tool "${name}" failed.`;
-}
-
 export function extractChromeMcpToolError(
   result: ChromeMcpToolResult,
   name: string,
@@ -153,7 +146,7 @@ export function extractChromeMcpToolError(
     (name === "close_page" &&
       extractStructuredPages(result).some((page) => page.id === args.pageId))
   ) {
-    return extractToolErrorMessage(result, name);
+    return extractMessageText(result).trim() || `Chrome MCP tool "${name}" failed.`;
   }
   if (name !== "navigate_page") {
     return undefined;
@@ -162,10 +155,6 @@ export function extractChromeMcpToolError(
   return [extractMessageText(result), ...extractTextContent(result)]
     .flatMap((text) => text.split(/\r?\n/))
     .find((line) => line.startsWith("Unable to navigate in the selected page:"));
-}
-
-function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
-  return redactToolPayloadText(redactCdpUrl(browserUrl) ?? browserUrl);
 }
 
 export function formatChromeMcpToolErrorMessage(params: {
@@ -179,7 +168,7 @@ export function formatChromeMcpToolErrorMessage(params: {
   if (params.options.browserUrl && CHROME_CONNECTION_TOOL_ERROR_RE.test(params.message)) {
     return (
       `Chrome MCP tool "${params.toolName}" failed for profile "${profileLabel}" while using ` +
-      `the configured Chrome endpoint (${formatChromeMcpEndpointForDiagnostic(params.options.browserUrl)}). ` +
+      `the configured Chrome endpoint (${redactToolPayloadText(redactCdpUrl(params.options.browserUrl) ?? params.options.browserUrl)}). ` +
       `Details: ${detail}`
     );
   }
@@ -197,10 +186,6 @@ export function formatChromeMcpToolErrorMessage(params: {
     );
   }
   return detail;
-}
-
-export function shouldReconnectForToolError(name: string, message: string): boolean {
-  return name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR);
 }
 
 export function extractJsonMessage(result: ChromeMcpToolResult): unknown {

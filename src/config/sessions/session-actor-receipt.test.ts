@@ -1,0 +1,190 @@
+import assert from "node:assert/strict";
+import { serialize } from "node:v8";
+import { expect, it, vi } from "vitest";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import type { SessionActorHotState } from "./session-actor-contract.js";
+import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
+import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+
+// mock-isolation: The fixture owns its database lifetime without background maintenance.
+vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
+  kickSessionEntryMaintenanceAfterWrite() {},
+}));
+// mock-isolation: The fixture controls archival rather than launching disk-budget maintenance.
+vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
+
+async function append(f: Fixture, eventJson: string, expected?: SessionActorHotState["version"]) {
+  const command: Mutation = {
+    type: "session.actor.appendTranscriptEvent",
+    input: {
+      target: f.target,
+      sessionId: f.scope.sessionId,
+      lifecycleRevision: null,
+      commandId: "append",
+      phaseId: "turn",
+      expected,
+      eventJson,
+    },
+  };
+  await f.prepare(command);
+  const outcome = f.mutate(command);
+  assert(outcome.kind === "committed", "Expected transcript append commit");
+  return { command, outcome };
+}
+
+function expectRetry(f: Fixture, command: Mutation) {
+  expect(f.mutate(command)).toMatchObject({
+    kind: "committed",
+    receipt: { transcript: { appendedEvents: [] } },
+  });
+}
+
+it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", async () => {
+  await withActor(async (f) => {
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      appendTranscriptEventsInTransaction(f.database, f.scope, [
+        {
+          type: "session",
+          id: f.scope.sessionId,
+          version: 3,
+          timestamp: "2026-01-01T00:00:00Z",
+          cwd: "/synthetic",
+        },
+      ]);
+    });
+    const event = {
+      type: "model_change",
+      id: "model-change",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:01Z",
+      provider: "synthetic",
+      modelId: "fixture-🦞",
+    };
+    const eventJson = JSON.stringify(event, null, 2);
+    const { command, outcome: first } = await append(f, eventJson, f.read().version);
+    expect(first.receipt.transcript.appendedEvents).toEqual([
+      { rawSeq: 1, event, serializedBytes: Buffer.byteLength(eventJson) + 1 },
+    ]);
+    expect(readTranscriptEventRows(f.database, f.scope.sessionId).at(-1)?.eventJson).toBe(
+      eventJson,
+    );
+    expectRetry(f, {
+      ...command,
+      input: {
+        ...command.input,
+        expected: first.receipt.afterVersion,
+        commandId: "model-change-retry",
+      },
+    });
+  });
+});
+
+function hot(rawSeq: number, generation = "generation"): SessionActorHotState {
+  return {
+    target: {
+      sessionKey: "agent:main:receipt",
+      database: { kind: "memory", handle: "receipt", incarnation: "receipt" },
+    },
+    version: { epoch: "epoch", sequence: rawSeq },
+    writeToken: String(rawSeq),
+    dependencySessionIds: ["session"],
+    entry: { sessionId: "session", updatedAt: 1 },
+    hasBoard: false,
+    participants: [],
+    members: [],
+    pendingInputs: [],
+    completionKeys: [],
+    transcript: {
+      version: { rawSeq, generation, updatedAt: 1 },
+      watermark: { maxSeq: rawSeq, generation },
+      anchorsState: "resident",
+      anchors: [],
+      idempotency: [],
+      modelContext: { kind: "resident", entries: [] },
+    },
+  };
+}
+
+it("detaches complete append deltas and omits unavailable, incomplete, or replaced histories", () => {
+  const payload = {
+    event: { id: "entry", message: { content: "committed" } },
+    serializedBytes: 51,
+  };
+  const payloads = new Map([[2, payload]]);
+  const create = (after: SessionActorHotState, supplied = payloads) =>
+    createSessionActorCommittedOutcome({
+      phase: "patch",
+      command: { commandId: "patch", phaseId: "accounting" },
+      before: hot(1),
+      after,
+      payloads: supplied,
+      applied: { value: undefined, reducers: [] },
+    }).receipt.transcript.appendedEvents;
+  const complete = create(hot(2));
+  payload.event.message.content = "changed after receipt";
+  expect(complete).toEqual([
+    { rawSeq: 2, event: { id: "entry", message: { content: "committed" } }, serializedBytes: 51 },
+  ]);
+  expect(create(hot(1))).toEqual([]);
+  expect(create(hot(2), new Map())).toBeUndefined();
+  expect(create(hot(3))).toBeUndefined();
+  expect(create(hot(2, "replacement"))).toBeUndefined();
+  expect(create(hot(0))).toBeUndefined();
+});
+
+it("keeps append receipts independent of retained transcript length", async () => {
+  const receiptBytes: number[] = [];
+  for (const historyLength of [16, 256]) {
+    await withActor(async (f) => {
+      const history = Array.from({ length: historyLength }, (_, index) => ({
+        type: "message",
+        id: `history-${index}`,
+        parentId: index ? `history-${index - 1}` : null,
+        timestamp: "2026-01-01T00:00:00Z",
+        message: { role: "user", content: "synthetic history", idempotencyKey: `input-${index}` },
+      }));
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        appendTranscriptEventsInTransaction(f.database, f.scope, history),
+      );
+      const event = {
+        type: "custom",
+        customType: "synthetic-receipt",
+        id: "new-event",
+        parentId: `history-${historyLength - 1}`,
+        timestamp: "2026-01-01T00:00:01Z",
+        data: { content: "x".repeat(6 * 1024) },
+      };
+      const { command, outcome } = await append(f, JSON.stringify(event));
+      const bytes = serialize(outcome).byteLength;
+      receiptBytes.push(bytes);
+      expect(bytes).toBeLessThan(16 * 1024);
+      expect(outcome.receipt.postimage).toMatchObject({
+        completionKeys: [],
+        transcript: {
+          anchorsState: "unavailable",
+          anchors: [],
+          idempotency: [],
+          modelContext: { kind: "unavailable" },
+        },
+      });
+      expect(outcome.receipt.transcript.appendedEvents).toEqual([
+        {
+          rawSeq: historyLength,
+          event,
+          serializedBytes: Buffer.byteLength(JSON.stringify(event)) + 1,
+        },
+      ]);
+      expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
+        historyLength + 1,
+      );
+      expectRetry(f, { ...command, input: { ...command.input, commandId: "retry" } });
+      expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
+        historyLength + 1,
+      );
+    });
+  }
+  // Scalar sequence/count encodings may grow; retained history must not cross the worker boundary.
+  expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
+});

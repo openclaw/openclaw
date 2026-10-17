@@ -44,18 +44,11 @@ function fixture(maxTokens = 128) {
     {},
   );
   const run = vi
-    .fn<
-      (
-        feeds: InferenceSession.FeedsType,
-        fetches?: InferenceSession.FetchesType | InferenceSession.RunOptions,
-        options?: InferenceSession.RunOptions,
-      ) => Promise<InferenceSession.ReturnType>
-    >()
+    .fn<(feeds: InferenceSession.FeedsType) => Promise<InferenceSession.ReturnType>>()
     .mockResolvedValue({
       cls_logits: new Tensor("float32", [2, -1], [1, 2]),
     });
-  const session = { run };
-  return { run, adapter: createGlinerAdapter({ session, tokenizer, maxTokens }) };
+  return { run, adapter: createGlinerAdapter({ session: { run }, tokenizer, maxTokens }) };
 }
 
 const input = { text: "Great", labels: ["positive", "negative"], task: "sentiment" };

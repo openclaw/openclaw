@@ -5,10 +5,9 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, vi } from "vitest";
-import { teamsMeetingsConfig } from "./config.js";
-import { TeamsMeetingsRuntime } from "./runtime.js";
+import { teamsMeetingsPlugin } from "../index.js";
 
-const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const resolveTeamsMeetingsConfig = teamsMeetingsPlugin.config.resolveConfig;
 const testState = useMeetingTestState(createOpenClawTestState);
 
 const URL =
@@ -51,11 +50,11 @@ function runtimeFixture(
   options: {
     config?: Parameters<typeof resolveTeamsMeetingsConfig>[0];
     harness?: { tabOpen?: boolean };
-    fullConfig?: ConstructorParameters<typeof TeamsMeetingsRuntime>[0]["fullConfig"];
+    fullConfig?: ConstructorParameters<typeof teamsMeetingsPlugin.Runtime>[0]["fullConfig"];
   } = {},
 ) {
   const harness = runtimeHarness(options.harness);
-  const runtime = new TeamsMeetingsRuntime({
+  const runtime = new teamsMeetingsPlugin.Runtime({
     config: resolveTeamsMeetingsConfig(
       options.config ?? {
         defaultMode: "transcribe",

@@ -162,32 +162,24 @@ function createAvailableSlug(
   return undefined;
 }
 
+function createUniqueSlug(nouns: string[], isTaken?: (id: string) => boolean): string {
+  const isIdTaken = isTaken ?? (() => false);
+  for (const words of [2, 3]) {
+    const slug = createAvailableSlug(words, isIdTaken, nouns);
+    if (slug) {
+      return slug;
+    }
+  }
+  const fallback = `${createSlugBase(3, nouns)}-${createFallbackSuffix(3)}`;
+  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36)}` : fallback;
+}
+
 /** Creates a human-readable unique session slug with numbered and random fallbacks. */
 export function createSessionSlug(isTaken?: (id: string) => boolean): string {
-  const isIdTaken = isTaken ?? (() => false);
-  const twoWord = createAvailableSlug(2, isIdTaken);
-  if (twoWord) {
-    return twoWord;
-  }
-  const threeWord = createAvailableSlug(3, isIdTaken);
-  if (threeWord) {
-    return threeWord;
-  }
-  const fallback = `${createSlugBase(3)}-${createFallbackSuffix(3)}`;
-  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36)}` : fallback;
+  return createUniqueSlug(SLUG_NOUNS, isTaken);
 }
 
 /** Creates a human-readable crustacean-themed slug for unnamed worktrees. */
 export function createCrustaceanSlug(isTaken?: (id: string) => boolean): string {
-  const isIdTaken = isTaken ?? (() => false);
-  const twoWord = createAvailableSlug(2, isIdTaken, CRUSTACEAN_NOUNS);
-  if (twoWord) {
-    return twoWord;
-  }
-  const threeWord = createAvailableSlug(3, isIdTaken, CRUSTACEAN_NOUNS);
-  if (threeWord) {
-    return threeWord;
-  }
-  const fallback = `${createSlugBase(3, CRUSTACEAN_NOUNS)}-${createFallbackSuffix(3)}`;
-  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36)}` : fallback;
+  return createUniqueSlug(CRUSTACEAN_NOUNS, isTaken);
 }

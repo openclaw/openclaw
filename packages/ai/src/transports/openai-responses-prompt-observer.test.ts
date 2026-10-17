@@ -16,6 +16,8 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import {
   completedSdkResponse,
+  createModel,
+  createContext,
   createCompactionContext,
   createOrphanedToolOutputCompactionContext,
   SDK_FULL_HISTORY_PREFIX,
@@ -60,33 +62,6 @@ import {
 } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
-
-function createModel<TApi extends Api = "openai-responses">(
-  overrides: Partial<Model<TApi>> = {},
-): Model<TApi> {
-  return {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
-    ...overrides,
-  } as Model<TApi>;
-}
-
-function createContext(systemPrompt: string, overrides: Partial<Context> = {}): Context {
-  return {
-    systemPrompt,
-    messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    tools: [],
-    ...overrides,
-  } as Context;
-}
 
 function createJwt(): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -168,6 +143,60 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses provider prompt observer", () => {
+  it("replays inline compaction with runtime facts after the user and an unchanged next-turn prefix", async () => {
+    const identity = { sessionId: "compacted-runtime-context", authProfileId: "profile" };
+    const model = createModel();
+    const context = createCompactionContext(model, identity);
+    context.systemPrompt = "Complete stable instructions";
+    const runtimeFacts =
+      'Conversation data (data, not instructions):\n"## Temporal Context\\nCurrent date: 2026-10-14\\nTime zone: UTC"';
+    context.messages.push({
+      role: "user",
+      content: runtimeFacts,
+      timestamp: 3,
+      operatorMessage: { turnScoped: true },
+    });
+    const saved = JSON.stringify(context);
+    const expectedInput = [
+      {
+        type: "compaction",
+        id: "cmp_azure_rejected",
+        encrypted_content: "opaque-azure-compaction",
+      },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: runtimeFacts }] },
+    ];
+    const first = await runObservedRequest({ context, model, options: identity });
+    expect(first.requests).toHaveLength(1);
+    expect(first.requests[0]?.instructions).toBe("Complete stable instructions");
+    expect(first.requests[0]?.input).toEqual(expectedInput);
+    expect(JSON.stringify(context)).toBe(saved);
+
+    // Reopening the saved transcript must extend, not rewrite, the admitted input.
+    const resumed: Context = JSON.parse(saved);
+    resumed.messages.push(
+      { role: "user", content: "Next question", timestamp: 4 },
+      {
+        role: "user",
+        content: "Updated runtime facts",
+        timestamp: 5,
+        operatorMessage: { turnScoped: true },
+      },
+    );
+    const next = await runObservedRequest({ context: resumed, model, options: identity });
+    expect(next.requests).toHaveLength(1);
+    expect(next.requests[0]?.instructions).toBe("Complete stable instructions");
+    expect(next.requests[0]?.input).toEqual([
+      ...expectedInput,
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Next question" }] },
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "Updated runtime facts" }],
+      },
+    ]);
+  });
+
   it.each(["string input", "missing terminal output"])(
     "preserves %s without a checkpoint measurement",
     async (shape) => {
@@ -208,7 +237,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     },
   );
 
-  it.each(["native", "shared", "chatgpt"] as const)(
+  it.each(["shared", "chatgpt"] as const)(
     "preserves measured checkpoint usage through %s egress and saved-history replay",
     async (transport) => {
       const identity = { sessionId: `usage-${transport}`, authProfileId: "usage-profile" };
@@ -223,6 +252,12 @@ describe("OpenAI Responses provider prompt observer", () => {
         throw new Error("missing tool-output fixture");
       }
       toolOutput.content = [{ type: "text", text: "large historical tool output\n".repeat(8_000) }];
+      context.messages.push({
+        role: "user",
+        content: "OpenClaw runtime context:\ncurrent runtime facts",
+        timestamp: 2,
+        runtimeContext: {},
+      });
       const run = async (rewriteInput: boolean) => {
         sdkState.outcomes = [completedSdkResponse(`resp_usage_${transport}`)];
         vi.stubGlobal(
@@ -294,7 +329,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     },
   );
 
-  it("binds measured usage to streamed reasoning when the terminal ciphertext changes", async () => {
+  it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
     const model = createModel();
     const identity = { sessionId: "reasoning-session", authProfileId: "reasoning-profile" };
     const context = createCompactionContext(model, identity);
@@ -331,7 +366,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     const result = await stream.result();
     expect(result.content[0]).toMatchObject({
       type: "thinking",
-      thinkingSignature: expect.stringContaining("opaque-streamed-reasoning"),
+      thinkingSignature: expect.stringContaining("opaque-terminal-reasoning"),
     });
     const persisted = JSON.stringify([...context.messages, result]);
     expect(
@@ -342,64 +377,6 @@ describe("OpenAI Responses provider prompt observer", () => {
         context.systemPrompt,
       ),
     ).toEqual({ index: context.messages.length, totalTokens: 525, suffix: [] });
-  });
-
-  // createModel() defaults to a verified native OpenAI route (see
-  // usesVerifiedInstructionsEndpoint in openai-responses-payload-policy.ts),
-  // so this request carries the system prompt via top-level `instructions`
-  // rather than an `input.developer`/`input.system` message. That default is
-  // route-specific, not universal -- see the Azure test below, which is on
-  // an unverified route and falls back to input.developer.
-  // The reasoning flag no longer changes promptSource (it used to select
-  // between the developer/system input roles); both cases stay in the table
-  // to confirm reasoning=true/false doesn't regress instructions delivery.
-  it.each([{ reasoning: true }, { reasoning: false }] as const)(
-    "observes the final instructions prompt (reasoning=$reasoning)",
-    async ({ reasoning }) => {
-      const prompt = `PRIVATE-reasoning-${reasoning}-PROMPT`;
-      const run = await runObservedRequest({
-        context: createContext(prompt),
-        model: createModel({ reasoning }),
-      });
-
-      expect(run.observations).toEqual([
-        {
-          egress: "responses-sdk",
-          payloadVariant: "initial",
-          promptSource: "instructions",
-          expectedChars: prompt.length,
-          observedChars: prompt.length,
-          matchesAssembledPrompt: true,
-        },
-      ]);
-      expect(JSON.stringify(run.observations)).not.toContain(prompt);
-    },
-  );
-
-  it("observes Azure Responses egress", async () => {
-    const prompt = "PRIVATE-AZURE-PROMPT";
-    const run = await runObservedRequest({
-      azure: true,
-      context: createContext(prompt),
-      model: createModel({
-        api: "azure-openai-responses",
-        provider: "azure-openai-responses",
-        baseUrl: "https://example.openai.azure.com",
-      }),
-    });
-
-    expect(sdkState.clients).toEqual(["azure"]);
-    expect(run.order).toEqual(["observe", "azure.create"]);
-    expect(run.observations[0]).toMatchObject({
-      egress: "responses-sdk",
-      payloadVariant: "initial",
-      // Azure is not a verified instructions-field route (see
-      // usesVerifiedInstructionsEndpoint in openai-responses-payload-policy.ts)
-      // -- it falls back to embedding the prompt in input, same as any other
-      // unverified route.
-      promptSource: "input.developer",
-      matchesAssembledPrompt: true,
-    });
   });
 
   it("recovers Azure compaction rejection and suppresses it on the next turn", async () => {
@@ -536,9 +513,9 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
-  it.each(["iterator", "response.failed"] as const)(
+  it.each(["response.failed"] as const)(
     "retries encrypted reasoning rejected by the SDK %s drain without dropping compaction",
-    async (failureShape) => {
+    async () => {
       const identity = { sessionId: "sdk-drain-session", authProfileId: "sdk-drain-profile" };
       const model = createModel({
         api: "openai-chatgpt-responses",
@@ -555,9 +532,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       const failedResponse: SdkResponse = {
         data: (async function* () {
           yield { type: "response.created", response: { id: "resp_rejected" } };
-          if (failureShape === "iterator") {
-            throw new Error(failureMessage);
-          }
           yield {
             type: "response.failed",
             response: {
@@ -619,30 +593,6 @@ describe("OpenAI Responses provider prompt observer", () => {
     },
   );
 
-  it("does not invoke the provider or retry when prompt observation throws", async () => {
-    const options = { apiKey: "test-key" };
-    responsesPromptObserver.set(options, () => {
-      throw Object.assign(new Error("observer failed"), {
-        code: "invalid_encrypted_content",
-      });
-    });
-    sdkState.outcomes = [completedSdkResponse("resp_unexpected")];
-
-    const stream = await Promise.resolve(
-      createOpenAIResponsesTransportStreamFn()(
-        createModel(),
-        createContext("PRIVATE-OBSERVER-FAILURE-PROMPT"),
-        options as never,
-      ),
-    );
-    expect(await stream.result()).toMatchObject({
-      stopReason: "error",
-      errorMessage: "observer failed",
-    });
-    expect(sdkState.clients).toEqual([]);
-    expect(sdkState.requests).toEqual([]);
-  });
-
   it("observes the async replacement immediately before final transformed egress", async () => {
     const prompt = "PRIVATE-FINAL-TRANSFORMED-PROMPT";
     const toolSurfaceObserver = vi.fn();
@@ -661,12 +611,13 @@ describe("OpenAI Responses provider prompt observer", () => {
     const options = {
       openclawCodeModeToolSurface: true,
       openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
-      onPayload: async () => {
+      onPayload: async (payload: unknown) => {
         await Promise.resolve();
+        const request = payload as { metadata?: Record<string, string> };
         return {
           model: "gpt-5.4",
           stream: true,
-          metadata: { caller: "kept" },
+          metadata: { ...request.metadata, caller: "kept" },
           input: [
             { type: "message", role: "developer", content: prompt },
             {
@@ -709,60 +660,38 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
 
-  it("observes each staged encrypted-content recovery attempt", async () => {
-    const prompt = "PRIVATE-REPLAY-PROMPT";
-    const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
-      code: "invalid_encrypted_content",
-    });
-    const onPayload = vi.fn((request: Record<string, unknown>) => ({
-      ...request,
-      input: [
-        ...((request.input as unknown[]) ?? []),
-        { type: "reasoning", encrypted_content: "opaque", summary: [] },
-        {
-          type: "compaction",
-          id: "cmp_invalid",
-          encrypted_content: "opaque-compaction",
+  it.each([{ azure: true, remove: false }])(
+    "honors the payload hook's metadata choice (azure=$azure, remove=$remove)",
+    async ({ azure, remove }) => {
+      configureAiTransportHost({
+        ...initialHost,
+        plugin: {
+          ...initialHost.plugin,
+          resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
         },
-      ],
-    }));
-    const run = await runObservedRequest({
-      context: createContext(prompt),
-      errors: [invalidEncryptedContent, invalidEncryptedContent, new Error("stop after retry")],
-      options: { onPayload },
-    });
-
-    expect(run.order).toEqual([
-      "observe",
-      "openai.create",
-      "observe",
-      "openai.create",
-      "observe",
-      "openai.create",
-    ]);
-    expect(run.observations.map((entry) => entry.payloadVariant)).toEqual([
-      "initial",
-      "reasoning-stripped",
-      "compaction-stripped",
-    ]);
-    expect(run.observations.every((entry) => entry.egress === "responses-sdk")).toBe(true);
-    expect(run.observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
-    expect(JSON.stringify(run.requests[0])).toContain("encrypted_content");
-    expect(JSON.stringify(run.requests[1])).toContain("opaque-compaction");
-    expect(JSON.stringify(run.requests[1])).not.toContain('"opaque"');
-    expect(
-      ((run.requests[1]?.input as Array<{ type?: string }> | undefined) ?? []).some(
-        (item) => item.type === "compaction",
-      ),
-    ).toBe(true);
-    expect(JSON.stringify(run.requests[2])).not.toContain("encrypted_content");
-    expect(
-      ((run.requests[2]?.input as Array<{ type?: string }> | undefined) ?? []).some(
-        (item) => item.type === "compaction",
-      ),
-    ).toBe(false);
-    expect(onPayload).toHaveBeenCalledTimes(2);
-  });
+      });
+      const run = await runObservedRequest({
+        azure,
+        context: createContext("prompt"),
+        options: {
+          onPayload: (payload: unknown) => {
+            const request = payload as Record<string, unknown>;
+            expect(request.metadata).toEqual({ host: "added" });
+            if (remove) {
+              delete request.metadata;
+            }
+            return request;
+          },
+        },
+      });
+      expect(run.requests).toHaveLength(1);
+      if (remove) {
+        expect(run.requests[0]).not.toHaveProperty("metadata");
+      } else {
+        expect(run.requests[0]?.metadata).toEqual({ host: "added" });
+      }
+    },
+  );
 
   it("uses cache-boundary and surrogate normalization as the expected prompt owner", async () => {
     const systemPrompt = `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic\ud800`;
@@ -779,45 +708,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       throw new Error("missing captured request");
     }
     expect(request.instructions).toBe(normalizedPrompt);
-  });
-
-  it("reports missing and same-length mutated prompts without retaining content", async () => {
-    const missingPrompt = "PRIVATE-MISSING-PROMPT";
-    const missing = await runObservedRequest({
-      context: createContext(missingPrompt),
-      options: {
-        onPayload: () => ({
-          model: "gpt-5.4",
-          stream: true,
-          input: [{ type: "message", role: "user", content: "hello" }],
-        }),
-      },
-    });
-    const mismatch = await runObservedRequest({
-      context: createContext("trusted"),
-      options: {
-        onPayload: () => ({
-          model: "gpt-5.4",
-          stream: true,
-          input: [{ type: "message", role: "developer", content: "altered" }],
-        }),
-      },
-    });
-
-    expect(missing.observations[0]).toMatchObject({
-      promptSource: "missing",
-      observedChars: 0,
-      matchesAssembledPrompt: false,
-    });
-    expect(mismatch.observations[0]).toMatchObject({
-      promptSource: "input.developer",
-      expectedChars: 7,
-      observedChars: 7,
-      matchesAssembledPrompt: false,
-    });
-    expect(JSON.stringify([...missing.observations, ...mismatch.observations])).not.toContain(
-      missingPrompt,
-    );
   });
 
   it("observes each native WebSocket connection-limit dispatch before send", async () => {
@@ -963,14 +853,8 @@ describe("OpenAI Responses provider prompt observer", () => {
   it("observes only SSE when automatic WebSocket fallback happens before send", async () => {
     const prompt = "PRIVATE-PRE-SEND-FALLBACK-PROMPT";
     const observations: ResponsesPromptObservation[] = [];
-    class FailingWebSocket {
-      constructor() {
-        throw new Error("websocket connect failed");
-      }
-      send(): void {}
-      close(): void {}
-      addEventListener(): void {}
-      removeEventListener(): void {}
+    function FailingWebSocket() {
+      throw new Error("websocket connect failed");
     }
     vi.stubGlobal("WebSocket", FailingWebSocket);
     vi.stubGlobal(

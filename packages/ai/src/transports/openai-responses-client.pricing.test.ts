@@ -2,18 +2,25 @@
 // model-aware service-tier helper. A transport-local flat table previously
 // drifted (2x while gpt-5.5 priority bills 2.5x) and understated UI cost.
 import type { Model } from "@openclaw/llm-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { streamSimpleOpenAIResponses } from "../providers/openai-responses.js";
+import {
+  responsesServiceTierObserver,
+  type ResponsesServiceTierObservation,
+} from "./openai-responses-contracts.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
 const sseState = vi.hoisted(() => ({
   outcomes: [] as Array<Error | SdkResponse>,
+  requests: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("openai", () => {
   class MockOpenAI {
     responses = {
-      create: () => {
+      create: (request: Record<string, unknown>) => {
+        sseState.requests.push(request);
         const outcome = sseState.outcomes.shift() ?? new Error("Unexpected SSE request");
         return {
           withResponse: async () => {
@@ -52,13 +59,14 @@ const model = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 
-function completedResponse(serviceTier: string): SdkResponse {
+function completedResponse(serviceTier: string | null | undefined, cachedTokens = 0): SdkResponse {
   return {
     data: (async function* () {
       yield {
         type: "response.completed",
         response: {
           id: "resp_priced",
+          model: "gpt-5.5",
           status: "completed",
           service_tier: serviceTier,
           output: [
@@ -70,7 +78,12 @@ function completedResponse(serviceTier: string): SdkResponse {
               content: [{ type: "output_text", text: "ok", annotations: [] }],
             },
           ],
-          usage: { input_tokens: 1_000_000, output_tokens: 1_000_000, total_tokens: 2_000_000 },
+          usage: {
+            input_tokens: 1_000_000,
+            input_tokens_details: { cached_tokens: cachedTokens },
+            output_tokens: 1_000_000,
+            total_tokens: 2_000_000,
+          },
         },
       };
     })(),
@@ -79,6 +92,11 @@ function completedResponse(serviceTier: string): SdkResponse {
 }
 
 describe("managed Responses transport service-tier pricing", () => {
+  afterEach(() => {
+    sseState.outcomes.length = 0;
+    sseState.requests.length = 0;
+  });
+
   it("applies the canonical 2.5x gpt-5.5 priority multiplier to usage cost", async () => {
     sseState.outcomes.push(completedResponse("priority"));
     const stream = await createOpenAIResponsesTransportStreamFn()(
@@ -90,4 +108,47 @@ describe("managed Responses transport service-tier pricing", () => {
     // Base cost 2 + 10 = 12; gpt-5.5 priority is 2.5x = 30 (flat 2x would be 24).
     expect(result.usage.cost.total).toBeCloseTo(30, 6);
   });
+
+  it.each([
+    { route: "managed", responseTier: "ultrafast" },
+    { route: "simple", responseTier: "default" },
+    { route: "simple", responseTier: undefined },
+  ])(
+    "observes $route terminal tier $responseTier against the final payload",
+    async ({ route, responseTier }) => {
+      sseState.outcomes.push(completedResponse(responseTier, 640_000));
+      const observations: ResponsesServiceTierObservation[] = [];
+      const options = {
+        apiKey: "test-key",
+        transport: "sse" as const,
+        serviceTier: "priority" as const,
+        onPayload: (payload: unknown) => ({
+          ...(payload as Record<string, unknown>),
+          service_tier: "ultrafast",
+        }),
+      };
+      responsesServiceTierObserver.set(options, (observation) => observations.push(observation));
+      const streamFn =
+        route === "managed"
+          ? createOpenAIResponsesTransportStreamFn()
+          : streamSimpleOpenAIResponses;
+      const stream = await streamFn(model, { messages: [], tools: [] }, { ...options });
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(sseState.requests[0]?.service_tier).toBe("ultrafast");
+      expect(observations).toEqual(
+        responseTier === "ultrafast" || responseTier === "default"
+          ? [
+              {
+                requestedTier: "ultrafast",
+                responseTier,
+                responseId: "resp_priced",
+                responseModel: "gpt-5.5",
+                inputTokens: 1_000_000,
+                cachedTokens: 640_000,
+              },
+            ]
+          : [],
+      );
+    },
+  );
 });

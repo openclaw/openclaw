@@ -1,13 +1,29 @@
+import { expect } from "vitest";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 
-type RestartPostCheckContext = {
-  activationAccepted: boolean;
-  json: boolean;
-  stdout: NodeJS.WritableStream;
-  warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
-};
+export function createGatewayProcessExpectations(
+  listeners: typeof import("../../infra/gateway-processes.js").findVerifiedGatewayListenerPidsOnPortSync,
+  signalPid: typeof import("../../infra/gateway-processes.js").signalVerifiedGatewayPidSync,
+) {
+  return {
+    listeners(port: number, env?: NodeJS.ProcessEnv) {
+      expect(listeners).toHaveBeenCalledWith(port, { env });
+    },
+    signal(pid: number, signal: "SIGTERM" | "SIGUSR1", port: number, env?: NodeJS.ProcessEnv) {
+      expect(signalPid).toHaveBeenCalledWith(pid, signal, { env, port });
+    },
+    noSignal(pid: number, signal: "SIGTERM" | "SIGUSR1", port: number, env?: NodeJS.ProcessEnv) {
+      expect(signalPid).not.toHaveBeenCalledWith(pid, signal, { env, port });
+    },
+  };
+}
+
+type RestartPostCheckContext = Parameters<
+  NonNullable<
+    Parameters<typeof import("./lifecycle-core.js").runServiceRestart>[0]["postRestartCheck"]
+  >
+>[0];
 
 export type RestartParams = {
   opts?: { json?: boolean };
@@ -87,7 +103,9 @@ export function createDeferredSafeRestartResult(): SafeGatewayRestartRequestResu
         cronRuns: 0,
         backgroundExecSessions: 0,
         rootRequests: 0,
-        activeTasks: 0,
+        agentRuns: 0,
+        acpRuns: 0,
+        mediaRuns: 0,
         totalActive: 1,
       },
       blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],

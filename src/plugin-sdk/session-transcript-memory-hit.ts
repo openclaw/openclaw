@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   isIncognitoSessionKey,
@@ -61,10 +60,6 @@ function decodeMemoryKeySegment(value: string): string | null {
   }
 }
 
-function syntheticSessionKey(identity: SessionTranscriptMemoryHitIdentity): string {
-  return `agent:${identity.agentId}:${identity.sessionId}`;
-}
-
 /**
  * Builds the memory hit key for one session transcript.
  */
@@ -113,15 +108,14 @@ export function resolveSessionTranscriptMemoryHitKeyToSessionKeys(
       return (
         !isIncognitoSessionKey(sessionKey) &&
         entry.sessionId === identity.sessionId &&
-        normalizeAgentId(resolveAgentIdFromSessionKey(sessionKey)) === identity.agentId
+        resolveAgentIdFromSessionKey(sessionKey) === identity.agentId
       );
     })
     .map(([sessionKey]) => sessionKey);
-  const deduped = uniqueStrings(matches);
-  if (deduped.length > 0) {
-    return deduped;
+  if (matches.length > 0) {
+    return matches;
   }
-  const fallbackKey = syntheticSessionKey(identity);
+  const fallbackKey = `agent:${identity.agentId}:${identity.sessionId}`;
   return params.includeSyntheticFallback === false || isIncognitoSessionKey(fallbackKey)
     ? []
     : [fallbackKey];

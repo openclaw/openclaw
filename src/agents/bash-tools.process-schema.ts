@@ -7,6 +7,7 @@ const sessionProperties = {
   name: Type.Optional(Type.String()),
 };
 const inputProperties = {
+  followUp: Type.Optional(Type.String()),
   stdinWritable: Type.Boolean(),
   waitingForInput: Type.Boolean(),
   idleMs: Type.Number(),

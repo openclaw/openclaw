@@ -10,8 +10,9 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import {
@@ -93,13 +94,15 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
   const host = pageHost(makeChatHost({ sessionKey: selected, requestHandlers: {} }));
   const client = expectDefined(host.client, "shared client");
   const peer = pageHost(makeChatHost({ client, sessions: host.sessions, sessionKey: selected }));
-  const paint = vi.fn();
-  const peerPaint = vi.fn();
-  host.requestUpdate = paint;
-  peer.requestUpdate = peerPaint;
-  const stopHost = subscribeChatOutboxProjection(host);
-  const stopPeer = subscribeChatOutboxProjection(peer);
+  const publish = vi.fn();
+  const peerPublish = vi.fn();
+  const stopPublication = subscribeChatOutboxQueue(host, publish);
+  const stopPeerPublication = subscribeChatOutboxQueue(peer, peerPublish);
+  const stopHost = chatOutboxOwner(host).subscribe(host);
+  const stopPeer = chatOutboxOwner(peer).subscribe(peer);
   onTestFinished(() => {
+    stopPeerPublication();
+    stopPublication();
     stopPeer();
     stopHost();
     host.sessions.dispose();
@@ -132,15 +135,15 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
     ),
   ).toBe(true);
   expect(host.chatQueue.map((row) => row.id)).toEqual(["old-owner"]);
-  paint.mockClear();
-  peerPaint.mockClear();
+  publish.mockClear();
+  peerPublish.mockClear();
 
   vi.spyOn(client, "recoveryScope", "get").mockReturnValue("replacement-scope");
   handlePageGatewayEvent(host, sessionEvent(foreign), () => false);
   expect(host.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
   expect(peer.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
-  expect(paint).toHaveBeenCalledTimes(1);
-  expect(peerPaint).toHaveBeenCalledTimes(1);
+  expect(publish).toHaveBeenCalledTimes(1);
+  expect(peerPublish).toHaveBeenCalledTimes(1);
 });
 
 it.each(
@@ -181,13 +184,11 @@ it.each(
 
 it.each(
   [false, true].flatMap((changed) =>
-    [0, 7].flatMap((peerEpoch) =>
-      [selected, queued].map((peerSession) => ({ changed, peerEpoch, peerSession })),
-    ),
+    [selected, queued].map((peerSession) => ({ changed, peerSession })),
   ),
 )(
-  "joins a passive reader for $peerSession at epoch $peerEpoch and preserves events (changed: $changed)",
-  async ({ changed, peerEpoch, peerSession }) => {
+  "joins a passive reader for $peerSession across pane epochs and preserves events (changed: $changed)",
+  async ({ changed, peerSession }) => {
     const first = createDeferred<ChatHistoryResult>();
     const firstReadStarted = createDeferred();
     let reads = 0;
@@ -202,7 +203,7 @@ it.each(
       client: host.client,
       sessions: host.sessions,
       sessionKey: peerSession,
-      connectionEpoch: peerEpoch,
+      connectionEpoch: 7,
     });
     const event = sessionEvent(queued);
     const a = resumeStoredChatOutboxes(host, event);
@@ -271,7 +272,14 @@ it("keeps global outbox event recovery bound to the event's agent", async () => 
   expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toEqual([
     [
       "chat.history",
-      { sessionKey: "global", agentId: "work", inputRunIds: ["work-run"], limit: 1000 },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        inputRunIds: ["work-run"],
+        limit: 1000,
+        toolResultMaxChars: 2_000,
+      },
+      { timeoutMs: 30_000 },
     ],
   ]);
   expect(listStoredChatOutboxes(host)).toHaveLength(2);

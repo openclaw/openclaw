@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,7 +11,8 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginArtifactDeclaredSurface } from "../plugins/capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import * as loader from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -21,8 +23,10 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { createNonExitingRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
+
+// mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 const prepareProvider = vi.hoisted(() =>
   vi.fn<
@@ -52,7 +56,7 @@ it.each([false, true])(
           gateway: { mode: "local" },
           agents: {
             defaults: { workspace: state.workspaceDir },
-            entries: { main: { default: true, workspace: state.workspaceDir } },
+            entries: { main: { workspace: state.workspaceDir } },
           },
           plugins: { entries: {} },
         };
@@ -68,7 +72,10 @@ it.each([false, true])(
         const runningRegistry = createEmptyPluginRegistry();
         setActivePluginRegistry(runningRegistry);
         const loaded = vi.spyOn(loader, "loadPluginRegistryHandle");
-        const projectRoot = state.statePath("npm", "projects", "fixture-provider");
+        const projectRoot = resolvePluginNpmProjectDir({
+          npmDir: state.statePath("npm"),
+          packageName: "@fixture/provider",
+        });
         const pluginRoot = path.join(projectRoot, "node_modules", "@fixture", "provider");
         const pluginEntry = path.join(pluginRoot, "index.cjs");
         const pluginSource = `module.exports = {
@@ -158,30 +165,29 @@ it.each([false, true])(
           );
         });
         const capture = vi.fn(captureSystemAgentOwnerPluginArtifacts);
-        const runEmbeddedAgent = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(
-          async (params) => {
-            expect(onPreparationComplete).toHaveBeenCalledOnce();
-            params.onSuccessfulAuthBinding?.({
-              authFingerprint,
-              agentHarnessId: "openclaw",
-              modelId: "fixture-model",
-              modelApi: "openai-completions",
-            });
-            if (replaceDuringProbe) {
-              await fs.writeFile(pluginEntry, pluginSource + "// Replaced artifact.\n");
-            }
-            return {
-              meta: {
-                durationMs: 1,
-                finalAssistantVisibleText: "OK",
-                executionTrace: {
-                  winnerProvider: "fixture-provider",
-                  winnerModel: "fixture-model",
-                },
+        const runEmbeddedAgent = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async (params) => {
+          expect(onPreparationComplete).toHaveBeenCalledOnce();
+          params.onSuccessfulAuthBinding?.({
+            authFingerprint,
+            agentHarnessId: "openclaw",
+            modelId: "fixture-model",
+            modelApi: "openai-completions",
+          });
+          if (replaceDuringProbe) {
+            await fs.writeFile(pluginEntry, pluginSource + "// Replaced artifact.\n");
+          }
+          return {
+            meta: {
+              durationMs: 1,
+              finalAssistantVisibleText: "OK",
+              executionTrace: {
+                winnerProvider: "fixture-provider",
+                winnerModel: "fixture-model",
               },
-            };
-          },
-        );
+            },
+          };
+        });
+        vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
         const onPreparationComplete = vi.fn(() => {
           expect(capture).toHaveBeenCalledOnce();
           expect(trustedRecord).toBeDefined();
@@ -214,7 +220,6 @@ it.each([false, true])(
                 }),
                 captureSystemAgentOwnerPluginArtifacts: capture,
                 resolveApiKeyForProvider: async () => resolvedAuth,
-                runEmbeddedAgent,
               },
             });
             expect(onPreparationComplete).toHaveBeenCalledOnce();
@@ -248,8 +253,12 @@ it.each([false, true])(
                 modelRef: "fixture-provider/fixture-model",
               });
               // The running generation intentionally retains its pre-install cache.
-              const records = await withPluginLifecycleLease({}, async () =>
-                readPersistedInstalledPluginIndexInstallRecords({ stateDir: state.stateDir }),
+              const records = await withPluginLifecycleLease(
+                {},
+                async () =>
+                  await readPersistedInstalledPluginIndexInstallRecordsAsync({
+                    stateDir: state.stateDir,
+                  }),
               );
               if (!trustedRecord) {
                 throw new Error("Installer did not prepare a trusted record");

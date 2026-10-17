@@ -94,6 +94,26 @@ describe("file-transfer plugin entry", () => {
     expect(directoryTool.parameters).not.toHaveProperty("properties.includeDotfiles");
   });
 
+  it("reports every node command idle between invokes so node auto-update can activate", () => {
+    const registerNodeHostCommand = vi.fn();
+    pluginEntry.register({
+      registerCli: vi.fn(),
+      registerNodeHostCommand,
+      registerNodeInvokePolicy: vi.fn(),
+      registerTool: vi.fn(),
+    } as never);
+
+    // The node host counts in-flight invokes itself; a missing or non-false hook defers updates forever.
+    const commands = [
+      ...(pluginEntry.nodeHostCommands ?? []),
+      ...registerNodeHostCommand.mock.calls.map(([entry]) => entry),
+    ];
+    expect(commands).toHaveLength(8);
+    expect(
+      commands.filter((entry) => entry.hasActiveWork?.() !== false).map((entry) => entry.command),
+    ).toEqual([]);
+  });
+
   it("fails closed if the lazy policy module cannot load", async () => {
     const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();

@@ -39,6 +39,7 @@ async function collectSourceFiles(dir: string): Promise<string[]> {
     }
     if (
       entry.name.endsWith(".test.ts") ||
+      entry.name.endsWith(".test-support.ts") ||
       entry.name.endsWith(".e2e.ts") ||
       entry.name.endsWith(".e2e.test.ts") ||
       entry.name.endsWith(".live.test.ts")

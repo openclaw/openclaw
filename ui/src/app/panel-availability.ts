@@ -17,6 +17,16 @@ export function isBrowserPanelAvailable(snapshot: GatewaySnapshot): boolean {
   return isPanelAvailable(snapshot, "browser.request");
 }
 
+/** The session owner checks target membership, tool policy, and sandbox requirements. */
+export function isBrowserDashboardAvailable(
+  snapshot: Pick<ApplicationContext["gateway"]["snapshot"], "client" | "phase" | "hello">,
+): boolean {
+  return (
+    isBrowserPanelAvailable(snapshot) ||
+    canCallGatewayMethod(snapshot, "browser.dashboard.request", "operator.sessions.write")
+  );
+}
+
 export function isBrowserPanelSurfaceAvailable(snapshot: GatewaySnapshot): boolean {
   return hasNativeBrowserBridge() || isBrowserPanelAvailable(snapshot);
 }

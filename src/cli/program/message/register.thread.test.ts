@@ -11,9 +11,12 @@ import { registerMessageThreadCommands } from "./register.thread.js";
 
 function createHelpers(runMessageAction: MessageCliHelpers["runMessageAction"]): MessageCliHelpers {
   return {
-    withMessageBase: (command) => command.option("--channel <channel>", "Channel"),
-    withMessageTarget: (command) => command.option("-t, --target <dest>", "Target"),
-    withRequiredMessageTarget: (command) => command.requiredOption("-t, --target <dest>", "Target"),
+    withMessageBase: (command, target) => {
+      if (target === "required") {
+        command.requiredOption("-t, --target <dest>", "Target");
+      }
+      return command.option("--channel <channel>", "Channel");
+    },
     runMessageAction,
   };
 }
@@ -68,7 +71,7 @@ describe("registerMessageThreadCommands", () => {
     runMessageAction.mockClear();
   });
 
-  it("routes plugin-remapped thread create actions through channel hooks", async () => {
+  async function runThreadCreateWithMessage(channel: string, target: string) {
     const message = new Command().exitOverride();
     registerMessageThreadCommands(message, createHelpers(runMessageAction));
 
@@ -77,9 +80,9 @@ describe("registerMessageThreadCommands", () => {
         "thread",
         "create",
         "--channel",
-        " topic-chat ",
+        channel,
         "-t",
-        "room-1",
+        target,
         "--thread-name",
         "Build Updates",
         "-m",
@@ -87,6 +90,10 @@ describe("registerMessageThreadCommands", () => {
       ],
       { from: "user" },
     );
+  }
+
+  it("routes plugin-remapped thread create actions through channel hooks", async () => {
+    await runThreadCreateWithMessage(" topic-chat ", "room-1");
 
     const remappedCall = firstMessageActionCall(runMessageAction);
     expect(remappedCall?.[0]).toBe("topic-create");
@@ -148,24 +155,7 @@ describe("registerMessageThreadCommands", () => {
   });
 
   it("keeps default thread create params when the channel does not remap the action", async () => {
-    const message = new Command().exitOverride();
-    registerMessageThreadCommands(message, createHelpers(runMessageAction));
-
-    await message.parseAsync(
-      [
-        "thread",
-        "create",
-        "--channel",
-        "plain-chat",
-        "-t",
-        "channel:123",
-        "--thread-name",
-        "Build Updates",
-        "-m",
-        "hello",
-      ],
-      { from: "user" },
-    );
+    await runThreadCreateWithMessage("plain-chat", "channel:123");
 
     const defaultCall = firstMessageActionCall(runMessageAction);
     expect(defaultCall?.[0]).toBe("thread-create");

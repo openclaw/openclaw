@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, expect, test, type TestContext } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -10,7 +11,16 @@ import {
   createGatewayFixtureFork,
 } from "./server.fixture-lifetime.test-support.js";
 
-const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
+// Prepare during collection; each isolated child keeps its own shutdown deadline.
+const fixtureWorkers = createVitestWorkerRun();
+afterAll(() => fixtureWorkers.dispose());
+try {
+  await fixtureWorkers.prepare();
+} catch (error) {
+  await fixtureWorkers.dispose();
+  throw error;
+}
+const runGatewayFixtureFork = createGatewayFixtureFork(fixtureWorkers, afterAll);
 
 // Each retained failure needs its own fork: a later case must not reset the failed owner.
 for (const scenario of [
@@ -88,18 +98,20 @@ test("retains shared code when a native fixture has no worker join receipt", asy
   const env = captureEnv(["TMPDIR", "TMP", "TEMP"]);
   const cleanups: Array<() => Promise<void>> = [];
   const finishers: Array<Parameters<TestContext["onTestFinished"]>[0]> = [];
-  const run = createGatewayFixtureFork((cleanup) => cleanups.push(cleanup));
   let caseRoot: string | undefined;
+  let codeRoot: string | undefined;
   let completion: Promise<void> | undefined;
   let probeWorkerExited = false;
   try {
     for (const key of ["TMPDIR", "TMP", "TEMP"]) {
       process.env[key] = root;
     }
+    const run = createGatewayFixtureFork(fixtureWorkers, (cleanup) => cleanups.push(cleanup));
     completion = run(
       { signal: context.signal, onTestFinished: (callback) => finishers.push(callback) },
-      (_repoRoot, ownedRoot) => {
+      (_repoRoot, ownedRoot, ownedCodeRoot) => {
         caseRoot = ownedRoot;
+        codeRoot = ownedCodeRoot;
         return `
 import fs from "node:fs";
 import { test } from "vitest";
@@ -136,8 +148,9 @@ test("finishes without publishing the required join receipt", () => {
     const config = path.join(root, sharedRoots[0]!, "vitest.config.ts");
     expect(cleanups).toHaveLength(1);
     await expect(cleanups[0]!()).rejects.toThrow("Fixture cleanup unverified");
-    await expect(fs.access(config)).resolves.toBeUndefined();
-    await expect(fs.access(caseRoot!)).resolves.toBeUndefined();
+    await fs.access(config);
+    await fs.access(caseRoot!);
+    await fs.access(codeRoot!);
     expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
   } finally {
     await Promise.allSettled(completion ? [completion] : []);
@@ -147,8 +160,11 @@ test("finishes without publishing the required join receipt", () => {
         throw new Error(`Native receipt probe exit is unverified: ${root}`);
       });
     }
-    // This independent PID observation permits probe disposal only; the fixture's
-    // missing join receipt and retained code claim are never repaired or released.
+    // This independent PID observation permits probe input disposal only; the
+    // fixture's missing join receipt and retained code claim are never repaired or released.
+    if (probeWorkerExited && codeRoot) {
+      await fs.rm(codeRoot, { recursive: true, force: true });
+    }
     await probe.cleanup();
   }
 });

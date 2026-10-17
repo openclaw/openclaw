@@ -10,10 +10,7 @@ import {
   type GatewayServiceLayoutSummary,
 } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceLoadState,
-} from "../daemon/service-types.js";
+import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 
 type ServiceStatusSummary = {
@@ -28,13 +25,6 @@ type ServiceStatusSummary = {
   wrapperPath?: string;
   installationDrift?: string;
 };
-
-function normalizeServiceWrapperPath(
-  command: GatewayServiceCommandConfig | null,
-): string | undefined {
-  const wrapperPath = command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  return wrapperPath || undefined;
-}
 
 /** Reads a daemon service summary, falling back to unknown when service inspection fails. */
 export async function readServiceStatusSummary(
@@ -53,7 +43,7 @@ export async function readServiceStatusSummary(
           () => undefined,
         )
       : undefined;
-    const wrapperPath = normalizeServiceWrapperPath(state.command);
+    const wrapperPath = state.command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
     const managedByOpenClaw = state.installed;
     // A running unmanaged process still counts as installed for status display.
     const externallyManaged = !managedByOpenClaw && state.running;

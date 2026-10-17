@@ -16,6 +16,12 @@ import {
 } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { getFreePort } from "../../../../src/test-utils/ports.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../helpers/fixture-receipts.js";
+import { withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
@@ -49,9 +55,31 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   };
 }
 
-function createFixturePlugin(repoRoot: string, outputRoot: string) {
+async function createFixturePlugin(repoRoot: string, outputRoot: string, receiptEndpoint: string) {
+  const sourceDir = path.join(
+    repoRoot,
+    "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin",
+  );
+  const pluginDir = path.join(outputRoot, "plugin");
+  await fs.mkdir(pluginDir);
+  await Promise.all([
+    fs.copyFile(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      path.join(pluginDir, "openclaw.plugin.json"),
+    ),
+    fs.copyFile(path.join(sourceDir, "index.js"), path.join(pluginDir, "fixture.mjs")),
+    fs.writeFile(
+      path.join(pluginDir, "index.mjs"),
+      `import fixturePlugin from "./fixture.mjs";
+${fixtureReceiptClientSource(receiptEndpoint)}
+export default {
+  ...fixturePlugin,
+  register(api) { fixturePlugin.register(api, sendReceipt); },
+};\n`,
+    ),
+  ]);
   return {
-    pluginDir: path.join(repoRoot, "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin"),
+    pluginDir,
     bridgeCallsPath: path.join(outputRoot, "bridge-calls.jsonl"),
     toolResultsPath: path.join(outputRoot, "tool-results.jsonl"),
   };
@@ -80,6 +108,7 @@ function withVoiceCallConfig(params: {
           config: {
             enabled: true,
             provider: "mock",
+            responseModel: "mock-openai/gpt-5.6-luna",
             inboundPolicy: "open",
             maxConcurrentCalls: 4,
             serve: { port: params.servePort, bind: "127.0.0.1", path: "/voice/webhook" },
@@ -130,11 +159,26 @@ async function waitForFinalToolResult(params: {
   bridgeCallsPath: string;
   streamUrl: string;
   mediaStream: WebSocket;
+  signal: AbortSignal;
+  receipts: FixtureReceiptChannel;
   gatewayLogs: () => string;
 }) {
-  const deadline = Date.now() + 30_000;
   let latestEntries: Array<Record<string, unknown>> = [];
-  while (Date.now() < deadline) {
+  for (let count = 1; ; count += 1) {
+    let ended = false;
+    try {
+      await withinTest(
+        params.receipts.waitFor(params.filePath, "tool result appended", count),
+        params.signal,
+      );
+    } catch (error) {
+      if (!params.signal.aborted) {
+        throw error;
+      }
+      ended = true;
+    }
+    // The fixture appends before reporting. Socket closure can overtake receipt delivery,
+    // so the durable record still decides whether the consult completed.
     const raw = await fs.readFile(params.filePath, "utf8").catch(() => "");
     const entries = raw
       .split("\n")
@@ -153,9 +197,9 @@ async function waitForFinalToolResult(params: {
     if (final) {
       return { entries, final };
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
+    if (ended) {
+      break;
+    }
   }
   const bridgeCalls = await fs.readFile(params.bridgeCallsPath, "utf8").catch(() => "");
   throw new Error(
@@ -171,6 +215,14 @@ async function openRealtimeMediaStream(params: {
   const issuedStreamUrl = new URL(params.streamUrl);
   const streamPath = `${issuedStreamUrl.pathname}${issuedStreamUrl.search}`;
   const ws = new WebSocket(`ws://127.0.0.1:${params.servePort}${streamPath}`);
+  const lifetime = new AbortController();
+  const onEnd = () => {
+    ws.off("close", onEnd);
+    ws.off("error", onEnd);
+    lifetime.abort(new Error("Voice Call realtime media stream ended"));
+  };
+  ws.once("close", onEnd);
+  ws.once("error", onEnd);
   await new Promise<void>((resolve, reject) => {
     ws.once("open", resolve);
     ws.once("error", reject);
@@ -181,7 +233,7 @@ async function openRealtimeMediaStream(params: {
       start: { streamSid: "MZ-qa-voice-call", callSid: params.providerCallId },
     }),
   );
-  return ws;
+  return { socket: ws, signal: lifetime.signal };
 }
 
 async function postMockVoiceEvents(
@@ -231,13 +283,15 @@ function countOccurrences(text: string, marker: string): number {
 
 async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-gateway-"));
-  const fixture = createFixturePlugin(options.repoRoot, fixtureRoot);
   const mock = await startQaMockOpenAiServer();
   const servePort = await getFreePort();
   const gatewayOwner = createQaGatewayChild();
   let gateway: QaGatewayChild | undefined;
   let mediaStream: WebSocket | undefined;
+  let receipts: FixtureReceiptChannel | undefined;
   try {
+    receipts = await openFixtureReceiptChannel();
+    const fixture = await createFixturePlugin(options.repoRoot, fixtureRoot, receipts.endpoint);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
@@ -397,16 +451,19 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     if (requestCountAfterBlank !== secondClassicRequest.requestCount) {
       throw new Error("blank final speech created an agent turn");
     }
-    mediaStream = await openRealtimeMediaStream({
+    const realtime = await openRealtimeMediaStream({
       providerCallId: stream.providerCallId,
       servePort,
       streamUrl: stream.streamUrl,
     });
+    mediaStream = realtime.socket;
     const toolResults = await waitForFinalToolResult({
       filePath: fixture.toolResultsPath,
       bridgeCallsPath: fixture.bridgeCallsPath,
       streamUrl: stream.streamUrl,
       mediaStream,
+      signal: realtime.signal,
+      receipts,
       gatewayLogs: gateway.logs,
     });
     const finalToolResult = toolResults.final.result as Record<string, unknown>;
@@ -450,6 +507,7 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     if (mediaStream && mediaStream.readyState < WebSocket.CLOSING) {
       mediaStream.close();
     }
+    await receipts?.close();
     await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
@@ -519,3 +577,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.exitCode = 1;
     });
 }
+
+export const testing = {
+  withVoiceCallConfig,
+};

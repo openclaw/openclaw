@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
 import {
   decodeUsageCostRollup,
   encodeUsageCostRollup,
@@ -11,10 +13,10 @@ import {
 } from "../infra/session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -22,12 +24,13 @@ const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 let root: string | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   vi.restoreAllMocks();
   note.mockReset();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   if (root) {
     await fs.rm(root, { recursive: true, force: true });
     root = undefined;
@@ -35,6 +38,44 @@ afterEach(async () => {
 });
 
 describe("legacy usage-cost cache cleanup", () => {
+  it("reports the obsolete Control UI cache and removes only that cache on repair, recording failures", async () => {
+    const stateDir = tempDirs.make("openclaw-control-ui-cache-doctor-");
+    const cacheRoot = path.join(stateDir, "cache", "control-ui-assets");
+    const cachedAsset = path.join(cacheRoot, "old-build", "assets", "index-old.js");
+    const unrelatedCache = path.join(stateDir, "cache", "keep.txt");
+    await fs.mkdir(path.dirname(cachedAsset), { recursive: true });
+    await fs.writeFile(cachedAsset, "old build");
+    await fs.writeFile(unrelatedCache, "keep");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    await maybeRepairLegacyRuntimeFiles(false, env);
+    await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Obsolete Control UI asset cache remains at ${cacheRoot}`),
+      "Control UI assets",
+    );
+
+    const rm = vi.spyOn(fs, "rm").mockRejectedValueOnce(fsError("EACCES"));
+    await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([
+      expect.stringMatching(/Could not remove obsolete Control UI asset cache.*EACCES/u),
+    ]);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringMatching(/Could not remove obsolete Control UI asset cache.*EACCES/u),
+      "Doctor warnings",
+    );
+    await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
+    rm.mockRestore();
+
+    await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
+    await expect(fs.lstat(cacheRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(unrelatedCache, "utf8")).resolves.toBe("keep");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Removed obsolete Control UI asset cache at ${cacheRoot}`),
+      "Control UI assets",
+    );
+    await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
+  });
+
   it("removes only rebuildable usage-cost cache sidecars", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-doctor-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -91,6 +132,23 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.stat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each([false, true])("reports skill-upload inspection failures (repair=%s)", async (repair) => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-inspection-"));
+    const uploadRoot = path.join(root, "tmp", "skill-uploads");
+    const metadataPath = path.join(uploadRoot, randomUploadId(), "metadata.json");
+    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
+    await fs.writeFile(metadataPath, "{}\n", "utf8");
+    vi.spyOn(fs, "lstat").mockRejectedValueOnce(fsError("EACCES"));
+
+    await maybeRepairLegacyRuntimeFiles(repair, { OPENCLAW_STATE_DIR: root });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringMatching(/Failed (?:removing|inspecting) legacy skill-upload staging:.*EACCES/u),
+      "Skill uploads",
+    );
+    await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
+  });
+
   const symlinkTest = process.platform === "win32" ? it.skip : it;
   symlinkTest("removes a legacy staging symlink without touching its target", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-link-"));
@@ -109,9 +167,10 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
   });
 
-  it.each([false, true])(
-    "continues retired-row cleanup after a rejected write (rejectFirst=%s)",
-    async (rejectFirst) => {
+  it.each(["none", "write", "inspection"] as const)(
+    "continues retired-row cleanup after an agent failure (failure=%s)",
+    async (failure) => {
+      const rejectFirst = failure !== "none";
       root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
       const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -154,17 +213,18 @@ describe("legacy usage-cost cache cleanup", () => {
         .prepare("SELECT * FROM cache_entries ORDER BY scope, key")
         .all();
 
-      if (rejectFirst) {
-        firstDatabase.db.exec(`
-        CREATE TEMP TRIGGER reject_usage_pruning BEFORE DELETE ON cache_entries
-        BEGIN SELECT RAISE(ABORT, 'pruning rejected'); END;
-      `);
+      if (failure === "inspection") {
+        vi.spyOn(fs, "stat").mockRejectedValueOnce(fsError("EACCES"));
+      } else if (failure === "write") {
+        vi.spyOn(usageCacheSqlite, "retireLegacySessionCostUsageCache").mockRejectedValueOnce(
+          new Error("pruning rejected"),
+        );
       }
       await maybeRepairLegacyRuntimeFiles(true, env);
 
       if (rejectFirst) {
         expect(note).toHaveBeenCalledWith(
-          expect.stringContaining("pruning rejected"),
+          expect.stringContaining(failure === "inspection" ? "EACCES" : "pruning rejected"),
           "Doctor warnings",
         );
         expect(

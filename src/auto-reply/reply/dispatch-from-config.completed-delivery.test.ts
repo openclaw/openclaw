@@ -24,7 +24,7 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -40,30 +40,16 @@ beforeEach(() => {
 describe("completed delivery through runner and dispatcher", () => {
   it.each([
     {
-      name: "speech only",
-      source: "[[tts:text]]Spoken only.[[/tts:text]]",
-      speech: "Spoken only.",
-    },
-    {
       name: "speech with visible text",
       source: "Shown. [[tts:text]]Spoken only.[[/tts:text]]",
       speech: "Spoken only.",
       visible: "Shown.",
     },
     {
-      name: "voice media",
-      source: "[[audio_as_voice]]MEDIA:https://example.test/voice.ogg",
-      voice: true,
-    },
-    {
-      name: "target media",
-      source: "[[reply_to:12345]]MEDIA:https://example.test/image.png",
-      target: "12345",
-    },
-    {
-      name: "explicit speech alongside silence",
+      name: "explicit speech alongside a literal silence token",
       source: "[[tts:text]]Speak this.[[/tts:text]]NO_REPLY",
       speech: "Speak this.",
+      visible: "NO_REPLY",
     },
     { name: "channel veto", source: "[[tts:text]]Do not speak.[[/tts:text]]", veto: true },
     {
@@ -157,7 +143,6 @@ describe("completed delivery through runner and dispatcher", () => {
       const { replyPayloads } = await buildReplyPayloads({
         payloads: embedded,
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "off",

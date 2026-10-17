@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 /** Bind each cold provisioner process through the existing sealed-runtime DI seam. */
 export function createPrivateHandoffStoreFixture(
@@ -40,7 +41,7 @@ export function createPrivateHandoffStoreFixture(
       "      break ;;",
       "  esac",
       "done",
-      `exec ${shellQuote(realpathSync(process.execPath))} "$@"`,
+      `exec ${shellQuote(realpathSync(resolveTestNodeExecPath()))} "$@"`,
       "",
     ].join("\n"),
   );

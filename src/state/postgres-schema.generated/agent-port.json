@@ -1,0 +1,550 @@
+{
+  "tables": [
+    {
+      "name": "acp_parent_stream_events",
+      "identities": []
+    },
+    {
+      "name": "auth_profile_state",
+      "identities": []
+    },
+    {
+      "name": "auth_profile_store",
+      "identities": []
+    },
+    {
+      "name": "board_tabs",
+      "identities": []
+    },
+    {
+      "name": "board_widgets",
+      "identities": []
+    },
+    {
+      "name": "cache_entries",
+      "identities": []
+    },
+    {
+      "name": "context_engine_turn_outbox",
+      "identities": [
+        {
+          "column": "enqueue_sequence",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "conversation_deliveries",
+      "identities": []
+    },
+    {
+      "name": "conversations",
+      "identities": []
+    },
+    {
+      "name": "heartbeat_outcomes",
+      "identities": []
+    },
+    {
+      "name": "memory_embedding_cache",
+      "identities": []
+    },
+    {
+      "name": "memory_entry_origins",
+      "identities": []
+    },
+    {
+      "name": "memory_index_chunk_provenance",
+      "identities": []
+    },
+    {
+      "name": "memory_index_chunk_recall_metadata",
+      "identities": []
+    },
+    {
+      "name": "memory_index_chunks",
+      "identities": [
+        {
+          "column": "chunk_rowid",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "memory_index_meta",
+      "identities": []
+    },
+    {
+      "name": "memory_index_sources",
+      "identities": [
+        {
+          "column": "id",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "memory_index_state",
+      "identities": [
+        {
+          "column": "id",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "memory_session_tombstones",
+      "identities": []
+    },
+    {
+      "name": "message_tool_run_outcomes",
+      "identities": [
+        {
+          "column": "id",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "schema_meta",
+      "identities": []
+    },
+    {
+      "name": "session_canonical_validation_pending",
+      "identities": []
+    },
+    {
+      "name": "session_conversations",
+      "identities": []
+    },
+    {
+      "name": "session_entry_snapshots",
+      "identities": []
+    },
+    {
+      "name": "session_goal_operations",
+      "identities": []
+    },
+    {
+      "name": "session_input_completions",
+      "identities": []
+    },
+    {
+      "name": "session_key_contract",
+      "identities": [
+        {
+          "column": "id",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "session_members",
+      "identities": []
+    },
+    {
+      "name": "session_nodes",
+      "identities": []
+    },
+    {
+      "name": "session_participants",
+      "identities": []
+    },
+    {
+      "name": "session_pending_inputs",
+      "identities": [
+        {
+          "column": "seq",
+          "autoIncrement": true
+        }
+      ]
+    },
+    {
+      "name": "session_progress_cards",
+      "identities": []
+    },
+    {
+      "name": "session_reactions",
+      "identities": []
+    },
+    {
+      "name": "session_suggestions",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_active_events",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_archives",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_cold_archives",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_fts_rows",
+      "identities": [
+        {
+          "column": "id",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "session_transcript_index_state",
+      "identities": []
+    },
+    {
+      "name": "session_windows",
+      "identities": []
+    },
+    {
+      "name": "standing_intents",
+      "identities": [
+        {
+          "column": "intent_key",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "trajectory_runtime_events",
+      "identities": []
+    },
+    {
+      "name": "transcript_event_identities",
+      "identities": []
+    },
+    {
+      "name": "transcript_events",
+      "identities": []
+    },
+    {
+      "name": "transcript_rewrite_watermarks",
+      "identities": []
+    }
+  ],
+  "sqliteTables": [
+    {
+      "name": "session_transcript_fts_content",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "name": "c0",
+          "type": ""
+        },
+        {
+          "name": "c1",
+          "type": ""
+        },
+        {
+          "name": "c2",
+          "type": ""
+        },
+        {
+          "name": "c3",
+          "type": ""
+        },
+        {
+          "name": "c4",
+          "type": ""
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "session_transcript_fts",
+      "columns": [
+        {
+          "name": "text",
+          "type": ""
+        },
+        {
+          "name": "session_id",
+          "type": ""
+        },
+        {
+          "name": "message_id",
+          "type": ""
+        },
+        {
+          "name": "role",
+          "type": ""
+        },
+        {
+          "name": "timestamp",
+          "type": ""
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "session_transcript_fts_idx",
+      "columns": [
+        {
+          "name": "segid",
+          "type": ""
+        },
+        {
+          "name": "term",
+          "type": ""
+        },
+        {
+          "name": "pgno",
+          "type": ""
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "standing_intents_fts_config",
+      "columns": [
+        {
+          "name": "k",
+          "type": ""
+        },
+        {
+          "name": "v",
+          "type": ""
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "standing_intents_fts_docsize",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "name": "sz",
+          "type": "BLOB"
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "standing_intents_fts_idx",
+      "columns": [
+        {
+          "name": "segid",
+          "type": ""
+        },
+        {
+          "name": "term",
+          "type": ""
+        },
+        {
+          "name": "pgno",
+          "type": ""
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "standing_intents_fts_data",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "name": "block",
+          "type": "BLOB"
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "standing_intents_fts",
+      "columns": [
+        {
+          "name": "trigger_keywords",
+          "type": ""
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "session_transcript_fts_docsize",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "name": "sz",
+          "type": "BLOB"
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "session_transcript_fts_config",
+      "columns": [
+        {
+          "name": "k",
+          "type": ""
+        },
+        {
+          "name": "v",
+          "type": ""
+        }
+      ],
+      "pk": [],
+      "identities": []
+    },
+    {
+      "name": "session_transcript_fts_data",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER"
+        },
+        {
+          "name": "block",
+          "type": "BLOB"
+        }
+      ],
+      "pk": [],
+      "identities": []
+    }
+  ],
+  "triggers": [
+    {
+      "name": "memory_index_chunks_revision_after_delete",
+      "table": "memory_index_chunks",
+      "range": [
+        32299,
+        32486
+      ]
+    },
+    {
+      "name": "memory_index_chunks_revision_after_insert",
+      "table": "memory_index_chunks",
+      "range": [
+        31921,
+        32108
+      ]
+    },
+    {
+      "name": "memory_index_chunks_revision_after_update",
+      "table": "memory_index_chunks",
+      "range": [
+        32110,
+        32297
+      ]
+    },
+    {
+      "name": "memory_index_sources_revision_after_delete",
+      "table": "memory_index_sources",
+      "range": [
+        31730,
+        31919
+      ]
+    },
+    {
+      "name": "memory_index_sources_revision_after_insert",
+      "table": "memory_index_sources",
+      "range": [
+        31348,
+        31537
+      ]
+    },
+    {
+      "name": "memory_index_sources_revision_after_update",
+      "table": "memory_index_sources",
+      "range": [
+        31539,
+        31728
+      ]
+    },
+    {
+      "name": "session_conversations_route_context_invalidate_after_update",
+      "table": "session_conversations",
+      "range": [
+        10172,
+        10555
+      ]
+    },
+    {
+      "name": "session_entry_snapshots_after_delete",
+      "table": "session_entry_snapshots",
+      "range": [
+        2884,
+        3108
+      ]
+    },
+    {
+      "name": "session_entry_snapshots_after_insert",
+      "table": "session_entry_snapshots",
+      "range": [
+        2262,
+        2486
+      ]
+    },
+    {
+      "name": "session_entry_snapshots_after_update",
+      "table": "session_entry_snapshots",
+      "range": [
+        2488,
+        2882
+      ]
+    },
+    {
+      "name": "session_transcript_fts_rows_after_delete",
+      "table": "session_transcript_fts_rows",
+      "range": [
+        31091,
+        31274
+      ]
+    },
+    {
+      "name": "standing_intents_fts_after_delete",
+      "table": "standing_intents",
+      "range": [
+        28631,
+        28878
+      ]
+    },
+    {
+      "name": "standing_intents_fts_after_insert",
+      "table": "standing_intents",
+      "range": [
+        28414,
+        28629
+      ]
+    },
+    {
+      "name": "standing_intents_fts_after_update",
+      "table": "standing_intents",
+      "range": [
+        28880,
+        29256
+      ]
+    }
+  ],
+  "preData": [
+    0,
+    29285
+  ],
+  "postData": [
+    29285,
+    46623
+  ]
+}

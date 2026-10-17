@@ -11,8 +11,7 @@ function normalizeNodeInvokeResultParams(params: unknown): unknown {
   if (!params || typeof params !== "object") {
     return params;
   }
-  const raw = params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = { ...raw };
+  const normalized = { ...(params as Record<string, unknown>) };
   if (normalized.payloadJSON === null) {
     delete normalized.payloadJSON;
   } else if (normalized.payloadJSON !== undefined && typeof normalized.payloadJSON !== "string") {
@@ -61,13 +60,6 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
     payloadJSON: p.payloadJSON ?? null,
     error: p.error ?? null,
   });
-  if (!ok) {
-    // Late-arriving results (after invoke timeout) are expected and harmless.
-    // Return success instead of error to reduce log noise; client can discard.
-    context.logGateway.debug(`late invoke result ignored: id=${p.id} node=${p.nodeId}`);
-    respond(true, { ok: true, ignored: true }, undefined);
-    return;
-  }
-
-  respond(true, { ok: true }, undefined);
+  // Late-arriving results after invoke timeout are harmless; clients can discard them.
+  respond(true, { ok: true, ...(!ok ? { ignored: true } : {}) }, undefined);
 };

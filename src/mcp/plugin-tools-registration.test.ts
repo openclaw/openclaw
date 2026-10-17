@@ -1,9 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { SdkError, SdkErrorCode } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  areDiagnosticsEnabledForProcess,
+  onDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import * as schedulerModule from "../infra/gateway-scheduler.js";
+import {
+  logWebhookReceived,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "../plugin-sdk/logging-core.js";
 import { resolvePluginProviders } from "../plugin-sdk/provider-catalog-runtime.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
@@ -16,6 +28,10 @@ import { markPluginRegistryActive } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { acquireStandalonePluginToolRegistry } from "../plugins/tools.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createCodexSupervisionToolsMcpServer } from "./codex-supervision-tools-serve.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -168,22 +184,61 @@ describe("MCP serving registration ownership", () => {
     }
   });
 
-  it("releases the native registration when supervision tool validation fails before connection", async () => {
-    const fixture = nativePlugin();
-    try {
-      await expect(
+  it.each(["standalone", "borrowed"] as const)(
+    "releases registrations and only its owned scheduler after validation fails (%s)",
+    async (ownership) => {
+      const fixture = nativePlugin();
+      const clock = createGatewaySchedulerClock(0);
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
+      host?.bindScheduler(scheduler);
+      const constructor = vi
+        .spyOn(schedulerModule, "GatewayScheduler")
+        .mockImplementation(function () {
+          return scheduler;
+        });
+      const previouslyEnabled = areDiagnosticsEnabledForProcess();
+      const heartbeats: string[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => {
+        if (event.type === "diagnostic.heartbeat") {
+          heartbeats.push(event.type);
+        }
+      });
+      const serve = () =>
         serveRegisteredToolsMcpServer({
-          acquireRegistry: fixture.acquire,
+          acquireRegistry: async () => {
+            startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
+            logWebhookReceived({ channel: "test" });
+            await clock.advanceBy(30_000);
+            await waitForDiagnosticEventsDrained();
+            expect(heartbeats).toHaveLength(1);
+            return fixture.acquire();
+          },
           createServer: (tools) => createCodexSupervisionToolsMcpServer({ tools }),
-        }),
-      ).rejects.toThrow("Install or update @openclaw/codex");
-      expect(fixture.state.factories).toBe(1);
-      expect(fixture.state.database?.isOpen).toBe(false);
-      expect(fixture.state.disposals).toBe(1);
-    } finally {
-      fixture.cleanup();
-    }
-  });
+        });
+      try {
+        setDiagnosticsEnabledForProcess(true);
+        await expect(host ? host.run(serve) : serve()).rejects.toThrow(
+          "Install or update @openclaw/codex",
+        );
+        expect(fixture.state.factories).toBe(1);
+        expect(fixture.state.database?.isOpen).toBe(false);
+        expect(fixture.state.disposals).toBe(1);
+        expect(scheduler.signal.aborted).toBe(ownership === "standalone");
+        expect(scheduler.nextWakeAtMs).toBe(
+          ownership === "standalone" ? null : clock.clock.now() + 30_000,
+        );
+      } finally {
+        stopDiagnosticHeartbeat();
+        unsubscribe();
+        await host?.close();
+        await scheduler.stop();
+        constructor.mockRestore();
+        setDiagnosticsEnabledForProcess(previouslyEnabled);
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("does not revive an acquired view when the same registry objects are reactivated", async () => {
     const fixture = nativePlugin();
@@ -221,7 +276,7 @@ describe("MCP serving registration ownership", () => {
       await Promise.all([server.connect(inbound), client.connect(outbound)]);
       const controller = new AbortController();
       call = client
-        .callTool({ name: "mcp_native_read" }, undefined, { signal: controller.signal })
+        .callTool({ name: "mcp_native_read" }, { signal: controller.signal })
         .catch((error: unknown) => error);
       await Promise.race([
         fixture.state.started.promise,
@@ -337,9 +392,14 @@ describe("MCP serving registration ownership", () => {
         (error: unknown) => error,
       );
       await connection;
-      const messages = causes(failure).map(String);
+      const failures = causes(failure);
+      const messages = failures.map(String);
       expect(messages).toHaveLength(3);
-      expect(messages.filter((message) => message.includes("Already connected"))).toHaveLength(1);
+      expect(
+        failures.filter(
+          (error) => error instanceof SdkError && error.code === SdkErrorCode.AlreadyConnected,
+        ),
+      ).toHaveLength(1);
       expect(
         messages.filter((message) => message.includes("synthetic transport close failure")),
       ).toHaveLength(1);

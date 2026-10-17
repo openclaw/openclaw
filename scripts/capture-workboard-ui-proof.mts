@@ -48,10 +48,16 @@ await page.addInitScript(
 
 try {
   await page.goto(new URL("/workboard/peter-tasks", baseUrl).toString());
-  const automationChip = page.locator(".workboard-automation-chip");
-  await automationChip.waitFor();
-  if ((await automationChip.textContent())?.trim() !== "Automation") {
-    throw new Error("Workboard automation chip did not render its expected label");
+  const automationLink = page.getByRole("link", {
+    name: "Open Review product operations",
+    exact: true,
+  });
+  await automationLink.waitFor();
+  if (
+    (await automationLink.textContent())?.trim() !== "Review product operations" ||
+    (await automationLink.getAttribute("href")) !== "/automations?job=job-product-operations-daily"
+  ) {
+    throw new Error("Workboard automation link did not render its expected label and destination");
   }
   await page.getByText("Prepare launch readiness checklist", { exact: true }).waitFor();
   await page.screenshot({
@@ -59,12 +65,18 @@ try {
     path: path.join(outputDir, "workboard-chip.png"),
   });
 
-  await page.goto(new URL("/dashboard", baseUrl).toString());
+  await page.goto(
+    new URL("/dashboard/main/workboard-proof?dashboard=expanded", baseUrl).toString(),
+  );
   const widget = page.locator('[data-test-id="workboard-board-widget"]');
   await widget.waitFor();
   await widget.getByRole("heading", { name: "Validate onboarding flow", exact: true }).waitFor();
   await widget.getByRole("heading", { name: "Review accessibility audit", exact: true }).waitFor();
-  await page.locator(".board-session-surface--dock-hidden").waitFor();
+  await page
+    .locator(
+      '.sidebar-region--expanded [data-panel-slot="dashboard"][data-region="main"] .board-session-surface',
+    )
+    .waitFor();
   const columnCount = await widget.locator(".workboard-column").count();
   if (columnCount !== 6) {
     throw new Error(`Expected 6 Workboard columns, received ${columnCount}`);

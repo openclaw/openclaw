@@ -1,15 +1,24 @@
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  request as httpRequest,
+  type ServerResponse,
+} from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveOpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   type MockOpenAiRequestSnapshot,
+  createQaCrablineTransportAdapter,
   createQaGatewayChild,
   type QaGatewayChild,
   startQaMockOpenAiServer,
@@ -19,9 +28,8 @@ import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
-const DISCORD_CHANNEL_ID = "789";
+const DISCORD_CHANNEL_ID = "135000000000000789";
 const DISCORD_MESSAGE_ID = "1000000000000000001";
-const DISCORD_APPLICATION_ID = "123456789012345678";
 const DISCORD_COMPONENTS_V2_FLAG = 1 << 15;
 const DISCORD_SESSION_KEY = `agent:qa:discord:channel:${DISCORD_CHANNEL_ID}`;
 const INLINE_SESSION_KEY = "agent:qa:inline-widget-proof";
@@ -92,12 +100,48 @@ function writeJson(res: ServerResponse, statusCode: number, value: unknown): voi
   res.end(body);
 }
 
-async function startDiscordRestLoopback() {
+async function startDiscordRestLoopback(providerApiUrl: string) {
   const requests: DiscordRestRequest[] = [];
+  const gatewayUrl = () => `${baseUrl.replace(/^http/u, "ws")}/gateway`;
   const server = createServer((req, res) => {
     void (async () => {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const method = req.method ?? "GET";
+      const channelPath = `/api/v10/channels/${DISCORD_CHANNEL_ID}`;
+      if (
+        method === "GET" &&
+        (pathname === "/api/v10/gateway" || pathname === "/api/v10/gateway/bot")
+      ) {
+        const response = await fetch(new URL(req.url ?? "/", providerApiUrl), {
+          headers: { authorization: req.headers.authorization ?? "" },
+        });
+        const metadata = (await response.json()) as JsonRecord;
+        writeJson(res, response.status, { ...metadata, url: gatewayUrl() });
+        return;
+      }
+      // Forward account startup to Crabline; record the fixture channel at the HTTP boundary.
+      if (pathname !== channelPath && !pathname.startsWith(`${channelPath}/`)) {
+        const target = new URL(req.url ?? "/", providerApiUrl);
+        await new Promise<void>((resolve, reject) => {
+          const upstream = httpRequest(
+            target,
+            { method, headers: { ...req.headers, host: target.host }, agent: false },
+            (response) => {
+              response.once("error", reject);
+              res.writeHead(response.statusCode ?? 502, response.headers);
+              response.pipe(res);
+            },
+          );
+          upstream.once("error", reject);
+          res.once("finish", resolve);
+          res.once("close", () => {
+            upstream.destroy();
+            resolve();
+          });
+          req.pipe(upstream);
+        });
+        return;
+      }
       const payload = await readRequestBody(req);
       requests.push({ method, pathname, ...payload });
       if (method === "GET" && pathname === `/api/v10/channels/${DISCORD_CHANNEL_ID}`) {
@@ -121,32 +165,57 @@ async function startDiscordRestLoopback() {
   if (!address || typeof address === "string") {
     throw new Error("Discord REST loopback did not bind a TCP port");
   }
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const gatewayProxy = new WebSocketServer({ server });
+  gatewayProxy.on("connection", (client, req) => {
+    const target = new URL(req.url ?? "/gateway", providerApiUrl);
+    target.protocol = "ws:";
+    const upstream = new WebSocket(target);
+    const pending: Array<{ data: RawData; binary: boolean }> = [];
+    client.on("message", (data, binary) => {
+      if (upstream.readyState === WebSocket.OPEN) {
+        upstream.send(data, { binary });
+      } else {
+        pending.push({ data, binary });
+      }
+    });
+    upstream.once("open", () => {
+      for (const { data, binary } of pending.splice(0)) {
+        upstream.send(data, { binary });
+      }
+    });
+    upstream.on("message", (data, binary) => {
+      if (binary) {
+        client.send(data, { binary });
+        return;
+      }
+      const payload = JSON.parse(rawDataToString(data)) as { t?: string; d?: JsonRecord };
+      if (payload.t === "READY" && payload.d) {
+        payload.d.resume_gateway_url = gatewayUrl();
+      }
+      client.send(JSON.stringify(payload));
+    });
+    client.once("close", () => upstream.terminate());
+    client.once("error", () => upstream.terminate());
+    upstream.once("close", () => client.terminate());
+    upstream.once("error", () => client.terminate());
+  });
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     requests,
-    stop: async () =>
+    stop: async () => {
+      for (const client of gatewayProxy.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        gatewayProxy.close((error) => (error ? reject(error) : resolve()));
+      });
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
-      }),
+      });
+    },
   };
 }
-
-const discordTransport = {
-  requiredPluginIds: ["discord"],
-  createGatewayConfig: () => ({
-    channels: {
-      discord: {
-        enabled: true,
-        token: "qa-activities-token",
-        applicationId: DISCORD_APPLICATION_ID,
-        activities: {
-          clientSecret: "qa-activities-client-secret",
-          applicationId: DISCORD_APPLICATION_ID,
-        },
-      },
-    },
-  }),
-};
 
 async function writeDiscordFetchPreload(root: string): Promise<string> {
   const preloadPath = path.join(root, "discord-rest-preload.mjs");
@@ -289,7 +358,16 @@ describe("Discord show_widget contextual presenter process proof", () => {
   beforeAll(async () => {
     const startedAt = performance.now();
     const scratch = tempDirs.make("openclaw-discord-attachment-e2e-");
-    discord = await startDiscordRestLoopback();
+    const discordTransport = await createQaCrablineTransportAdapter({
+      outputDir: scratch,
+      selection: resolveOpenClawCrablineChannelDriverSelection({ channel: "discord" }),
+    });
+    cleanups.push(() => discordTransport.cleanupAfterGatewayStop());
+    const transportEnv = discordTransport.createRuntimeEnvPatch();
+    if (!transportEnv.DISCORD_API_URL) {
+      throw new Error("Crabline Discord transport did not provide its API endpoint");
+    }
+    discord = await startDiscordRestLoopback(transportEnv.DISCORD_API_URL);
     cleanups.push(() => discord.stop());
     const preloadPath = await writeDiscordFetchPreload(scratch);
     mock = await startQaMockOpenAiServer();
@@ -314,6 +392,16 @@ describe("Discord show_widget contextual presenter process proof", () => {
       controlUiEnabled: false,
       mutateConfig: (cfg) => ({
         ...cfg,
+        channels: {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            activities: {
+              clientSecret: "qa-activities-client-secret",
+              applicationId: cfg.channels?.discord?.applicationId,
+            },
+          },
+        },
         models: {
           ...cfg.models,
           catalogRefresh: { ...cfg.models?.catalogRefresh, enabled: false },
@@ -328,17 +416,21 @@ describe("Discord show_widget contextual presenter process proof", () => {
         },
         tools: {
           ...cfg.tools,
+          // This proof inspects the direct tool inventory sent to the model.
+          toolSearch: false,
           alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "message", "show_widget"],
         },
       }),
       runtimeEnvPatch: {
-        DISCORD_BOT_TOKEN: "qa-activities-token",
+        ...transportEnv,
+        DISCORD_API_URL: `${discord.baseUrl}/api/v10`,
+        DISCORD_BOT_TOKEN: undefined,
         OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
         OPENCLAW_SKIP_CANVAS_HOST: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
       },
       runtimePreloads: [pathToFileURL(preloadPath).href],
     });
+    await discordTransport.waitReady({ gateway });
     process.stdout.write(
       `${JSON.stringify({ proof: "discord-gateway-shared-fixture", durationMs: performance.now() - startedAt })}\n`,
     );
@@ -697,7 +789,11 @@ describe("Discord show_widget contextual presenter process proof", () => {
           messageChannel: "discord",
           messageTo: `channel:${DISCORD_CHANNEL_ID}`,
         },
-        { accountId: "default", messageChannel: "discord", messageTo: "user:789" },
+        {
+          accountId: "default",
+          messageChannel: "discord",
+          messageTo: `user:${DISCORD_CHANNEL_ID}`,
+        },
         {
           accountId: "default",
           messageChannel: "slack",

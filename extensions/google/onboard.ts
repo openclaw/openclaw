@@ -1,10 +1,11 @@
-// Google setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-4-argon";
 const RETIRED_GOOGLE_GEMINI_MODEL_REFS = new Set([
   "gemini-3-pro",
   "gemini-3-pro-preview",
@@ -12,10 +13,7 @@ const RETIRED_GOOGLE_GEMINI_MODEL_REFS = new Set([
   "google/gemini-3-pro-preview",
 ]);
 
-function isRetiredGeminiModelRef(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
+function isRetiredGeminiModelRef(value: string): boolean {
   const modelRef = value.trim();
   if (RETIRED_GOOGLE_GEMINI_MODEL_REFS.has(modelRef)) {
     return true;
@@ -25,23 +23,12 @@ function isRetiredGeminiModelRef(value: unknown): boolean {
 
 function hasRetiredGeminiDefaultModelRefs(cfg: OpenClawConfig): boolean {
   const defaults = cfg.agents?.defaults;
-  const model = defaults?.model as unknown;
-  if (model && typeof model === "object") {
-    const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
-    if (
-      Array.isArray(fallbacks) &&
-      fallbacks.some((fallback) => isRetiredGeminiModelRef(fallback))
-    ) {
-      return true;
-    }
+  if (resolveAgentModelFallbackValues(defaults?.model).some(isRetiredGeminiModelRef)) {
+    return true;
   }
 
   const models = defaults?.models;
-  if (
-    models &&
-    typeof models === "object" &&
-    Object.keys(models).some((modelRef) => isRetiredGeminiModelRef(modelRef))
-  ) {
+  if (models && Object.keys(models).some((modelRef) => isRetiredGeminiModelRef(modelRef))) {
     return true;
   }
 
@@ -50,9 +37,7 @@ function hasRetiredGeminiDefaultModelRefs(cfg: OpenClawConfig): boolean {
     return false;
   }
   return Object.values(providerConfigs).some((providerConfig) =>
-    Array.isArray(providerConfig.models)
-      ? providerConfig.models.some((providerModel) => isRetiredGeminiModelRef(providerModel.id))
-      : false,
+    providerConfig.models?.some((providerModel) => isRetiredGeminiModelRef(providerModel.id)),
   );
 }
 
@@ -60,15 +45,7 @@ export function applyGoogleGeminiModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
 } {
-  const current = cfg.agents?.defaults?.model as unknown;
-  const currentPrimary =
-    typeof current === "string"
-      ? current.trim() || undefined
-      : current &&
-          typeof current === "object" &&
-          typeof (current as { primary?: unknown }).primary === "string"
-        ? ((current as { primary: string }).primary || "").trim() || undefined
-        : undefined;
+  const currentPrimary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
   if (currentPrimary === GOOGLE_GEMINI_DEFAULT_MODEL && !hasRetiredGeminiDefaultModelRefs(cfg)) {
     return { next: cfg, changed: false };
   }

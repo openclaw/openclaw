@@ -29,8 +29,8 @@ function routeFixture(
   };
   const router = createApplicationRouter();
   const loading = createDeferred();
-  const component = createDeferred<{ render: () => null }>();
-  router.getRoute("about")!.component = async () => ({ render: () => null });
+  const component = createDeferred<{ renderSolid: () => null }>();
+  router.getRoute("about")!.component = async () => ({ renderSolid: () => null });
   router.getRoute("workboard")!.component = () => {
     loading.resolve();
     return component.promise;
@@ -81,7 +81,7 @@ function routeFixture(
     started,
     resolve() {
       metadata.resolve();
-      component.resolve({ render: () => null });
+      component.resolve({ renderSolid: () => null });
     },
     pop(next: RouteLocation) {
       location = next;
@@ -97,48 +97,12 @@ const legacyBoardLocation: RouteLocation = {
 };
 
 describe("Workboard route navigation ownership", () => {
-  it("canonicalizes the active legacy URL while preserving its query and hash", async () => {
-    const fixture = routeFixture();
-    await fixture.started;
-    try {
-      const navigation = fixture.router.navigate(
-        "workboard",
-        fixture.context,
-        { history: "push" },
-        legacyBoardLocation,
-      );
-      await fixture.loading.promise;
-      fixture.resolve();
-      await navigation;
-      await Promise.all(fixture.redirects);
-      expect(fixture.history.location()).toEqual({
-        pathname: "/ui/workboard/ops",
-        search: "?agent=writer",
-        hash: "#original",
-      });
-      expect(fixture.router.getState().matches[0]?.data).toMatchObject({ boardFilter: "ops" });
-    } finally {
-      fixture.router.stop();
-    }
-  });
-
-  it.each([
-    {
-      name: "another page",
-      routeId: "about",
-      location: { pathname: "/ui/settings/about", search: "?view=licenses", hash: "#latest" },
-    },
-    {
-      name: "a newer hash on the same board",
-      routeId: "workboard",
-      location: { pathname: "/ui/workboard/ops", search: "?agent=writer", hash: "#latest" },
-    },
-    {
-      name: "a newer query on the same board",
-      routeId: "workboard",
-      location: { pathname: "/ui/workboard/ops", search: "?agent=reviewer", hash: "#latest" },
-    },
-  ] as const)("keeps $name when old route loading finishes", async ({ routeId, location }) => {
+  it("keeps a newer query and hash on the same board when old route loading finishes", async () => {
+    const location = {
+      pathname: "/ui/workboard/ops",
+      search: "?agent=reviewer",
+      hash: "#latest",
+    };
     const fixture = routeFixture();
     await fixture.started;
     try {
@@ -150,7 +114,7 @@ describe("Workboard route navigation ownership", () => {
       );
       await fixture.loading.promise;
       const newNavigation = fixture.router.navigate(
-        routeId,
+        "workboard",
         fixture.context,
         { history: "push" },
         location,
@@ -160,7 +124,7 @@ describe("Workboard route navigation ownership", () => {
       await Promise.all(fixture.redirects);
       expect(fixture.history.location()).toEqual(location);
       expect(fixture.router.getState().location).toEqual(location);
-      expect(fixture.router.getState().matches[0]?.routeId).toBe(routeId);
+      expect(fixture.router.getState().matches[0]?.routeId).toBe("workboard");
     } finally {
       fixture.router.stop();
     }
@@ -191,6 +155,7 @@ describe("Workboard route navigation ownership", () => {
         search: "?agent=writer",
         hash: "#original",
       });
+      expect(fixture.router.getState().matches[0]?.data).toMatchObject({ boardFilter: "ops" });
     } finally {
       fixture.router.stop();
     }
@@ -228,52 +193,6 @@ describe("Workboard route navigation ownership", () => {
 });
 
 describe("Workboard route location", () => {
-  it("reads the canonical board path without rewriting it", () => {
-    expect(
-      resolveWorkboardRouteLocation({
-        pathname: "/workboard/ops",
-        search: "?agent=main",
-        hash: "#ready",
-      }),
-    ).toEqual({ boardFilter: "ops", search: "?agent=main" });
-  });
-
-  it("redirects the shipped query alias to the canonical path", () => {
-    expect(
-      resolveWorkboardRouteLocation({
-        pathname: "/workboard",
-        search: "?agent=main&board=ops",
-        hash: "#ready",
-      }),
-    ).toEqual({
-      boardFilter: "ops",
-      search: "?agent=main",
-      canonicalLocation: {
-        pathname: "/workboard/ops",
-        search: "?agent=main",
-        hash: "#ready",
-      },
-    });
-  });
-
-  it("drops a redundant legacy query from an already-canonical board path", () => {
-    expect(
-      resolveWorkboardRouteLocation({
-        pathname: "/workboard/ops",
-        search: "?board=other&agent=main",
-        hash: "",
-      }),
-    ).toEqual({
-      boardFilter: "ops",
-      search: "?agent=main",
-      canonicalLocation: {
-        pathname: "/workboard/ops",
-        search: "?agent=main",
-        hash: "",
-      },
-    });
-  });
-
   it("normalizes an invalid legacy board to the all-boards route", () => {
     expect(
       resolveWorkboardRouteLocation(

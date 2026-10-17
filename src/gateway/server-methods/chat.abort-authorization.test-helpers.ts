@@ -9,7 +9,7 @@ import {
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
 
-export type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
+type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
 type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
 
 export async function invokeAbort({
@@ -20,8 +20,8 @@ export async function invokeAbort({
   deviceId,
   preserveSideRuns,
   scopes = ["operator.write"],
+  onAuthorizedBeforeEmbeddedAbort,
   onAuthorizedAfterQueuedAbort,
-  excludeRunIds,
 }: {
   context: ReturnType<typeof createChatAbortContext>;
   sessionKey?: string;
@@ -30,16 +30,16 @@ export async function invokeAbort({
   deviceId: string;
   preserveSideRuns?: boolean;
   scopes?: string[];
+  onAuthorizedBeforeEmbeddedAbort?: () => boolean;
   onAuthorizedAfterQueuedAbort?: () => boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   return await invokeChatAbortHandler({
     handler:
-      onAuthorizedAfterQueuedAbort || excludeRunIds
+      onAuthorizedBeforeEmbeddedAbort || onAuthorizedAfterQueuedAbort
         ? (options) =>
             handleChatAbortRequestWithLifecycle(options, {
+              onAuthorizedBeforeEmbeddedAbort,
               onAuthorizedAfterQueuedAbort,
-              excludeRunIds,
             })
         : handleChatAbortRequest,
     context,

@@ -1,4 +1,27 @@
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+
+type ForegroundClaims = NonNullable<
+  NonNullable<SessionEntry["mainRestartRecovery"]>["foregroundClaims"]
+>;
+
+export function removeMainSessionRecoveryForegroundClaim(
+  claims: ForegroundClaims,
+  claimId: string,
+): ForegroundClaims | undefined {
+  const tokens = claims.tokens.filter((token) => token !== claimId);
+  if (tokens.length === 0) {
+    return undefined;
+  }
+  const runIdsByClaimId = Object.fromEntries(
+    Object.entries(claims.runIdsByClaimId ?? {}).filter(([token]) => token !== claimId),
+  );
+  return {
+    lifecycleGeneration: claims.lifecycleGeneration,
+    tokens,
+    ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
+  };
+}
 
 type MainRecoveryStateFields = Pick<
   SessionEntry,
@@ -27,17 +50,35 @@ export function buildMainSessionRecoveryClearPatch(
   return MAIN_SESSION_RECOVERY_CLEAR_PATCH;
 }
 
-export function clearMainSessionRecoveryAfterAgentRun(
+export function buildMainSessionRecoverySettlementPatch(
+  params: Parameters<typeof buildRestartRecoveryClaimCleanupPatch>[0] & {
+    // A retained delivery snapshot can finish a receipt without owning the current cycle.
+    clearRecoveryState?: boolean;
+  },
+): Partial<SessionEntry> {
+  return {
+    ...buildRestartRecoveryClaimCleanupPatch(params),
+    ...(params.clearRecoveryState === false
+      ? {}
+      : buildMainSessionRecoveryClearPatch(params.entry)),
+  };
+}
+
+export function buildMainSessionRecoveryAfterAgentRunPatch(
   entry: SessionEntry,
   clearForceSafeTools: boolean | undefined,
-): void {
-  const aborted = entry.abortedLastRun === true;
-  if (clearForceSafeTools && !aborted) {
-    entry.restartRecoveryForceSafeTools = undefined;
+): Partial<SessionEntry> {
+  if (entry.abortedLastRun === true) {
+    return {};
   }
-  if (!aborted) {
-    Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
-  }
+  return {
+    ...(clearForceSafeTools ? { restartRecoveryForceSafeTools: undefined } : {}),
+    // Accepted queued turns retain independent claims. Their release owner clears
+    // the recovery cycle after the last claim, not a preceding model completion.
+    ...(entry.mainRestartRecovery?.foregroundClaims
+      ? {}
+      : buildMainSessionRecoveryClearPatch(entry)),
+  };
 }
 
 export type { MainRecoveryStateFields };

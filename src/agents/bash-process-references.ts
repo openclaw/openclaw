@@ -3,7 +3,7 @@
  * These references are surfaced in agent context so follow-up turns can
  * reconnect to prior long-running work.
  */
-import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { compareProcessSessionStartOrder, listRunningSessions } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
@@ -24,35 +24,20 @@ export type ActiveProcessSessionReference = {
   truncated: boolean;
 };
 
-function truncate(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 1) {
-    return truncateUtf16Safe(value, maxChars);
-  }
-  return truncateWithMarker(value, maxChars, { marker: "...", reserve: 3, trimEnd: false });
-}
-
 /** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
   now?: number;
-  limit?: number;
 }): ActiveProcessSessionReference[] {
   const scopeKey = params.scopeKey?.trim();
   if (!scopeKey) {
     return [];
   }
   const now = params.now ?? Date.now();
-  const limit =
-    typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit > 0
-      ? Math.floor(params.limit)
-      : DEFAULT_ACTIVE_PROCESS_LIMIT;
   return listRunningSessions()
     .filter((session) => session.scopeKey === scopeKey)
     .toSorted(compareProcessSessionStartOrder)
-    .slice(0, limit)
+    .slice(0, DEFAULT_ACTIVE_PROCESS_LIMIT)
     .map((session) => ({
       sessionId: session.id,
       status: "running" as const,
@@ -61,9 +46,10 @@ export function listActiveProcessSessionReferences(params: {
       runtimeMs: Math.max(0, now - session.startedAt),
       cwd: session.cwd,
       command: session.command,
-      name: truncate(
+      name: truncateWithMarker(
         deriveSessionName(session.command) || session.command,
         MAX_COMMAND_LABEL_CHARS,
+        { marker: "...", reserve: 3, trimEnd: false },
       ),
       tail: session.tail,
       truncated: session.truncated,

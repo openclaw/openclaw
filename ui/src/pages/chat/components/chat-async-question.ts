@@ -14,6 +14,7 @@ import {
 import { persistedSteerTargetRunId } from "../stream-causal-boundary.ts";
 import {
   readLiveTerminalDisposition,
+  readLiveTerminalRevision,
   readLiveTerminalRunId,
 } from "../terminal-message-identity.ts";
 import {
@@ -29,8 +30,6 @@ import type {
 } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-card.ts";
-
-export { renderAsyncQuestionSummary } from "./chat-async-question-summary.ts";
 
 function terminalOutcome(message: unknown): "successful" | "settled" | null {
   const record = asNullableRecord(message);
@@ -64,7 +63,7 @@ function terminalOutcome(message: unknown): "successful" | "settled" | null {
 }
 
 /** Reminders age out of the dock, not out of the conversation or the user's authority. */
-function questionHistory(messages: readonly unknown[]) {
+function readQuestionHistory(messages: readonly unknown[]) {
   const runs = new Map<string, { first: number; last: number; settled?: number }>();
   const userTurns = new Map<string, number>();
   const recoveryStarts = new Map<string, number>();
@@ -214,16 +213,47 @@ function questionHistory(messages: readonly unknown[]) {
   return { history, resolved };
 }
 
+// History arrays are replaced, never mutated, but live terminal outcomes land
+// beside them. Rescan only for a new array or terminal outcome, not per render.
+const questionHistories = new WeakMap<
+  readonly unknown[],
+  { revision: number; history: ReturnType<typeof readQuestionHistory> }
+>();
+function questionHistory(messages: readonly unknown[]) {
+  const revision = readLiveTerminalRevision();
+  const cached = questionHistories.get(messages);
+  if (cached?.revision === revision) {
+    return cached.history;
+  }
+  const history = readQuestionHistory(messages);
+  questionHistories.set(messages, { revision, history });
+  return history;
+}
+
+type AsyncQuestionState = {
+  asyncQuestionScope?: string;
+  asyncQuestionGeneration?: number;
+  asyncQuestionPresentation?: AsyncQuestionPresentation;
+  asyncQuestionSessions?: Map<string, AsyncQuestionDraftSession>;
+  asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
+  asyncQuestionRevision: number;
+  transcriptRenderContext: { onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"] };
+};
+
+const questionListeners = new WeakMap<AsyncQuestionState, Set<() => void>>();
+
+export function subscribeAsyncQuestionState(state: AsyncQuestionState, notify: () => void) {
+  let listeners = questionListeners.get(state);
+  if (!listeners) {
+    listeners = new Set();
+    questionListeners.set(state, listeners);
+  }
+  listeners.add(notify);
+  return () => listeners.delete(notify);
+}
+
 export function createAsyncQuestionPresentation(
-  state: {
-    asyncQuestionScope?: string;
-    asyncQuestionGeneration?: number;
-    asyncQuestionPresentation?: AsyncQuestionPresentation;
-    asyncQuestionSessions?: Map<string, AsyncQuestionDraftSession>;
-    asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
-    asyncQuestionRevision: number;
-    transcriptRenderContext: { onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"] };
-  },
+  state: AsyncQuestionState,
   props: {
     messages?: readonly unknown[];
     queue?: readonly ChatQueueItem[];
@@ -231,10 +261,10 @@ export function createAsyncQuestionPresentation(
     sessionKey: string;
     currentAgentId?: string;
     connectionEpoch?: number;
+    connected?: boolean;
     asyncQuestionStorage?: DurableComposerDraftScope | null;
     onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"];
     onReopen?: (itemId: string, scope: string) => void;
-    onRequestUpdate?: () => void;
   },
 ): AsyncQuestionPresentation {
   const storageScope = props.asyncQuestionStorage
@@ -308,7 +338,9 @@ export function createAsyncQuestionPresentation(
   const notify = () => {
     if (isCurrent()) {
       state.asyncQuestionRevision += 1;
-      props.onRequestUpdate?.();
+      for (const listener of questionListeners.get(state) ?? []) {
+        listener();
+      }
     }
   };
   if (session) {
@@ -393,26 +425,18 @@ export function createAsyncQuestionPresentation(
       if (durableDismissal) {
         // Do not present Undo/Answer as restored while reload still reads dismissed.
         // The existing writer serializes this intent behind any dismissal in flight.
-        for (;;) {
-          onChange();
-          await durableDismissal.write;
-          const latest = state.asyncQuestionPresentation;
-          if (drafts.get(itemId) !== current || current.status !== "reopening") {
-            return;
-          }
-          if (!isCurrent() || latest?.resolved.has(itemId)) {
-            current.status = undefined;
-            durableDismissal.onChange();
-            return;
-          }
-          const boundary = latest?.archived.get(itemId);
-          if (current.reopenedAfterBoundary === boundary) {
-            break;
-          }
-          // History can advance during the save; persist that latest reopen boundary
-          // before revealing an untouched answer that would otherwise age out again.
-          current.reopenedAfterBoundary = boundary;
+        onChange();
+        await durableDismissal.write;
+        if (drafts.get(itemId) !== current || current.status !== "reopening") {
+          return;
         }
+        if (!isCurrent() || state.asyncQuestionPresentation?.resolved.has(itemId)) {
+          current.status = undefined;
+          durableDismissal.onChange();
+          return;
+        }
+        // A completion arriving during this save may archive the reminder again;
+        // its Answer action can reopen it against that newer boundary.
         current.status = undefined;
       }
       // Failed storage still permits answering, with the existing unsaved notice.
@@ -429,7 +453,10 @@ export function createAsyncQuestionPresentation(
       [...resolved].map(([itemId, draft]) => [
         itemId,
         draft.unparsedText,
-        [...draft.answers].map(([questionId, answer]) => [questionId, questionDraftValues(answer)]),
+        [...draft.answers].map(([questionId, answer]) => [
+          questionId,
+          questionDraftValues(answer, {}),
+        ]),
       ]),
       [...delivery].map(([itemId, item]) => [
         itemId,
@@ -439,10 +466,12 @@ export function createAsyncQuestionPresentation(
         item.sendError,
       ]),
       Boolean(props.onAsyncQuestionSubmit && props.onQueueRetry),
+      props.connected,
     ]),
     drafts,
     resolved,
     delivery,
+    connected: props.connected,
     discard: (item) => {
       if (!isCurrent()) {
         return;

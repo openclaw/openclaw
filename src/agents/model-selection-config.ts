@@ -15,13 +15,9 @@ export function resolveDefaultModelForAgent(
   } & ModelManifestNormalizationContext,
 ): ModelRef {
   return resolveConfiguredModelRef({
-    cfg: params.cfg,
-    agentId: params.agentId,
+    ...params,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
   });
 }
 

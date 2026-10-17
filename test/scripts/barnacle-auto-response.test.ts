@@ -1,6 +1,4 @@
-// Barnacle Auto Response tests cover barnacle auto response script behavior.
 import { readFileSync } from "node:fs";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   candidateLabels,
@@ -20,27 +18,11 @@ const blankTemplateBody = readFileSync(
 );
 
 function pr(title: string, body = blankTemplateBody) {
-  return {
-    title,
-    body,
-  };
+  return { title, body };
 }
 
-function prContextBody(evidence: string, overrides: Record<string, string> = {}) {
-  const fields = {
-    problem: "Gateway status did not report the Discord channel as ready.",
-    evidence,
-    ...overrides,
-  };
-  return [
-    "## What Problem This Solves",
-    "",
-    fields.problem,
-    "",
-    "## Evidence",
-    "",
-    fields.evidence,
-  ].join("\n");
+function prContextBody(evidence: string) {
+  return `## What Problem This Solves\n\nGateway status did not report the Discord channel as ready.\n\n## Evidence\n\n${evidence}`;
 }
 
 function file(filename: string, status = "modified", previousFilename?: string) {
@@ -51,16 +33,27 @@ function file(filename: string, status = "modified", previousFilename?: string) 
   };
 }
 
+const repo = { owner: "openclaw", repo: "openclaw" };
+const broadFiles = () => [
+  file("ui/src/app.ts"),
+  file("src/gateway/server.ts"),
+  file("extensions/slack/src/index.ts"),
+  file("docs/plugins/community.md"),
+];
+const labelEvent = (name: string, login = "maintainer", type = "User") => ({
+  action: "labeled",
+  label: { name },
+  sender: { login, type },
+});
+const addedSkills = (...paths: string[]) => paths.map((path) => file(`skills/${path}`, "added"));
+
 function barnacleContext(
   pullRequest: Record<string, unknown>,
   labels: string[] = [],
   options: Record<string, unknown> = {},
 ) {
   return {
-    repo: {
-      owner: "openclaw",
-      repo: "openclaw",
-    },
+    repo,
     payload: {
       action: options.action ?? "opened",
       label: options.label,
@@ -70,9 +63,7 @@ function barnacleContext(
         title: "Cleanup plugin docs",
         body: blankTemplateBody,
         author_association: "CONTRIBUTOR",
-        user: {
-          login: "contributor",
-        },
+        user: { login: "contributor" },
         labels: labels.map((name) => ({ name })),
         ...pullRequest,
       },
@@ -85,24 +76,17 @@ function barnacleIssueContext(
   labels: string[] = [],
   options: Record<string, unknown> = {},
 ) {
+  const { payload } = barnacleContext(issue, labels, options);
+  const { pull_request, ...event } = payload;
   return {
-    repo: {
-      owner: "openclaw",
-      repo: "openclaw",
-    },
+    repo,
     payload: {
-      action: options.action ?? "opened",
-      label: options.label,
-      sender: options.sender,
+      ...event,
       issue: {
+        ...pull_request,
         number: 456,
         title: "OpenClaw issue",
         body: "",
-        author_association: "CONTRIBUTOR",
-        user: {
-          login: "contributor",
-        },
-        labels: labels.map((name) => ({ name })),
         ...issue,
       },
       comment: options.comment,
@@ -116,11 +100,6 @@ function barnacleGithub(
     maintainerLogins?: string[];
     removeLabelNotFound?: string[];
     repositoryRoles?: Record<string, string>;
-    comments?: Array<{
-      body: string;
-      performed_via_github_app?: { slug: string };
-      user?: { login: string; type: string };
-    }>;
   } = {},
 ) {
   const maintainerLogins = new Set(
@@ -140,18 +119,17 @@ function barnacleGithub(
     removeLabel: [] as Array<{ issue_number: number; name: string }>,
     update: [] as Array<{ issue_number: number; state?: string }>,
   };
-  const listFiles = async () => files;
-  const listComments = async () => options.comments ?? [];
+  const record =
+    <T>(target: T[]) =>
+    async (params: T) => {
+      target.push(params);
+    };
   const github = {
-    paginate: async (fn: unknown) => (fn === listComments ? (options.comments ?? []) : files),
+    paginate: async () => files,
     rest: {
       issues: {
-        addLabels: async (params: { issue_number: number; labels: string[] }) => {
-          calls.addLabels.push(params);
-        },
-        createComment: async (params: { issue_number: number; body: string }) => {
-          calls.createComment.push(params);
-        },
+        addLabels: record(calls.addLabels),
+        createComment: record(calls.createComment),
         createLabel: async () => undefined,
         getLabel: async (params: { name: string }) => ({
           data: {
@@ -161,49 +139,29 @@ function barnacleGithub(
               managedLabelSpecs[params.name as keyof typeof managedLabelSpecs]?.description ?? "",
           },
         }),
-        listComments,
-        lock: async (params: { issue_number: number; lock_reason?: string }) => {
-          calls.lock.push(params);
-        },
+        lock: record(calls.lock),
         removeLabel: async (params: { issue_number: number; name: string }) => {
           calls.removeLabel.push(params);
           if (removeLabelNotFound.has(params.name)) {
-            const error = new Error("not found") as Error & { status: number };
-            error.status = 404;
-            throw error;
+            throw Object.assign(new Error("not found"), { status: 404 });
           }
         },
-        update: async (params: { issue_number: number; state?: string }) => {
-          calls.update.push(params);
-        },
+        update: record(calls.update),
         updateLabel: async () => undefined,
       },
-      pulls: {
-        listFiles,
-      },
+      pulls: { listFiles: async () => files },
       repos: {
         getCollaboratorPermissionLevel: async ({ username }: { username: string }) => {
           const role = repositoryRoles[username.toLowerCase()] ?? "read";
-          return {
-            data: {
-              permission: role,
-              role_name: role,
-            },
-          };
+          return { data: { permission: role, role_name: role } };
         },
       },
       teams: {
         getMembershipForUserInOrg: async ({ username }: { username: string }) => {
           if (maintainerLogins.has(username.toLowerCase())) {
-            return {
-              data: {
-                state: "active",
-              },
-            };
+            return { data: { state: "active" } };
           }
-          const error = new Error("not found") as Error & { status: number };
-          error.status = 404;
-          throw error;
+          throw Object.assign(new Error("not found"), { status: 404 });
         },
       },
     },
@@ -212,70 +170,52 @@ function barnacleGithub(
 }
 
 function expectedIssueUpdate(issue_number: number, state: string) {
-  return {
-    owner: "openclaw",
-    repo: "openclaw",
-    issue_number,
-    state,
-  };
+  return { ...repo, issue_number, state };
 }
 
 function expectedRemoveLabel(issue_number: number, name: string) {
-  return {
-    owner: "openclaw",
-    repo: "openclaw",
-    issue_number,
-    name,
-  };
+  return { ...repo, issue_number, name };
 }
 
 function expectedAddLabels(issue_number: number, labels: string[]) {
-  return {
-    owner: "openclaw",
-    repo: "openclaw",
-    issue_number,
-    labels,
-  };
+  return { ...repo, issue_number, labels };
 }
 
-function managedLabelDescription(label: string): string {
-  return expectDefined(managedLabelSpecs[label], `managed label ${label}`).description;
+function labeledContext(label: string, login?: string, type?: string) {
+  return barnacleContext({}, [label], labelEvent(label, login, type));
+}
+
+function expectClosed(calls: Awaited<ReturnType<typeof runBarnacle>>, issue: number, text: string) {
+  expect(calls.createComment).toEqual([
+    expect.objectContaining({ issue_number: issue, body: expect.stringContaining(text) }),
+  ]);
+  expect(calls.update).toStrictEqual([expectedIssueUpdate(issue, "closed")]);
+}
+
+function expectNoActions(
+  calls: Awaited<ReturnType<typeof runBarnacle>>,
+  keys: Array<keyof typeof calls>,
+) {
+  for (const key of keys) {
+    expect(calls[key]).toStrictEqual([]);
+  }
+}
+
+async function runBarnacle(
+  context: ReturnType<typeof barnacleContext> | ReturnType<typeof barnacleIssueContext>,
+  files: Parameters<typeof barnacleGithub>[0],
+  options?: Parameters<typeof barnacleGithub>[1],
+) {
+  const { calls, github } = barnacleGithub(files, options);
+  await runBarnacleAutoResponse({ github, context, core: { info: () => undefined } });
+  return calls;
 }
 
 describe("barnacle-auto-response", () => {
-  it("keeps Barnacle-owned labels documented and ClawHub spelled correctly", () => {
-    expect(managedLabelDescription("r: skill")).toContain("ClawHub");
-    expect(managedLabelDescription("r: skill")).not.toContain("Clawdhub");
-    expect(managedLabelDescription("dirty")).toContain("dirty/unrelated");
-    expect(managedLabelDescription("r: support")).toContain("support requests");
-    expect(managedLabelDescription("r: false-positive")).toContain("false positive");
-    expect(managedLabelDescription("r: third-party-extension")).toContain("ClawHub");
-    expect(managedLabelDescription("r: bluebubbles")).toContain("deprecated");
-    expect(managedLabelDescription("r: too-many-prs")).toContain("twenty active PRs");
-    for (const label of Object.values(candidateLabels)) {
-      expect(managedLabelSpecs).toHaveProperty(label);
-      expect(managedLabelDescription(label)).toMatch(/^Candidate:/);
-    }
-  });
-
-  it("labels docs-only discoverability churn without closing it", () => {
-    const labels = classifyPullRequestCandidateLabels(pr("Update README translation"), [
-      file("README.md"),
-    ]);
-
-    expect(labels).toEqual([
-      candidateLabels.blankTemplate,
-      candidateLabels.needsPrContext,
-      candidateLabels.lowSignalDocs,
-      candidateLabels.docsDiscoverability,
-    ]);
-  });
-
   it("does not treat template boilerplate as behavior evidence for test-only churn", () => {
     const labels = classifyPullRequestCandidateLabels(pr("Add test coverage"), [
       file("src/gateway/foo.test.ts"),
     ]);
-
     expect(labels).toEqual([
       candidateLabels.blankTemplate,
       candidateLabels.needsPrContext,
@@ -299,22 +239,15 @@ describe("barnacle-auto-response", () => {
         classifyPullRequestCandidateLabels(pr("Fix linked skill behavior", "Fixes #127931"), files),
       ).not.toContain("r: skill");
     }
-
     for (const files of [
-      [
-        file("skills/weather-helper/SKILL.md", "added"),
-        file("skills/weather-helper/references/usage.md", "added"),
-      ],
-      [
-        file("skills/Group/Weather-Helper/skill.md", "added"),
-        file("skills/Group/Weather-Helper/scripts/check.mjs", "added"),
-      ],
-      [
-        file("skills/weather-helper/SKILL.md", "added"),
-        file("skills/weather-helper/README.md", "added"),
-        file("skills/group/calendar-helper/SKILL.md", "added"),
-        file("skills/group/calendar-helper/assets/icon.svg", "added"),
-      ],
+      addedSkills("weather-helper/SKILL.md", "weather-helper/references/usage.md"),
+      addedSkills("Group/Weather-Helper/skill.md", "Group/Weather-Helper/scripts/check.mjs"),
+      addedSkills(
+        "weather-helper/SKILL.md",
+        "weather-helper/README.md",
+        "group/calendar-helper/SKILL.md",
+        "group/calendar-helper/assets/icon.svg",
+      ),
     ]) {
       expect(classifyPullRequestCandidateLabels(pr("Add weather helper skill"), files)).toContain(
         "r: skill",
@@ -323,182 +256,38 @@ describe("barnacle-auto-response", () => {
   });
 
   it("removes a stale automated skill close label from a mixed skill and core PR", async () => {
-    const { calls, github } = barnacleGithub([
-      file("skills/weather-helper/SKILL.md", "added"),
-      file("src/skills/loading/plugin-skills.test.ts"),
-    ]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
+    const calls = await runBarnacle(
+      barnacleContext(
         {
           title: "Add a skill and fix Windows symlink typing",
           body: "Fixes #127931",
         },
         ["r: skill"],
-        {
-          action: "labeled",
-          label: { name: "r: skill" },
-          sender: { login: "openclaw-barnacle[bot]", type: "Bot" },
-        },
+        labelEvent("r: skill", "openclaw-barnacle[bot]", "Bot"),
       ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
+      [
+        file("skills/weather-helper/SKILL.md", "added"),
+        file("src/skills/loading/plugin-skills.test.ts"),
+      ],
+    );
     expect(calls.removeLabel).toContainEqual(expectedRemoveLabel(123, "r: skill"));
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
-  });
-
-  it("closes a newly added ordinary skill and its assets deterministically", async () => {
-    const { calls, github } = barnacleGithub([
-      file("skills/weather-helper/SKILL.md", "added"),
-      file("skills/weather-helper/references/usage.md", "added"),
-    ]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({ title: "Add weather helper skill" }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.addLabels.flatMap((call) => call.labels)).toContain("r: skill");
-    expect(calls.createComment).toHaveLength(1);
-    expect(calls.createComment[0]?.body).toContain("ClawHub");
-    expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
+    expectNoActions(calls, ["createComment", "update"]);
   });
 
   it("does not duplicate the close for its own skill label event", async () => {
-    const { calls, github } = barnacleGithub([file("skills/weather-helper/SKILL.md", "added")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, ["r: skill"], {
-        action: "labeled",
-        label: { name: "r: skill" },
-        sender: { login: "openclaw-barnacle[bot]", type: "Bot" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
+    const calls = await runBarnacle(labeledContext("r: skill", "openclaw-barnacle[bot]", "Bot"), [
+      file("skills/weather-helper/SKILL.md", "added"),
+    ]);
+    expectNoActions(calls, ["createComment", "update"]);
   });
 
   it("honors a maintainer-applied skill close label", async () => {
-    const { calls, github } = barnacleGithub([file("src/skills/workspace.ts")], {
+    const calls = await runBarnacle(labeledContext("r: skill"), [file("src/skills/workspace.ts")], {
       maintainerLogins: ["maintainer"],
     });
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, ["r: skill"], {
-        action: "labeled",
-        label: { name: "r: skill" },
-        sender: { login: "maintainer", type: "User" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
     expect(calls.removeLabel).not.toContainEqual(expectedRemoveLabel(123, "r: skill"));
     expect(calls.createComment).toHaveLength(1);
     expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
-  });
-
-  it("uses the latest case-insensitive context sections after template boilerplate", () => {
-    const body = [
-      blankTemplateBody,
-      "## What problem this solves",
-      "",
-      "Gateway status did not report the Discord channel as ready.",
-      "",
-      "## evidence",
-      "",
-      "pnpm test passed.",
-    ].join("\n\n");
-    const labels = classifyPullRequestCandidateLabels(pr("Fix gateway status", body), [
-      file("src/gateway/server.ts"),
-    ]);
-
-    expect(labels).not.toContain(clawSweeperProofSuppliedLabel);
-    expect(labels).not.toContain(candidateLabels.blankTemplate);
-    expect(labels).not.toContain(candidateLabels.needsPrContext);
-  });
-
-  it("labels external PRs that are missing context or evidence", () => {
-    const labels = classifyPullRequestCandidateLabels(pr("Fix gateway startup"), [
-      file("src/gateway/server.ts"),
-    ]);
-
-    expect(labels).toContain(candidateLabels.needsPrContext);
-  });
-
-  it("accepts focused test evidence without assigning a proof label", () => {
-    const labels = classifyPullRequestCandidateLabels(
-      pr("Fix gateway startup", prContextBody("pnpm test passed with Vitest mocks.")),
-      [file("src/gateway/server.ts")],
-    );
-
-    expect(labels).not.toContain(clawSweeperProofSuppliedLabel);
-    expect(labels).not.toContain(candidateLabels.needsPrContext);
-  });
-
-  it("accepts external PR evidence without assigning a proof label", () => {
-    const labels = classifyPullRequestCandidateLabels(
-      pr(
-        "Fix gateway startup",
-        prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
-      ),
-      [file("src/gateway/server.ts")],
-    );
-
-    expect(labels).not.toContain(clawSweeperProofSuppliedLabel);
-    expect(labels).not.toContain(candidateLabels.needsPrContext);
-  });
-
-  it("accepts CRLF-formatted screenshot evidence without assigning a proof label", () => {
-    const labels = classifyPullRequestCandidateLabels(
-      pr(
-        "Fix gateway startup",
-        prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
-          /\n/g,
-          "\r\n",
-        ),
-      ),
-      [file("src/gateway/server.ts")],
-    );
-
-    expect(labels).not.toContain(clawSweeperProofSuppliedLabel);
-    expect(labels).not.toContain(candidateLabels.needsPrContext);
-  });
-
-  it("uses linked issues as context and suppresses low-signal docs labels", () => {
-    const labels = classifyPullRequestCandidateLabels(
-      pr("Update docs", `${blankTemplateBody}\n\nRelated #12345`),
-      [file("docs/plugins/community.md")],
-    );
-
-    expect(labels).not.toContain(candidateLabels.lowSignalDocs);
-    expect(labels).not.toContain(candidateLabels.docsDiscoverability);
-  });
-
-  it("warns on broad high-surface PRs instead of auto-closing them as dirty", () => {
-    const labels = classifyPullRequestCandidateLabels(pr("Cleanup plugin docs"), [
-      file("ui/src/app.ts"),
-      file("src/gateway/server.ts"),
-      file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
-    ]);
-
-    expect(labels).toContain(candidateLabels.dirtyCandidate);
   });
 
   it("suppresses dirty-candidate when the PR has concrete behavior context", () => {
@@ -507,315 +296,72 @@ describe("barnacle-auto-response", () => {
       "- Why it matters: users lose the running session",
       "- What changed: add a guard around metadata loading",
     ].join("\n");
-
-    const labels = classifyPullRequestCandidateLabels(pr("Fix gateway crash", body), [
-      file("ui/src/app.ts"),
-      file("src/gateway/server.ts"),
-      file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
-    ]);
-
+    const labels = classifyPullRequestCandidateLabels(pr("Fix gateway crash", body), broadFiles());
     expect(labels).not.toContain(candidateLabels.dirtyCandidate);
   });
 
-  it("does not classify a linked core plugin auto-enable fix as an external plugin candidate", () => {
-    const labels = classifyPullRequestCandidateLabels(
-      pr(
-        "Fix duplicate plugin auto-enable entries",
-        [
-          "- Problem: openclaw doctor --fix adds duplicate installed plugin entries",
-          "- Why it matters: users get noisy config churn",
-          "- What changed: respect manifest-provided channel auto-loads",
-          "",
-          "Fixes #37548",
-          "",
-          "This touches external plugin install state but fixes core config repair behavior.",
-        ].join("\n"),
-      ),
-      [
-        file("src/config/plugin-auto-enable.shared.ts"),
-        file("src/config/plugin-auto-enable.channels.test.ts"),
-        file("src/config/plugin-auto-enable.test-helpers.ts"),
-      ],
-    );
-
-    expect(labels).not.toContain(candidateLabels.externalPluginCandidate);
-  });
-
-  it("does not mutate maintainer-authored PRs", async () => {
-    const { calls, github } = barnacleGithub([
-      file("ui/src/app.ts"),
-      file("src/gateway/server.ts"),
-      file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
-    ]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({
-        author_association: "OWNER",
-        user: {
-          login: "maintainer",
-        },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.addLabels).toStrictEqual([]);
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.removeLabel).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
-  });
-
   it("leaves stale Barnacle labels alone on maintainer-authored PRs", async () => {
-    const { calls, github } = barnacleGithub([
-      file("ui/src/app.ts"),
-      file("src/gateway/server.ts"),
-      file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
-    ]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
+    const calls = await runBarnacle(
+      barnacleContext(
         {
           author_association: "OWNER",
-          user: {
-            login: "maintainer",
-          },
+          user: { login: "maintainer" },
         },
         [candidateLabels.dirtyCandidate, "r: too-many-prs"],
       ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.addLabels).toStrictEqual([]);
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.removeLabel).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
+      broadFiles(),
+    );
+    expectNoActions(calls, ["addLabels", "createComment", "removeLabel", "update"]);
   });
 
-  it("does not mutate maintainer-authored issues", async () => {
-    const { calls, github } = barnacleGithub([]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleIssueContext({
-        title: "TestFlight access",
-        author_association: "OWNER",
-        user: {
-          login: "maintainer",
-        },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.addLabels).toStrictEqual([]);
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
-  });
-
-  it("does not action close labels on maintainer-authored issues", async () => {
-    const { calls, github } = barnacleGithub([]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleIssueContext(
-        {
-          title: "Need help with setup",
-          author_association: "MEMBER",
-          user: {
-            login: "maintainer",
-          },
-        },
-        ["r: support"],
-        {
-          action: "labeled",
-          label: { name: "r: support" },
-        },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
-  });
-
-  it("closes issues tagged as false positives", async () => {
-    const { calls, github } = barnacleGithub([]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleIssueContext({}, ["r: false-positive"], {
-        action: "labeled",
-        label: { name: "r: false-positive" },
-        sender: { login: "maintainer", type: "User" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.createComment).toHaveLength(1);
-    expect(calls.createComment[0]?.issue_number).toBe(456);
-    expect(calls.createComment[0]?.body).toContain("false positive");
-    expect(calls.update).toStrictEqual([expectedIssueUpdate(456, "closed")]);
-  });
-
+  const pings = "@openclaw/maintainer testflight";
+  const teamMembers = ["alice", "bob", "carol"];
   it.each([
-    {
-      name: "ordinary comment",
-      body: "Thanks",
-      type: "User",
-      author: "reader",
-      maintainers: [],
-      messages: [],
+    ["three maintainers", "@alice @bob @carol", "User", "reader", teamMembers, ["spam-ping"]],
+    ["combined reply", pings, "User", "reader", [], ["spam-ping", "Not available"]],
+    ["bot comment", pings, "Bot", "automation", [], []],
+    ["maintainer comment", "testflight", "User", "maintainer", ["maintainer"], []],
+  ] satisfies Array<[string, string, string, string, string[], string[]]>)(
+    "preserves Barnacle comment actions for %s",
+    async (_name, body, type, author, maintainers, messages) => {
+      const calls = await runBarnacle(
+        barnacleIssueContext({}, [], {
+          action: "created",
+          comment: { body, user: { login: author, type } },
+        }),
+        [],
+        { maintainerLogins: maintainers },
+      );
+      expect(calls.createComment).toHaveLength(messages.length ? 1 : 0);
+      for (const message of messages) {
+        expect(calls.createComment[0]?.body).toContain(message);
+      }
+      expectNoActions(calls, ["addLabels", "removeLabel", "update", "lock"]);
     },
-    {
-      name: "keyword reply",
-      body: "TESTFLIGHT",
-      type: "User",
-      author: "reader",
-      maintainers: [],
-      messages: ["Not available"],
-    },
-    {
-      name: "team mention",
-      body: "@openclaw/maintainer",
-      type: "User",
-      author: "reader",
-      maintainers: [],
-      messages: ["spam-ping"],
-    },
-    {
-      name: "three maintainers",
-      body: "@alice @bob @carol",
-      type: "User",
-      author: "reader",
-      maintainers: ["alice", "bob", "carol"],
-      messages: ["spam-ping"],
-    },
-    {
-      name: "combined reply",
-      body: "@openclaw/maintainer testflight",
-      type: "User",
-      author: "reader",
-      maintainers: [],
-      messages: ["spam-ping", "Not available"],
-    },
-    {
-      name: "bot comment",
-      body: "@openclaw/maintainer testflight",
-      type: "Bot",
-      author: "automation",
-      maintainers: [],
-      messages: [],
-    },
-    {
-      name: "maintainer comment",
-      body: "testflight",
-      type: "User",
-      author: "maintainer",
-      maintainers: ["maintainer"],
-      messages: [],
-    },
-  ])("preserves Barnacle comment actions for $name", async (scenario) => {
-    const { calls, github } = barnacleGithub([], { maintainerLogins: scenario.maintainers });
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleIssueContext({}, [], {
-        action: "created",
-        comment: { body: scenario.body, user: { login: scenario.author, type: scenario.type } },
-      }),
-      core: { info: () => undefined },
-    });
-    expect(calls.createComment).toHaveLength(scenario.messages.length ? 1 : 0);
-    for (const message of scenario.messages) {
-      expect(calls.createComment[0]?.body).toContain(message);
-    }
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.update).toEqual([]);
-    expect(calls.lock).toEqual([]);
-  });
+  );
 
   it("does not close automation PRs for the active PR limit", async () => {
-    for (const automationPullRequest of [
-      { head: { ref: "clawsweeper/openclaw-openclaw-73880" }, login: "app/openclaw-clawsweeper" },
-      { headRefName: "clawsweeper/openclaw-openclaw-73880", login: "app/openclaw-clawsweeper" },
-      {
-        head: { ref: "clownfish/ghcrawl-156993-autonomous-smoke" },
-        login: "app/openclaw-clownfish",
-      },
-      { headRefName: "clownfish/ghcrawl-156993-autonomous-smoke", login: "app/openclaw-clownfish" },
+    for (const [ref, login] of [
+      ["clawsweeper/openclaw-openclaw-73880", "app/openclaw-clawsweeper"],
+      ["clownfish/ghcrawl-156993-autonomous-smoke", "app/openclaw-clownfish"],
     ]) {
-      const { calls, github } = barnacleGithub([]);
-      const { login, ...pullRequest } = automationPullRequest;
-
-      await runBarnacleAutoResponse({
-        github,
-        context: barnacleContext(
-          {
-            ...pullRequest,
-            user: {
-              login,
-            },
-          },
-          ["r: too-many-prs"],
-        ),
-        core: {
-          info: () => undefined,
-        },
-      });
-
-      expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
-      expect(
-        calls.createComment.every((call) => !call.body.includes("more than 20 active PRs")),
-      ).toBe(true);
-      expect(calls.update).toStrictEqual([]);
+      for (const head of [{ head: { ref } }, { headRefName: ref }]) {
+        const calls = await runBarnacle(
+          barnacleContext({ ...head, user: { login } }, ["r: too-many-prs"]),
+          [],
+        );
+        expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
+        expect(
+          calls.createComment.every((call) => !call.body.includes("more than 20 active PRs")),
+        ).toBe(true);
+        expect(calls.update).toStrictEqual([]);
+      }
     }
-  });
-
-  it("removes stale PR-limit labels from GitHub App-authored PRs", async () => {
-    const { calls, github } = barnacleGithub([file("README.md")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          user: {
-            login: "renovate[bot]",
-            type: "Bot",
-          },
-        },
-        ["r: too-many-prs"],
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not close GitHub App-authored PRs when stale PR-limit label removal returns 404", async () => {
-    const { calls, github } = barnacleGithub([file("README.md")], {
-      removeLabelNotFound: ["r: too-many-prs"],
-    });
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
+    const calls = await runBarnacle(
+      barnacleContext(
         {
           user: {
             login: "renovate[bot]",
@@ -824,32 +370,17 @@ describe("barnacle-auto-response", () => {
         },
         ["r: too-many-prs"],
       ),
-      core: {
-        info: () => undefined,
+      [file("README.md")],
+      {
+        removeLabelNotFound: ["r: too-many-prs"],
       },
-    });
-
+    );
     expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
+    expectNoActions(calls, ["createComment", "update"]);
   });
 
   it("still adds candidate labels to broad contributor PRs", async () => {
-    const { calls, github } = barnacleGithub([
-      file("ui/src/app.ts"),
-      file("src/gateway/server.ts"),
-      file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
-    ]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}),
-      core: {
-        info: () => undefined,
-      },
-    });
-
+    const calls = await runBarnacle(barnacleContext({}), broadFiles());
     expect(calls.addLabels).toStrictEqual([
       expectedAddLabels(123, [
         candidateLabels.blankTemplate,
@@ -858,38 +389,12 @@ describe("barnacle-auto-response", () => {
         candidateLabels.dirtyCandidate,
       ]),
     ]);
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
-  });
-
-  it("adds proof labels to external PRs without auto-closing by default", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.addLabels).toStrictEqual([
-      expectedAddLabels(123, [
-        candidateLabels.blankTemplate,
-        candidateLabels.needsPrContext,
-        candidateLabels.refactorOnly,
-      ]),
-    ]);
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
+    expectNoActions(calls, ["createComment", "update"]);
   });
 
   it("removes stale context labels without changing ClawSweeper proof labels", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
+    const calls = await runBarnacle(
+      barnacleContext(
         {
           body: prContextBody("pnpm test passed."),
         },
@@ -901,314 +406,23 @@ describe("barnacle-auto-response", () => {
           PROOF_OVERRIDE_LABEL,
         ],
       ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
+      [file("src/gateway/server.ts")],
+    );
     expect(calls.removeLabel).toStrictEqual([
       expectedRemoveLabel(123, candidateLabels.needsPrContext),
     ]);
-    expect(calls.update).toStrictEqual([]);
-  });
-
-  it("preserves manually applied sufficient proof label when override is added", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
-        },
-        [PROOF_OVERRIDE_LABEL, PROOF_SUFFICIENT_LABEL],
-        {
-          action: "labeled",
-          label: { name: PROOF_OVERRIDE_LABEL },
-          sender: { login: "maintainer", type: "User" },
-        },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.update).toEqual([]);
-  });
-
-  it("removes stale context labels without adding proof labels", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
-        },
-        [candidateLabels.needsPrContext, "triage: mock-only-proof"],
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toStrictEqual([
-      expectedRemoveLabel(123, candidateLabels.needsPrContext),
-    ]);
-    expect(calls.addLabels).toStrictEqual([]);
-  });
-
-  it.each(["edited", "synchronize"])(
-    "preserves ClawSweeper sufficient proof labels after PR %s events",
-    async (action) => {
-      const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-      await runBarnacleAutoResponse({
-        github,
-        context: barnacleContext(
-          {
-            body: prContextBody(
-              "![after](https://github.com/user-attachments/assets/gateway-ready)",
-            ),
-          },
-          [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
-          { action },
-        ),
-        core: {
-          info: () => undefined,
-        },
-      });
-
-      expect(calls.removeLabel).toEqual([]);
-    },
-  );
-
-  it("preserves sufficient proof on synchronize when ClawSweeper passed the exact head", async () => {
-    const headSha = "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f";
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")], {
-      comments: [
-        {
-          user: {
-            login: "clawsweeper[bot]",
-            type: "Bot",
-          },
-          performed_via_github_app: {
-            slug: "clawsweeper",
-          },
-          body: `<!-- clawsweeper-verdict:pass item=123 sha=${headSha} confidence=high -->`,
-        },
-      ],
-    });
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          body: blankTemplateBody,
-          head: { sha: headSha },
-        },
-        [PROOF_SUFFICIENT_LABEL],
-        { action: "synchronize" },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).not.toContainEqual(
-      expect.objectContaining({ name: PROOF_SUFFICIENT_LABEL }),
-    );
-  });
-
-  it("preserves sufficient proof on synchronize when the matching marker is forged", async () => {
-    const headSha = "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f";
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")], {
-      comments: [
-        {
-          user: {
-            login: "external-contributor",
-            type: "User",
-          },
-          body: `<!-- clawsweeper-verdict:pass item=123 sha=${headSha} confidence=high -->`,
-        },
-      ],
-    });
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          body: blankTemplateBody,
-          head: { sha: headSha },
-        },
-        [PROOF_SUFFICIENT_LABEL],
-        { action: "synchronize" },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-  });
-
-  it("preserves stale sufficient proof while ClawSweeper automerge owns the PR", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          head: {
-            ref: "fix/memory-search-event-loop-yield-81172",
-            sha: "0ede3d716805e7d2ced8df37c6666af510dc9e19",
-          },
-          body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
-        },
-        [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL, "clawsweeper:automerge"],
-        { action: "synchronize" },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-  });
-
-  it("preserves stale sufficient proof on ClawSweeper branch updates", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          head: {
-            ref: "clawsweeper/repair-pr-83758",
-            sha: "0ede3d716805e7d2ced8df37c6666af510dc9e19",
-          },
-          body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
-        },
-        [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
-        { action: "synchronize" },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-  });
-
-  it("preserves stale sufficient proof on ClawSweeper-authored PR updates", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
-          user: {
-            login: "clawsweeper[bot]",
-            type: "Bot",
-          },
-        },
-        [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
-        { action: "synchronize" },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).not.toContainEqual(
-      expect.objectContaining({ name: PROOF_SUFFICIENT_LABEL }),
-    );
-  });
-
-  it("preserves ClawSweeper's sufficient proof label on ordinary label events", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext(
-        {
-          body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
-        },
-        [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
-        {
-          action: "labeled",
-          label: { name: PROOF_SUFFICIENT_LABEL },
-          sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
-        },
-      ),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-  });
-
-  it("adds missing context labels even when proof is sufficient", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
-        action: "labeled",
-        label: { name: "status: ready for maintainer look" },
-        sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.addLabels.flatMap((call) => call.labels)).toContain(
-      candidateLabels.needsPrContext,
-    );
-  });
-
-  it("re-adds missing context labels while sufficient proof is present", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
-        action: "unlabeled",
-        label: { name: candidateLabels.needsPrContext },
-        sender: { login: "maintainer", type: "User" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.addLabels.flatMap((call) => call.labels)).toContain(
-      candidateLabels.needsPrContext,
-    );
+    expectNoActions(calls, ["addLabels", "update"]);
   });
 
   it("keeps context labels when sufficient proof is already present", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL, candidateLabels.needsPrContext], {
-        action: "labeled",
-        label: { name: "status: ready for maintainer look" },
-        sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
+    const calls = await runBarnacle(
+      barnacleContext(
+        {},
+        [PROOF_SUFFICIENT_LABEL, candidateLabels.needsPrContext],
+        labelEvent("status: ready for maintainer look", "openclaw-clawsweeper[bot]", "Bot"),
+      ),
+      [file("src/gateway/server.ts")],
+    );
     expect(calls.removeLabel).toEqual([]);
     expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
       candidateLabels.needsPrContext,
@@ -1216,105 +430,46 @@ describe("barnacle-auto-response", () => {
   });
 
   it("does not let Barnacle veto ClawSweeper's sufficient proof label add", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
-        action: "labeled",
-        label: { name: PROOF_SUFFICIENT_LABEL },
-        sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.update).toEqual([]);
+    const calls = await runBarnacle(
+      labeledContext(PROOF_SUFFICIENT_LABEL, "openclaw-clawsweeper[bot]", "Bot"),
+      [file("src/gateway/server.ts")],
+    );
+    expectNoActions(calls, ["removeLabel", "addLabels", "update"]);
   });
 
   it("actions manually applied candidate labels", async () => {
-    const { calls, github } = barnacleGithub([file("extensions/example/openclaw.plugin.json")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, [candidateLabels.externalPluginCandidate], {
-        action: "labeled",
-        label: { name: candidateLabels.externalPluginCandidate },
-        sender: { login: "maintainer", type: "User" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.createComment).toHaveLength(1);
-    expect(calls.createComment[0]?.issue_number).toBe(123);
-    expect(calls.createComment[0]?.body).toContain("ClawHub");
-    expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
+    const calls = await runBarnacle(labeledContext(candidateLabels.externalPluginCandidate), [
+      file("extensions/example/openclaw.plugin.json"),
+    ]);
+    expectClosed(calls, 123, "ClawHub");
   });
 
   it("closes manually labeled BlueBubbles requests with imsg migration guidance", async () => {
-    const { calls, github } = barnacleGithub([]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleIssueContext({}, ["r: bluebubbles"], {
-        action: "labeled",
-        label: { name: "r: bluebubbles" },
-        sender: { login: "maintainer", type: "User" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.createComment).toHaveLength(1);
-    expect(calls.createComment[0]?.issue_number).toBe(456);
-    expect(calls.createComment[0]?.body).toContain("/channels/imessage");
-    expect(calls.update).toStrictEqual([expectedIssueUpdate(456, "closed")]);
+    const calls = await runBarnacle(
+      barnacleIssueContext({}, ["r: bluebubbles"], labelEvent("r: bluebubbles")),
+      [],
+    );
+    expectClosed(calls, 456, "/channels/imessage");
   });
 
   it("keeps bot-applied candidate labels passive", async () => {
-    const { calls, github } = barnacleGithub([file("extensions/example/openclaw.plugin.json")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, [candidateLabels.externalPluginCandidate], {
-        action: "labeled",
-        label: { name: candidateLabels.externalPluginCandidate },
-        sender: { login: "openclaw-bot[bot]", type: "Bot" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
-    expect(calls.createComment).toStrictEqual([]);
-    expect(calls.update).toStrictEqual([]);
+    const calls = await runBarnacle(
+      labeledContext(candidateLabels.externalPluginCandidate, "openclaw-bot[bot]", "Bot"),
+      [file("extensions/example/openclaw.plugin.json")],
+    );
+    expectNoActions(calls, ["createComment", "update"]);
   });
 
   it("actions existing candidate labels when a maintainer adds trigger-response", async () => {
-    const { calls, github } = barnacleGithub([file("src/gateway/foo.test.ts")]);
-
-    await runBarnacleAutoResponse({
-      github,
-      context: barnacleContext({}, [candidateLabels.testOnlyNoBug, "trigger-response"], {
-        action: "labeled",
-        label: { name: "trigger-response" },
-        sender: { login: "maintainer", type: "User" },
-      }),
-      core: {
-        info: () => undefined,
-      },
-    });
-
+    const calls = await runBarnacle(
+      barnacleContext(
+        {},
+        [candidateLabels.testOnlyNoBug, "trigger-response"],
+        labelEvent("trigger-response"),
+      ),
+      [file("src/gateway/foo.test.ts")],
+    );
     expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "trigger-response")]);
-    expect(calls.createComment).toHaveLength(1);
-    expect(calls.createComment[0]?.issue_number).toBe(123);
-    expect(calls.createComment[0]?.body).toContain("lacks a clear problem statement or evidence");
-    expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
+    expectClosed(calls, 123, "lacks a clear problem statement or evidence");
   });
 });

@@ -3,12 +3,18 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-record-state.js";
-import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "../../plugins/test-helpers/installed-plugin-index.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
@@ -23,18 +29,34 @@ import {
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 
 const runtimeFixture = createFixtureLifetime();
+const testFixture = createFixtureLifetime();
+let receipts: FixtureReceiptChannel;
 let candidateAuthorityRuntime: Awaited<ReturnType<typeof prepareCandidateAuthorityRuntime>>;
 let candidateAuthorityWorker: URL;
 let candidateAuthorityBundledPluginsDir: string;
 beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
   candidateAuthorityRuntime = await runtimeFixture.run(() =>
     prepareCandidateAuthorityRuntime(runtimeFixture.createTempDir("candidate-authority-runtime-")),
   );
   candidateAuthorityWorker = candidateAuthorityRuntime.worker;
   candidateAuthorityBundledPluginsDir = candidateAuthorityRuntime.bundledPluginsDir;
 });
-afterEach(() => vi.restoreAllMocks());
-afterAll(() => runtimeFixture.cleanup());
+afterEach(async () => {
+  // Vitest can enter teardown while the timed-out body's child and state cleanup still unwind.
+  try {
+    await testFixture.cleanup();
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+afterAll(async () => {
+  try {
+    await runtimeFixture.cleanup();
+  } finally {
+    await receipts.close();
+  }
+});
 
 type BoundaryObservation = {
   event: string;
@@ -45,10 +67,11 @@ type BoundaryObservation = {
   doctorAuthority?: boolean;
 };
 
-it.each(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const)(
+it.for(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as const)(
   "composes migrated candidate, plugin/config publication and fresh Doctor: %s",
-  async (fault) => {
-    await withOpenClawTestState(
+  { timeout: 120_000 },
+  async (fault, { signal }) => {
+    const stateWork = withOpenClawTestState(
       {
         label: `candidate-authority-${fault}`,
         env: {
@@ -123,6 +146,7 @@ it.each(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as cons
           events,
           ready: readyPath,
           proceed,
+          receiptEndpoint: receipts.endpoint,
           boundary: fault === "candidate-owner-replaced" ? "candidate" : "doctor",
         });
         const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
@@ -185,9 +209,24 @@ it.each(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as cons
                 }
               },
             });
-            void runtimeFixture.track(pending);
             try {
-              await waitForFixtureFile(readyPath, pending);
+              // The record precedes the receipt; process settlement and socket delivery are unordered.
+              const settled = pending.then(
+                () => {
+                  if (!fs.existsSync(readyPath)) {
+                    throw new Error(`Child exited before writing ${readyPath}`);
+                  }
+                },
+                (error: unknown) => {
+                  if (!fs.existsSync(readyPath)) {
+                    throw new Error(`Child failed before writing ${readyPath}`, { cause: error });
+                  }
+                },
+              );
+              await withinTest(
+                Promise.race([receipts.waitFor(readyPath, "config-backup"), settled]),
+                signal,
+              );
               const boundary: BoundaryObservation = JSON.parse(fs.readFileSync(readyPath, "utf8"));
               observation = boundary;
               expect(observation.source).toBe(candidateAuthorityWorker.href);
@@ -275,6 +314,6 @@ it.each(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as cons
         }
       },
     );
+    await testFixture.track(stateWork);
   },
-  120_000,
 );

@@ -10,11 +10,13 @@ import {
 } from "../../infra/device-identity.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { captureEnv } from "../../test-utils/env.js";
+import { ExpectedCliError } from "../failure-output.js";
 import { runNodeIdentityShow } from "./identity.js";
 
 describe("runNodeIdentityShow", () => {
   let stateDir: string;
-  let prevStateDir: string | undefined;
+  let originalEnv: ReturnType<typeof captureEnv>;
   let stdout: string[];
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -24,7 +26,7 @@ describe("runNodeIdentityShow", () => {
 
   beforeEach(() => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-identity-"));
-    prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    originalEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     stdout = [];
     logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -40,11 +42,7 @@ describe("runNodeIdentityShow", () => {
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    if (prevStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = prevStateDir;
-    }
+    originalEnv.restore();
     logSpy.mockRestore();
     errorSpy.mockRestore();
     exitSpy.mockRestore();
@@ -53,10 +51,16 @@ describe("runNodeIdentityShow", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("fails closed when no identity exists (never mints one)", async () => {
-    await runNodeIdentityShow({});
-    expect(errorSpy).toHaveBeenCalledOnce();
-    expect(exitSpy).toHaveBeenCalledWith(1);
+  it.each([false, true])("fails closed without minting an identity (json=%s)", async (json) => {
+    const failure = await runNodeIdentityShow({ json }).catch((error: unknown) => error);
+    const message =
+      "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)";
+    expect(failure).toBeInstanceOf(ExpectedCliError);
+    expect(failure).toMatchObject({ message, humanOutput: message, machineOutput: message });
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(writeStdoutSpy).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 

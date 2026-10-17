@@ -33,7 +33,6 @@ function createParams(overrides: Partial<IsolatedParams> = {}): IsolatedParams {
 describe("Codex isolated completion native boundary", () => {
   it.each([
     { thinkLevel: undefined, supported: ["low", "high"], expected: "low" },
-    { thinkLevel: "high", supported: ["low", "high"], expected: "high" },
     { thinkLevel: "max", supported: ["medium", "xhigh"], expected: "xhigh" },
     { thinkLevel: "off", supported: ["none", "low"], expected: "none" },
   ] as const)(

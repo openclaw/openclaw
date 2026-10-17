@@ -4,7 +4,7 @@ Typed schemas, inferred TypeScript types, and runtime validators for the OpenCla
 Gateway WebSocket protocol.
 
 The current wire protocol is version 4. General clients must use v4; authenticated
-node clients and lightweight probes may use the N-1 window during rolling upgrades.
+node clients and lightweight connectivity checks may use the N-1 window during rolling upgrades.
 See the [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol)
 for transport, authentication, roles, scopes, and complete frame examples.
 
@@ -29,7 +29,7 @@ Use the verified stable release with an exact pin:
 npm install --save-exact @openclaw/gateway-protocol@2026.8.1
 ```
 
-This release declares Node.js `>=22.19.0`. See the canonical
+This release declares Node.js `>=22.19.0`. See the
 [installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
 for the matching client package, package/wire-version rules, and recovery from
 reserved `0.0.0` artifacts. Test it with the Gateway version you deploy; the root
@@ -83,11 +83,15 @@ validators as `validate*Params` functions.
 
 External lifecycle controllers can validate suspension responses with
 `validateGatewaySuspendPrepareResult` and `validateGatewaySuspendStatusResult`.
-These use the canonical result schemas without changing the payload. Preserve
+These use the shared result schemas without changing the payload. Preserve
 optional `writeCustody`: absence means unknown custody, not an empty list. Phase
 names are open strings; consumers must not discard an unfamiliar owner phase.
 Validation does not authorize a stop or replace lease, process-identity, and
 readiness checks owned by the controller.
+
+Leave `includeLifecycle` unset when using older published status validators.
+Request `includeLifecycle: true` only with a validator that supports `ownerId`
+and `phase`.
 
 ## Guard an event without TypeBox
 
@@ -120,11 +124,21 @@ const handshake = {
 };
 ```
 
-Nodes and probes use `MIN_NODE_PROTOCOL_VERSION` and
+Nodes and diagnostic clients use `MIN_NODE_PROTOCOL_VERSION` and
 `MIN_PROBE_PROTOCOL_VERSION`, respectively. A capability advertises client support;
 it does not grant authorization.
 
 ## Contract notes
+
+### Retired worker tool imports
+
+The `WorkerSessionsSpawn*`, `WorkerSessionsSend*`, `WorkerSessionTool*`,
+`WorkerPortal*`, and `WorkerPresence*` schemas, types, root validators, and associated
+feature/limit constants published in 2026.9.6 and 2026.9.7 remain available for decoding older data. They do
+not register or advertise the retired worker RPCs. Current workers use the
+prepared tool surface and `worker.gatewayTool` transport; migrate integrations to
+`WorkerGatewayTool*`. These imports can be removed only in an explicitly announced
+breaking package API release after consumer migration.
 
 ### Session identifiers
 

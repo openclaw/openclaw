@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Type, type Static } from "typebox";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
@@ -10,10 +10,12 @@ import {
   type SkillLibraryFile,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
+import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
@@ -35,13 +37,8 @@ export class SkillTreeDirectoryError extends SkillLibraryError {
   }
 }
 
-type PreparedSkillBundle = {
-  revision: string;
-  files: Array<Static<typeof manifestSchema>[number] & { bytes: Buffer }>;
-};
-export type PreparedSkillLibraryBundle = PreparedSkillBundle & { description: string };
+export type PreparedSkillLibraryBundle = ReturnType<typeof prepareSkillLibraryBundle>;
 const portableCompare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const manifestSchema = Type.Array(
   Type.Object(
     {
@@ -82,7 +79,7 @@ export async function readSkillLibraryManifestTree(
       symlinks: "reject",
       maxBytes: file.sizeBytes,
     });
-    if (buffer.length !== file.sizeBytes || sha256(buffer) !== file.sha256) {
+    if (buffer.length !== file.sizeBytes || sha256Hex(buffer) !== file.sha256) {
       throw new SkillLibraryError(
         "INVALID_BUNDLE",
         `Published skill file failed integrity verification: ${file.path}`,
@@ -127,9 +124,7 @@ function validateSkillBundlePath(filePath: string): void {
         part === "." ||
         part === ".." ||
         /[\\<>:"|?*]/u.test(part) ||
-        Array.from(part).some(
-          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-        ) ||
+        containsAsciiControlCharacter(part) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
         /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||
@@ -149,7 +144,7 @@ export function decodeSkillLibraryFile(file: SkillLibraryFile): Buffer {
 }
 
 /** Validate exact portable artifacts without imposing publication metadata on loaded skills. */
-export function prepareSkillBundle(files: readonly SkillLibraryFile[]): PreparedSkillBundle {
+export function prepareSkillBundle(files: readonly SkillLibraryFile[]) {
   if (files.length > SKILL_LIBRARY_MAX_FILES) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Skill bundle exceeds 256 files.");
   }
@@ -174,7 +169,7 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
       return {
         path: file.path,
         bytes,
-        sha256: sha256(bytes),
+        sha256: sha256Hex(bytes),
         sizeBytes: bytes.length,
         executable: file.executable === true,
       };
@@ -197,14 +192,12 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
   // Preserve the managed revision encoding: only exact artifact bytes and metadata enter the hash.
   const manifest = prepared.map(({ bytes: _bytes, ...file }) => file);
   return {
-    revision: sha256(JSON.stringify(["openclaw.skill-library.tree.v1", manifest])),
+    revision: sha256Hex(JSON.stringify(["openclaw.skill-library.tree.v1", manifest])),
     files: prepared,
   };
 }
 
-export function prepareSkillLibraryBundle(
-  files: readonly SkillLibraryFile[],
-): PreparedSkillLibraryBundle {
+export function prepareSkillLibraryBundle(files: readonly SkillLibraryFile[]) {
   const bundle = prepareSkillBundle(files);
   for (const file of bundle.files) {
     validateSkillLibraryPath(file.path);
@@ -281,7 +274,12 @@ export async function stageSkillLibraryBundle(
   skillId: string,
   bundle: PreparedSkillLibraryBundle,
   env?: NodeJS.ProcessEnv,
+  assertFileMutationAllowed?: () => void,
 ) {
+  const assertCurrent = assertFileMutationAllowed
+    ? retainMutationAuthority(assertFileMutationAllowed)
+    : undefined;
+  assertCurrent?.();
   const destination = skillLibraryRevisionDir(skillId, bundle.revision, env);
   const parent = path.dirname(destination);
   const ensured = await ensureAbsoluteDirectory(parent, { mode: 0o700 });
@@ -289,24 +287,25 @@ export async function stageSkillLibraryBundle(
     throw ensured.error;
   }
   await cleanAbandonedSkillStaging(parent);
+  assertCurrent?.();
   const staging = await fs.mkdtemp(path.join(parent, `.staging-${process.pid}-`));
   try {
+    const stagingRoot = await root(staging, { assertBeforeMutation: assertCurrent });
     const directories = new Set([staging]);
     for (const file of bundle.files) {
       const target = path.join(staging, file.path);
+      assertCurrent?.();
       await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       let directory = path.dirname(target);
       while (directory !== parent) {
         directories.add(directory);
         directory = path.dirname(directory);
       }
-      const handle = await fs.open(target, "wx", file.executable ? 0o500 : 0o400);
-      try {
-        await handle.writeFile(file.bytes);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await stagingRoot.create(`./${file.path}`, file.bytes, {
+        mode: (file.executable ? 0o500 : 0o400) & ~process.umask(),
+        mkdir: false,
+        durable: "file",
+      });
     }
     for (const directory of [...directories].toSorted((a, b) => b.length - a.length)) {
       await syncDirectory(directory);
@@ -314,6 +313,7 @@ export async function stageSkillLibraryBundle(
     return {
       staging,
       async publish() {
+        assertCurrent?.();
         try {
           await fs.rename(staging, destination);
         } catch (error) {

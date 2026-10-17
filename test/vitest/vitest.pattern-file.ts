@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { narrowIncludePatterns } from "./vitest.include-patterns.ts";
+import { narrowIncludePatterns, resolveNonBrowserTestPattern } from "./vitest.include-patterns.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
@@ -32,6 +32,11 @@ export function isSharedVitestExcludedPath(file: string, scopedDir = ""): boolea
 }
 
 export function matchesVitestGlob(value: string, pattern: string): boolean {
+  // Preserve the original Node/Bun spelling while native discovery uses the full basename.
+  const nonBrowser = resolveNonBrowserTestPattern(pattern);
+  if (nonBrowser) {
+    return matchesVitestGlob(value, nonBrowser);
+  }
   // CI plans tests before installing dependencies; keep Node's matcher dependency-free.
   if (!process.versions.bun) {
     return path.matchesGlob(value, pattern);
@@ -156,10 +161,13 @@ export function collectVitestExcludePatterns(args: string[]): string[] {
   return patterns;
 }
 
+function normalizeVitestPath(file: string): string {
+  return path.sep === "\\" ? file.replaceAll("\\", "/") : file;
+}
+
 function normalizeCliFileFilter(filter: string): string {
   // Line qualifiers belong to native task selection, not physical discovery or wrapper routing.
-  const file = filter.replace(/:\d+$/u, "");
-  return process.platform === "win32" ? file.replaceAll("\\", "/") : file;
+  return normalizeVitestPath(filter.replace(/:\d+$/u, ""));
 }
 
 function loadPatternListFromArgvForScope(
@@ -186,7 +194,10 @@ export function narrowIncludePatternsForCli(
     return null;
   }
 
-  return narrowIncludePatterns(includePatterns, cliPatterns, matchesVitestGlob);
+  // CLI operands may be absolute while canonical project ownership is repo-relative.
+  return narrowIncludePatterns(includePatterns, cliPatterns, (value, pattern) =>
+    matchesVitestGlob(path.resolve(repoRoot, value), path.resolve(repoRoot, pattern)),
+  );
 }
 
 export function relativizeScopedPatterns(values: readonly string[], dir = ""): string[] {
@@ -219,7 +230,7 @@ export function matchesVitestCliSelection(
     narrowIncludePatternsForCli(include, ["node", "vitest", ...args], { scopedDir }) ??
     include;
   const relativeFile = path.posix.relative(scopedDir, file);
-  const absoluteFile = path.resolve(repoRoot, file);
+  const absoluteFile = normalizeVitestPath(path.resolve(repoRoot, file));
   if (
     !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
       matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
@@ -239,9 +250,11 @@ export function matchesVitestCliSelection(
       if (path.isAbsolute(filter) && absoluteFile.startsWith(filter)) {
         return true;
       }
-      const relativeFilter = filter.endsWith("/")
-        ? path.join(path.relative(dir, filter), "/")
-        : path.relative(dir, filter);
+      const relativeFilter = normalizeVitestPath(
+        filter.endsWith("/")
+          ? path.join(path.relative(dir, filter), "/")
+          : path.relative(dir, filter),
+      );
       return (
         relativeFile.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) ||
         relativeFile.toLocaleLowerCase().includes(relativeFilter.toLocaleLowerCase())

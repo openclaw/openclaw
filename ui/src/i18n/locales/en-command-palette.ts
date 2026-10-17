@@ -63,7 +63,7 @@ const enCommandPalette = {
     transcriptSearchClear: "Clear",
     transcriptSearchRetry: "Retry",
     transcriptSearchSearching: "Searching transcripts…",
-    transcriptSearchUnavailable: "Transcript search requires a newer Gateway.",
+    transcriptSearchUnavailable: "Connect to the Gateway to search transcripts.",
     transcriptSearchError: "Transcript search failed",
     transcriptSearchIndexing:
       "The transcript index is still updating. Retry to include recent messages.",
@@ -116,7 +116,6 @@ const enCommandPalette = {
       workspaceFiles: "Toggle workspace files",
       sideChat: "Toggle side chat",
       browserPanel: "Toggle browser panel",
-      tasksPanel: "Toggle tasks panel",
       desktopPanel: "Toggle desktop panel",
       discussionPanel: "Toggle discussion panel",
       dashboardPanel: "Toggle dashboard panel",

@@ -16,8 +16,14 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { executeSystemAgentOperation } from "./operations-execute.js";
 import type { SystemAgentOverview } from "./overview.js";
+import { verifySetupInferenceConfig } from "./setup-inference.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
+
+vi.mock("./setup-inference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-inference.js")>()),
+  verifySetupInferenceConfig: vi.fn(),
+}));
 
 const preparation = vi.hoisted(() => ({
   gateway: undefined as (() => Promise<void>) | undefined,
@@ -144,6 +150,11 @@ it.each([
         entered.resolve();
       };
     }
+    vi.mocked(verifySetupInferenceConfig).mockResolvedValue({
+      ok: true,
+      modelRef: model,
+      latencyMs: 1,
+    });
     completion = metadata
       .run(() =>
         executeSystemAgentOperation({ kind: "setup", workspace }, runtime, {
@@ -152,7 +163,6 @@ it.each([
           deps: {
             setupSurface: "gateway",
             loadOverview: async () => ({ defaultModel: model }) as SystemAgentOverview,
-            verifyInferenceConfig: async () => ({ ok: true, modelRef: model, latencyMs: 1 }),
           },
         }),
       )

@@ -1,4 +1,4 @@
-// Migrate Claude plugin module implements skills behavior.
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -10,11 +10,11 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
 } from "openclaw/plugin-sdk/migration";
 import { backupMigrationItemTarget } from "openclaw/plugin-sdk/migration-runtime";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { exists, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 type PlannedSkill = {
   name: string;
@@ -27,7 +27,7 @@ type PlannedSkill = {
 async function collectSkillDirs(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
@@ -59,7 +59,7 @@ async function collectSkillDirs(
 async function collectCommandFiles(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
@@ -90,7 +90,7 @@ async function collectCommandFiles(
 
 export async function buildSkillItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   const planned: PlannedSkill[] = [];
@@ -177,10 +177,16 @@ export async function applyGeneratedSkillItem(
         : path.basename(item.source);
     const skillName =
       typeof item.details?.skillName === "string" ? item.details.skillName : sanitizeName(item.id);
+    const bytes = await fs.readFile(item.source);
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        `Claude command file is not valid UTF-8: ${item.source}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
+      );
+    }
     const content = generatedCommandSkillContent({
       skillName,
       sourceLabel,
-      commandContent: await fs.readFile(item.source, "utf8"),
+      commandContent: bytes.toString("utf8"),
     });
     const backupPath = targetExists
       ? await backupMigrationItemTarget(item.target, reportDir, { dereference: true })

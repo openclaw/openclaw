@@ -9,6 +9,11 @@ title: "Configuration examples"
 
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
+Doctor migrates legacy `agents.list` arrays and `default` markers into keyed
+`agents.entries` with explicit surface owners. The updater runs this migration
+through its backup flow. After replacing the binary directly, run
+`openclaw doctor --fix` before starting the Gateway.
+
 ## Quick start
 
 ### Absolute minimum
@@ -60,6 +65,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 ## Expanded example (major options)
 
 > JSON5 lets you use comments and trailing commas. Regular JSON works too.
+
+This example leaves `agents.defaults.timeoutSeconds` unset, so each model attempt uses the 48-hour default. Set a different per-attempt budget only when your workflow needs one. Configured fallbacks each receive a fresh budget; see [Agent runtime](/concepts/agent-loop#timeouts).
 
 ```json5
 {
@@ -210,8 +217,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
   // Agent runtime
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
       userTimezone: "America/Chicago",
       model: {
         primary: "anthropic/claude-sonnet-4-6",
@@ -225,7 +235,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
         "openai/gpt-5.4": { alias: "gpt" },
       },
-      skills: ["github", "weather"], // inherited by agents that omit list[].skills
+      skills: ["github", "weather"], // inherited by agents that omit entries.*.skills
       thinkingDefault: "low",
       verboseDefault: "off",
       toolProgressDetail: "explain",
@@ -244,7 +254,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       humanDelay: {
         mode: "natural",
       },
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       typingIntervalSeconds: 5,
       maxConcurrent: 3,
@@ -275,7 +284,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -296,6 +305,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
     },
   },
+
+  bindings: [
+    { agentId: "main", match: { channel: "discord", accountId: "*" } },
+    { agentId: "main", match: { channel: "slack", accountId: "*" } },
+    { agentId: "main", match: { channel: "telegram", accountId: "*" } },
+    { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+  ],
+  talk: { agentId: "main" },
 
   memory: {
     search: {
@@ -483,15 +500,19 @@ example `~/.agents/skills/manager -> ~/path/to/skills`.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
       skills: ["github", "weather"],
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
     },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       docs: { workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 

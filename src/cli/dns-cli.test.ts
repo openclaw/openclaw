@@ -32,8 +32,13 @@ vi.mock("../infra/tailnet.js", async () => {
   };
 });
 
+// mock-isolation: DNS fixtures use empty config without loading operator state.
 vi.mock("../config/config.js", async () => {
-  return { getRuntimeConfig: () => ({}) };
+  return {
+    getRuntimeConfig: () => ({}),
+    loadConfig: () => ({}),
+    captureRuntimeConfigAsyncReader: () => async () => ({}),
+  };
 });
 
 import { Command } from "commander";
@@ -105,5 +110,36 @@ describe("dns-cli probe bounds", () => {
     for (const call of nonProbeCalls) {
       expect(call[2]?.timeout).toBeUndefined();
     }
+  });
+  it("names the deadline and signal when the brew prefix probe times out", async () => {
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) =>
+      cmd === "brew" && args[0] === "--prefix"
+        ? {
+            ...spawnOk(),
+            status: null,
+            signal: "SIGKILL",
+            error: Object.assign(new Error("spawnSync brew ETIMEDOUT"), { code: "ETIMEDOUT" }),
+          }
+        : spawnOk(),
+    );
+
+    await expect(runDnsSetupApply()).rejects.toThrow(
+      "brew --prefix failed: timed out after 15 seconds (signal SIGKILL)",
+    );
+  });
+
+  it("names the signal when a setup step is killed", async () => {
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "brew" && args[0] === "--prefix") {
+        return spawnOk(`${brewPrefix}\n`);
+      }
+      return cmd === "sudo" && args[0] === "brew"
+        ? { ...spawnOk(), status: null, signal: "SIGTERM" }
+        : spawnOk();
+    });
+
+    await expect(runDnsSetupApply()).rejects.toThrow(
+      "sudo brew services restart coredns failed: signal SIGTERM",
+    );
   });
 });

@@ -7,7 +7,7 @@ import { createBackupScratchDirectory, finishBackupScratch } from "../infra/back
 import * as fsSafe from "../infra/fs-safe.js";
 import { noteBackupScratchHealth } from "./doctor-backup-scratch.js";
 
-const mocks = vi.hoisted(() => ({ note: vi.fn(), directories: vi.fn<() => string[]>() }));
+const mocks = vi.hoisted(() => ({ note: vi.fn(), directories: vi.fn<() => Promise<string[]>>() }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 vi.mock("../state/backup-run-records.js", () => ({
   readBackupArchiveDirectories: mocks.directories,
@@ -20,7 +20,7 @@ it("reports without mutation and fixes abandoned scratch at recorded archive loc
   const fallback = path.join(root, "archive-parent");
   await fs.mkdir(fallback);
   vi.spyOn(os, "tmpdir").mockReturnValue(root);
-  mocks.directories.mockReturnValue([fallback]);
+  mocks.directories.mockResolvedValue([fallback]);
   const stale = await createBackupScratchDirectory(fallback);
   const live = await createBackupScratchDirectory(root);
   stale.release();

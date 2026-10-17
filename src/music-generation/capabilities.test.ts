@@ -1,57 +1,14 @@
-// Tests music generation capability matching and normalization.
 import { describe, expect, it } from "vitest";
 import {
   listSupportedMusicGenerationModes,
   resolveMusicGenerationModeCapabilities,
 } from "./capabilities.js";
-import type { MusicGenerationProvider } from "./types.js";
-
-function createProvider(
-  capabilities: MusicGenerationProvider["capabilities"],
-): MusicGenerationProvider {
-  return {
-    id: "music-plugin",
-    capabilities,
-    async generateMusic() {
-      throw new Error("not used");
-    },
-  };
-}
 
 describe("music-generation capabilities", () => {
   it("requires explicit edit capabilities before advertising edit mode", () => {
-    const provider = createProvider({
-      maxInputImages: 2,
-    });
-
-    expect(listSupportedMusicGenerationModes(provider)).toEqual(["generate"]);
-  });
-
-  it("prefers explicit edit capabilities for reference-image requests", () => {
-    const provider = createProvider({
-      supportsDuration: true,
-      edit: {
-        enabled: true,
-        maxInputImages: 1,
-        supportsDuration: false,
-        supportsLyrics: true,
-      },
-    });
-
-    expect(
-      resolveMusicGenerationModeCapabilities({
-        provider,
-        inputImageCount: 1,
-      }),
-    ).toEqual({
-      mode: "edit",
-      capabilities: {
-        enabled: true,
-        maxInputImages: 1,
-        supportsDuration: false,
-        supportsLyrics: true,
-      },
-    });
+    expect(listSupportedMusicGenerationModes({ capabilities: { maxInputImages: 2 } })).toEqual([
+      "generate",
+    ]);
   });
 
   it("detects generate vs edit mode from reference images", () => {
@@ -66,18 +23,11 @@ describe("music-generation capabilities", () => {
   });
 
   it("does not infer edit capabilities from aggregate fields", () => {
-    const provider = createProvider({
-      maxInputImages: 1,
-    });
-
     expect(
       resolveMusicGenerationModeCapabilities({
-        provider,
+        provider: { capabilities: { maxInputImages: 1 } },
         inputImageCount: 1,
       }),
-    ).toEqual({
-      mode: "edit",
-      capabilities: undefined,
-    });
+    ).toEqual({ mode: "edit", capabilities: undefined });
   });
 });

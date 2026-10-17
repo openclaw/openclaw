@@ -12,7 +12,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../src/state/openclaw-state-db.js";
-import { activeSessions } from "../src/transcripts/capture.js";
+import { activeSessions } from "../src/transcripts/capture-startup.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -29,7 +29,6 @@ const resolveAccessTarget = async (channelId: string) => ({
 });
 
 function createTool(params: {
-  accountId: string;
   caller:
     | { kind: "operator"; source: "channel-owner" | "local" | "scheduled" }
     | {
@@ -45,8 +44,6 @@ function createTool(params: {
 }) {
   return createTranscriptsTool({
     agentId: "main",
-    agentAccountId: params.accountId,
-    agentChannel: "discord",
     caller: params.caller,
     config: params.config,
     stateDir: params.stateDir,
@@ -135,7 +132,6 @@ describe("transcripts tool with the registered Discord provider", () => {
       transcripts: { enabled: true },
     } satisfies OpenClawConfig;
     const ownerTool = createTool({
-      accountId: "account-a",
       caller: {
         kind: "channel",
         channel: "discord",
@@ -148,7 +144,6 @@ describe("transcripts tool with the registered Discord provider", () => {
       stateDir,
     });
     const otherAccountTool = createTool({
-      accountId: "account-b",
       caller: {
         kind: "channel",
         channel: "discord",
@@ -161,7 +156,6 @@ describe("transcripts tool with the registered Discord provider", () => {
       stateDir,
     });
     const deniedSameAccountTool = createTool({
-      accountId: "account-a",
       caller: {
         kind: "channel",
         channel: "discord",
@@ -259,7 +253,6 @@ describe("transcripts tool with the registered Discord provider", () => {
       transcripts: { enabled: true },
     } satisfies OpenClawConfig;
     const deniedTool = createTool({
-      accountId: "account-a",
       caller: {
         kind: "channel",
         channel: "discord",

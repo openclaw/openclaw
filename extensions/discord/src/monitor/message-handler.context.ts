@@ -16,15 +16,15 @@ import {
   buildInboundHistoryFromEntries,
   createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
-  getSessionEntry,
-  readSessionUpdatedAt,
+  getSessionEntryAsync,
+  readSessionUpdatedAtAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
@@ -33,7 +33,10 @@ import {
   buildDiscordInboundAccessContext,
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import {
   createDiscordHistorySenderProvenance,
   filterDiscordHistoryEntriesForContext,
@@ -137,11 +140,16 @@ export async function buildDiscordMessageProcessContext(params: {
   const senderUsername = sender.isPluralKit
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
-  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext, toolPolicy } =
     buildDiscordInboundAccessContext({
+      cfg,
+      accountId,
+      parentId: threadParentId,
       channelConfig,
       guildInfo,
       sender: { id: sender.id, name: sender.name, tag: sender.tag },
+      senderName,
+      senderUsername,
       allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
       isGuild: isGuildMessage,
       channelTopic: channelInfo?.topic,
@@ -169,7 +177,7 @@ export async function buildDiscordMessageProcessContext(params: {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const routeSession = getSessionEntry({
+  const routeSession = await getSessionEntryAsync({
     agentId: route.agentId,
     storePath,
     sessionKey: route.sessionKey,
@@ -190,23 +198,9 @@ export async function buildDiscordMessageProcessContext(params: {
   const historySession = recoversHistory
     ? historySessionScope.sessionKey === route.sessionKey
       ? routeSession
-      : getSessionEntry(historySessionScope)
+      : await getSessionEntryAsync(historySessionScope)
     : undefined;
-  const isHistoryCurrent = () => {
-    if (abortSignal?.aborted || ctx.isPolicyCurrent?.() === false) {
-      return false;
-    }
-    if (!recoversHistory) {
-      return true;
-    }
-    const current = getSessionEntry(historySessionScope);
-    return (
-      current?.sessionId === historySession?.sessionId &&
-      current?.lifecycleRevision === historySession?.lifecycleRevision &&
-      current?.sessionStartedAt === historySession?.sessionStartedAt &&
-      (current?.updatedAt === 0) === (historySession?.updatedAt === 0)
-    );
-  };
+  const isHistoryCurrent = () => !abortSignal?.aborted && ctx.isPolicyCurrent?.() !== false;
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
   let visibleChannelHistory: DiscordHistoryEntry[] | undefined;
   // Failed downloads (CDN error, SSRF block, size cap, timeout) produce
@@ -381,10 +375,7 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-  const deliverTarget = replyPlan.deliverTarget;
-  const replyTarget = replyPlan.replyTarget;
-  const replyReference = replyPlan.replyReference;
-  const autoThreadContext = replyPlan.autoThreadContext;
+  const { replyTarget, autoThreadContext } = replyPlan;
   const conversationParentId = threadChannel
     ? threadParentId
     : autoThreadContext
@@ -418,7 +409,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const effectivePreviousTimestamp =
     effectiveSessionKey === route.sessionKey
       ? previousTimestamp
-      : readSessionUpdatedAt({
+      : await readSessionUpdatedAtAsync({
           storePath,
           sessionKey: effectiveSessionKey,
         });
@@ -441,12 +432,12 @@ export async function buildDiscordMessageProcessContext(params: {
     return null;
   }
 
+  const batchMessageIds =
+    ctx.sourceMessageIds && ctx.sourceMessageIds.length > 1 ? [...ctx.sourceMessageIds] : undefined;
   const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
     channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
-    // User-selected bot text is reply context, not a new bot-authored event.
-    suppressSelfQuoteBody: false,
     contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
@@ -491,6 +482,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     reply: {
       to: effectiveTo,
+      replyToId: resolveDiscordReferencedReplyMessageId(message) ?? undefined,
       ...(originatingTo !== effectiveTo ? { originatingTo } : {}),
     },
     message: {
@@ -510,6 +502,7 @@ export async function buildDiscordMessageProcessContext(params: {
       historyKind: isGuildMessage ? "recent" : "pending",
     },
     access: {
+      toolPolicy,
       mentions: {
         canDetectMention: ctx.canDetectMention,
         wasMentioned: ctx.effectiveWasMentioned,
@@ -564,6 +557,13 @@ export async function buildDiscordMessageProcessContext(params: {
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
     extra: {
+      MessageSids: batchMessageIds,
+      MessageSidFirst: batchMessageIds?.[0],
+      MessageSidLast: batchMessageIds?.at(-1),
+      ReplyThreading: resolveBatchedReplyThreadingPolicy(
+        replyToMode,
+        batchMessageIds !== undefined,
+      ),
       GroupThread: ctx.groupThread,
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
       GroupSubject: isDirectMessage ? undefined : groupChannel,
@@ -579,7 +579,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
   if (ctx.inboundEventKind === "room_event" && shouldIncludeChannelHistory) {
     const nativeMediaText = formatDiscordMediaText({
-      attachments: message.attachments ?? undefined,
+      attachments: message.attachments,
       stickers: resolveDiscordMessageStickers(message),
     });
     const historyText = [text, nativeMediaText].filter(Boolean).join("\n");
@@ -602,51 +602,38 @@ export async function buildDiscordMessageProcessContext(params: {
     });
   }
 
-  if (shouldLogVerbose()) {
-    const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
-    logVerbose(
-      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
-    );
-  }
-
   return {
     ctxPayload,
     persistedSessionKey,
-    turn: {
-      storePath,
-      record: {
-        updateLastRoute: {
-          sessionKey: persistedSessionKey,
-          channel: "discord",
-          to: lastRouteTo,
-          accountId: route.accountId,
-          mainDmOwnerPin:
-            isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: author.id,
-                  onSkip: ({
-                    ownerRecipient,
-                    senderRecipient,
-                  }: {
-                    ownerRecipient: string;
-                    senderRecipient: string;
-                  }) => {
-                    logVerbose(
-                      `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        },
-        onRecordError: (err: unknown) => {
-          logVerbose(`discord: failed updating session meta: ${String(err)}`);
-        },
+    record: {
+      updateLastRoute: {
+        sessionKey: persistedSessionKey,
+        channel: "discord",
+        to: lastRouteTo,
+        accountId: route.accountId,
+        mainDmOwnerPin:
+          isDirectMessage && persistedSessionKey === route.mainSessionKey && pinnedMainDmOwner
+            ? {
+                ownerRecipient: pinnedMainDmOwner,
+                senderRecipient: author.id,
+                onSkip: ({
+                  ownerRecipient,
+                  senderRecipient,
+                }: {
+                  ownerRecipient: string;
+                  senderRecipient: string;
+                }) => {
+                  logVerbose(
+                    `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              }
+            : undefined,
+      },
+      onRecordError: (err: unknown) => {
+        logVerbose(`discord: failed updating session meta: ${String(err)}`);
       },
     },
     replyPlan,
-    deliverTarget,
-    replyTarget,
-    replyReference,
   };
 }

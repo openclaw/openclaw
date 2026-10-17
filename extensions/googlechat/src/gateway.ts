@@ -1,4 +1,3 @@
-// Googlechat plugin module implements gateway behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -47,7 +46,7 @@ export async function startGoogleChatGatewayAccount(ctx: {
   // so health evaluation would read "healthy" for the lifetime of the process.
   // The status store patch-merges, so the blocked branch clears `webhookPath`
   // explicitly: a restart with broken config must not keep the previous run's path.
-  const webhookPath = resolveGoogleChatWebhookPath({ account });
+  const webhookPath = resolveGoogleChatWebhookPath(account.config);
   statusSink({
     running: true,
     lastStartAt: Date.now(),
@@ -59,17 +58,6 @@ export async function startGoogleChatGatewayAccount(ctx: {
     audienceType: account.config.audienceType,
     audience: account.config.audience,
   });
-  let stopped = false;
-  const markStopped = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    statusSink({
-      running: false,
-      lastStopAt: Date.now(),
-    });
-  };
   if (
     isGoogleChatNativeApprovalClientEnabled({
       cfg: ctx.cfg,
@@ -101,12 +89,8 @@ export async function startGoogleChatGatewayAccount(ctx: {
       stop: async (unregister) => {
         await unregister?.();
       },
-      onStop: async () => {
-        markStopped();
-      },
     });
-  } catch (error) {
-    markStopped();
-    throw error;
+  } finally {
+    statusSink({ running: false, lastStopAt: Date.now() });
   }
 }

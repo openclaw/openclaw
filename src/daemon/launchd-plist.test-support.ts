@@ -5,6 +5,9 @@ export function decodeLaunchAgentPlistFixture(
   format: string | undefined,
 ) {
   const xml = typeof input === "string" ? input : Buffer.from(input).toString("utf8");
+  if (!/<plist(?:\s[^>]*)?>\s*<dict>[\s\S]*<\/dict>\s*<\/plist>\s*$/.test(xml)) {
+    throw new Error("Unsupported plist fixture XML");
+  }
   if (format === "xml1") {
     return { stdout: xml, stderr: "" };
   }

@@ -35,7 +35,7 @@ vi.mock("./discovery.js", async (importOriginal) => {
   };
 });
 
-const { withPluginDiagnosticsReport } = await import("./status.js");
+const { buildPluginSnapshotReportAsync, withPluginDiagnosticsReport } = await import("./status.js");
 const { resolveEffectivePluginIds } = await import("./effective-plugin-ids.js");
 const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
 
@@ -122,6 +122,26 @@ it("does not re-derive discovery when reporting effective-only plugins", async (
     scansMoreThanFullReport: effective.scans > all.scans,
   }).toEqual({ rebuilds: 0, scansMoreThanFullReport: false });
 });
+
+it.each([
+  { onlyPluginIds: undefined, expected: ["cold-plugin", "other-plugin"] },
+  { onlyPluginIds: [" other-plugin ", "missing-plugin"], expected: ["other-plugin"] },
+  { onlyPluginIds: [], expected: [] },
+])(
+  "keeps effective snapshot reports within explicit scope $onlyPluginIds",
+  async ({ onlyPluginIds, expected }) => {
+    const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
+    const report = await buildPluginSnapshotReportAsync({
+      config,
+      env: process.env,
+      metadataSnapshot,
+      effectiveOnly: true,
+      onlyPluginIds,
+    });
+
+    expect(report.plugins.map((plugin) => plugin.id).toSorted()).toEqual(expected);
+  },
+);
 
 // A supplied snapshot is an optimization, never an input to the answer.
 it("only reuses a snapshot that answers for the whole config", () => {

@@ -48,11 +48,8 @@ function pendingMatches(sessionKey: string, data: SessionChatRouteData): boolean
 
 export class RouteDraftComposerFocus {
   private timer: number | undefined;
-  private readonly host: HTMLElement;
 
-  constructor(host: HTMLElement) {
-    this.host = host;
-  }
+  constructor(private readonly host: HTMLElement) {}
 
   rendered(
     data: SessionChatRouteData | undefined,
@@ -116,6 +113,7 @@ export class RouteDraftComposerFocus {
         this.timer = undefined;
         return;
       }
+      // Route replacement remounts pane bridges; resolve their current composer for this handoff.
       const pane = [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
         (candidate) =>
           candidate.active &&

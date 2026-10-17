@@ -7,29 +7,10 @@ import {
   isWorkerDesktopString,
   isWorkerDesktopUsername,
 } from "../shared/worker-desktop-descriptor.js";
-import { hasExactOwnKeys } from "./protocol-record.js";
+import { decodeWorkerRequest, hasExactOwnKeys } from "./protocol-record.js";
 
 const REQUEST_MAX_BYTES = 16 * 1024;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
-
-type NodeWorkerDesktopStreamInput = {
-  ticket: string;
-  attachPath: string;
-  port: number;
-  passwordFilePath?: string;
-  username?: string;
-};
-
-function parseJson(raw?: string | null): unknown {
-  if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
-    throw new Error("INVALID_REQUEST: invalid node worker desktop request");
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: malformed node worker desktop request");
-  }
-}
 
 function isValidPort(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= 65_535;
@@ -42,10 +23,8 @@ function requireAbsolutePath(value: unknown, label: string): string {
   return value;
 }
 
-export function parseNodeWorkerDesktopStreamInput(
-  raw?: string | null,
-): NodeWorkerDesktopStreamInput {
-  const value = parseJson(raw);
+export function parseNodeWorkerDesktopStreamInput(raw?: string | null) {
+  const value = decodeWorkerRequest(raw, REQUEST_MAX_BYTES, "node worker desktop");
   if (
     !isRecord(value) ||
     !hasExactOwnKeys(value, ["ticket", "attachPath", "port"], ["passwordFilePath", "username"])
@@ -84,7 +63,7 @@ export function parseNodeWorkerDesktopStreamInput(
 }
 
 export function parseNodeWorkerDesktopLaunchInput(raw?: string | null): WorkerDesktopApp {
-  const value = parseJson(raw);
+  const value = decodeWorkerRequest(raw, REQUEST_MAX_BYTES, "node worker desktop");
   if (!isRecord(value) || (value.id !== "browser" && value.id !== "terminal")) {
     throw new Error("INVALID_REQUEST: invalid node worker desktop app descriptor");
   }

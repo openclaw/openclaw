@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   formatSystemAgentOverview,
   formatSystemAgentOnboardingWelcome,
@@ -9,6 +10,7 @@ import {
   loadSystemAgentOverview,
   type SystemAgentOverview,
 } from "./overview.js";
+import { withSystemAgentOverviewSources } from "./overview.test-support.js";
 
 function createConfigSnapshot(runtimeConfig: OpenClawConfig): ConfigFileSnapshot {
   return {
@@ -67,30 +69,40 @@ describe("loadSystemAgentOverview", () => {
           model: { primary: "openai/gpt-5.2" },
           systemAgent: { agentId: "main" },
         },
-        list: [{ id: "main" }, { id: "work", name: "Work" }],
+        entries: { main: {}, work: { name: "Work" } },
       },
       gateway: { port: 19001 },
     };
     const snapshot = createConfigSnapshot(runtimeConfig);
-    const overview = await loadSystemAgentOverview({
-      env: { OPENCLAW_TEST_FAST: "1" },
-      deps: {
-        readConfigFileSnapshot: async () => snapshot,
-        resolveConfigPath: () => "/tmp/openclaw.json",
-        resolveGatewayPort: (cfg) => cfg?.gateway?.port ?? 8765,
-        buildGatewayConnectionDetails: (input) => ({
-          url: `ws://127.0.0.1:${input.config.gateway?.port ?? 8765}`,
-          urlSource: "local loopback",
-        }),
-        probeLocalCommand: async (command) => ({
-          command,
-          found: command === "codex",
-          version: command === "codex" ? "codex 1.0.0" : undefined,
-        }),
-        probeGatewayUrl: async (url) => ({ reachable: false, url, error: "offline" }),
+    const overview = await withEnvAsync(
+      {
+        OPENCLAW_CONFIG_PATH: "/tmp/ambient-config.json",
+        OPENCLAW_GATEWAY_URL: "wss://ambient.example.invalid",
+        OPENCLAW_GATEWAY_PORT: "19876",
+        OPENCLAW_PROFILE: "ambient-profile",
+        OPENAI_API_KEY: "fixture-present",
+        ANTHROPIC_API_KEY: "fixture-present",
       },
-    });
+      async () => {
+        const result = await withSystemAgentOverviewSources(
+          snapshot,
+          () => loadSystemAgentOverview(),
+          {
+            probeLocalCommand: async (command) => ({
+              command,
+              found: command === "codex",
+              version: command === "codex" ? "codex 1.0.0" : undefined,
+            }),
+            probeGatewayUrl: async (url) => ({ reachable: false, url, error: "offline" }),
+          },
+        );
+        expect(process.env.OPENCLAW_GATEWAY_URL).toBe("wss://ambient.example.invalid");
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe("/tmp/ambient-config.json");
+        return result;
+      },
+    );
 
+    expect(overview.config.path).toBe("/tmp/openclaw.json");
     expect(overview.config.exists).toBe(true);
     expect(overview.config.valid).toBe(true);
     expect(overview.defaultAgentId).toBe("main");
@@ -99,6 +111,7 @@ describe("loadSystemAgentOverview", () => {
     expect(overview.tools.codex.found).toBe(true);
     expect(overview.tools.claude.found).toBe(false);
     expect(overview.tools.gemini.found).toBe(false);
+    expect(overview.tools.apiKeys).toEqual({ openai: false, anthropic: false });
     expect(overview.gateway.url).toBe("ws://127.0.0.1:19001");
     expect(overview.gateway.reachable).toBe(false);
     expect(overview.references.docsPath).toMatch(/docs$/);
@@ -123,11 +136,12 @@ describe("loadSystemAgentOverview", () => {
         ...(separated ? { meta: { migrations: { utilityModelSeparation: true as const } } } : {}),
         agents: {
           defaults: {
+            systemAgent: { agentId: "main" },
             utilityModel: "helper@local:utility",
             models: { "local-utility/small": { alias: "helper" } },
           },
           entries: {
-            main: { default: true },
+            main: {},
             ops: { utilityModel: "helper@local:ops" },
           },
         },
@@ -148,18 +162,13 @@ describe("loadSystemAgentOverview", () => {
         },
       };
       const original = structuredClone(runtimeConfig);
-      const overview = await loadSystemAgentOverview({
-        env: { OPENCLAW_TEST_FAST: "1" },
-        deps: {
-          readConfigFileSnapshot: async () => createConfigSnapshot(runtimeConfig),
-          buildGatewayConnectionDetails: () => ({
-            url: "ws://127.0.0.1:18789",
-            urlSource: "local loopback",
-          }),
-          probeLocalCommand: async (command) => ({ command, found: false }),
+      const overview = await withSystemAgentOverviewSources(
+        createConfigSnapshot(runtimeConfig),
+        () => loadSystemAgentOverview(),
+        {
           probeGatewayUrl: async (url) => ({ reachable: true, url }),
         },
-      });
+      );
 
       expect(overview.defaultModel).toBe(separated ? undefined : "local-utility/small");
       expect(overview.setupModel).toBe(separated ? "helper@local:utility" : undefined);

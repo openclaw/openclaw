@@ -256,16 +256,15 @@ describe("ssh sandbox backend", () => {
       provider: "default",
       id: "UNMATERIALIZED_DEFAULT_IDENTITY",
     };
-    config.agents!.list = [
-      {
-        id: "worker",
+    config.agents!.entries = {
+      worker: {
         sandbox: {
           ssh: {
             identityData: "MATERIALIZED WORKER IDENTITY",
           },
         },
       },
-    ];
+    };
 
     await sshSandboxBackendManager.describeRuntime({
       entry: {
@@ -360,7 +359,7 @@ describe("ssh sandbox backend", () => {
         ownerKind: "capability",
         ownerId: "agent-sandbox:cold",
         state: "unavailable",
-        paths: ["agents.list.0.sandbox.ssh.identityData"],
+        paths: ["agents.entries.cold.sandbox.ssh.identityData"],
         refKeys: ["env:default:MISSING_AGENT_SSH_IDENTITY"],
         reason: "secret reference was not found",
       },

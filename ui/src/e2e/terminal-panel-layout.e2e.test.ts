@@ -103,10 +103,12 @@ suite.define(() => {
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
           await page.keyboard.press("Control+Backquote");
           await gateway.waitForRequest("terminal.open");
+          const terminalOutput =
+            "OpenClaw release workspace\r\n$ pnpm test ui/src/components/terminal/terminal-panel.test.ts\r\n22 tests passed\r\n$ ";
           await gateway.emitGatewayEvent("terminal.data", {
             sessionId: `terminal-layout-${theme}`,
-            seq: 0,
-            data: "OpenClaw release workspace\r\n$ pnpm test ui/src/components/terminal/terminal-panel.test.ts\r\n22 tests passed\r\n$ ",
+            seq: terminalOutput.length,
+            data: terminalOutput,
           });
 
           const panel = page.locator("openclaw-terminal-panel");

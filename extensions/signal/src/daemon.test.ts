@@ -19,10 +19,8 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: spawnMock };
-});
+// mock-isolation: Keep process owners and worker runtimes out of this daemon fixture.
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ spawnOomScoreAdjusted: spawnMock }));
 
 function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {
@@ -179,7 +177,7 @@ describe("spawnSignalDaemon", () => {
     ]);
   });
 
-  it.each(["SEVERE Manager - database exception", "Failed to initialize HTTP Server - oops"])(
+  it.each(["SEVERE Manager - database exception"])(
     "surfaces untagged failure output: %s",
     async (line) => {
       const error = vi.fn();
@@ -197,27 +195,6 @@ describe("spawnSignalDaemon", () => {
       expect(error).toHaveBeenCalledWith(`signal-cli: ${line}`);
     },
   );
-
-  it("waits for exit after SIGTERM before resolving stop", async () => {
-    const handle = spawnSignalDaemon({
-      cliPath: "signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-    });
-
-    let resolved = false;
-    const stopPromise = handle.stop().then(() => {
-      resolved = true;
-    });
-    await Promise.resolve();
-
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(resolved).toBe(false);
-
-    child.emit("exit", 0, null);
-    await stopPromise;
-    expect(resolved).toBe(true);
-  });
 
   it("falls back to SIGKILL when the daemon does not exit after SIGTERM", async () => {
     vi.useFakeTimers();

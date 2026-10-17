@@ -12,11 +12,11 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
 import type { GatewayClient } from "../../gateway/client.js";
 import { openUrl } from "../../infra/browser-open.js";
-import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError, type WizardPrompter } from "../../wizard/prompts.js";
+import { answerGatewayWizardStep } from "../gateway-wizard-step.js";
 import {
   withModelsAccountsGateway,
   type ModelsAccountsGatewayOptions,
@@ -70,53 +70,25 @@ async function answerAccountStep(step: WizardStep, signal: AbortSignal): Promise
       label: sanitizeTerminalText(option.label),
       hint: option.hint && sanitizeTerminalText(option.hint),
     })) ?? [];
-  switch (step.type) {
-    case "note":
-      if (step.format === "plain") {
-        await prompter.plain?.(message);
-      } else {
-        await prompter.note(message, step.title && sanitizeTerminalText(step.title));
-      }
-      return undefined;
-    case "text": {
-      const value = await prompter.text({
-        message,
-        sensitive: step.sensitive,
-        placeholder: step.placeholder && sanitizeTerminalText(step.placeholder),
-        initialValue:
-          typeof step.initialValue === "string"
-            ? sanitizeTerminalText(step.initialValue)
-            : undefined,
-      });
-      if (step.sensitive) {
-        registerSecretValueForRedaction(value);
-      }
-      return value;
-    }
-    case "select":
-      return await prompter.select({
-        message,
-        options,
-        initialValue: step.initialValue,
-        searchable: true,
-      });
-    case "multiselect":
-      return await prompter.multiselect({
-        message,
-        options,
-        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
-        searchable: true,
-      });
-    case "confirm":
-    case "action":
-      return await prompter.confirm({
-        message,
-        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
-      });
-    case "progress":
-      return undefined;
+  if (step.type === "note" && step.format === "plain") {
+    await prompter.plain?.(message);
+    return undefined;
   }
-  return undefined;
+  return await answerGatewayWizardStep(
+    {
+      ...step,
+      message,
+      title: step.title && sanitizeTerminalText(step.title),
+      placeholder: step.placeholder && sanitizeTerminalText(step.placeholder),
+      initialValue:
+        step.type === "text" && typeof step.initialValue === "string"
+          ? sanitizeTerminalText(step.initialValue)
+          : step.initialValue,
+      options,
+    },
+    prompter,
+    { searchable: true },
+  );
 }
 
 async function connectAccount(
@@ -133,6 +105,8 @@ async function connectAccount(
     start,
   );
   const params = { profileId: start.profileId, connectId: started.connectId };
+  const readStatus = () =>
+    client.request<UsersAuthConnectStatusResult>("users.authConnect.status", params, { signal });
   let active:
     | {
         id: string;
@@ -149,11 +123,7 @@ async function connectAccount(
   };
   try {
     signal.throwIfAborted();
-    let result = await client.request<UsersAuthConnectStatusResult>(
-      "users.authConnect.status",
-      params,
-      { signal },
-    );
+    let result = await readStatus();
     while (result.status === "pending") {
       const step = result.step;
       if (active?.id !== step?.id) {
@@ -210,11 +180,7 @@ async function connectAccount(
           runtime.error(sanitizeTerminalText(result.error));
         }
       } else {
-        result = await client.request<UsersAuthConnectStatusResult>(
-          "users.authConnect.status",
-          params,
-          { signal },
-        );
+        result = await readStatus();
       }
     }
     return result;
@@ -359,8 +325,9 @@ export async function modelsAccountsLoginCommand(
   }
 }
 
-export async function modelsAccountsUseCommand(
-  options: ModelsAccountsOptions & { authProfileId: string },
+export async function modelsAccountsUpdateDefaultCommand(
+  options: ModelsAccountsOptions &
+    ({ action: "use"; authProfileId: string } | { action: "clear-default"; provider: string }),
   runtime: RuntimeEnv,
 ): Promise<void> {
   await withModelsAccountsGateway(
@@ -369,42 +336,25 @@ export async function modelsAccountsUseCommand(
     runtime,
     async ({ client, signal, profile }) => {
       const profileId = profile.id;
-      const result = await client.request<UsersSelectModelAccountResult>(
-        "users.selectModelAccount",
-        { profileId, authProfileId: options.authProfileId },
+      const result = await client.request<
+        UsersSelectModelAccountResult | UsersUnlinkAuthProfileResult
+      >(
+        options.action === "use" ? "users.selectModelAccount" : "users.unlinkAuthProfile",
+        {
+          profileId,
+          ...(options.action === "use"
+            ? { authProfileId: options.authProfileId }
+            : { provider: options.provider }),
+        },
         { signal },
       );
       if (options.json) {
         writeRuntimeJson(runtime, { profileId, ...result });
       } else {
         runtime.log(
-          `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
-        );
-      }
-    },
-  );
-}
-
-export async function modelsAccountsClearDefaultCommand(
-  options: ModelsAccountsOptions & { provider: string },
-  runtime: RuntimeEnv,
-): Promise<void> {
-  await withModelsAccountsGateway(
-    options,
-    "write",
-    runtime,
-    async ({ client, signal, profile }) => {
-      const profileId = profile.id;
-      const result = await client.request<UsersUnlinkAuthProfileResult>(
-        "users.unlinkAuthProfile",
-        { profileId, provider: options.provider },
-        { signal },
-      );
-      if (options.json) {
-        writeRuntimeJson(runtime, { profileId, ...result });
-      } else {
-        runtime.log(
-          `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
+          options.action === "use"
+            ? `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`
+            : `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
         );
       }
     },

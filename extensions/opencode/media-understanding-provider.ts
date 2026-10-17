@@ -1,4 +1,3 @@
-// Opencode provider module implements model/runtime integration.
 import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   describeImageWithModelPayloadTransform,
@@ -7,31 +6,21 @@ import {
 } from "openclaw/plugin-sdk/media-understanding";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function stripOpencodeDisabledResponsesReasoningPayload(payload: unknown): void {
+const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
   if (!isRecord(payload)) {
     return;
   }
   const reasoning = payload.reasoning;
-  if (reasoning === "none") {
+  if (reasoning === "none" || (isRecord(reasoning) && reasoning.effort === "none")) {
     delete payload.reasoning;
-    return;
   }
-  if (!isRecord(reasoning) || reasoning.effort !== "none") {
-    return;
-  }
-  delete payload.reasoning;
-}
-
-const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
-  stripOpencodeDisabledResponsesReasoningPayload(payload);
-  return undefined;
 };
 
 export const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "opencode",
   capabilities: ["image"],
   defaultModels: {
-    image: "gpt-5-nano",
+    image: "minimax-m3",
   },
   describeImage: (request) =>
     describeImageWithModelPayloadTransform(request, stripDisabledResponsesReasoning),

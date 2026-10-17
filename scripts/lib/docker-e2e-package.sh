@@ -332,6 +332,7 @@ docker_e2e_print_failed_container_state() {
   inspect_output="$(
     docker_e2e_docker_cmd inspect --format 'ExitCode={{.State.ExitCode}}
 OOMKilled={{.State.OOMKilled}}
+Init={{.HostConfig.Init}}
 Error={{printf "%.4096s" .State.Error}}' "$container_id" 2>&1
   )" || inspect_status="$?"
   if [ "$inspect_status" -ne 0 ]; then
@@ -352,6 +353,8 @@ docker_e2e_harness_mount_args() {
     -v "$harness_root/scripts/docker/verify-fs-safe-native.mjs:/app/scripts/docker/verify-fs-safe-native.mjs:ro"
     -v "$harness_root/scripts/lib:/app/scripts/lib:ro"
     -v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"
+    -v "$harness_root/packages/llm-core/package.json:/app/packages/llm-core/package.json:ro"
+    -v "$harness_root/packages/llm-core/src/types.ts:/app/packages/llm-core/src/types.ts:ro"
     -v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"
     -v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"
@@ -378,23 +381,6 @@ docker_e2e_run_with_harness() {
   previous_int_trap="$(trap -p INT || true)"
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
-  restore_harness_traps() {
-    if [ -n "$previous_int_trap" ]; then
-      eval "$previous_int_trap"
-    else
-      trap - INT
-    fi
-    if [ -n "$previous_term_trap" ]; then
-      eval "$previous_term_trap"
-    else
-      trap - TERM
-    fi
-    if [ -n "$previous_hup_trap" ]; then
-      eval "$previous_hup_trap"
-    else
-      trap - HUP
-    fi
-  }
   docker_e2e_harness_descendant_pids() {
     local parent_pid="$1"
     local child_pid
@@ -450,7 +436,7 @@ docker_e2e_run_with_harness() {
     if [ -n "$harness_stdin_fd" ]; then
       eval "exec ${harness_stdin_fd}<&-"
     fi
-    restore_harness_traps
+    docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
     if [ "$exit_after_cleanup" = "1" ]; then
       exit "$cleanup_status"
     fi

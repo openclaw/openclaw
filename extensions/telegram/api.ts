@@ -1,4 +1,3 @@
-// Telegram API module exposes the plugin public contract.
 export type { Message as TelegramBotMessage, Update as TelegramBotUpdate } from "grammy/types";
 export { telegramPlugin } from "./src/channel.js";
 export { telegramSetupPlugin } from "./src/channel.setup.js";
@@ -12,7 +11,6 @@ export {
   listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
-  resetMissingDefaultWarnFlag,
   resolveDefaultTelegramAccountId,
   type ResolvedTelegramAccount,
   resolveTelegramAccount,

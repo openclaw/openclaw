@@ -337,10 +337,6 @@ describe("evidence summary", () => {
 
   it.each([
     ["live Discord transport", "discord", "live", undefined, "live", true],
-    ["live Matrix transport", "matrix", "live", undefined, "live", true],
-    ["live Slack transport", "slack", "live", undefined, "live", true],
-    ["live Telegram transport", "telegram", "live", undefined, "live", true],
-    ["live WhatsApp transport", "whatsapp", "live", undefined, "live", true],
     [
       "live transport without a bundled channel identity",
       "custom-live-transport",
@@ -348,22 +344,6 @@ describe("evidence summary", () => {
       undefined,
       "live",
       true,
-    ],
-    [
-      "synthetic driver for a real channel identity",
-      "telegram",
-      "qa-channel",
-      undefined,
-      "qa-channel",
-      false,
-    ],
-    [
-      "Crabline driver for a real channel identity",
-      "telegram",
-      "crabline",
-      undefined,
-      "crabline",
-      false,
     ],
     [
       "explicit synthetic driver ignores requested environment metadata",

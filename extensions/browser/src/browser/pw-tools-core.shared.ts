@@ -1,31 +1,30 @@
-/**
- * Shared validation and normalization helpers for Playwright-backed browser
- * tool implementations.
- */
 import { stripVTControlCharacters } from "node:util";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { formatErrorMessage } from "../infra/errors.js";
 import { BrowserActionError, BrowserError } from "./errors.js";
 import { parseRoleRef } from "./pw-role-snapshot.js";
 
 let nextUploadArmId = 0;
 let nextDownloadArmId = 0;
 
-/** Returns a new monotonic id for the currently armed file upload waiter. */
+const LOCATOR_STATE_DIAGNOSTICS: Partial<Record<string, string>> = {
+  editable: "is not editable (for example, read-only). Use an editable control.",
+  enabled: "is not enabled. Complete any prerequisites that enable the control.",
+  stable: "is not stable. Wait for movement or animation to finish before interacting.",
+};
+
 export function bumpUploadArmId(): number {
   nextUploadArmId += 1;
   return nextUploadArmId;
 }
 
-/** Returns a new monotonic id for the currently armed download waiter. */
 export function bumpDownloadArmId(): number {
   nextDownloadArmId += 1;
   return nextDownloadArmId;
 }
 
-/** Normalizes role refs and raw element refs into the locator id format. */
 export function requireRef(value: unknown): string {
   const raw = normalizeOptionalString(value) ?? "";
   const roleRef = raw ? parseRoleRef(raw) : null;
@@ -36,7 +35,6 @@ export function requireRef(value: unknown): string {
   return ref;
 }
 
-/** Requires either a role ref or CSS selector and returns the trimmed selector mode. */
 export function requireRefOrSelector(
   ref: string | undefined,
   selector: string | undefined,
@@ -52,13 +50,11 @@ export function requireRefOrSelector(
   };
 }
 
-/** Bounds user-facing timeout options to Playwright-safe limits. */
 export function normalizeTimeoutMs(timeoutMs: number | undefined, fallback: number): number {
   const parsed = parseFiniteNumber(timeoutMs);
   return Math.max(500, Math.min(120_000, Math.floor(parsed ?? fallback)));
 }
 
-/** Converts common Playwright locator failures into model-actionable messages. */
 export function toAIFriendlyError(error: unknown, selector: string): Error {
   if (error instanceof BrowserError) {
     return error;
@@ -109,20 +105,9 @@ export function toAIFriendlyError(error: unknown, selector: string): Error {
     const state = diagnostic
       .match(/^element is not (editable|enabled|visible|stable)$/i)?.[1]
       ?.toLowerCase();
-    if (state === "editable") {
-      return failure(
-        `Element "${label}" is not editable (for example, read-only). Use an editable control.`,
-      );
-    }
-    if (state === "enabled") {
-      return failure(
-        `Element "${label}" is not enabled. Complete any prerequisites that enable the control.`,
-      );
-    }
-    if (state === "stable") {
-      return failure(
-        `Element "${label}" is not stable. Wait for movement or animation to finish before interacting.`,
-      );
+    const stateDiagnostic = state ? LOCATOR_STATE_DIAGNOSTICS[state] : undefined;
+    if (stateDiagnostic) {
+      return failure(`Element "${label}" ${stateDiagnostic}`);
     }
     if (
       state === "visible" ||

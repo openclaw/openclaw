@@ -1,4 +1,3 @@
-// Coordinates active TUI runs, watchdogs, terminal errors, and history refresh.
 import { classifyFailoverReasonCore } from "../agents/failover/classify-core.js";
 import { isAuthErrorMessage } from "../agents/failover/message-patterns.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
@@ -20,6 +19,8 @@ import type {
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+const LOCAL_MODEL_CANCELLATION_NOTICE =
+  "Cancellation requested; the local model may still be finishing.";
 const STREAMING_WATCHDOG_USER_MESSAGE =
   "This response is taking longer than expected. Still waiting for the current run.";
 
@@ -39,6 +40,7 @@ type TuiRunLifecycleContext = {
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
   clearLocalBtwRunIds?: () => void;
+  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
   streamingWatchdogMs?: number;
   localMode?: boolean;
 };
@@ -60,10 +62,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     localMode,
   } = context;
   const { sessionRuns, liveTerminalErrorMessages } = runCoordinator;
-  const pendingTerminalLifecycleErrors = new Map<
-    string,
-    { errorMessage: string; timer: ReturnType<typeof setTimeout> }
-  >();
+  const pendingTerminalLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
     Number.isFinite(context.streamingWatchdogMs) &&
@@ -75,6 +74,15 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   let reconnectPendingRunId: string | null = null;
   let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let streamingWatchdogRunId: string | null = null;
+  let cancellationNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearCancellationNotice = () => {
+    clearTimeout(cancellationNoticeTimer);
+    cancellationNoticeTimer = undefined;
+    if (state.activityStatus === LOCAL_MODEL_CANCELLATION_NOTICE) {
+      setActivityStatus("idle");
+    }
+  };
 
   const flushPendingHistoryRefreshIfIdle = () => {
     if (state.activeChatRunId || hasPendingSubmit(state)) {
@@ -88,27 +96,14 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const clearStreamingWatchdog = () => {
-    if (streamingWatchdogTimer) {
-      clearTimeout(streamingWatchdogTimer);
-      streamingWatchdogTimer = null;
-    }
+    clearTimeout(streamingWatchdogTimer ?? undefined);
+    streamingWatchdogTimer = null;
     streamingWatchdogRunId = null;
   };
 
   const clearPendingTerminalLifecycleError = (runId: string) => {
-    const pending = pendingTerminalLifecycleErrors.get(runId);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending.timer);
+    clearTimeout(pendingTerminalLifecycleErrors.get(runId));
     pendingTerminalLifecycleErrors.delete(runId);
-  };
-
-  const clearPendingTerminalLifecycleErrors = () => {
-    for (const pending of pendingTerminalLifecycleErrors.values()) {
-      clearTimeout(pending.timer);
-    }
-    pendingTerminalLifecycleErrors.clear();
   };
 
   const clearTrackedRunState = () => {
@@ -117,18 +112,19 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
-    clearPendingTerminalLifecycleErrors();
+    pendingTerminalLifecycleErrors.forEach(clearTimeout);
+    pendingTerminalLifecycleErrors.clear();
     btw.clear();
     clearStreamingWatchdog();
+    clearCancellationNotice();
   };
 
   const armStreamingWatchdog = (runId: string) => {
+    clearCancellationNotice();
     if (streamingWatchdogMs <= 0) {
       return;
     }
-    if (streamingWatchdogTimer) {
-      clearTimeout(streamingWatchdogTimer);
-    }
+    clearTimeout(streamingWatchdogTimer ?? undefined);
     streamingWatchdogRunId = runId;
     streamingWatchdogTimer = setTimeout(() => {
       streamingWatchdogTimer = null;
@@ -157,6 +153,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       return;
     }
     lastSessionKey = state.currentSessionKey;
+    clearCancellationNotice();
     if (!state.activeChatRunId && !hasPendingSubmit(state)) {
       clearTrackedRunState();
     }
@@ -197,10 +194,6 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     return true;
   };
 
-  const markSubmittedRunRegistered = (runId: string) => {
-    clearPendingSubmitDraft(state, runId);
-  };
-
   const acknowledgeChatRun = (runId: string, options?: { protectStream?: boolean }) => {
     if (reconnectPendingRunId === runId) {
       reconnectPendingRunId = null;
@@ -208,13 +201,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     clearPendingTerminalLifecycleError(runId);
     chatLog.dismissPendingSystem(runId);
     runCoordinator.noteSessionRun(runId, options);
-    markSubmittedRunRegistered(runId);
-  };
-
-  const clearActiveRunIfMatch = (runId: string) => {
-    if (state.activeChatRunId === runId) {
-      state.activeChatRunId = null;
-    }
+    clearPendingSubmitDraft(state, runId);
   };
 
   const promoteMostRecentSessionRun = (): boolean => {
@@ -257,7 +244,8 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       reconnectPendingRunId = null;
     }
     state.activeChatRunId = null;
-    if (!hasPendingSubmit(state)) {
+    // Idle confirms cancellation settled; the terminal notice owns its brief expiry.
+    if (!hasPendingSubmit(state) && state.activityStatus !== LOCAL_MODEL_CANCELLATION_NOTICE) {
       state.activityStatus = "idle";
     }
     setActivityStatus(state.activityStatus);
@@ -298,49 +286,74 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     armStreamingWatchdog(activeRunId);
   };
 
+  const settleRunActivity = (
+    params: {
+      runId: string;
+      wasActiveRun: boolean;
+      status: "idle" | "aborted" | "error";
+      localModelMayStillBeFinishing?: boolean;
+    },
+    reconcileIdle: boolean,
+  ) => {
+    if (state.activeChatRunId === params.runId) {
+      state.activeChatRunId = null;
+    }
+    const promotedRemainingRun = promoteMostRecentSessionRun();
+    flushPendingHistoryRefreshIfIdle();
+    if (!promotedRemainingRun) {
+      if (params.wasActiveRun) {
+        clearCancellationNotice();
+        setActivityStatus(params.status);
+        clearStreamingWatchdog();
+        if (params.localModelMayStillBeFinishing && !hasPendingSubmit(state)) {
+          const noticeSessionKey = state.currentSessionKey;
+          setActivityStatus(LOCAL_MODEL_CANCELLATION_NOTICE);
+          cancellationNoticeTimer = setTimeout(() => {
+            cancellationNoticeTimer = undefined;
+            if (
+              state.currentSessionKey === noticeSessionKey &&
+              !state.activeChatRunId &&
+              !hasPendingSubmit(state) &&
+              state.activityStatus === LOCAL_MODEL_CANCELLATION_NOTICE
+            ) {
+              setActivityStatus("aborted");
+              tui.requestRender();
+            }
+          }, 5_000);
+          cancellationNoticeTimer.unref?.();
+        }
+      } else {
+        if (streamingWatchdogRunId === params.runId) {
+          clearStreamingWatchdog();
+        }
+        if (reconcileIdle) {
+          clearStaleStreamingIfNoTrackedRunRemains();
+        }
+      }
+    }
+    void refreshSessionInfo?.();
+  };
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
     displayedFinal?: boolean;
+    reconcileIdle?: boolean;
   }) => {
     runCoordinator.noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
-    clearActiveRunIfMatch(params.runId);
-    const promotedRemainingRun = promoteMostRecentSessionRun();
-    flushPendingHistoryRefreshIfIdle();
-    if (!promotedRemainingRun) {
-      if (params.wasActiveRun) {
-        setActivityStatus(params.status);
-        clearStreamingWatchdog();
-      } else {
-        if (streamingWatchdogRunId === params.runId) {
-          clearStreamingWatchdog();
-        }
-        clearStaleStreamingIfNoTrackedRunRemains();
-      }
-    }
-    void refreshSessionInfo?.();
+    settleRunActivity(params, params.reconcileIdle !== false);
   };
 
   const terminateRun = (params: {
     runId: string;
     wasActiveRun: boolean;
     status: "aborted" | "error";
+    localModelMayStillBeFinishing?: boolean;
   }) => {
     runCoordinator.noteCompletedRun(params.runId);
     runCoordinator.dropSessionRun(params.runId);
-    clearActiveRunIfMatch(params.runId);
-    const promotedRemainingRun = promoteMostRecentSessionRun();
-    flushPendingHistoryRefreshIfIdle();
-    if (!promotedRemainingRun) {
-      if (params.wasActiveRun) {
-        setActivityStatus(params.status);
-        clearStreamingWatchdog();
-      } else if (streamingWatchdogRunId === params.runId) {
-        clearStreamingWatchdog();
-      }
-    }
-    void refreshSessionInfo?.();
+    settleRunActivity(params, false);
   };
 
   const hasConcurrentActiveRun = (runId: string) => {
@@ -415,11 +428,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       }
     }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
     timer.unref?.();
-    pendingTerminalLifecycleErrors.set(runId, { errorMessage, timer });
-  };
-
-  const dispose = () => {
-    clearTrackedRunState();
+    pendingTerminalLifecycleErrors.set(runId, timer);
   };
 
   return {
@@ -430,11 +439,9 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     clearStreamingWatchdog,
     clearStaleStreamingIfNoTrackedRunRemains,
     clearTrackedRunState,
-    dispose,
     finalizeRun,
     flushPendingHistoryRefreshIfIdle,
     hasConcurrentActiveRun,
-    markSubmittedRunRegistered,
     maybeRefreshHistoryForRun,
     pauseStreamingWatchdog: clearStreamingWatchdog,
     reconnectStreamingWatchdog,

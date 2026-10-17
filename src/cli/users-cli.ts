@@ -1,10 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Minimal gateway CLI commands for durable user profile administration.
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-type UsersCliOpts = GatewayRpcOpts & { to?: string };
+type UsersCliOpts = GatewayRpcOpts & { to?: string; into?: string };
 
 const DEFAULT_USERS_TIMEOUT_MS = 10_000;
 
@@ -70,6 +71,33 @@ export function registerUsersCli(program: Command) {
           { scopes: ["operator.admin"] },
         );
         writeUsersList(result, opts.json === true);
+      }),
+  );
+
+  addUsersGatewayOptions(
+    users
+      .command("merge <sourceProfileId>")
+      .description("Merge a duplicate user profile into a surviving profile")
+      .requiredOption("--into <targetProfileId>", "Surviving profile id")
+      .action(async (sourceProfileId: string, opts: UsersCliOpts) => {
+        const result = await callGatewayFromCli(
+          "users.merge",
+          opts,
+          { sourceProfileId, targetProfileId: opts.into },
+          { scopes: ["operator.admin"] },
+        );
+        if (opts.json === true) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        if (!isRecord(result.profile) || typeof result.profile.id !== "string") {
+          throw new Error("Invalid users.merge response: missing survivor profile ID");
+        }
+        process.stdout.write(
+          `Survivor: ${sanitizeTerminalText(result.profile.id)}\n` +
+            `Retired profile: ${sanitizeTerminalText(sourceProfileId)}\n` +
+            "History keeps its original attribution; logins, links, and accounts follow the survivor.\n",
+        );
       }),
   );
 

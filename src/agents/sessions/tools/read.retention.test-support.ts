@@ -3,14 +3,8 @@ import { setImmediate } from "node:timers/promises";
 import { createReadToolDefinition } from "./read.js";
 
 const requestedMode = process.argv[2];
-assert.ok(
-  requestedMode === "all" ||
-    requestedMode === "line" ||
-    requestedMode === "range" ||
-    requestedMode === "cursor" ||
-    requestedMode === "eof",
-);
-type Mode = "line" | "range" | "cursor" | "eof";
+assert.ok(requestedMode === "all" || requestedMode === "cursor" || requestedMode === "eof");
+type Mode = "cursor" | "eof";
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
 const inputUnits = 2 * 1024 * 1024;
@@ -27,8 +21,8 @@ async function makeResults(mode: Mode, tool: ReturnType<typeof createReadToolDef
         `read-${index}`,
         {
           path: "synthetic-large.txt",
-          offset: mode === "range" || mode === "eof" ? 2 : 1,
-          limit: mode === "range" ? 2 : 1,
+          offset: mode === "eof" ? 2 : 1,
+          limit: 1,
           ...(mode === "cursor" ? { cursor: 10 } : {}),
         },
         undefined,
@@ -76,10 +70,7 @@ async function runMode(mode: Mode) {
   const held = await collect();
   // Inspect only after GC: string assertions/serialization can flatten slices and hide retention.
   for (const [index, result] of results.entries()) {
-    const expected: string =
-      mode === "range"
-        ? `${line(index)}\n${line(index)}`
-        : line(index).slice(mode === "cursor" ? 10 : 0);
+    const expected = line(index).slice(mode === "cursor" ? 10 : 0);
     if (mode === "eof") {
       assert.deepEqual(result.details, { kind: "text", content: expected });
       assert.deepEqual(result.content, [{ type: "text", text: expected }]);
@@ -89,8 +80,8 @@ async function runMode(mode: Mode) {
     assert.equal(result.details?.content, expected);
     assert.deepEqual(result.details?.continuation, {
       kind: "line",
-      offset: mode === "range" ? 4 : 2,
-      limit: mode === "range" ? 2 : 1,
+      offset: 2,
+      limit: 1,
     });
     assert.equal(result.content[0]?.type, "text");
     assert.ok(result.content[0]?.type === "text" && result.content[0].text.startsWith(expected));
@@ -103,8 +94,7 @@ async function runMode(mode: Mode) {
   };
 }
 
-const modes: Mode[] =
-  requestedMode === "all" ? ["line", "range", "cursor", "eof"] : [requestedMode];
+const modes: Mode[] = requestedMode === "all" ? ["cursor", "eof"] : [requestedMode];
 const observations = [];
 for (const mode of modes) {
   observations.push(await runMode(mode));

@@ -8,12 +8,12 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
-import { TerminalIntentQueue } from "./terminal-pending-actions.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", () => ({
   refreshControlUiServiceWorker: vi.fn(async () => false),
@@ -25,7 +25,7 @@ const panels: OpenClawTerminalPanel[] = [];
 const releaseResponses: Array<() => void> = [];
 
 function mountTerminalPanel(client: TerminalGatewayClient): OpenClawTerminalPanel {
-  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
   panel.client = client;
   panel.available = true;
   panels.push(panel);
@@ -45,6 +45,7 @@ describe("terminal panel pending cancellation", () => {
       panel.closeTerminalPanel();
     }
     document.body.replaceChildren();
+    await Promise.resolve();
     for (const release of releaseResponses) {
       release();
     }
@@ -66,7 +67,6 @@ describe("terminal panel pending cancellation", () => {
   )(
     "settles $kind $outcome without reviving a cancelled tab (cancelled: $cancelled, reconnect: $reconnect, page: $page)",
     async ({ kind, outcome, cancelled, reconnect, page }) => {
-      const queueCalls = vi.spyOn(TerminalIntentQueue.prototype, "queue");
       createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
       const response = (sessionId: string) => ({
         ...terminalOpenResult(sessionId),
@@ -92,13 +92,15 @@ describe("terminal panel pending cancellation", () => {
         },
         addEventListener: () => () => {},
       };
-      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
       panel.client = client;
       panel.available = true;
       panel.page = panel.fullscreen = panel.embedded = page;
       panel.routeTarget = kind === "attach" ? { sessionId: "pending-session" } : null;
       panels.push(panel);
       document.body.append(panel);
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       if (!page) {
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
@@ -113,10 +115,10 @@ describe("terminal panel pending cancellation", () => {
         expect(requests.filter((request) => request.method === targetMethod)).toHaveLength(1),
       );
       if (cancelled) {
-        panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+        panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
         await panel.updateComplete;
-        expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
-        expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+        expect(panel.querySelector(".tabstrip-tab")).toBeNull();
+        expect(panel.querySelector(".tp-error")).toBeNull();
       }
       if (reconnect) {
         expect(panel.terminalPanelOpen).toBe(false);
@@ -127,28 +129,33 @@ describe("terminal panel pending cancellation", () => {
         panel.available = true;
         await panel.updateComplete;
       }
+      if (page) {
+        expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(true);
+      }
       if (outcome === "resolve") {
         pending.resolve(response("pending-session"));
       } else {
         pending.reject(new Error("terminal request failed"));
       }
-      await Promise.all(queueCalls.mock.results.map((result) => result.value));
-      await waitForFast(() =>
-        expect(
-          panel.terminalPanelOpen
-            ? panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled
-            : false,
-        ).toBe(false),
-      );
+      if (page) {
+        await waitForFast(() =>
+          expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
+        );
+      } else {
+        await waitForFast(() =>
+          expect(requests).toContainEqual({
+            method: "terminal.close",
+            params: { sessionId: "pending-session" },
+          }),
+        );
+      }
       expect(requests.filter((request) => request.method === targetMethod)).toHaveLength(1);
-      expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
+      expect(panel.querySelector(".tabstrip-tab")).toBeNull();
       expect(panel.terminalPanelOpen).toBe(page);
       if (cancelled) {
-        expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+        expect(panel.querySelector(".tp-error")).toBeNull();
       } else {
-        expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
-          "terminal request failed",
-        );
+        expect(panel.querySelector(".tp-error")?.textContent).toContain("terminal request failed");
       }
       expect(requests.filter((request) => request.method === "terminal.close")).toEqual(
         outcome === "resolve"
@@ -206,11 +213,9 @@ describe("terminal panel pending cancellation", () => {
       panel.toggle();
       if (healthy) {
         await waitForFast(() =>
-          expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(
-            false,
-          ),
+          expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
         );
-        panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
+        panel.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
       }
       await waitForFast(() => expect(openCount).toBe(pendingOpenIndex));
       if (transition === "queued attach") {
@@ -221,9 +226,7 @@ describe("terminal panel pending cancellation", () => {
         );
         expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(0);
       }
-      panel.renderRoot
-        .querySelector<HTMLButtonElement>(".is-connecting + .tabstrip-tab__close")!
-        .click();
+      panel.querySelector<HTMLButtonElement>(".is-connecting + .tabstrip-tab__close")!.click();
       await panel.updateComplete;
       expect(panel.terminalPanelOpen).toBe(true);
       if (transition === "reconnect") {
@@ -237,9 +240,7 @@ describe("terminal panel pending cancellation", () => {
       }
       pending.resolve(terminalOpenResult("cancelled-session"));
       await waitForFast(() => {
-        expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(
-          false,
-        );
+        expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false);
         expect(
           openCount > pendingOpenIndex ||
             requests.filter((request) => request.method === "terminal.attach").length === 1,
@@ -252,7 +253,7 @@ describe("terminal panel pending cancellation", () => {
           params: { sessionId: transition === "reconnect" ? "healthy" : "queued-session" },
         },
       ]);
-      expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+      expect(panel.querySelector(".tp-error")).toBeNull();
       expect(JSON.parse(sessionStorage.getItem("openclaw.terminal.sessions.v1") ?? "[]")).toEqual(
         transition === "reconnect"
           ? ["healthy"]

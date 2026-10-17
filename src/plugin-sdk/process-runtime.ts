@@ -15,16 +15,18 @@ export {
   type SpawnResult,
 } from "../process/exec.js";
 export { withCommandProcessScope } from "../process/exec-spawn.js";
-export { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
+export { prepareOomScoreAdjustedSpawn, spawnOomScoreAdjusted } from "../process/linux-oom-score.js";
 export type { OomScoreAdjustedSpawn, OomWrapOptions } from "../process/linux-oom-score.js";
 export { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+export { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 export { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 // Released official plugins retain these exports until their supported hosts
 // provide worker-task-server; bundled workers use that narrower entrypoint.
 export { serveWorkerTasks } from "../infra/worker-task-server.js";
-export type { WorkerTaskControl } from "../infra/worker-task-native-sections.js";
+export type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 export type { WorkerTaskResponse } from "../infra/worker-task-pool.js";
 export { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
+export { reapOrphanedProcesses } from "../process/orphaned-process.js";
 export {
   spawnTerminalPty,
   type TerminalPtyHandle,
@@ -37,3 +39,18 @@ export {
   isPidDefinitelyDead,
 } from "../shared/pid-alive.js";
 export { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
+
+export {
+  createOwnedStdioProcess,
+  closeOwnedStdioProcess,
+  type OwnedStdioProcess,
+  type OwnedStdioProcessOptions,
+} from "../process/owned-stdio.js";
+
+export {
+  DarwinProcessInspectionError,
+  readDarwinProcessSnapshot,
+  readDarwinProcessTree,
+  readDarwinProcessCommandLine,
+  type DarwinProcess,
+} from "../process/darwin-process-inspection.js";

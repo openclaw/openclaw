@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -31,9 +32,6 @@ import {
 } from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -46,13 +44,15 @@ import {
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { isSameSubagentRun } from "../registry/subagent-run-generation.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -65,11 +65,12 @@ vi.mock("../../../gateway/call.js", { spy: true });
 export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
   const completed = createDeferred();
   const inspect = () => {
-    if (typeof entry.cleanupCompletedAt === "number") {
+    const current = subagentRuns.get(entry.runId);
+    if (isSameSubagentRun(current, entry) && typeof current?.cleanupCompletedAt === "number") {
       completed.resolve();
     }
   };
-  const unsubscribe = onSubagentRegistryPersisted(inspect);
+  const unsubscribe = subscribeSubagentRunChanges("persistence", inspect);
   try {
     inspect();
     await completed.promise;
@@ -149,7 +150,7 @@ export function installSpawnAttachmentFixture(params: {
   stateDir: string;
   admitted: Parameters<typeof getAdmittedRunDelegatedAuthority>[0];
   pauseAt?: "directory" | "files";
-  entered: () => void;
+  entered: () => void | Promise<void>;
   release: Promise<void>;
 }) {
   const root = path.join(params.stateDir, "attachments", "subagents", "main");
@@ -164,7 +165,7 @@ export function installSpawnAttachmentFixture(params: {
         lateWrites.push("directory");
       }
       if (params.pauseAt === "directory") {
-        params.entered();
+        await params.entered();
         await params.release;
       }
     }
@@ -189,7 +190,7 @@ export function installSpawnAttachmentFixture(params: {
         const result = await store.writeText(...args);
         expect(await fs.readFile(path.join(rootDir, args[0]), "utf8")).toBe("synthetic attachment");
         if (params.pauseAt === "directory" || params.pauseAt === "files") {
-          params.entered();
+          await params.entered();
           await params.release;
         }
         return result;
@@ -219,8 +220,7 @@ export function installSpawnAuthorityFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
   let pluginSnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  const settle = () => settleSubagentRegistryPersistenceWork();
 
   beforeEach(async () => {
     // Failed cleanup retains the prior owner instead of replacing its live stores.
@@ -247,9 +247,8 @@ export function installSpawnAuthorityFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
+    await captureRuntimeConfigAsyncReader()();
+    await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
       () => getActivePluginRegistry() ?? createTestRegistry([]),
     );
@@ -259,7 +258,6 @@ export function installSpawnAuthorityFixture() {
       }
       return await new Promise<never>(() => {});
     });
-    deliveries = captureTaskDeliveryWork();
   });
 
   afterEach(async () => {
@@ -272,9 +270,7 @@ export function installSpawnAuthorityFixture() {
     // Settled delivery failures still permit cleanup; live roots retain their stores.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         schedulerTesting.reset();
         await cleanupSessionStateForTest({ stateDir });
         vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
@@ -292,8 +288,6 @@ export function installSpawnAuthorityFixture() {
         }
         restoreActivePluginRegistrySnapshot(pluginSnapshot);
         env.restore();
-        deliveries?.[Symbol.dispose]();
-        deliveries = undefined;
         stateDir = "";
       } catch (error) {
         failures.push(error);
@@ -320,6 +314,7 @@ export function installSpawnAuthorityFixture() {
       getSessionEventSubscriberConnIds: () => new Set(),
       broadcastToConnIds: vi.fn(),
       recoveryRuntime: {
+        prepareRestartRecovery: () => undefined,
         waitForAgent: async () => await new Promise<never>(() => {}),
         dispatchAgent: async () => {
           throw new Error("Unexpected fixture recovery agent dispatch");

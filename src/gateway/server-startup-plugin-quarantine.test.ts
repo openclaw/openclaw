@@ -18,7 +18,7 @@ import {
 } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { installPluginFromPath } from "../plugins/install.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { runPluginPayloadSmokeCheck } from "../plugins/payload-verification.js";
 import {
   createPluginCache,
@@ -470,7 +470,6 @@ describe("updater plugin degradation with a running source Gateway", () => {
           channel: "stable",
           ...(await preparePostCorePluginConfig({ requestedChannel: null })),
           pluginInstallRecords: records,
-          pluginRequirements: { [pluginId]: "optional" },
           timeoutMs: 5_000,
           json: true,
         }),
@@ -479,10 +478,8 @@ describe("updater plugin degradation with a running source Gateway", () => {
     expect(result.status).toBe("warning");
     expect(result.reason).toBeUndefined();
     expect(result.assessment).toMatchObject({
-      kind: "optional-repair-needed",
-      failures: [
-        expect.objectContaining({ pluginId, installPath, reason: "missing-extension-entry" }),
-      ],
+      kind: "unsafe",
+      reason: "plugin-requirement-unknown",
     });
     expect(result.npm.outcomes).toContainEqual(
       expect.objectContaining({ pluginId, status: "error" }),
@@ -543,6 +540,8 @@ describe("updater plugin degradation with a running source Gateway", () => {
     expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
     expect(await fsPromises.readFile(snapshot.path, "utf8")).toBe(configBytes);
     expect(await fsPromises.readFile(dataPath, "utf8")).toBe("newer state must survive\n");
-    expect(readPersistedInstalledPluginIndexInstallRecords({ env: process.env })).toEqual(records);
+    expect(
+      await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: process.env }),
+    ).toEqual(records);
   });
 });

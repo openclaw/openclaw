@@ -1,17 +1,26 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as updateLedger from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
@@ -50,18 +59,43 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const nativePlatform = process.platform;
 beforeEach(() => {
   mockSystemAccountHome();
   mocks.enabled = true;
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  // The service is Windows-shaped; SQLite still opens files on the real host.
+  for (const name of ["resolveExistingSqliteFileUri", "resolveImmutableSqliteFileUri"] as const) {
+    const resolveUri = nodeSqlite[name];
+    vi.spyOn(nodeSqlite, name).mockImplementation((pathname) =>
+      resolveUri(pathname, nativePlatform),
+    );
+  }
+  const readRun = updateLedger.getUpdateRun;
+  vi.spyOn(updateLedger, "getUpdateRun").mockImplementation((...args) => {
+    const previousPlatform = process.platform;
+    platform.mockReturnValue(nativePlatform);
+    try {
+      return readRun(...args);
+    } finally {
+      platform.mockReturnValue(previousPlatform);
+    }
+  });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  await closeStateDatabaseForTest();
+  vi.restoreAllMocks();
+});
 
 it.each([
+  "plugin warning",
   "launch failure",
   "failed terminal result",
   "replaced task",
   "changed protected task",
-] as const)("keeps Windows autostart suspended across migrated finalizer %s", async (outcome) => {
+] as const)("hands off migrated Windows updates: %s", async (outcome) => {
+  const succeeded = outcome === "plugin warning";
+  const replaced = outcome === "replaced task" || outcome === "changed protected task";
   const home = await fs.realpath(dirs.make("migrated-windows-"));
   await withEnvAsync(
     {
@@ -77,16 +111,32 @@ it.each([
       OPENCLAW_SERVICE_KIND: undefined,
     },
     async () => {
-      mockProcessPlatform("win32");
+      const databases: ReturnType<typeof nodeSqlite.openNodeSqliteDatabase>[] = [];
+      const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+        const database = openDatabase(...args);
+        databases.push(database);
+        return database;
+      });
       const root = process.cwd();
+      const runId = createUpdateRun({ trigger: "cli" }).runId;
+      const activationTimeoutMs = 3_600_000;
+      const run = { runId, env: { ...process.env }, activationTimeoutMs };
+      const { recordPhase } = createUpdateCommandExecutionGuards({ run }, root);
+      let running = true;
       let programArguments = [process.execPath, path.join(root, "openclaw.mjs"), "gateway"];
       mocks.service.mockReturnValue(
         createMockGatewayService({
+          label: "Scheduled Task",
+          stop: async () => {
+            running = false;
+          },
           readCommand: async () => ({
             programArguments,
+            sourcePath: resolveGatewayTaskScriptPath(process.env),
             environment: { HOME: home },
           }),
-          readRuntime: async () => ({ status: "running" }),
+          readRuntime: async () => ({ status: running ? "running" : "stopped" }),
           isLoaded: async () => true,
         }),
       );
@@ -95,14 +145,24 @@ it.each([
         updateInstallKind: "package",
         shouldRestart: true,
         jsonMode: true,
+        updateRun: run,
+        recordPhase,
       });
+      expect(stopped.serviceMutationSkipMessage).toBeUndefined();
+      expect(stopped).toMatchObject({ stopped: true, inspected: true });
       const recovery = stopped.windowsTaskAutoStartRecovery;
       expect(recovery).toBeDefined();
       if (outcome === "changed protected task" && stopped.serviceUpdateVerdict?.kind === "owned") {
         stopped.serviceUpdateVerdict.refreshDefinition = false;
       }
       recovery?.beginMutation();
-      const activationTimeoutMs = 3_600_000;
+      expect({ running, enabled: mocks.enabled }).toEqual({ running: false, enabled: false });
+      // Candidate Doctor publishes a schema the retained updater cannot open.
+      await closeStateDatabaseForTest();
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      database.close();
+      expect(() => getUpdateRun(runId)).toThrow(/newer schema version/);
       let enabledAtWorkerStart: boolean | undefined;
       vi.mocked(runUtf8CommandWithTimeout).mockImplementationOnce(async (_argv, options) => {
         assert(typeof options === "object");
@@ -113,7 +173,7 @@ it.each([
         if (outcome === "launch failure") {
           throw new Error("candidate finalizer unavailable");
         }
-        if (outcome === "replaced task" || outcome === "changed protected task") {
+        if (replaced) {
           mocks.enabled = true;
           programArguments =
             outcome === "replaced task"
@@ -130,24 +190,20 @@ it.each([
           JSON.stringify({
             result: {
               ...input.params.result,
-              status: "error",
-              reason: "plugin-convergence-failed",
+              ...(succeeded
+                ? { postUpdate: { plugins: { status: "warning" } } }
+                : { status: "error", reason: "plugin-convergence-failed" }),
             },
-            terminalRunId: "migrated-windows-run",
-            exitCode: 1,
+            terminalRunId: runId,
+            exitCode: succeeded ? 0 : 1,
           }),
         );
-        return {
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-          cleanup: "normal",
-        };
+        if (succeeded) {
+          mocks.enabled = true;
+          running = true;
+        }
+        return createCommandResult({ cleanup: "normal" });
       });
-      const runId = "migrated-windows-run";
       const operation = continueMigratedUpdateInFreshProcess(
         {
           mutationStarted: true,
@@ -155,25 +211,17 @@ it.each([
           result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
           installKindChanged: false,
           configSnapshot: {
+            ...createUpdateCliBaseSnapshot({}),
             path: path.join(home, "openclaw.json"),
             exists: false,
             raw: null,
-            parsed: {},
-            sourceConfig: asResolvedSourceConfig({}),
-            resolved: asResolvedSourceConfig({}),
-            valid: true,
-            runtimeConfig: asRuntimeConfig({}),
-            config: asRuntimeConfig({}),
-            issues: [],
-            warnings: [],
-            legacyIssues: [],
           },
           requestedChannel: null,
           storedChannel: "stable",
           channel: "stable",
           downgradeRisk: false,
           shouldRestart: true,
-          opts: { json: true, run: { runId, env: { ...process.env }, activationTimeoutMs } },
+          opts: { json: true, run },
           preManagedServiceStop: stopped,
           controlPlaneUpdateSentinelMeta: null,
           preUpdatePluginInstallRecords: {},
@@ -185,21 +233,27 @@ it.each([
         [],
       );
       try {
-        if (outcome === "launch failure") {
-          await expect(operation).rejects.toThrow("candidate finalizer unavailable");
-        } else if (outcome === "replaced task" || outcome === "changed protected task") {
-          await expect(operation).rejects.toThrow(/ownership or manager identity changed/);
+        if (outcome === "launch failure" || replaced) {
+          await expect(operation).rejects.toThrow(
+            replaced ? /ownership or manager identity changed/ : "candidate finalizer unavailable",
+          );
+        } else if (succeeded) {
+          await expect(operation).resolves.toMatchObject({
+            exitCode: 0,
+            result: { status: "ok", postUpdate: { plugins: { status: "warning" } } },
+          });
         } else {
           await expect(operation).resolves.toMatchObject({ exitCode: 1 });
         }
         expect(enabledAtWorkerStart).toBe(false);
-        const replaced = outcome === "replaced task" || outcome === "changed protected task";
-        expect(mocks.enabled).toBe(replaced);
+        expect(mocks.enabled).toBe(replaced || succeeded);
         await recovery?.restore();
-        expect(mocks.enabled).toBe(replaced);
+        expect([mocks.enabled, running]).toEqual([replaced || succeeded, succeeded]);
       } finally {
         await recovery?.complete(false);
       }
+      // Windows cannot remove the fixture home while native state handles are open.
+      expect(databases.filter((connection) => connection.isOpen)).toEqual([]);
     },
   );
 });

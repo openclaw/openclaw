@@ -57,7 +57,7 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
   };
   const value = <T>(key: string, fallback: T): T =>
     key in overrides ? (overrides[key] as T) : fallback;
-  const state: SkillsState = {
+  const state: SkillsProps["state"] = {
     client: null,
     connected: value("connected", true),
     runtimeConfig: {} as SkillsState["runtimeConfig"],

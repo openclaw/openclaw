@@ -1,5 +1,6 @@
 // Discord tests cover gateway websocket transport options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayPlugin } from "./gateway.js";
 
 const { webSocketCtorCalls, mockOwner } = vi.hoisted(() => {
   const calls: Array<{ url: string; options: unknown }> = [];
@@ -26,17 +27,13 @@ vi.mock("./ws-runtime.js", async () => {
 import { WebSocket } from "./ws-runtime.js";
 
 describe("GatewayPlugin websocket options", () => {
-  let GatewayPlugin: typeof import("./gateway.js").GatewayPlugin;
-
-  beforeEach(async () => {
+  beforeEach(() => {
     webSocketCtorCalls.length = 0;
-    ({ GatewayPlugin } = await import("./gateway.js"));
   });
 
   it("bounds inbound gateway websocket payloads and the opening handshake", () => {
     expect(WebSocket).toBe(mockOwner.constructor);
     const gateway = new GatewayPlugin({
-      autoInteractions: false,
       url: "wss://gateway.example.test",
     });
 

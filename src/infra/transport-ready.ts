@@ -1,16 +1,13 @@
-// Polls channel transports until they are ready for runtime work.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleepWithAbort } from "./backoff.js";
 
-/** Result returned by one transport readiness probe attempt. */
-export type TransportReadyResult = {
+type TransportReadyResult = {
   ok: boolean;
   error?: string | null;
 };
 
-/** Parameters for polling a channel transport until it can accept runtime work. */
 export type WaitForTransportReadyParams = {
   label: string;
   timeoutMs: number;
@@ -22,12 +19,7 @@ export type WaitForTransportReadyParams = {
   check: () => Promise<TransportReadyResult>;
 };
 
-/**
- * Polls a channel transport readiness probe until it succeeds, times out, or aborts.
- *
- * Used by channel plugins that start external daemons or subscribe to local transports before
- * processing inbound events, with bounded retry logging through the caller's runtime sink.
- */
+/** Polls until ready, timed out, or aborted, with bounded logging through the runtime sink. */
 export async function waitForTransportReady(params: WaitForTransportReadyParams): Promise<void> {
   const started = Date.now();
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
@@ -37,6 +29,12 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
   const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 150, 50);
   let nextLogAt = started + logAfterMs;
   let lastError: string | null = null;
+  const logNotReady = (elapsedMs: number) =>
+    params.runtime.error?.(
+      theme.error(
+        `${params.label} not ready after ${elapsedMs}ms (${lastError ?? "unknown error"})`,
+      ),
+    );
 
   while (true) {
     if (params.abortSignal?.aborted) {
@@ -53,12 +51,7 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
       break;
     }
     if (now >= nextLogAt) {
-      const elapsedMs = now - started;
-      params.runtime.error?.(
-        theme.error(
-          `${params.label} not ready after ${elapsedMs}ms (${lastError ?? "unknown error"})`,
-        ),
-      );
+      logNotReady(now - started);
       nextLogAt = now + logIntervalMs;
     }
 
@@ -74,8 +67,6 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
     }
   }
 
-  params.runtime.error?.(
-    theme.error(`${params.label} not ready after ${timeoutMs}ms (${lastError ?? "unknown error"})`),
-  );
+  logNotReady(timeoutMs);
   throw new Error(`${params.label} not ready (${lastError ?? "unknown error"})`);
 }

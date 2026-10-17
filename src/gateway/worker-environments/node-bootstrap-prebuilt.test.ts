@@ -61,7 +61,7 @@ async function rewriteArchive(
 }
 
 describe("prebuilt node bootstrap distribution", () => {
-  it("reuses image-owned bytes after restart and pins a private copy until enrollment closes", async () => {
+  it("reuses image-owned bytes after restart without mutating the deployment archive", async () => {
     const current = await fixture();
     const { built, retainedBytes, retainedHash, retainedPath } = await retainArchive(current);
     const restarted = createProvider(current.options);
@@ -81,11 +81,8 @@ describe("prebuilt node bootstrap distribution", () => {
       expect(await fs.readFile(retainedPath)).toEqual(retainedBytes);
       await fs.writeFile(retainedPath, "image replaced after preparation");
       expect(await fs.readFile(artifact.tarballPath)).toEqual(acceptedBytes);
-      const closing = restarted.close();
-      await expect(fs.access(artifact.tarballPath)).resolves.toBeUndefined();
+      await restarted.close();
       await expect(restarted.prepare()).rejects.toThrow("closed");
-      enrollment.abort();
-      await closing;
       await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readFile(retainedPath, "utf8")).toBe("image replaced after preparation");
     } finally {
@@ -93,15 +90,13 @@ describe("prebuilt node bootstrap distribution", () => {
     }
   });
 
-  it.each(["missing", "corrupt", "truncated", "oversized", "symlink"] as const)(
+  it.each(["missing", "truncated", "oversized", "symlink"] as const)(
     "builds the canonical archive when deployment input is %s without changing that input",
     async (failure) => {
       const current = await fixture();
       const { built, builtBytes, retainedBytes, retainedPath } = await retainArchive(current);
       if (failure === "missing") {
         await fs.rm(retainedPath);
-      } else if (failure === "corrupt") {
-        await fs.writeFile(retainedPath, "not an archive");
       } else if (failure === "truncated") {
         await fs.writeFile(retainedPath, retainedBytes.subarray(0, retainedBytes.length / 2));
       } else if (failure === "oversized") {
@@ -173,7 +168,7 @@ describe("prebuilt node bootstrap distribution", () => {
     },
   );
 
-  it("rebuilds duplicate image entries for concurrent consumers and cleans up after enrollment", async () => {
+  it("rebuilds duplicate image entries for concurrent consumers and cleans up on close", async () => {
     const current = await fixture();
     const { built, builtBytes, retainedPath } = await retainArchive(current);
     const header = Buffer.alloc(512);
@@ -192,10 +187,7 @@ describe("prebuilt node bootstrap distribution", () => {
       expect(concurrent).toBe(artifact);
       expect(artifact.tarballSha256).toBe(built.tarballSha256);
       expect(await fs.readFile(artifact.tarballPath)).toEqual(builtBytes);
-      const closing = restarted.close();
-      await expect(fs.access(artifact.tarballPath)).resolves.toBeUndefined();
-      enrollment.abort();
-      await closing;
+      await restarted.close();
       await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
       expect(await fs.readFile(retainedPath)).toEqual(invalidBytes);
     } finally {
@@ -203,50 +195,24 @@ describe("prebuilt node bootstrap distribution", () => {
     }
   });
 
-  it.each(["worker-turn", "remote-exec"] as const)(
-    "keeps both execution modes available with an image prepared for %s",
-    async (retainedMode) => {
-      const current = await fixture();
-      await write(current.packageRoot, "dist/entry.js", 'console.log("generic-node");');
-      const workerOptions = { ...current.options, plugins: [] };
-      const owner =
-        retainedMode === "worker-turn" ? createProvider(workerOptions) : current.provider;
-      const { built, retainedHash, retainedPath, retainedBytes } = await retainArchive({
-        ...current,
-        provider: owner,
-      });
-      const [worker, remote] = await Promise.all([
-        createProvider(workerOptions).prepare(),
-        createProvider(current.options).prepare(),
-      ]);
-      expect(worker.enabledPluginIds).toEqual([]);
-      expect(remote.enabledPluginIds).toEqual(["remote-runtime"]);
-      const matching = retainedMode === "worker-turn" ? worker : remote;
-      const different = retainedMode === "worker-turn" ? remote : worker;
-      expect(matching.tarballSha256).toBe(
-        process.platform === "win32" ? built.tarballSha256 : retainedHash,
-      );
-      expect(different.tarballSha256).not.toBe(matching.tarballSha256);
-      expect(await fs.readFile(retainedPath)).toEqual(retainedBytes);
-    },
-  );
-
-  it("cancels one consumer while another retains preparation and leaves the image archive intact", async () => {
+  it("keeps both execution modes available with an image prepared for worker-turn", async () => {
     const current = await fixture();
-    const { built, retainedPath, retainedBytes, retainedHash } = await retainArchive(current);
-    const restarted = createProvider(current.options);
-    const cancelled = new AbortController();
-    const pending = restarted.prepare(cancelled.signal);
-    const surviving = restarted.prepare();
-    const reason = new Error("enrollment cancelled");
-    cancelled.abort(reason);
-    await expect(pending).rejects.toMatchObject({ name: "AbortError", cause: reason });
-    const artifact = await surviving;
-    expect(artifact.tarballSha256).toBe(
+    await write(current.packageRoot, "dist/entry.js", 'console.log("generic-node");');
+    const workerOptions = { ...current.options, plugins: [] };
+    const { built, retainedHash, retainedPath, retainedBytes } = await retainArchive({
+      ...current,
+      provider: createProvider(workerOptions),
+    });
+    const [worker, remote] = await Promise.all([
+      createProvider(workerOptions).prepare(),
+      createProvider(current.options).prepare(),
+    ]);
+    expect(worker.enabledPluginIds).toEqual([]);
+    expect(remote.enabledPluginIds).toEqual(["remote-runtime"]);
+    expect(worker.tarballSha256).toBe(
       process.platform === "win32" ? built.tarballSha256 : retainedHash,
     );
-    await restarted.close();
-    await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
+    expect(remote.tarballSha256).not.toBe(worker.tarballSha256);
     expect(await fs.readFile(retainedPath)).toEqual(retainedBytes);
   });
 

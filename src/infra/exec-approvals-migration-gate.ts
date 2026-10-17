@@ -17,6 +17,9 @@ const legacyAbsenceCache = new Set<string>();
  */
 function doctorFixInstruction(filePath: string, env: NodeJS.ProcessEnv): string {
   const command = "Run `openclaw doctor --fix`";
+  if (filePath.endsWith("#exec_approvals_config")) {
+    return `${command} with OPENCLAW_STATE_DIR set to ${path.dirname(path.dirname(filePath))}`;
+  }
   return env.OPENCLAW_STATE_DIR?.trim()
     ? `${command} with OPENCLAW_STATE_DIR set to ${path.dirname(filePath)}`
     : command;

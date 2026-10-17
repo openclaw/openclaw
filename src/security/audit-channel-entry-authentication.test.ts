@@ -175,9 +175,130 @@ describe("channel entry authentication audit", () => {
     expect(JSON.stringify(findings)).not.toContain(name);
   });
 
-  it("classifies through the identity declaration exactly once", () => {
-    expect(classifyEntryAuthentication(stableId)).toBe("verified");
-    expect(classifyEntryAuthentication(name)).toBe("mutable");
-    expect(classifyEntryAuthentication("*")).toBeUndefined();
+  it("warns when real WhatsApp and Slack channel accounts use mutable toolsBySender keys without leaking identifiers", async () => {
+    const { loadBundledPluginFacade } =
+      await import("../test-utils/bundled-plugin-public-surface.js");
+    const { whatsappSetupPlugin } = await loadBundledPluginFacade<{
+      whatsappSetupPlugin: ChannelPlugin;
+    }>({
+      pluginId: "whatsapp",
+      artifactBasename: "api.js",
+    });
+    const { slackPlugin } = await loadBundledPluginFacade<{
+      slackPlugin: ChannelPlugin;
+    }>({
+      pluginId: "slack",
+      artifactBasename: "api.js",
+    });
+    const { runSecurityAuditCore } = await import("./audit.js");
+    const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
+    const readOnlyPluginsModule = await import("../channels/plugins/read-only.js");
+    const listReadOnlySpy = vi
+      .spyOn(readOnlyPluginsModule, "listReadOnlyChannelPluginsForConfig")
+      .mockReturnValue([whatsappSetupPlugin, slackPlugin]);
+
+    const auditConfig: OpenClawConfig = {
+      session: { dmScope: "per-account-channel-peer" },
+      channels: {
+        whatsapp: {
+          allowFrom: [stableId],
+          groups: {
+            "120363123456789@g.us": {
+              tools: { deny: ["exec"] },
+              toolsBySender: {
+                "name:ops-lead-name": { alsoAllow: ["exec"] },
+                "id:12345": { allow: ["exec"] },
+              },
+            },
+          },
+          accounts: {
+            default: {
+              authDir: "/tmp/openclaw-whatsapp-default-audit-test",
+            },
+            work: {
+              authDir: "/tmp/openclaw-whatsapp-work-audit-test",
+              groups: {
+                "120363999999999@g.us": {
+                  toolsBySender: {
+                    "username:bob-handle": { allow: ["read"] },
+                  },
+                },
+              },
+            },
+          },
+        },
+        slack: {
+          enabled: true,
+          botToken: "xoxb-test-token",
+          appToken: "xapp-test-token",
+          channels: {
+            accounts: {
+              toolsBySender: {
+                "username:alice-handle": { allow: ["read"] },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    try {
+      const report = await runSecurityAuditCore({
+        config: auditConfig,
+        sourceConfig: auditConfig,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        loadPluginSecurityCollectors: false,
+        plugins: [whatsappSetupPlugin, slackPlugin],
+      });
+      const doctorFindings = await collectSecurityWarnings(auditConfig);
+
+      for (const findings of [report.findings, doctorFindings]) {
+        const whatsappDefaultFinding = findings.find(
+          (entry) =>
+            entry.checkId === "channels.whatsapp.toolsBySender.mutable_entries" &&
+            entry.title.includes("(account: default)"),
+        );
+        expect(whatsappDefaultFinding).toMatchObject({
+          severity: "warn",
+          detail: expect.stringContaining(
+            "1 toolsBySender entry in channels.whatsapp.accounts.default.groups.120363123456789@g.us.toolsBySender match mutable username:/name: sender attributes",
+          ),
+          remediation:
+            "Prefer stable id: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
+        });
+
+        const whatsappWorkFinding = findings.find(
+          (entry) =>
+            entry.checkId === "channels.whatsapp.toolsBySender.mutable_entries" &&
+            entry.title.includes("(account: work)"),
+        );
+        expect(whatsappWorkFinding).toMatchObject({
+          severity: "warn",
+          detail: expect.stringContaining(
+            "1 toolsBySender entry in channels.whatsapp.accounts.work.groups.120363999999999@g.us.toolsBySender match mutable username:/name: sender attributes",
+          ),
+        });
+
+        const slackFinding = findings.find(
+          (entry) => entry.checkId === "channels.slack.toolsBySender.mutable_entries",
+        );
+        expect(slackFinding).toMatchObject({
+          severity: "warn",
+          detail: expect.stringContaining(
+            "1 toolsBySender entry in channels.slack.channels.accounts.toolsBySender match mutable username:/name: sender attributes",
+          ),
+          remediation:
+            "Prefer stable id: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
+        });
+
+        const serialized = JSON.stringify(findings);
+        expect(serialized).not.toContain("ops-lead-name");
+        expect(serialized).not.toContain("alice-handle");
+        expect(serialized).not.toContain("bob-handle");
+      }
+    } finally {
+      listReadOnlySpy.mockRestore();
+    }
   });
 });

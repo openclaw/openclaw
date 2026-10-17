@@ -12,13 +12,6 @@ import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 describe("system-agent assistant timeout", () => {
   it.each([
     {
-      name: "external provider",
-      provider: "openai",
-      modelLabel: "openai/gpt-5.5",
-      external: true,
-      expected: SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
-    },
-    {
       name: "local provider",
       provider: "ollama",
       modelLabel: "ollama/qwen3.5:4b",

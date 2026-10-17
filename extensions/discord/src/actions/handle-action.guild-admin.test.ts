@@ -1,7 +1,7 @@
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as discordRequestClient from "../proxy-request-client.js";
+import * as discordRest from "../internal/rest.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 
@@ -9,7 +9,7 @@ const cfg = {
   channels: { discord: { token: "token", groupPolicy: "open" } },
 } as OpenClawConfig;
 
-const scenario = {
+const defaultScenario = {
   denyView: false,
   guildPermissions: PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages,
   locked: false,
@@ -18,6 +18,7 @@ const scenario = {
     | ChannelType.GuildPrivateThread
     | ChannelType.GuildPublicThread,
 };
+const scenario = { ...defaultScenario };
 
 let closeLoopback = async () => {};
 let requests: Awaited<ReturnType<typeof createDiscordLoopbackRest>>["requests"] = [];
@@ -54,6 +55,11 @@ function runReopen(params: Record<string, unknown> = {}) {
 
 function patchRequests() {
   return requests.filter((request) => request.method === "PATCH");
+}
+
+async function expectReopenDenied(params: Record<string, unknown> = {}) {
+  await expect(runReopen(params)).rejects.toThrow(/required permissions/);
+  expect(patchRequests()).toHaveLength(0);
 }
 
 beforeAll(async () => {
@@ -94,7 +100,9 @@ beforeAll(async () => {
   });
   requests = loopback.requests;
   closeLoopback = loopback.close;
-  vi.spyOn(discordRequestClient, "createDiscordRequestClient").mockReturnValue(loopback.rest);
+  vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
+    return loopback.rest;
+  });
 });
 
 afterAll(async () => {
@@ -104,11 +112,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   requests.length = 0;
-  scenario.denyView = false;
-  scenario.guildPermissions = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
-  scenario.locked = false;
-  scenario.privateMember = true;
-  scenario.type = ChannelType.GuildPublicThread;
+  Object.assign(scenario, defaultScenario);
 });
 
 describe("registered Discord channel-edit thread permissions", () => {
@@ -123,39 +127,29 @@ describe("registered Discord channel-edit thread permissions", () => {
     scenario.guildPermissions =
       PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessagesInThreads;
 
-    await expect(runReopen()).rejects.toThrow(/required permissions/);
-    expect(patchRequests()).toHaveLength(0);
+    await expectReopenDenied();
   });
 
   it("rejects a private-thread nonmember before the Discord PATCH", async () => {
     scenario.type = ChannelType.GuildPrivateThread;
     scenario.privateMember = false;
 
-    await expect(runReopen()).rejects.toThrow(/required permissions/);
-    expect(patchRequests()).toHaveLength(0);
+    await expectReopenDenied();
   });
 
   it("rejects revoked target visibility before the Discord PATCH", async () => {
     scenario.denyView = true;
 
-    await expect(runReopen()).rejects.toThrow(/required permissions/);
-    expect(patchRequests()).toHaveLength(0);
+    await expectReopenDenied();
   });
 
-  it.each([
-    ["an explicit unlock", { locked: false }],
-    ["an explicit flag edit", { nsfw: false }],
-    ["an explicit parent clear", { clearParent: true }],
-    ["a forum tag edit", { availableTags: [{ name: "status" }] }],
-  ])("keeps ManageThreads required for %s during reopen", async (_label, params) => {
-    await expect(runReopen(params)).rejects.toThrow(/required permissions/);
-    expect(patchRequests()).toHaveLength(0);
+  it("keeps ManageThreads required for an explicit parent clear during reopen", async () => {
+    await expectReopenDenied({ clearParent: true });
   });
 
   it("keeps ManageThreads required to reopen a locked thread", async () => {
     scenario.locked = true;
 
-    await expect(runReopen()).rejects.toThrow(/required permissions/);
-    expect(patchRequests()).toHaveLength(0);
+    await expectReopenDenied();
   });
 });

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type {
   commandResult as publicationCommandResult,
@@ -90,19 +90,24 @@ export async function createRealPublicationWorkspace({
   mocks.findWorktree.mockReturnValue(worktree);
   mocks.findWorktreeById.mockReturnValue(worktree);
   const loaded = mocks.loadSession(sessionKey);
-  const entry = { ...loaded.entry, worktree: { ...loaded.entry.worktree, repoRoot: cwd } };
-  if (realWorktree) {
-    insertRegistryWorktree(process.env, {
-      ...worktree,
-      name: "publication",
-      createdAt: Date.now(),
-      lastActiveAt: Date.now(),
-    });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { ...entry, updatedAt: Date.now() },
-    );
-  } else {
+  const entry = {
+    ...loaded.entry,
+    worktree: { ...loaded.entry.worktree, id: worktree.id, repoRoot: cwd },
+  };
+  if (!realWorktree) {
+    await deleteRegistryWorktree(process.env, worktree.id);
+  }
+  await insertRegistryWorktree(process.env, {
+    ...worktree,
+    name: "publication",
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  });
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    { ...entry, updatedAt: Date.now() },
+  );
+  if (!realWorktree) {
     mocks.loadSession.mockReturnValue({ ...loaded, entry });
   }
   mocks.resolveRepository.mockResolvedValue({

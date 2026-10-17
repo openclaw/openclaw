@@ -1,259 +1,101 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { createMinimaxFastModeWrapper, createMinimaxThinkingDisabledWrapper } from "./minimax.js";
 
-function captureThinkingPayload(params: {
-  provider: string;
-  api: string;
-  modelId: string;
+const minimaxModel = {
+  api: "anthropic-messages",
+  provider: "minimax",
+  id: "MiniMax-M2.7",
+} as Model<"anthropic-messages">;
+
+function captureThinkingPayload({
+  model = minimaxModel,
+  payload = {},
+  thinkingLevel,
+  options = {},
+}: {
+  model?: Model;
+  payload?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
-}): unknown {
-  let capturedThinking: unknown = undefined;
-  const baseStreamFn: StreamFn = (model, context, options) => {
-    const payload: Record<string, unknown> = {};
-    options?.onPayload?.(payload, model);
-    capturedThinking = payload.thinking;
-    return {} as ReturnType<StreamFn>;
+  options?: Parameters<StreamFn>[2];
+} = {}) {
+  const baseStreamFn: StreamFn = (streamModel, _context, streamOptions) => {
+    streamOptions?.onPayload?.(payload, streamModel);
+    return createAssistantMessageEventStream();
   };
-
-  const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn, params.thinkingLevel);
-  void wrapped(
-    {
-      api: params.api,
-      provider: params.provider,
-      id: params.modelId,
-    } as Model<"anthropic-messages">,
-    { messages: [] } as Context,
-    {},
+  void createMinimaxThinkingDisabledWrapper(baseStreamFn, thinkingLevel)(
+    model,
+    { messages: [] },
+    options,
   );
-
-  return capturedThinking;
+  return payload;
 }
 
 describe("createMinimaxThinkingDisabledWrapper", () => {
-  it("disables thinking for minimax anthropic-messages provider", () => {
+  it.each([
+    ["minimax", "anthropic-messages", "MiniMax-M2.7", { type: "disabled" }],
+    ["minimax-portal", "anthropic-messages", "MiniMax-M2.7", { type: "disabled" }],
+    ["anthropic", "anthropic-messages", "claude-sonnet-4-6", undefined],
+    ["minimax", "openai-completions", "MiniMax-M2.7", undefined],
+    ["minimax", "anthropic-messages", "MiniMax-M3", undefined],
+    ["minimax-portal", "anthropic-messages", "MiniMax-M3", undefined],
+  ] as const)("sets default thinking for %s/%s/%s", (provider, api, id, expected) => {
+    expect(
+      captureThinkingPayload({ model: { ...minimaxModel, provider, api, id } }).thinking,
+    ).toEqual(expected);
+  });
+
+  it.each([
+    ["removes implicit disabled thinking", undefined, { type: "disabled" }, undefined],
+    ["preserves explicit off thinking", "off", { type: "disabled" }, { type: "disabled" }],
+    [
+      "rewrites budget thinking to adaptive",
+      "adaptive",
+      { type: "enabled", budget_tokens: 1024 },
+      { type: "adaptive" },
+    ],
+  ] as const)("%s for MiniMax-M3", (_name, thinkingLevel, thinking, expected) => {
     expect(
       captureThinkingPayload({
-        provider: "minimax",
-        api: "anthropic-messages",
-        modelId: "MiniMax-M2.7",
-      }),
-    ).toEqual({ type: "disabled" });
-  });
-
-  it("disables thinking for minimax-portal anthropic-messages provider", () => {
-    expect(
-      captureThinkingPayload({
-        provider: "minimax-portal",
-        api: "anthropic-messages",
-        modelId: "MiniMax-M2.7",
-      }),
-    ).toEqual({ type: "disabled" });
-  });
-
-  it("does not affect non-minimax providers", () => {
-    expect(
-      captureThinkingPayload({
-        provider: "anthropic",
-        api: "anthropic-messages",
-        modelId: "claude-sonnet-4-6",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not affect minimax with non-anthropic-messages api", () => {
-    expect(
-      captureThinkingPayload({
-        provider: "minimax",
-        api: "openai-completions",
-        modelId: "MiniMax-M2.7",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does NOT disable thinking for MiniMax-M3 on anthropic-messages", () => {
-    // M3 emits Anthropic-shape thinking blocks and returns empty content
-    // when thinking is disabled; see isMinimaxModelRequiringThinking.
-    expect(
-      captureThinkingPayload({
-        provider: "minimax",
-        api: "anthropic-messages",
-        modelId: "MiniMax-M3",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does NOT disable thinking for MiniMax-M3 on minimax-portal", () => {
-    expect(
-      captureThinkingPayload({
-        provider: "minimax-portal",
-        api: "anthropic-messages",
-        modelId: "MiniMax-M3",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("removes implicit disabled thinking for MiniMax-M3", () => {
-    let capturedThinking: unknown = undefined;
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        thinking: { type: "disabled" },
-      };
-      options?.onPayload?.(payload, model);
-      capturedThinking = payload.thinking;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn);
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedThinking).toBeUndefined();
-  });
-
-  it("preserves explicit off thinking for MiniMax-M3", () => {
-    let capturedThinking: unknown = undefined;
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        thinking: { type: "disabled" },
-      };
-      options?.onPayload?.(payload, model);
-      capturedThinking = payload.thinking;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn, "off");
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedThinking).toEqual({ type: "disabled" });
-  });
-
-  it("rewrites MiniMax-M3 default budget thinking to adaptive", () => {
-    let capturedThinking: unknown = undefined;
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        thinking: { type: "enabled", budget_tokens: 1024 },
-      };
-      options?.onPayload?.(payload, model);
-      capturedThinking = payload.thinking;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn, "adaptive");
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedThinking).toEqual({ type: "adaptive" });
+        model: { ...minimaxModel, id: "MiniMax-M3" },
+        payload: { thinking },
+        thinkingLevel,
+      }).thinking,
+    ).toEqual(expected);
   });
 
   it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        max_tokens: 8692,
-        thinking: { type: "enabled", budget_tokens: 8192 },
-      };
-      options?.onPayload?.(payload, model);
-      capturedPayload = payload;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn, "adaptive");
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      { maxTokens: 500 },
-    );
-
-    expect(capturedPayload).toMatchObject({
-      max_tokens: 500,
-      thinking: { type: "adaptive" },
-    });
+    expect(
+      captureThinkingPayload({
+        model: { ...minimaxModel, id: "MiniMax-M3" },
+        payload: { max_tokens: 8692, thinking: { type: "enabled", budget_tokens: 8192 } },
+        thinkingLevel: "adaptive",
+        options: { maxTokens: 500 },
+      }),
+    ).toMatchObject({ max_tokens: 500, thinking: { type: "adaptive" } });
   });
 
   it("preserves explicit enabled thinking for MiniMax-M3", () => {
-    let capturedThinking: unknown = undefined;
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        thinking: { type: "disabled" },
-      };
-      options?.onPayload?.(payload, model);
-      capturedThinking = payload.thinking;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn);
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {
+    const capturedPayload = captureThinkingPayload({
+      model: { ...minimaxModel, id: "MiniMax-M3" },
+      payload: { thinking: { type: "disabled" } },
+      options: {
         onPayload: (payload) => {
-          (payload as Record<string, unknown>).thinking = {
-            type: "enabled",
-            budget_tokens: 1024,
-          };
+          (payload as Record<string, unknown>).thinking = { type: "enabled", budget_tokens: 1024 };
         },
       },
-    );
-
-    expect(capturedThinking).toEqual({ type: "enabled", budget_tokens: 1024 });
+    });
+    expect(capturedPayload.thinking).toEqual({ type: "enabled", budget_tokens: 1024 });
   });
 
   it("preserves an already-set thinking value", () => {
-    let capturedThinking: unknown = undefined;
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        thinking: { type: "enabled", budget_tokens: 1024 },
-      };
-      options?.onPayload?.(payload, model);
-      capturedThinking = payload.thinking;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn);
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedThinking).toEqual({ type: "enabled", budget_tokens: 1024 });
+    expect(
+      captureThinkingPayload({
+        payload: { thinking: { type: "enabled", budget_tokens: 1024 } },
+      }).thinking,
+    ).toEqual({ type: "enabled", budget_tokens: 1024 });
   });
 });
 
@@ -262,20 +104,9 @@ describe("createMinimaxFastModeWrapper", () => {
     let capturedId = "";
     const baseStreamFn: StreamFn = (model) => {
       capturedId = model.id;
-      return {} as ReturnType<StreamFn>;
+      return createAssistantMessageEventStream();
     };
-
-    const wrapped = createMinimaxFastModeWrapper(baseStreamFn, true);
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
+    void createMinimaxFastModeWrapper(baseStreamFn, true)(minimaxModel, { messages: [] }, {});
     expect(capturedId).toBe("MiniMax-M2.7-highspeed");
   });
 
@@ -283,21 +114,13 @@ describe("createMinimaxFastModeWrapper", () => {
     const capturedIds: string[] = [];
     const baseStreamFn: StreamFn = (model) => {
       capturedIds.push(model.id);
-      return {} as ReturnType<StreamFn>;
+      return createAssistantMessageEventStream();
     };
-
     let enabled = true;
     const wrapped = createMinimaxFastModeWrapper(baseStreamFn, () => enabled);
-    const model = {
-      api: "anthropic-messages",
-      provider: "minimax",
-      id: "MiniMax-M2.7",
-    } as Model<"anthropic-messages">;
-
-    void wrapped(model, { messages: [] } as Context, {});
+    void wrapped(minimaxModel, { messages: [] }, {});
     enabled = false;
-    void wrapped(model, { messages: [] } as Context, {});
-
+    void wrapped(minimaxModel, { messages: [] }, {});
     expect(capturedIds).toEqual(["MiniMax-M2.7-highspeed", "MiniMax-M2.7"]);
   });
 });

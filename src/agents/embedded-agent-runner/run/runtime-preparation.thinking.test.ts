@@ -10,6 +10,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import {
@@ -27,7 +28,7 @@ import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./runtime.js";
 
 // Credential acquisition and native process installation are outside this network-free
 // composition. Route planning, model resolution, auth commit, and the overlay remain real.
@@ -44,13 +45,14 @@ vi.mock("../../model-auth.js", async (importOriginal) => ({
     profileId,
   }),
 }));
+// mock-isolation: Runtime preparation uses synthetic credentials without host auth reads.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: async () => ({ mode: "token", apiKey: "fixture-token" }),
-  resolveProviderAuthProfileMetadata: () => ({}),
+  resolveProviderAuthProfileMetadataAsync: async () => ({}),
 }));
 vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),
-  getCachedLiveProviderModelRows: async () => [
+  fetchLiveProviderModelRows: async () => [
     {
       slug: "gpt-5.6-luna",
       supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
@@ -198,35 +200,37 @@ describe("selected route thinking metadata at runtime preparation", () => {
         : prepareModelRunCapabilities([[capabilityEntry], []], ["openai", MODEL_ID, "codex"])
             .modelThinkingCapability;
     const runId = `effort-${route}-${capability}`;
-    const runtime = await prepareEmbeddedRunRuntime({
-      assertCurrent: () => {},
-      runParams: {
-        runId,
-        admittedRunContext: createTestAdmittedRunContext(runId),
-        sessionId: "effort-session",
-        sessionKey: "agent:main:effort-session",
-        agentId: "main",
-        prompt: "Reply briefly.",
+    const runtime = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
+      prepareEmbeddedRunRuntime({
+        assertCurrent: () => {},
+        runParams: {
+          runId,
+          admittedRunContext: createTestAdmittedRunContext(runId),
+          sessionId: "effort-session",
+          sessionKey: "agent:main:effort-session",
+          agentId: "main",
+          prompt: "Reply briefly.",
+          workspaceDir: root,
+          timeoutMs: 5_000,
+          config: preparedModelRuntime.config,
+          authProfileId: `openai:${route}`,
+          authProfileIdSource: "user",
+          thinkLevel: "off",
+          modelThinkingCapability,
+        },
+        provider: "openai",
+        modelId: MODEL_ID,
+        agentDir: preparedModelRuntime.agentDir,
         workspaceDir: root,
-        timeoutMs: 5_000,
-        config: preparedModelRuntime.config,
-        authProfileId: `openai:${route}`,
-        authProfileIdSource: "user",
-        thinkLevel: "off",
-        modelThinkingCapability,
-      },
-      provider: "openai",
-      modelId: MODEL_ID,
-      agentDir: preparedModelRuntime.agentDir,
-      workspaceDir: root,
-      globalLane: "test",
-      hookRunner: undefined,
-      hookContext: { sessionId: "effort-session", workspaceDir: root },
-      markStartupStage: () => {},
-      notifyExecutionPhase: () => {},
-      fallbackConfigured: false,
-      preparedModelRuntime,
-    });
+        globalLane: "test",
+        hookRunner: undefined,
+        hookContext: { sessionId: "effort-session", workspaceDir: root },
+        markStartupStage: () => {},
+        notifyExecutionPhase: () => {},
+        fallbackConfigured: false,
+        preparedModelRuntime,
+      }),
+    );
     try {
       const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
       expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(

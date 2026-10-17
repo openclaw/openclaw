@@ -3,8 +3,6 @@ import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-proto
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
-const requests = new WeakMap<GatewayBrowserClient, object>();
-
 /** Load a complete published surface while preserving the current connection and session. */
 export async function refreshPluginCapabilities(
   event: Pick<GatewayEventFrame, "event" | "payload">,
@@ -18,45 +16,28 @@ export async function refreshPluginCapabilities(
     return;
   }
   const payload = isRecord(event.payload) ? event.payload : undefined;
-  let generation: number;
   if (event.event === "plugins.controlUi.changed") {
     if (typeof payload?.revision !== "string" || !payload.revision) {
       return;
     }
-    // UI policy can change the advertised widgets without replacing backend plugins.
-    generation = current.pluginCapabilities?.generation ?? 0;
   } else {
     const nextGeneration = payload?.generation;
     if (
       event.event !== "plugins.changed" ||
       typeof nextGeneration !== "number" ||
       !Number.isSafeInteger(nextGeneration) ||
-      nextGeneration < 0 ||
-      nextGeneration <= (current.pluginCapabilities?.generation ?? -1)
+      nextGeneration < 0
     ) {
       return;
     }
-    generation = nextGeneration;
   }
-  const request = {};
-  requests.set(client, request);
-  let capabilities: Required<PluginsUiDescriptorsResult>;
-  try {
-    capabilities = await client.request("plugins.uiDescriptors", {});
-  } catch (error) {
-    if (requests.get(client) === request) {
-      throw error;
-    }
-    return;
-  }
-  const snapshot = requests.get(client) === request ? readCurrent() : null;
+  const capabilities = await client.request<Required<PluginsUiDescriptorsResult>>(
+    "plugins.uiDescriptors",
+    {},
+  );
+  const snapshot = readCurrent();
   if (!snapshot?.hello) {
     return;
-  }
-  if (
-    capabilities.generation < Math.max(generation, snapshot.pluginCapabilities?.generation ?? -1)
-  ) {
-    throw new Error("Plugin capabilities did not reach the applied generation.");
   }
   const canvasPluginSurfaceUrl = capabilities.pluginSurfaceUrls.canvas?.trim() || null;
   if (canvasPluginSurfaceUrl !== snapshot.canvasPluginSurfaceUrl) {

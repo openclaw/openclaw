@@ -4,15 +4,14 @@ import { getConfigValueAtPath } from "../config/config-paths.js";
 import { setRuntimeConfigAppliedHash } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
-import type { GatewayRestartIntent } from "../infra/restart-intent.js";
 import {
   deferGatewayRestartUntilIdle,
   type RestartDeferralHandle,
   setGatewayRestartPolicy,
 } from "../infra/restart.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
+import type { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
   GatewayConfigReloadSupersededError,
   type AcceptedRestartTarget,
@@ -23,18 +22,6 @@ import {
   type GatewayRestartTransactionState,
 } from "./server-reload-contracts.js";
 import { isCurrentGatewayReloadGeneration } from "./server-reload-generation.js";
-
-const RESTART_EMISSION_RETRY_MS = 1_000;
-
-type GatewayActiveCounts = {
-  queueSize: number;
-  pendingReplies: number;
-  embeddedRuns: number;
-  backgroundExecSessions: number;
-  rootRequests: number;
-  activeTasks: number;
-  totalActive: number;
-};
 
 type RestartRequestDetails = {
   plan: GatewayReloadPlan;
@@ -69,22 +56,20 @@ type AcceptedRestartTargetState =
 
 type GatewayRestartCoordinatorParams = Pick<
   GatewayReloadHandlerParams,
-  "assertRestartReady" | "logReload" | "requestRecoveryRestart"
+  "scheduler" | "assertRestartReady" | "logReload" | "requestRecoveryRestart"
 >;
 
 type GatewayRestartCoordinatorOptions = {
   params: GatewayRestartCoordinatorParams;
   myGeneration: number;
   restartRecoveryAvailable: boolean;
-  getActiveCounts: () => GatewayActiveCounts;
-  formatActiveDetails: (counts: GatewayActiveCounts) => string[];
-  formatDeferredWorkStatus: (status: "active" | "still active") => string;
-  formatTaskBlockers: () => string | null;
-};
+} & Pick<
+  ReturnType<typeof createGatewayActiveWorkTracker>,
+  "getActiveCounts" | "formatActiveDetails" | "formatDeferredWorkStatus"
+>;
 
 class GatewayRestartTransaction {
-  private retryStopped = false;
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopped = false;
   private restartDeferral: RestartDeferralHandle | null = null;
   private requestGeneration = 0;
   // onReady/onTimeout precede async restart preparation. Keep committed details
@@ -106,7 +91,7 @@ class GatewayRestartTransaction {
 
   constructor(private readonly options: GatewayRestartCoordinatorOptions) {}
 
-  readonly isStopped = () => this.retryStopped;
+  readonly isStopped = () => this.stopped;
   readonly hasPendingConfigCandidate = () => this.acceptedTargetState.kind === "candidate-pending";
   readonly hasOperation = () => this.operation.kind !== "idle";
   readonly getAcceptedTarget = (): AcceptedRestartTarget | null =>
@@ -236,7 +221,7 @@ class GatewayRestartTransaction {
     nextConfig: OpenClawConfig,
     options?: GatewayRestartRequestOptions,
   ): GatewayRestartTransactionResult {
-    if (this.retryStopped) {
+    if (this.isStopped()) {
       return { status: "recovery-pending", settle: () => {} };
     }
     // Only another restart requirement supersedes accepted restart work. A
@@ -262,7 +247,7 @@ class GatewayRestartTransaction {
   }
 
   stop(): void {
-    this.retryStopped = true;
+    this.stopped = true;
     this.pausedDebt = null;
     this.conservativeDebt = null;
     this.supersedeRequest();
@@ -308,7 +293,8 @@ class GatewayRestartTransaction {
 
   private isCurrentRequest(requestGeneration: number): boolean {
     return (
-      !this.retryStopped &&
+      !this.isStopped() &&
+      !this.options.params.scheduler.signal.aborted &&
       requestGeneration === this.requestGeneration &&
       isCurrentGatewayReloadGeneration(this.options.myGeneration)
     );
@@ -318,55 +304,7 @@ class GatewayRestartTransaction {
     this.requestGeneration += 1;
     this.restartDeferral?.cancel();
     this.restartDeferral = null;
-    if (this.retryTimer) {
-      clearTimeout(this.retryTimer);
-      this.retryTimer = null;
-    }
     this.operation = { kind: "idle" };
-  }
-
-  private scheduleEmissionRetry(retry: {
-    reason: string;
-    intent?: GatewayRestartIntent;
-    requestGeneration: number;
-    prepareForEmit?: () => Promise<boolean>;
-  }): void {
-    if (this.retryTimer || !this.isCurrentRequest(retry.requestGeneration)) {
-      return;
-    }
-    // Retry the exact failed emission. Re-entering request planning would start
-    // a fresh idle deferral and discard a timeout's force/deadline decision.
-    this.retryTimer = setTimeout(() => {
-      this.retryTimer = null;
-      if (!this.isCurrentRequest(retry.requestGeneration)) {
-        return;
-      }
-      // Timer callbacks outlive the config transaction root. Re-enter process
-      // admission so prepared host suspension cannot race signal delivery.
-      void runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (!this.isCurrentRequest(retry.requestGeneration)) {
-          return;
-        }
-        if (retry.prepareForEmit && !(await retry.prepareForEmit())) {
-          this.scheduleEmissionRetry(retry);
-          return;
-        }
-        const emitResult = this.options.params.requestRecoveryRestart?.(retry.reason, retry.intent);
-        if (emitResult && emitResult.status !== "failed") {
-          this.markEmissionSettled();
-        }
-        if (!emitResult || emitResult.status === "failed") {
-          this.scheduleEmissionRetry(retry);
-        }
-      }, "reload:restart").catch((err: unknown) => {
-        if (this.isCurrentRequest(retry.requestGeneration)) {
-          this.options.params.logReload.warn(
-            `gateway restart recovery retry stopped: ${String(err)}`,
-          );
-        }
-      });
-    }, RESTART_EMISSION_RETRY_MS);
-    this.retryTimer.unref?.();
   }
 
   private requestForGeneration(
@@ -393,6 +331,7 @@ class GatewayRestartTransaction {
     }
     const requestRecoveryRestart = params.requestRecoveryRestart;
     let emissionPrepared = true;
+    let preparing = false;
     const prepareForEmit = async () => {
       try {
         await params.assertRestartReady?.(nextConfig);
@@ -423,72 +362,63 @@ class GatewayRestartTransaction {
         params.logReload.warn(
           `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
         );
-        const taskBlockers = this.options.formatTaskBlockers();
-        if (taskBlockers) {
-          params.logReload.warn(
-            `restart blocked by active background task run(s): ${taskBlockers}`,
-          );
-        }
       } else {
         params.logReload.warn(`config change requires gateway restart (${reasons}) — preparing`);
       }
 
-      let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
       // Timeout and failed checks leave a live deferral owned by this request.
       this.restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => this.options.getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
         timeoutIntent: { force: true, reason: "config reload forced restart" },
         reason: restartReason,
-        emitHooks: {
-          beforeEmit: async () => {
+        // Preparation can wait for the plugin lifecycle lease, whose holders need
+        // root admission; the deferral runs it before taking the signal fence.
+        prepareEmission: async () => {
+          preparing = true;
+          try {
             emissionPrepared = await prepareForEmit();
-          },
+          } finally {
+            preparing = false;
+          }
+        },
+        emitHooks: {
           emitRestart: (reason, intent) => {
             if (!this.isCurrentRequest(requestGeneration)) {
               return { status: "coalesced" };
             }
             const resolvedReason = reason ?? restartReason;
             if (!emissionPrepared) {
-              failedEmission = { reason: resolvedReason, intent };
+              params.logReload.warn(
+                "gateway restart preparation failed; reapply the config or restart the Gateway manually",
+              );
               return { status: "failed" };
             }
             const emitResult = requestRecoveryRestart(resolvedReason, intent);
             if (emitResult.status !== "failed") {
               this.markEmissionSettled();
+            } else {
+              params.logReload.warn(
+                "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
+              );
             }
-            failedEmission =
-              emitResult.status === "failed" ? { reason: resolvedReason, intent } : undefined;
             return emitResult;
-          },
-          afterEmitFailed: async () => {
-            if (!this.isCurrentRequest(requestGeneration) || !failedEmission) {
-              return;
-            }
-            if (!this.options.restartRecoveryAvailable) {
-              params.logReload.warn("gateway restart recovery unavailable; retry skipped");
-              return;
-            }
-            params.logReload.warn("gateway restart recovery emission failed; retrying");
-            this.scheduleEmissionRetry({
-              ...failedEmission,
-              requestGeneration,
-              prepareForEmit,
-            });
           },
         },
         hooks: {
           onReady: () => {
             this.restartDeferral = null;
-            params.logReload.info("all operations and replies completed; restarting gateway now");
+            if (this.operation.kind === "request" && this.operation.emissionSettled) {
+              params.logReload.info("all operations and replies completed; restarting gateway now");
+            }
           },
           onStillPending: (_pending, elapsedMs) => {
             params.logReload.warn(
-              `restart still deferred after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("active")}`,
+              `restart still deferred after ${elapsedMs}ms with ${preparing ? "restart preparation pending; " : ""}${this.options.formatDeferredWorkStatus("active")}`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
-            // Keep the handle until delivery or cancellation; forced attempts may retry.
+            // Keep the handle until preparation settles or the request is cancelled.
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
@@ -503,7 +433,6 @@ class GatewayRestartTransaction {
       setGatewayRestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
       return true;
     }
-    // No active operations or pending replies, restart immediately
     params.logReload.warn(`config change requires gateway restart (${reasons})`);
     // The managed reloader owns independent root admission until onRestart
     // returns. Extend that fence across signal delivery until the run loop
@@ -513,14 +442,9 @@ class GatewayRestartTransaction {
       this.markEmissionSettled();
     }
     if (emitResult.status === "failed") {
-      params.logReload.warn("gateway restart recovery emission failed");
-      if (this.options.restartRecoveryAvailable) {
-        this.scheduleEmissionRetry({
-          reason: restartReason,
-          requestGeneration,
-          prepareForEmit,
-        });
-      }
+      params.logReload.warn(
+        "gateway restart recovery emission failed; reapply the config or restart the Gateway manually",
+      );
       return false;
     }
     if (emitResult.status === "coalesced") {
@@ -534,27 +458,16 @@ class GatewayRestartTransaction {
 export function createGatewayRestartCoordinator(options: GatewayRestartCoordinatorOptions) {
   const transaction = new GatewayRestartTransaction(options);
   return {
-    acceptRestartConfig: (config?: OpenClawConfig) => transaction.acceptConfig(config),
+    acceptRestartConfig: transaction.acceptConfig.bind(transaction),
     ...transaction.appliedConfigHashPublisher,
-    beginGatewayRestartLifecycle: () => transaction.beginLifecycle(),
-    pauseGatewayRestartForConfigCandidate: () => transaction.pauseForConfigCandidate(),
-    publishAcceptedRestartTarget: (target: AcceptedRestartTarget) =>
-      transaction.publishAcceptedTarget(target),
-    recordAcceptedRestartTarget: (target: AcceptedRestartTarget) =>
-      transaction.recordAcceptedTarget(target),
-    requestGatewayRestart: (
-      plan: GatewayReloadPlan,
-      nextConfig: OpenClawConfig,
-      requestOptions?: GatewayRestartRequestOptions,
-    ) => transaction.request(plan, nextConfig, requestOptions),
-    restoreConservativeRestartDebt: (debt: RestartRequestDetails) =>
-      transaction.restoreConservativeDebt(debt),
-    stopRestartRetries: () => transaction.stop(),
-    deferGatewayRestartDebt: (
-      plan: GatewayReloadPlan,
-      nextConfig: OpenClawConfig,
-      requestOptions?: GatewayRestartRequestOptions,
-    ) => transaction.deferDebt(plan, nextConfig, requestOptions),
+    beginGatewayRestartLifecycle: transaction.beginLifecycle.bind(transaction),
+    pauseGatewayRestartForConfigCandidate: transaction.pauseForConfigCandidate.bind(transaction),
+    publishAcceptedRestartTarget: transaction.publishAcceptedTarget.bind(transaction),
+    recordAcceptedRestartTarget: transaction.recordAcceptedTarget.bind(transaction),
+    requestGatewayRestart: transaction.request.bind(transaction),
+    restoreConservativeRestartDebt: transaction.restoreConservativeDebt.bind(transaction),
+    stopRestartRetries: transaction.stop.bind(transaction),
+    deferGatewayRestartDebt: transaction.deferDebt.bind(transaction),
     getLatestAcceptedRestartTarget: transaction.getAcceptedTarget,
     hasConfigCandidatePending: transaction.hasPendingConfigCandidate,
     hasRestartRequestTransaction: transaction.hasOperation,

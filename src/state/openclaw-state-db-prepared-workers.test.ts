@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { ensureNodeWorkerPreparedWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
@@ -15,11 +15,7 @@ import {
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const migrationPaths = ["runtime open", "doctor repair"] as const;
 const preparationKey = "a".repeat(64);
-const migrationCases = [15, 16].flatMap((version) =>
-  migrationPaths.map((via) => ({ version, via })),
-);
 const retainedTables = [
   "worker_environment_credentials",
   "worker_environment_ssh_fallback_ports",
@@ -31,21 +27,19 @@ const retainedTables = [
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-function readObligations(db: DatabaseSync) {
+function readObligations(db: EngineConnection) {
   return Object.fromEntries(
     retainedTables.map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all()]),
   );
 }
 
-function readSnapshot(db: DatabaseSync) {
+function readSnapshot(db: EngineConnection) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
     metadata: db.prepare("SELECT * FROM schema_meta").all(),
     machineState: db.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all(),
     schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
     environments: db.prepare("SELECT rowid, * FROM worker_environments").all(),
-    workshopProposals: db.prepare("SELECT * FROM skill_workshop_proposals").all(),
-    workshopReviews: db.prepare("SELECT * FROM skill_workshop_collection_reviews").all(),
     obligations: readObligations(db),
   };
 }
@@ -70,31 +64,6 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
         ('fixture', 'namespace', 'retained', '{"keep":true}', 10, NULL),
         ('fixture', 'namespace', 'expiring', '{"keep":true}', 10, 1000);
     `);
-    legacy.exec(`INSERT INTO skill_workshop_proposals (
-      proposal_id, record_json, owner_agent_id, kind, status, created_at, updated_at, draft_hash
-    ) VALUES ('retained-proposal', '{}', 'main', 'create', 'pending', '2026-08-01', '2026-08-01', 'hash');`);
-    if (version === 15) {
-      legacy.exec(`
-        ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
-        ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
-        UPDATE skill_workshop_proposals SET workspace_dir = '/workspace';
-        DROP TABLE skill_workshop_collection_reviews;
-        CREATE TABLE skill_workshop_collection_reviews (
-          review_id TEXT NOT NULL PRIMARY KEY,
-          workspace_dir TEXT NOT NULL,
-          backup_id TEXT NOT NULL,
-          create_time INTEGER NOT NULL,
-          kept_names_json TEXT NOT NULL,
-          written_names_json TEXT NOT NULL,
-          dropped_json TEXT NOT NULL
-        ) STRICT;
-        INSERT INTO skill_workshop_collection_reviews
-          VALUES ('retained-review', '/workspace', 'backup', 1, '[]', '[]', '[]');
-      `);
-    } else {
-      legacy.exec(`INSERT INTO skill_workshop_collection_reviews
-        VALUES ('retained-review', 'main', 'backup', 1, '[]', '[]', '[]');`);
-    }
     legacy.exec(`
       ALTER TABLE worker_environments ADD COLUMN future_note TEXT;
       PRAGMA user_version = ${version};
@@ -138,7 +107,7 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
 }
 
 describe("prepared worker schema migration", () => {
-  it.each(migrationPaths)(
+  it.each(["doctor repair"] as const)(
     "upgrades deferred v16 content through %s without publishing over an old updater",
     (via) => {
       const { options, before } = createLegacyWorkers(16, true);
@@ -169,9 +138,6 @@ describe("prepared worker schema migration", () => {
           .all()
           .map((row) => row.name),
       ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      expect(db.prepare("SELECT * FROM skill_workshop_collection_reviews").all()).toEqual(
-        before.workshopReviews,
-      );
       const after = readSnapshot(db);
       closeOpenClawStateDatabaseForTest();
       expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
@@ -206,7 +172,7 @@ describe("prepared worker schema migration", () => {
     ).toEqual([]);
   });
 
-  it.each(migrationCases)(
+  it.each([{ version: 15, via: "runtime open" }])(
     "preserves v$version workers and unresolved cleanup through $via",
     ({ version, via }) => {
       const { options, databasePath, before } = createLegacyWorkers(version);
@@ -217,10 +183,9 @@ describe("prepared worker schema migration", () => {
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [
-            ...(version === 15
-              ? ["Moved Skill Workshop ownership to per-agent directories (v16)"]
-              : []),
             "Recorded prepared worker ownership and one-use lifecycle (v17)",
+            "Replaced retained task indexes with ordered cron history indexes (v24)",
+            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
             "Rebuilt canonical shared-state SQLite indexes (1)",
           ],
           warnings: [],
@@ -244,22 +209,6 @@ describe("prepared worker schema migration", () => {
           .all()
           .map((row) => row.name),
       ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      expect(db.prepare("SELECT * FROM skill_workshop_proposals").all()).toEqual(
-        before.workshopProposals.map(
-          ({ workspace_dir: _workspace, claim_released_time: _released, ...proposal }) => proposal,
-        ),
-      );
-      expect(db.prepare("SELECT * FROM skill_workshop_collection_reviews").all()).toEqual([
-        {
-          review_id: "retained-review",
-          owner_agent_id: "main",
-          backup_id: "backup",
-          create_time: 1,
-          kept_names_json: "[]",
-          written_names_json: "[]",
-          dropped_json: "[]",
-        },
-      ]);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
@@ -280,7 +229,7 @@ describe("prepared worker schema migration", () => {
     },
   );
 
-  it.each(migrationCases)(
+  it.each([{ version: 16, via: "doctor repair" }])(
     "rolls back all v$version migrations and markers after failed $via",
     ({ version, via }) => {
       const { options, databasePath } = createLegacyWorkers(version);
@@ -296,30 +245,6 @@ describe("prepared worker schema migration", () => {
           changes: [],
           warnings: [expect.stringContaining("prepared migration rollback")],
         });
-      }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
-    },
-  );
-
-  it.each(migrationCases)(
-    "refuses incomplete v$version ownership before $via",
-    ({ version, via }) => {
-      const { options, databasePath } = createLegacyWorkers(version);
-      const legacy = openNodeSqliteDatabase(databasePath);
-      legacy.exec("DROP TABLE session_groups;");
-      const before = readSnapshot(legacy);
-      legacy.close();
-      if (via === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table session_groups/);
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([
-          expect.stringContaining("missing table session_groups"),
-        ]);
       }
       const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {

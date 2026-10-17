@@ -50,7 +50,7 @@ export function withLegacyConfig(
 }
 
 /** Isolates the trusted partition selector from a partially valid legacy config. */
-export function retainStoreConfig(config: OpenClawConfig | undefined): OpenClawConfig | undefined {
+function retainStoreConfig(config: OpenClawConfig | undefined): OpenClawConfig | undefined {
   const cron = config?.cron as { store?: unknown; webhook?: unknown } | undefined;
   if (typeof cron?.store !== "string" || !cron.store.trim()) {
     return undefined;

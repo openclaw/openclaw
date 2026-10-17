@@ -20,11 +20,12 @@ describe("Gateway host lifecycle authority", () => {
   const execute = vi.fn<HostedGatewayStop["execute"]>();
   const dispose = vi.fn<HostedGatewayStop["dispose"]>();
   const owners: ReturnType<typeof createGatewayHostLifecycle>[] = [];
-  const owner = () => {
+  const owner = (commitExternalStop?: () => void) => {
     const host = createGatewayHostLifecycle({
       isCurrent: () => current,
       isServing: () => serving,
       acceptStop,
+      commitExternalStop,
       processOwner: { ownsProcessLifecycle: true, supervisor: null },
     });
     owners.push(host);
@@ -64,6 +65,36 @@ describe("Gateway host lifecycle authority", () => {
       delayMs: 0,
     });
     expect(guard).toHaveBeenCalledTimes(2);
+  });
+
+  it("exposes committed external stop only when its live process host supplies it", () => {
+    const legacy = owner();
+    expect(legacy.capability.externalRestart?.commitStop).toBeUndefined();
+    const commit = vi.fn(() => {
+      serving = false;
+    });
+    const host = owner(commit);
+    const capability = host.capability.externalRestart;
+    if (!capability?.commitStop) {
+      throw new Error("Missing committed stop capability");
+    }
+    capability.commitStop();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
+    expect(() => capability.commitStop!()).toThrow("retired or non-serving");
+  });
+
+  it.each(["retired", "replaced"])("refuses committed stop from a %s host", async (change) => {
+    const commit = vi.fn();
+    const host = owner(commit);
+    if (change === "retired") {
+      await host.retire();
+    }
+    if (change === "replaced") {
+      current = false;
+    }
+    expect(() => host.capability.externalRestart!.commitStop!()).toThrow("retired or non-serving");
+    expect(commit).not.toHaveBeenCalled();
   });
 
   it("transfers only the accepted stop across teardown, without awaiting native completion", async () => {
@@ -133,14 +164,6 @@ describe("Gateway host lifecycle authority", () => {
     await expect(first).resolves.toEqual({ ok: false, error: "native permission denied" });
     expect(acceptStop).not.toHaveBeenCalled();
     await expect(host.capability.request("start", () => {})).resolves.toMatchObject({ ok: true });
-  });
-
-  it("retires accepted native authority on preemption", async () => {
-    const host = owner();
-    await host.capability.request("stop", () => {});
-    await host.retire();
-    await expect(host.finishStop()).resolves.toEqual({ outcome: "retired" });
-    expect(execute).not.toHaveBeenCalled();
   });
 
   it("does not carry an armed lease into another host iteration in the same process", async () => {
@@ -221,6 +244,7 @@ describe("Gateway host lifecycle authority", () => {
       await retirement;
       await request;
       expect(dispose).toHaveBeenCalledOnce();
+      await expect(host.finishStop()).resolves.toEqual({ outcome: "retired" });
     },
   );
 

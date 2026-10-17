@@ -1,4 +1,6 @@
+import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -6,6 +8,8 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
+import { createPluginRuntimeStore } from "../../../plugin-sdk/runtime-store.js";
+import { PluginInstance } from "../../../plugins/plugin-instance.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   registerRealtimeVoiceSelection,
@@ -15,7 +19,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import type { GatewayClient, RespondFn } from "../../server-methods/types.js";
 import { talkVoiceHandlers } from "./voice.js";
@@ -160,6 +164,41 @@ describe("channel-owned voice selection RPC", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
+  it("retains the channel plugin runtime when voice replacement schedules later consults", async () => {
+    const discordInstance = new PluginInstance("discord");
+    const talkVoiceInstance = new PluginInstance("talk-voice");
+    const runtimeStore = createPluginRuntimeStore<string>({
+      pluginId: "discord",
+      errorMessage: "Discord runtime not initialized",
+    });
+    let consult: (() => string) | undefined;
+    try {
+      discordInstance.run(() => runtimeStore.setRuntime("discord-runtime"));
+      const call = discordInstance.run(() =>
+        managedCall(async () => {
+          consult = new AsyncResource("discord-replacement-consult").bind(() =>
+            runtimeStore.getRuntime(),
+          );
+        }),
+      );
+
+      expect(
+        await talkVoiceInstance.run(() =>
+          invoke("talk.voice.set", { voice: "cedar" }, call.client),
+        ),
+      ).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ voice: "cedar", status: "applied" }),
+        undefined,
+      );
+
+      expect(call.currentVoice()).toBe("cedar");
+      expect(consult?.()).toBe("discord-runtime");
+    } finally {
+      await Promise.all([discordInstance.dispose(), talkVoiceInstance.dispose()]);
+    }
+  });
+
   it("rejects foreign targets and unsupported voices before reconnecting", async () => {
     const call = managedCall();
     for (const params of [
@@ -176,29 +215,46 @@ describe("channel-owned voice selection RPC", () => {
     expect(call.currentVoice()).toBe("marin");
   });
 
-  it.each(["run", "binding", "call", "speaker"])(
+  it.for(["run", "binding", "call", "speaker"])(
     "rechecks %s ownership after replacement preparation",
-    async (retired) => {
+    async (retired, { signal }) => {
+      const entered = createDeferredCore();
       const ready = createDeferredCore();
-      const call = managedCall(async () => await ready.promise);
+      const call = managedCall(async () => {
+        entered.resolve();
+        await ready.promise;
+      });
       const changing = start("talk.voice.set", { voice: "cedar" }, call.client);
-      expect(call.apply).toHaveBeenCalledOnce();
-      expect(changing.respond).not.toHaveBeenCalled();
-      expect(await invoke("talk.voice.set", { voice: "cedar" }, call.client)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("already in progress") }),
-      );
-      if (retired === "run") {
-        releaseAgentRunDelegatedAuthority(call.authority);
-      } else if (retired === "binding") {
-        call.release();
-      } else if (retired === "call") {
-        call.handle.unregister();
-      } else {
-        call.revokeSpeaker();
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            changing.completed,
+            "Voice replacement did not reach preparation",
+          ),
+          signal,
+        );
+        expect(call.apply).toHaveBeenCalledOnce();
+        expect(changing.respond).not.toHaveBeenCalled();
+        expect(
+          await invoke("talk.voice.set", { voice: "cedar" }, call.client),
+        ).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ message: expect.stringContaining("already in progress") }),
+        );
+        if (retired === "run") {
+          releaseAgentRunDelegatedAuthority(call.authority);
+        } else if (retired === "binding") {
+          call.release();
+        } else if (retired === "call") {
+          call.handle.unregister();
+        } else {
+          call.revokeSpeaker();
+        }
+      } finally {
+        ready.resolve();
       }
-      ready.resolve();
       await changing.completed;
       expect(changing.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
       expect(call.currentVoice()).toBe("marin");

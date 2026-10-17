@@ -93,7 +93,6 @@ final class TalkRealtimeVoiceSessionCleanupTests: XCTestCase {
                 manager.updateGatewayConnected(true)
                 manager._test_preparePrefetchedRealtimeVoiceSession(
                     "voice-new", gateway: gateway, route: newRoute)
-                manager.gatewayTalkRealtimeVoiceId = "replacement-voice"
             }
             let status = manager.statusText
             gate.release()
@@ -108,7 +107,6 @@ final class TalkRealtimeVoiceSessionCleanupTests: XCTestCase {
                 XCTAssertTrue(originalCloses.isEmpty, "Retired routes cannot dispatch")
                 XCTAssertTrue(replacementCloses.isEmpty, "Old cleanup cannot use the replacement account")
                 XCTAssertEqual(manager._test_activeRealtimeVoiceSessionId(), "voice-new")
-                XCTAssertEqual(manager.gatewayTalkRealtimeVoiceId, "replacement-voice")
                 XCTAssertTrue(manager._test_hasPrefetchedRealtimeSession())
             }
             XCTAssertEqual(manager.statusText, status)

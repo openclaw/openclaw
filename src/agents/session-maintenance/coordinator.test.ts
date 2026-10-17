@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  readOperatorToolGatewayAuthority,
+  runWithOperatorToolGatewayAuthority,
+} from "../../gateway/operator-tool-gateway-authority.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import {
   beginForegroundSessionMaintenance,
   createSessionMaintenanceOwner,
@@ -12,6 +20,52 @@ afterEach(async () => {
 });
 
 describe("session maintenance ownership", () => {
+  it.each([false, true])(
+    "runs without retired caller or operator authority (preemptible=%s)",
+    async (preemptible) => {
+      const source = new AbortController();
+      const operator = {
+        scopes: ["operator.admin"],
+        signal: source.signal,
+        assertCurrent: () => source.signal.throwIfAborted(),
+      };
+      await runWithOperatorToolGatewayAuthority(operator, () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "session:source",
+            receiptAuthority: () => !source.signal.aborted,
+          },
+          async () => {
+            const caller = getGatewayToolCallerIdentity();
+            expect(caller?.receiptAuthority?.()).toBe(true);
+            const owner = createSessionMaintenanceOwner({
+              sessionKey: "session:detached",
+              preemptible,
+            });
+            const work = owner.track(
+              owner.run(async () => {
+                expect(getGatewayToolCallerIdentity()).toBeUndefined();
+                expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+                await Promise.resolve();
+                owner.assertCurrent();
+                expect(getGatewayToolCallerIdentity()).toBeUndefined();
+                expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+                return "maintenance completed";
+              }),
+            );
+            source.abort();
+            await expect(work).resolves.toBe("maintenance completed");
+            expect(getGatewayToolCallerIdentity()).toBe(caller);
+            expect(caller?.receiptAuthority?.()).toBe(false);
+            expect(readOperatorToolGatewayAuthority()).toBe(operator);
+            expect(operator.assertCurrent).toThrow();
+          },
+        ),
+      );
+    },
+  );
+
   it("aborts optional work before admitting foreground and waits for its actual cleanup", async () => {
     const started = createDeferred();
     const aborted = createDeferred();

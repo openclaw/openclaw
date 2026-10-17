@@ -17,9 +17,7 @@
     "../../src/system-agent/**/*.test.ts",
     "../../src/system-agent/**/*.test.tsx",
     "../../src/skills/**/*.test.ts",
-    "../../src/skills/**/*.test.tsx",
-    "../../src/system-agent/**/*.test.ts",
-    "../../src/system-agent/**/*.test.tsx"
+    "../../src/skills/**/*.test.tsx"
   ],
   "exclude": [
     "../../node_modules",

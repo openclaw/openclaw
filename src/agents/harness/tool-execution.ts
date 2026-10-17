@@ -18,11 +18,11 @@ export function createAgentHarnessToolExecutionRegistry<TIdentity, TResult>(
     claim(call: TIdentity, start: () => Promise<TResult>) {
       const existing = executions.get(keyFor(call));
       if (existing) {
-        return { execution: existing, replayed: true } as const;
+        return { execution: existing } as const;
       }
       const execution = start();
       executions.set(keyFor(call), execution);
-      return { execution, replayed: false } as const;
+      return { execution } as const;
     },
   };
 }

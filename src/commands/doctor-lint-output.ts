@@ -1,6 +1,14 @@
 import { formatCliJsonFailure } from "../cli/failure-output.js";
-import type { HealthFinding } from "../flows/health-checks.js";
+import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
+import { exitCodeFromFindings } from "../flows/doctor-lint-flow.js";
+import {
+  healthFindingMeetsSeverity,
+  type HealthFinding,
+  type HealthFindingSeverity,
+} from "../flows/health-checks.js";
 import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 const DOCTOR_LINT_JSON_SCHEMA_VERSION = 1;
@@ -11,6 +19,7 @@ function formatJsonResult(result: {
   checksSkipped: number;
   findings: readonly HealthFinding[];
   warnings?: readonly HealthFinding[];
+  databaseStores?: readonly Record<string, unknown>[];
 }) {
   return {
     schemaVersion: DOCTOR_LINT_JSON_SCHEMA_VERSION,
@@ -18,6 +27,7 @@ function formatJsonResult(result: {
     checksRun: result.checksRun,
     checksSkipped: result.checksSkipped,
     findings: result.findings.map(toJsonFinding),
+    ...(result.databaseStores ? { databaseStores: result.databaseStores } : {}),
     // Shipped updater gates require findings to be empty on success.
     ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
   };
@@ -71,5 +81,106 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
     ...(f.target !== undefined ? { target: f.target } : {}),
     ...(f.requirement !== undefined ? { requirement: f.requirement } : {}),
     ...(f.fixHint !== undefined ? { fixHint: f.fixHint } : {}),
+    ...(f.details !== undefined ? { details: f.details } : {}),
+  };
+}
+
+export type DoctorLintExecution = {
+  checksRun: number;
+  checksSkipped: number;
+  cleanupWarnings?: readonly HealthFinding[];
+  databaseStores?: readonly Record<string, unknown>[];
+  exitCode: number;
+  findings: readonly HealthFinding[];
+  warnings?: readonly HealthFinding[];
+  writeOutput: () => void;
+};
+
+export function detectDoctorLintOutputMode(opts: DoctorLintCliOptions): "human" | "json" {
+  return opts.json === true || !process.stdout.isTTY ? "json" : "human";
+}
+
+/** Rehearsal lint deferred by the update budget: no checks ran, and the deferral is the report. */
+export function createDeferredInspectionExecution(
+  runtime: RuntimeEnv,
+  opts: DoctorLintCliOptions,
+  warnings: HealthFinding[],
+): DoctorLintExecution {
+  return {
+    checksRun: 0,
+    checksSkipped: 0,
+    exitCode: 0,
+    findings: warnings,
+    writeOutput() {
+      if (detectDoctorLintOutputMode(opts) === "json") {
+        writeJsonResult({ ok: true, checksRun: 0, checksSkipped: 0, findings: [], warnings });
+      } else {
+        for (const finding of warnings) {
+          runtime.log(`[warning] ${finding.checkId} [${finding.errorCode}]: ${finding.message}`);
+          runtime.log(finding.fixHint ?? "Run `openclaw doctor` after activation.");
+        }
+      }
+    },
+  };
+}
+
+export function createStateSnapshotFailureFinding(error: Error): HealthFinding {
+  return {
+    checkId: "core/doctor/lint-state-inspection",
+    severity: "error",
+    source: "doctor",
+    target: "plugin-state",
+    requirement: "read-only-plugin-state-inspection",
+    message:
+      "Doctor lint could not inspect plugin state without mutating the live state database " +
+      `(${scrubDoctorErrorMessage(error.cause ?? error)}).`,
+    fixHint:
+      "Keep the current Gateway running, resolve the state database inspection error, then rerun this check.",
+  };
+}
+
+export async function createStateSnapshotFailureExecution(
+  runtime: RuntimeEnv,
+  opts: DoctorLintCliOptions,
+  sevMin: HealthFindingSeverity,
+  error: Error,
+  completed?: DoctorLintExecution,
+): Promise<DoctorLintExecution> {
+  const { collectNodeRuntimeFindings } = await import("./node-runtime-diagnostics.js");
+  const failures = [
+    createStateSnapshotFailureFinding(error),
+    ...(completed ? [] : await collectNodeRuntimeFindings()),
+  ].filter((entry) => healthFindingMeetsSeverity(entry, sevMin));
+  const visible = [...(completed?.findings ?? []), ...failures];
+  const checksRun = completed?.checksRun ?? 0;
+  const checksSkipped = completed?.checksSkipped ?? 0;
+  return {
+    checksRun,
+    checksSkipped,
+    exitCode: exitCodeFromFindings(visible, sevMin),
+    findings: visible,
+    cleanupWarnings: completed?.cleanupWarnings,
+    databaseStores: completed?.databaseStores,
+    warnings: completed?.warnings,
+    writeOutput() {
+      if (detectDoctorLintOutputMode(opts) === "json") {
+        writeJsonResult({
+          ok: false,
+          checksRun,
+          checksSkipped,
+          findings: visible,
+          databaseStores: completed?.databaseStores,
+          warnings: [...(completed?.warnings ?? []), ...(completed?.cleanupWarnings ?? [])],
+        });
+        return;
+      }
+      completed?.writeOutput();
+      for (const entry of failures) {
+        runtime.error(`doctor --lint: ${entry.message}`);
+        if (entry.fixHint) {
+          runtime.error(`fix: ${entry.fixHint}`);
+        }
+      }
+    },
   };
 }

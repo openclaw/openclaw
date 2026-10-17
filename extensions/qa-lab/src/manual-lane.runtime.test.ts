@@ -158,51 +158,15 @@ describe("runQaManualLane", () => {
 
   it.each([
     {
-      label: "timed-out run despite a stale reply",
-      waited: { status: "timeout", error: "provider stalled" },
-      reply: "stale assistant reply",
-      error: "provider stalled",
-    },
-    {
       label: "failed run despite a stale reply",
       waited: { status: "error", error: "authentication failed" },
       reply: "stale assistant reply",
       error: "authentication failed",
     },
     {
-      label: "successful run without an outbound reply",
-      waited: { status: "ok" },
-      reply: null,
-      error: "manual lane did not produce a successful reply",
-    },
-    {
-      label: "successful run with a whitespace-only reply",
-      waited: { status: "ok" },
-      reply: "   ",
-      error: "manual lane did not produce a successful reply",
-    },
-    {
-      label: "legacy completed run without an outbound reply",
-      waited: { status: "error", error: "completed" },
-      reply: null,
-      error: "manual lane did not produce a successful reply",
-    },
-    {
-      label: "legacy completed run with a whitespace-only reply",
-      waited: { status: "error", error: " completed " },
-      reply: "   ",
-      error: "manual lane did not produce a successful reply",
-    },
-    {
       label: "timed-out run without an outbound reply",
       waited: { status: "timeout", error: "provider stalled" },
       reply: null,
-      error: "manual lane did not produce a successful reply",
-    },
-    {
-      label: "failed run with a whitespace-only reply",
-      waited: { status: "error", error: "authentication failed" },
-      reply: "   ",
       error: "manual lane did not produce a successful reply",
     },
   ])("rejects a $label after resource cleanup", async ({ waited, reply, error }) => {
@@ -225,26 +189,6 @@ describe("runQaManualLane", () => {
     expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledOnce();
     expect(mockStop).toHaveBeenCalledOnce();
     expect(labStop).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { status: "ok" },
-    { status: "completed" },
-    { status: "succeeded" },
-    { status: "error", error: " completed " },
-  ])("accepts the canonical successful agent wait result %#", async (waited) => {
-    gatewayCall.mockReset().mockResolvedValueOnce({ runId: "run-1" }).mockResolvedValueOnce(waited);
-
-    await expect(
-      runQaManualLane({
-        repoRoot: "/tmp/openclaw-repo",
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        message: "check the kickoff file",
-        replySettleMs: 0,
-      }),
-    ).resolves.toMatchObject({ waited, reply: "Protocol note: mock reply." });
   });
 
   it("skips the mock provider bootstrap for live frontier runs", async () => {

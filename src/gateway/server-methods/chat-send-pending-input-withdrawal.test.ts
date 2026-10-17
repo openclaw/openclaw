@@ -1,0 +1,372 @@
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import {
+  createQueueSettings,
+  createQueueTestRun,
+} from "../../auto-reply/reply/queue.test-helpers.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
+import {
+  admitFollowupRunLifecycle,
+  retireFollowupRunCancellation,
+} from "../../auto-reply/reply/queue/lifecycle.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "../../config/sessions/session-pending-input-receipts.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import { abortChatRunById, removeChatAbortControllerEntry } from "../chat-abort.js";
+import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
+import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { readChatPendingInputs } from "./chat-pending-inputs.js";
+import {
+  setClientProfile,
+  useBrowserFollowupFixture,
+} from "./chat-send-pending-inputs.test-support.js";
+import { createActiveRun } from "./chat.abort.test-helpers.js";
+import * as sessionChangeEvent from "./session-change-event.js";
+import type { RespondFn } from "./types.js";
+
+installGatewayTestHooks();
+const createBrowserFollowupFixture = useBrowserFollowupFixture();
+
+type FollowupFixture = Awaited<ReturnType<typeof createBrowserFollowupFixture>>;
+
+async function startInput() {
+  const fixture = await createBrowserFollowupFixture();
+  const cleanup = async () => {
+    clearFollowupQueue(fixture.scope.sessionKey);
+    await fixture.cleanup();
+  };
+  try {
+    await fixture.send();
+    const recorder = await fixture.dispatchedRecorder;
+    const runId = fixture.params.idempotencyKey;
+    const active = fixture.context.chatAbortControllers.get(runId);
+    if (!active) {
+      throw new Error("Expected the pending input's abort owner");
+    }
+    return {
+      ...fixture,
+      recorder,
+      active,
+      runId,
+      [Symbol.asyncDispose]: cleanup,
+    };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+}
+
+function enqueueInput(fixture: FollowupFixture, signal: AbortSignal) {
+  const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
+    | Parameters<typeof dispatchInboundMessage>[0]
+    | undefined;
+  const run = createQueueTestRun({ prompt: fixture.params.message });
+  run.abortSignal = signal;
+  run.turnAdoptionLifecycle = dispatch?.replyOptions?.turnAdoptionLifecycle;
+  expect(run.turnAdoptionLifecycle).toBeDefined();
+  expect(
+    enqueueFollowupRun(
+      fixture.scope.sessionKey,
+      run,
+      createQueueSettings({ mode: "followup" }),
+      "none",
+      async () => {},
+      false,
+    ),
+  ).toBe(true);
+  return run;
+}
+
+async function discardInput(
+  fixture: FollowupFixture,
+  respond = vi.fn<RespondFn>(),
+  hasCurrentClientAuthority?: () => boolean,
+) {
+  const params = {
+    sessionKey: fixture.scope.sessionKey,
+    runId: fixture.params.idempotencyKey,
+    discardPendingInput: true,
+  };
+  await handleChatAbortRequest({
+    params,
+    req: { type: "req", id: "discard-input", method: "chat.abort", params },
+    client: fixture.client,
+    context: fixture.context,
+    respond,
+    isWebchatConnect: () => true,
+    hasCurrentClientAuthority,
+  });
+  return respond;
+}
+
+describe("queued chat input withdrawal", () => {
+  it("keeps refused browser input revoked after its session access returns", async () => {
+    await using fixture = await createBrowserFollowupFixture({
+      preserveContent: true,
+      persistDuringDispatch: true,
+    });
+    const profile = ensureProfileForEmail("restored-custody@example.test");
+    setClientProfile(fixture.client, profile);
+    fixture.client.connect.scopes = ["operator.read", "operator.write"];
+    const ack = await fixture.send(undefined, { expectedProfileId: profile.id });
+    const recorder = await fixture.dispatchedRecorder;
+    const check = () =>
+      recorder.withPendingInputCurrent
+        ? recorder.withPendingInputCurrent(() => {})
+        : Promise.resolve().then(() => recorder.withPendingInput?.(() => {}));
+    await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
+    await expect(check()).rejects.toMatchObject({
+      message: "Message injection authority is no longer current",
+      cause: {
+        message: expect.stringContaining("session is draft for this connection"),
+      },
+    });
+    await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));
+    await expect(check()).rejects.toThrow("Message injection authority is no longer current");
+    await fixture.finishDispatch();
+    expect(ack).toHaveBeenCalledOnce();
+    expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+    expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+      total: 1,
+      items: [{ state: "interrupted" }],
+    });
+    expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["admitted", "timeout", "timeout", false],
+    ["queued", "stop", "stop", false],
+    ["queued", "restart", "restart", false],
+    ["signal", undefined, "aborted", false],
+    ["consumed", "rpc", undefined, false],
+    ["queued", "rpc", "rpc", true],
+  ] as const)(
+    "settles %s input (%s, %s, discard: %s) without losing recovery",
+    async (target, stopReason, reason, discardPendingInput) => {
+      await using fixture = await startInput();
+      const { context, scope, active, recorder, runId } = fixture;
+      const { chatAbortControllers, chatQueuedTurns } = context;
+      let dispatchCompletion: Promise<void> | undefined;
+      if (target === "queued") {
+        enqueueInput(fixture, active.controller.signal);
+        const detached = createDeferred();
+        vi.mocked(fixture.context.removeChatRun).mockImplementationOnce(() => {
+          detached.resolve();
+          return undefined;
+        });
+        dispatchCompletion = fixture.finishDispatch();
+        await detached.promise;
+        expect(chatAbortControllers.has(runId)).toBe(false);
+        expect(chatQueuedTurns.has(runId)).toBe(true);
+      }
+      if (target === "signal") {
+        active.controller.abort(new Error("Private cancellation payload must stay out of logs"));
+      } else {
+        if (target === "consumed") {
+          await recorder.persistApproved();
+        }
+        if (discardPendingInput) {
+          expect(await discardInput(fixture)).toHaveBeenCalledWith(true, {
+            ok: true,
+            aborted: true,
+            runIds: [runId],
+          });
+        } else {
+          const params = { runId, sessionKey: scope.sessionKey, stopReason };
+          const result =
+            target === "queued"
+              ? abortQueuedChatTurnById(chatQueuedTurns, params)
+              : abortChatRunById(createChatAbortOps(context), params);
+          expect(result.aborted).toBe(true);
+        }
+      }
+      await (dispatchCompletion ?? fixture.finishDispatch());
+      const disposition = reason === "restart" ? "interrupted" : "cancelled";
+      const prefix = "chat pending input aborted:";
+      const logs = vi
+        .mocked(context.logGateway.info)
+        .mock.calls.filter(([message]) => message.startsWith(prefix));
+      const { sessionKey, sessionId } = scope;
+      const details = { runId, sessionKey, sessionId, agentId: "main", disposition, reason };
+      expect(logs).toEqual(reason ? [[`${prefix} ${reason} (${disposition})`, details]] : []);
+      expect(await listSessionPendingInputs(scope)).toMatchObject(
+        reason ? { items: [{ state: disposition }], total: 1 } : { items: [], total: 0 },
+      );
+      if (reason) {
+        const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 1000 });
+        expect(page.items).toHaveLength(1);
+        if (discardPendingInput) {
+          expect(page.items[0]?.message).toMatchObject({ display: false, content: [] });
+          expect(JSON.stringify(page)).not.toContain(fixture.approvedContent);
+        } else {
+          expect(page.items[0]?.message).toMatchObject({ content: fixture.approvedContent });
+        }
+        expect(await listSessionPendingInputReceipts(scope, { runIds: [runId] })).toEqual([
+          {
+            runId,
+            state: "pending",
+            ...(disposition === "cancelled" ? { cancelled: true } : {}),
+          },
+        ]);
+        expect(loadTranscriptEventsSync(scope)).toEqual(fixture.activeTranscript);
+      } else {
+        expect(JSON.stringify(loadTranscriptEventsSync(scope))).toContain(fixture.approvedContent);
+      }
+    },
+  );
+
+  it.each(["admitted", "consumed", "queued-consumed"] as const)(
+    "does not stop an input that cannot be removed ($0)",
+    async (target) => {
+      await using fixture = await startInput();
+      const { recorder, runId, active, context, scope } = fixture;
+      if (target === "queued-consumed") {
+        enqueueInput(fixture, active.controller.signal);
+      }
+      if (target !== "admitted") {
+        await recorder.persistApproved();
+      }
+      const queued = context.chatQueuedTurns.get(runId);
+      const pending = await listSessionPendingInputs(scope);
+      const transcript = loadTranscriptEventsSync(scope);
+      const respond = await discardInput(fixture);
+
+      expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
+      expect(active.controller.signal.aborted).toBe(false);
+      expect(context.chatAbortControllers.get(runId)).toBe(active);
+      expect(context.chatQueuedTurns.get(runId)).toBe(queued);
+      expect(await listSessionPendingInputs(scope)).toEqual(pending);
+      expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
+    },
+  );
+
+  it.each(["retry", "resume", "retired", "revoked"] as const)(
+    "keeps refused removal available for $0 and fences adoption through withdrawal commit",
+    async (afterRefusal) => {
+      await using fixture = await startInput();
+      const { runId, active, context, scope } = fixture;
+      const { sessionKey, sessionId, agentId } = scope;
+      const { chatAbortControllers: controllers, chatQueuedTurns: turns } = context;
+      let unsubscribe: (() => void) | undefined;
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const refusal = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
+      const publishChange = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
+      let replacement: ReturnType<typeof createActiveRun> | undefined;
+      let retiredAfterCommit: boolean | undefined;
+      const published: Promise<PromiseSettledResult<boolean>>[] = [];
+      try {
+        const run = enqueueInput(fixture, active.controller.signal);
+        const queued = turns.get(runId);
+        expect(queued).toBeDefined();
+        let adoption: Promise<"admitted" | "aborted"> | undefined;
+        const beginAdoption = () => {
+          adoption = admitFollowupRunLifecycle(run).then(
+            () => {
+              retireFollowupRunCancellation(run);
+              return "admitted" as const;
+            },
+            () => "aborted" as const,
+          );
+        };
+        let requestCurrent = true;
+        unsubscribe = sessionChanges.subscribe((change) => {
+          if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+            published.push(
+              Promise.allSettled([
+                listSessionPendingInputs(scope).then(({ items }) => {
+                  const input = items[0];
+                  return input?.state === "cancelled" && input.message.display === false;
+                }),
+              ]).then(([result]) => result),
+            );
+            // Revoke at publication; awaiting the read would miss this synchronous race.
+            if (afterRefusal === "retired" && !replacement) {
+              replacement = createActiveRun(sessionKey, { sessionId, agentId });
+              retiredAfterCommit = removeChatAbortControllerEntry(controllers, runId, active);
+              controllers.set(runId, replacement);
+            }
+            if (afterRefusal === "revoked") {
+              requestCurrent = false;
+            }
+          }
+        });
+        const respond = vi.fn<RespondFn>();
+        const remove = () => discardInput(fixture, respond, () => requestCurrent);
+
+        let refuseCommit = true;
+        refusal.mockImplementation((callback, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "commit") {
+              if (!refuseCommit || afterRefusal === "resume") {
+                beginAdoption();
+              }
+              if (refuseCommit) {
+                throw new Error("Synthetic withdrawal commit refusal");
+              }
+            }
+            return callback(request, grant);
+          }, attachment),
+        );
+        await expect(remove()).rejects.toThrow("Synthetic withdrawal commit refusal");
+        expect(controllers.get(runId)).toBe(active);
+        expect(turns.get(runId)).toBe(queued);
+        expect(active.controller.signal.aborted).toBe(false);
+        expect((await listSessionPendingInputs(scope)).items[0]?.state).toBe("queued");
+        expect(published).toEqual([]);
+
+        if (afterRefusal === "resume") {
+          await expect(adoption).resolves.toBe("admitted");
+          return;
+        }
+        refuseCommit = false;
+        if (afterRefusal === "revoked") {
+          await expect(remove()).rejects.toThrow("Gateway requester authority changed");
+        } else {
+          await remove();
+          expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runIds: [runId] });
+        }
+        await expect(adoption).resolves.toBe("aborted");
+        expect(active.controller.signal.aborted).toBe(true);
+        if (replacement) {
+          expect(retiredAfterCommit).toBe(true);
+          expect(replacement.controller.signal.aborted).toBe(false);
+          expect(controllers.get(runId)?.controller).toBe(replacement.controller);
+        }
+        expect(published.length).toBeGreaterThan(0);
+        for (const result of await Promise.all(published)) {
+          expect(result).toEqual({ status: "fulfilled", value: true });
+        }
+        expect(publishChange).toHaveBeenCalledWith(
+          context,
+          { sessionKey, sessionId, agentId, reason: "agent.input.settled" },
+          { accessChanged: false },
+        );
+        expect(loadTranscriptEventsSync(scope)).toEqual(fixture.activeTranscript);
+      } finally {
+        refusal.mockRestore();
+        publishChange.mockRestore();
+        unsubscribe?.();
+        await Promise.allSettled(published);
+        const current = controllers.get(runId);
+        if (current && current.controller === replacement?.controller) {
+          removeChatAbortControllerEntry(controllers, runId, current);
+        }
+      }
+    },
+  );
+});

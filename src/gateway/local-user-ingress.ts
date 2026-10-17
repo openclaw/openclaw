@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ExecutionIdentityAdmissionFacts } from "../audit/execution-identity-admission.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -7,11 +8,12 @@ type GatewayLocalUserIngressFacts = Readonly<
   Pick<ExecutionIdentityAdmissionFacts, "assurance" | "ingress" | "invoker">
 >;
 
-type GatewayLocalUserIngress = Readonly<{
+export type GatewayLocalUserIngress = Readonly<{
   facts: GatewayLocalUserIngressFacts;
 }>;
 
 const ingressByOwner = new WeakMap<object, GatewayLocalUserIngress>();
+const preparedIngress = new WeakSet<GatewayLocalUserIngress>();
 
 function freezeLocalUserIngress(facts: GatewayLocalUserIngressFacts): GatewayLocalUserIngress {
   Object.freeze(facts.ingress);
@@ -20,7 +22,41 @@ function freezeLocalUserIngress(facts: GatewayLocalUserIngressFacts): GatewayLoc
     Object.freeze(item);
   }
   Object.freeze(facts.assurance);
-  return Object.freeze({ facts: Object.freeze(facts) });
+  const ingress = Object.freeze({ facts: Object.freeze(facts) });
+  preparedIngress.add(ingress);
+  return ingress;
+}
+
+/** Only the attach owner can supply facts; copied or public lookalikes carry none. */
+export function readGatewayLocalUserIngressFacts(
+  ingress: GatewayLocalUserIngress | undefined,
+): GatewayLocalUserIngressFacts | undefined {
+  return ingress && preparedIngress.has(ingress) ? ingress.facts : undefined;
+}
+
+/** Collected turns retain attribution only when every source supplies the same attach facts. */
+export function combineGatewayLocalUserIngress(
+  sources: readonly (GatewayLocalUserIngress | undefined)[],
+): GatewayLocalUserIngress | undefined {
+  const first = sources.find((source) => readGatewayLocalUserIngressFacts(source));
+  if (!first) {
+    return undefined;
+  }
+  if (
+    sources.every((source) =>
+      isDeepStrictEqual(readGatewayLocalUserIngressFacts(source), first.facts),
+    )
+  ) {
+    return first;
+  }
+  return freezeLocalUserIngress({
+    ingress: {
+      kind: "gateway-client",
+      boundary: "gateway.ws.authenticated-connect",
+      state: "unknown",
+    },
+    invoker: { state: "unknown" },
+  });
 }
 
 function safeDisplayLabel(value: string | null | undefined): string | undefined {

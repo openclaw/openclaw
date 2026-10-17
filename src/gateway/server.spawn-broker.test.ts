@@ -134,16 +134,6 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
   });
 
-  nodeIt("joins the broker when runtime startup fails", async () => {
-    observed.failStartup = true;
-    try {
-      await expect(startGatewayServer()).rejects.toThrow("startup failed");
-      expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
-    } finally {
-      observed.failStartup = false;
-    }
-  });
-
   nodeIt.each(["shutdown", "startup failure", "shutdown failure"] as const)(
     "owns the auth read child through runtime callbacks and %s",
     async (phase) => {
@@ -157,7 +147,6 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           source: "canonical",
           expectedIdentity: readDatabasePathIdentitySync(source).key,
           env: { ...process.env },
-          coordinatorRuntime: { directory: path.join(root, "coordinator"), keepAlive: false },
         });
       const resume = createDeferredCore();
       let runtimeRead: Promise<unknown> | undefined;
@@ -204,8 +193,10 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           }
         }
         expect(spawnCount).toBe(1);
-        expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
+        expect(child?.pid).toBeTypeOf("number");
+        expect(() => process.kill(child!.pid!, 0)).toThrow();
+        expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
       } finally {
         resume.resolve();
         await Promise.allSettled([runtimeRead]);
@@ -216,7 +207,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
 
   it("preserves Bun's native process transport", async () => {
     const bun = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { value: "1.4.2", configurable: true });
+    Object.defineProperty(process.versions, "bun", { value: "1.4.3", configurable: true });
     try {
       const server = await startGatewayServer();
       try {

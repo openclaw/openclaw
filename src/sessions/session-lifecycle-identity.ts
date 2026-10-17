@@ -17,38 +17,17 @@ export function normalizeSessionIdentities(
     .toSorted();
 }
 
-function decodeSessionIdentity(
-  normalizedIdentity: string,
-): { scope: string; identity: string } | undefined {
-  try {
-    const decoded: unknown = JSON.parse(normalizedIdentity);
-    if (
-      !Array.isArray(decoded) ||
-      decoded.length !== 2 ||
-      typeof decoded[0] !== "string" ||
-      typeof decoded[1] !== "string"
-    ) {
-      return undefined;
-    }
-    return { scope: decoded[0], identity: decoded[1] };
-  } catch {
-    return undefined;
-  }
-}
-
 /** Group a snapshot of owner-held identity keys without sharing its mutable indexes. */
 export function collectSessionIdentityTargets(
   identities: Iterable<string>,
 ): Map<string, Set<string>> {
   const targets = new Map<string, Set<string>>();
   for (const identity of identities) {
-    const decoded = decodeSessionIdentity(identity);
-    if (!decoded) {
-      continue;
-    }
-    const scoped = targets.get(decoded.scope) ?? new Set<string>();
-    scoped.add(decoded.identity);
-    targets.set(decoded.scope, scoped);
+    // The lifecycle owner indexes only keys produced by normalizeSessionIdentities.
+    const [scope, sessionIdentity]: [string, string] = JSON.parse(identity);
+    const scoped = targets.get(scope) ?? new Set<string>();
+    scoped.add(sessionIdentity);
+    targets.set(scope, scoped);
   }
   return targets;
 }

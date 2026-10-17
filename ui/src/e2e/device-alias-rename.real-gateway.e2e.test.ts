@@ -169,7 +169,7 @@ suite.define(() => {
           });
 
           await row.locator(".device-entry__menu-trigger").click();
-          await page.locator('wa-dropdown-item[value="editAlias"]').click();
+          await row.locator('[role="menuitem"][data-value="editAlias"]').click();
           const dialog = page.locator("openclaw-modal-dialog").last();
           await dialog.locator('input[name="value"]').waitFor();
           await captureUiProof(page, "02-real-gateway-alias-dialog-open.png", {

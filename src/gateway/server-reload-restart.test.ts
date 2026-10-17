@@ -1,12 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import * as restartModule from "../infra/restart.js";
-import * as commandQueue from "../process/command-queue.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import { nextGatewayReloadGeneration } from "./server-reload-generation.js";
 import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
+
+const getTotalQueueSize = vi.hoisted(() => vi.fn(() => 0));
+vi.mock("../process/command-queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/command-queue.js")>()),
+  getTotalQueueSize,
+}));
 
 const zeroActiveCounts = {
   queueSize: 0,
@@ -14,9 +24,19 @@ const zeroActiveCounts = {
   embeddedRuns: 0,
   backgroundExecSessions: 0,
   rootRequests: 0,
-  activeTasks: 0,
+  agentRuns: 0,
+  acpRuns: 0,
+  mediaRuns: 0,
+  cronRuns: 0,
+  sessionAdmissions: 0,
+  sessionMutations: 0,
+  chatRuns: 0,
+  queuedTurns: 0,
+  terminalPersistence: 0,
+  terminalSessions: 0,
+  lifecycleWrites: 0,
   totalActive: 0,
-};
+} satisfies GatewayActiveWorkSnapshot["counts"];
 
 const restartPlan = {
   changedPaths: ["gateway.port"],
@@ -33,7 +53,28 @@ const restartPlan = {
   noopPaths: [],
 } satisfies GatewayReloadPlan;
 
+type CoordinatorOptions = Parameters<typeof createGatewayRestartCoordinator>[0];
+
+function createCoordinator(
+  {
+    scheduler = createTestGatewayScheduler("fake-timers"),
+    ...params
+  }: Partial<CoordinatorOptions["params"]>,
+  options: Partial<Omit<CoordinatorOptions, "params">> = {},
+) {
+  return createGatewayRestartCoordinator({
+    params: { logReload: { info: vi.fn(), warn: vi.fn() }, ...params, scheduler },
+    myGeneration: options.myGeneration ?? nextGatewayReloadGeneration(),
+    restartRecoveryAvailable: true,
+    getActiveCounts: () => zeroActiveCounts,
+    formatActiveDetails: () => [],
+    formatDeferredWorkStatus: () => "no active work",
+    ...options,
+  });
+}
+
 beforeEach(() => {
+  getTotalQueueSize.mockReset().mockReturnValue(0);
   restartModule.resetGatewayRestartStateForInProcessRestart();
   resetGatewayWorkAdmission();
 });
@@ -45,7 +86,7 @@ afterEach(() => {
 });
 
 describe("gateway restart readiness preflight", () => {
-  it("keeps the current lifecycle serving until successor state is restart-ready", async () => {
+  it("keeps the current lifecycle serving until an explicit request is restart-ready", async () => {
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const assertRestartReady = vi
       .fn<() => Promise<void> | void>()
@@ -54,15 +95,7 @@ describe("gateway restart readiness preflight", () => {
     const prepareRuntimeConfig = vi.fn(async () => ({}) as OpenClawConfig);
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const params = { assertRestartReady, logReload, requestRecoveryRestart };
-    const coordinator = createGatewayRestartCoordinator({
-      params,
-      myGeneration: nextGatewayReloadGeneration(),
-      restartRecoveryAvailable: true,
-      getActiveCounts: () => zeroActiveCounts,
-      formatActiveDetails: () => [],
-      formatDeferredWorkStatus: () => "no active work",
-      formatTaskBlockers: () => null,
-    });
+    const coordinator = createCoordinator(params);
     vi.useFakeTimers();
 
     try {
@@ -82,9 +115,82 @@ describe("gateway restart readiness preflight", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
 
+      expect(assertRestartReady).toHaveBeenCalledOnce();
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(logReload.info).not.toHaveBeenCalledWith(
+        "all operations and replies completed; restarting gateway now",
+      );
+
+      coordinator.requestGatewayRestart(restartPlan, {}, { prepareRuntimeConfig });
+      await vi.advanceTimersByTimeAsync(0);
+
       expect(assertRestartReady).toHaveBeenCalledTimes(2);
       expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
       expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+    } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  it("prepares outside the restart-signal fence so lease holders can finish", async () => {
+    vi.useFakeTimers();
+    // A config reload holds the plugin lifecycle lease and needs root admission
+    // before it can release it; restart preparation waits for that lease.
+    const holderGate = Promise.withResolvers<void>();
+    const lease = Promise.withResolvers<void>();
+    void holderGate.promise.then(() =>
+      runWithGatewayIndependentRootWorkAdmission(async () => {}, "reload:config").then(
+        lease.resolve,
+      ),
+    );
+    const prepareRuntimeConfig = vi.fn(async () => {
+      holderGate.resolve();
+      await lease.promise;
+      return {} as OpenClawConfig;
+    });
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const coordinator = createCoordinator({
+      assertRestartReady: vi.fn(),
+      logReload,
+      requestRecoveryRestart,
+    });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
+      expect(requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
+        "config reload: gateway.port",
+        undefined,
+      );
+      expect(logReload.warn).not.toHaveBeenCalledWith(expect.stringContaining("failed"));
+    } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  it("reports a pending restart preparation instead of waiting silently", async () => {
+    vi.useFakeTimers();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const coordinator = createCoordinator({ logReload, requestRecoveryRestart });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig: () => new Promise<OpenClawConfig>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenLastCalledWith(
+        expect.stringMatching(
+          /^restart still deferred after \d+ms with restart preparation pending; no active work$/,
+        ),
+      );
     } finally {
       coordinator.stopRestartRetries();
     }
@@ -101,16 +207,14 @@ describe("gateway restart readiness preflight", () => {
       },
     );
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const activeCounts = { ...zeroActiveCounts, totalActive: 1, activeTasks: 1 };
-    const coordinator = createGatewayRestartCoordinator({
-      params: { assertRestartReady: vi.fn(), logReload, requestRecoveryRestart: vi.fn() },
-      myGeneration: nextGatewayReloadGeneration(),
-      restartRecoveryAvailable: true,
-      getActiveCounts: () => activeCounts,
-      formatActiveDetails: () => [],
-      formatDeferredWorkStatus: () => "1 active task",
-      formatTaskBlockers: () => null,
-    });
+    const activeCounts = { ...zeroActiveCounts, totalActive: 1, agentRuns: 1 };
+    const coordinator = createCoordinator(
+      { assertRestartReady: vi.fn(), logReload, requestRecoveryRestart: vi.fn() },
+      {
+        getActiveCounts: () => activeCounts,
+        formatDeferredWorkStatus: () => "1 active agent run",
+      },
+    );
 
     try {
       coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
@@ -132,17 +236,15 @@ describe("gateway restart readiness preflight", () => {
   });
   it("forces the restart at the deadline when production timeout diagnostics cannot inspect work", async () => {
     vi.useFakeTimers();
-    const queueSize = vi.spyOn(commandQueue, "getTotalQueueSize").mockReturnValue(1);
+    const queueSize = getTotalQueueSize.mockReturnValue(1);
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const myGeneration = nextGatewayReloadGeneration();
     const tracker = createGatewayActiveWorkTracker({ params: { logReload }, myGeneration });
-    const coordinator = createGatewayRestartCoordinator({
-      params: { logReload, requestRecoveryRestart },
-      myGeneration,
-      restartRecoveryAvailable: true,
-      ...tracker,
-    });
+    const coordinator = createCoordinator(
+      { logReload, requestRecoveryRestart },
+      { myGeneration, ...tracker },
+    );
     try {
       expect(coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig).status).toBe(
         "accepted",
@@ -157,7 +259,7 @@ describe("gateway restart readiness preflight", () => {
 
       expect(requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
         "config reload: gateway.port",
-        { force: true, drainBudgetExhausted: true, reason: "config reload forced restart" },
+        { force: true, waitMs: 300_000, reason: "config reload forced restart" },
       );
       expect(logReload.warn).toHaveBeenCalledWith(
         expect.stringContaining(
@@ -179,20 +281,19 @@ describe("gateway restart readiness preflight", () => {
         if (failedProbe) {
           throw new Error("pending-work store unavailable");
         }
-        return { ...zeroActiveCounts, totalActive: 1, activeTasks: 1 };
+        return { ...zeroActiveCounts, totalActive: 1, agentRuns: 1 };
       });
       const requestRecoveryRestart = vi.fn(() => {
         throw new Error("restart emission rejected");
       });
-      const coordinator = createGatewayRestartCoordinator({
-        params: { logReload: { info: vi.fn(), warn: vi.fn() }, requestRecoveryRestart },
-        myGeneration: nextGatewayReloadGeneration(),
-        restartRecoveryAvailable: true,
-        getActiveCounts,
-        formatActiveDetails: () => ["1 active task"],
-        formatDeferredWorkStatus: () => "1 active task",
-        formatTaskBlockers: () => null,
-      });
+      const coordinator = createCoordinator(
+        { requestRecoveryRestart },
+        {
+          getActiveCounts,
+          formatActiveDetails: () => ["1 active agent run"],
+          formatDeferredWorkStatus: () => "1 active agent run",
+        },
+      );
       try {
         coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig);
         failedProbe = failure === "check error";

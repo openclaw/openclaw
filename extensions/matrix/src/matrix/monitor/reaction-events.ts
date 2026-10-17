@@ -2,6 +2,7 @@ import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
@@ -13,8 +14,7 @@ import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import { resolveMatrixThreadRootId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
-import { resolveMatrixInboundRoute } from "./route.js";
-import type { PluginRuntime } from "./runtime-api.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
@@ -251,7 +251,7 @@ export async function handleInboundMatrixReaction(params: {
     messageId: reaction.eventId,
     threadRootId,
   });
-  const { route, runtimeBindingId } = resolveMatrixInboundRoute({
+  const { route, runtimeBindingId } = await resolveMatrixInboundRouteAsync({
     cfg: params.cfg,
     accountId: params.accountId,
     roomId: params.roomId,
@@ -262,7 +262,7 @@ export async function handleInboundMatrixReaction(params: {
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });
   if (runtimeBindingId) {
-    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts, {
+    await getSessionBindingService().touchAsync(runtimeBindingId, params.event.origin_server_ts, {
       channel: "matrix",
       accountId: params.accountId,
     });

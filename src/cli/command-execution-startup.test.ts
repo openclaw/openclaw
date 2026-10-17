@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -135,8 +136,6 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
 
     expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
@@ -144,8 +143,6 @@ describe("command-execution-startup", () => {
       commandPath: ["message", "send"],
       measure: expect.any(Function),
       allowInvalid: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
@@ -154,12 +151,12 @@ describe("command-execution-startup", () => {
   });
 
   it.each([
-    { commandPath: ["gateway"], asyncReads: 2 },
-    { commandPath: ["gateway", "run"], asyncReads: 2 },
-    { commandPath: ["doctor"], asyncReads: 0 },
+    { commandPath: ["gateway"] },
+    { commandPath: ["gateway", "run"] },
+    { commandPath: ["doctor"] },
   ])(
-    "routes fresh $commandPath snapshots through their host preparation",
-    async ({ commandPath, asyncReads }) => {
+    "prepares fresh $commandPath snapshots asynchronously without runtime activation ownership",
+    async ({ commandPath }) => {
       const root = tempDirs.make("openclaw-cli-snapshot-preparation-");
       const configPath = path.join(root, "openclaw.json");
       const env = {
@@ -187,13 +184,7 @@ describe("command-execution-startup", () => {
         observe: false,
       });
       const prepare = vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync");
-      const captures: Array<ReturnType<typeof runtime.captureManagedConfigSnapshotPreparation>> =
-        [];
       ensureConfigReadyMock.mockImplementationOnce(async () => {
-        captures.push(runtime.captureManagedConfigSnapshotPreparation(configPath));
-        expect(
-          runtime.captureManagedConfigSnapshotPreparation(path.join(root, "other.json")),
-        ).toBeNull();
         expect(runtime.hasManagedRuntimeConfigWriteOwner(configPath)).toBe(false);
         await expect(
           runtime.preflightManagedRuntimeConfigWrite(
@@ -231,19 +222,7 @@ describe("command-execution-startup", () => {
             pluginRegistry: { scope: "all" },
           },
         });
-        expect(prepare).toHaveBeenCalledTimes(asyncReads);
-        expect(runtime.captureManagedConfigSnapshotPreparation(configPath)).toBeNull();
-        const captured = captures[0];
-        if (asyncReads > 0) {
-          if (!captured) {
-            throw new Error("Gateway bootstrap did not own snapshot preparation");
-          }
-          await expect(captured(async () => undefined)).rejects.toThrow(
-            "snapshot preparation owner has closed",
-          );
-        } else {
-          expect(captured).toBeNull();
-        }
+        expect(prepare).toHaveBeenCalledTimes(2);
       } finally {
         prepare.mockRestore();
         vi.unstubAllEnvs();

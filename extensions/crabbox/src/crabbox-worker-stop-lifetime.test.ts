@@ -3,12 +3,14 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { stopCrabboxLease } from "./crabbox-worker-command.js";
+import * as processRunner from "./crabbox-process.js";
+import { openWarmImageStore } from "./crabbox-state.test-support.js";
+import { stopCrabboxLease, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
-  commandResult,
   createWarmProvider,
   LEASE_ID,
-  openWarmImageStore,
   PROFILE,
   provisionWarmProfile,
   tempDirs,
@@ -29,6 +31,87 @@ const HELD_STOP = `
 `;
 
 describe("Crabbox stop lifetime", () => {
+  it("explicitly recovers an Azure fixed lease after local create-intent loss", async () => {
+    const runCommand = vi
+      .fn()
+      .mockResolvedValueOnce(
+        commandResult({
+          code: 4,
+          stderr: "Azure fixed lease cannot be adopted without its create intent",
+        }),
+      )
+      .mockResolvedValueOnce(commandResult());
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+
+    await expect(
+      stopCrabboxLease({
+        binary: "crabbox",
+        id: LEASE_ID,
+        provider: "azure",
+        warn: vi.fn(),
+      }),
+    ).resolves.toBeUndefined();
+    expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([
+      ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID],
+      ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID, "--force"],
+    ]);
+  });
+
+  it.each(
+    [60_000, CRABBOX_STOP_TIMEOUT_MS].flatMap((elapsedMs) =>
+      [-90_000, 90_000].map((clockStepMs) => ({ elapsedMs, clockStepMs })),
+    ),
+  )(
+    "keeps Azure recovery within the original deadline after $elapsedMs ms and a $clockStepMs ms wall step",
+    async ({ elapsedMs, clockStepMs }) => {
+      let now = 0;
+      let wallStep = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const wallClock = vi.spyOn(Date, "now").mockImplementation(() => now + wallStep);
+      const runCommand = vi
+        .fn<CrabboxCommandRunner>()
+        .mockImplementationOnce(async () => {
+          now = elapsedMs;
+          wallStep = clockStepMs;
+          return commandResult({
+            code: 4,
+            stderr: "Azure fixed lease cannot be adopted without its create intent",
+          });
+        })
+        .mockResolvedValue(commandResult());
+      vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+      try {
+        const stopped = stopCrabboxLease({
+          binary: "crabbox",
+          id: LEASE_ID,
+          provider: "azure",
+          warn: vi.fn(),
+        });
+        if (elapsedMs < CRABBOX_STOP_TIMEOUT_MS) {
+          await expect(stopped).resolves.toBeUndefined();
+          expect(runCommand).toHaveBeenCalledTimes(2);
+          expect(runCommand.mock.calls[1]?.[1].timeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS - elapsedMs);
+          expect(runCommand.mock.calls[1]?.[0]).toEqual([
+            "crabbox",
+            "stop",
+            "--provider",
+            "azure",
+            "--id",
+            LEASE_ID,
+            "--force",
+          ]);
+        } else {
+          await expect(stopped).rejects.toThrow("timed out before Azure fixed-lease recovery");
+          expect(runCommand).toHaveBeenCalledOnce();
+        }
+        expect(runCommand.mock.calls[0]?.[1].timeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS);
+      } finally {
+        wallClock.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
   it.each(["destroy", "dispose", "inspection loss"] as const)(
     "retains heartbeat custody through %s and later disposal",
     async (entrance) => {
@@ -103,13 +186,12 @@ describe("Crabbox stop lifetime", () => {
   );
 
   it.each([
-    { entrance: "destroy", exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
-    { entrance: "direct stop", exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
-    { entrance: "destroy", exitCode: 5, elapsedMs: 6 * 60_000, outcome: "failure" },
-    { entrance: "destroy", exitCode: 0, elapsedMs: 18 * 60_000, outcome: "timeout" },
+    { exitCode: 0, elapsedMs: 6 * 60_000, outcome: "success" },
+    { exitCode: 5, elapsedMs: 6 * 60_000, outcome: "failure" },
+    { exitCode: 0, elapsedMs: 18 * 60_000, outcome: "timeout" },
   ])(
-    "preserves $entrance custody through late $outcome",
-    async ({ entrance, exitCode, elapsedMs, outcome }) => {
+    "preserves destroy custody through late $outcome",
+    async ({ exitCode, elapsedMs, outcome }) => {
       const marker = path.join(tempDirs.make("openclaw-crabbox-stop-"), "release");
       const started = createDeferred<void>();
       let childResult: SpawnResult | undefined;
@@ -141,16 +223,8 @@ describe("Crabbox stop lifetime", () => {
       armed = true;
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       let settled = false;
-      const operation = (
-        entrance === "destroy"
-          ? provider.destroy({ leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } })
-          : stopCrabboxLease({
-              binary: "crabbox",
-              id: LEASE_ID,
-              provider: "aws",
-              runCommand: runStop,
-            })
-      )
+      const operation = provider
+        .destroy({ leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } })
         .then(
           () => ({ success: true }),
           (error: unknown) => ({ error }),
@@ -181,9 +255,7 @@ describe("Crabbox stop lifetime", () => {
       if (outcome === "success") {
         expect(await operation).toEqual({ success: true });
         expect(childResult).toMatchObject({ termination: "exit", code: 0 });
-        if (entrance === "destroy") {
-          expect(store.lookup(owner.key)?.allocations[LEASE_ID]).toBeUndefined();
-        }
+        expect(store.lookup(owner.key)?.allocations[LEASE_ID]).toBeUndefined();
       } else {
         expect(await operation).toMatchObject({
           error: {

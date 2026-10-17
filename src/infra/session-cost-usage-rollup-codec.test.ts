@@ -1,4 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import {
+  decodeUsageCostPartition,
+  partitionUsageCostRollup,
+} from "./session-cost-usage-partitions.js";
 import {
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
@@ -102,4 +107,56 @@ describe("usage rollup storage codec", () => {
       decodeUsageCostRollup(encoded.valueJson, "different-pricing", encoded.blob),
     ).toBeUndefined();
   });
+
+  it.each([0, 512])("rejects impossible lengths before deferring %i records", (records) => {
+    const original = entry(records);
+    const encoded = encodeUsageCostRollup(original);
+    const metadata = JSON.parse(encoded.valueJson);
+    for (const body of [
+      { ...metadata.body, bytes: 35 * 1024 * 1024 },
+      { ...metadata.body, bytes: metadata.body.storedBytes + 1, encoding: "identity" },
+      { ...metadata.body, bytes: metadata.body.storedBytes, encoding: "zstd" },
+    ]) {
+      expect(
+        decodeUsageCostRollup(
+          JSON.stringify({ ...metadata, body }),
+          original.pricingFingerprint,
+          encoded.blob,
+          { remainingBytes: 0 },
+        ),
+      ).toBeUndefined();
+    }
+    expect(
+      decodeUsageCostRollup(encoded.valueJson, original.pricingFingerprint, encoded.blob, {
+        remainingBytes: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([1, 512])(
+    "rejects impossible partition lengths before deferring %i records",
+    (records) => {
+      const original = entry(records);
+      const partition = expectDefined(
+        partitionUsageCostRollup(original).partitions[0],
+        "Expected generated usage partition",
+      );
+      const metadata = JSON.parse(partition.valueJson);
+      for (const header of [
+        { ...metadata, encoding: "identity", bytes: 35 * 1024 * 1024 },
+        { ...metadata, encoding: "identity", bytes: partition.blob.byteLength + 1 },
+        { ...metadata, encoding: "zstd", bytes: partition.blob.byteLength },
+      ]) {
+        expect(
+          decodeUsageCostPartition(JSON.stringify(header), partition.blob, { remainingBytes: 0 }),
+        ).toBeUndefined();
+      }
+      expect(
+        decodeUsageCostPartition(partition.valueJson, partition.blob, { remainingBytes: 0 }),
+      ).toBeNull();
+      expect(decodeUsageCostPartition(partition.valueJson, partition.blob)).toMatchObject({
+        buckets: { "0": { totals: { totalTokens: records } } },
+      });
+    },
+  );
 });

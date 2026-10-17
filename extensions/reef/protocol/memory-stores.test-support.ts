@@ -47,7 +47,7 @@ export class MemoryAuditStore implements AuditStore {
 
 interface ReplayRecord {
   envelopeHash: string;
-  state: "available" | "in_flight" | "completed" | "consumed";
+  state: "available" | "in_flight" | "completed";
   receipt?: SignedReceipt;
   body?: MessageBody;
 }
@@ -65,7 +65,7 @@ export class MemoryReplayStore implements ReplayStore {
     if (existing.envelopeHash !== envelopeHash) {
       return "mismatch";
     }
-    if (existing.state === "completed" || existing.state === "consumed") {
+    if (existing.state === "completed") {
       return "duplicate";
     }
     if (existing.state === "in_flight") {
@@ -96,16 +96,6 @@ export class MemoryReplayStore implements ReplayStore {
     if (body !== undefined) {
       existing.body = structuredClone(body);
     }
-  }
-
-  async consume(peer: string, id: string): Promise<void> {
-    const existing = this.#bindings.get(replayKey(peer, id));
-    if (existing?.state !== "in_flight") {
-      throw new Error("replay claim is not in flight");
-    }
-    existing.state = "consumed";
-    delete existing.receipt;
-    delete existing.body;
   }
 
   async release(peer: string, id: string): Promise<void> {

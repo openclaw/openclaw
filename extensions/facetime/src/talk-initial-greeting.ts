@@ -6,10 +6,7 @@ const FACETIME_INITIAL_GREETING =
   "Greet the caller briefly, introduce yourself using your configured identity, and ask how you can help.";
 const FACETIME_GREETING_MEDIA_SETTLE_MS = 100;
 
-export function createFaceTimeInitialGreeting(params: {
-  delayMs?: number;
-  speak: (instructions: string) => void;
-}): {
+export function createFaceTimeInitialGreeting(params: { speak: (instructions: string) => void }): {
   readonly instructions: string;
   schedule(): void;
   cancel(): void;
@@ -34,7 +31,7 @@ export function createFaceTimeInitialGreeting(params: {
         timer = undefined;
         dismissed = true;
         params.speak(FACETIME_INITIAL_GREETING);
-      }, params.delayMs ?? FACETIME_GREETING_MEDIA_SETTLE_MS);
+      }, FACETIME_GREETING_MEDIA_SETTLE_MS);
       timer.unref?.();
     },
     cancel() {

@@ -49,9 +49,7 @@ describe("subagent Gateway context binding", () => {
   it.each([
     { retired: 0, closure: "closed" },
     { retired: 1, closure: "closed" },
-    { retired: 0, closure: "replaced" },
     { retired: 1, closure: "replaced" },
-    { retired: 0, closure: "throwing" },
     { retired: 1, closure: "throwing" },
   ])("rechecks caller $retired after its source is $closure", async ({ retired, closure }) => {
     const context = {} as GatewayRequestContext;

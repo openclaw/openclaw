@@ -26,6 +26,7 @@ suite.define(() => {
     "scopes $action copy fallback to its $lifecycle file presentation",
     async ({ lifecycle, action }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        await page.clock.install();
         await page.addInitScript(() => {
           window.fileCopyProof = { nativeWrites: [], fallbacks: [] };
           Object.defineProperty(navigator, "clipboard", {
@@ -64,6 +65,8 @@ suite.define(() => {
             "sessions.files.get": {
               root: "/workspace",
               file: {
+                previewKind: "text",
+                contentEncoding: "utf8",
                 content: "Synthetic file copy content",
                 kind: "read",
                 missing: false,
@@ -95,12 +98,15 @@ suite.define(() => {
           await panel.getByRole("button", { name: "View Raw Text", exact: true }).click();
           await expect.poll(() => panel.locator(".sidebar-file-view").count()).toBe(0);
         }
-        await page.evaluate(async () => {
-          window.fileCopyProof.reject!();
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          });
-        });
+        // Keep transient feedback alive while proof capture crosses host I/O boundaries.
+        const pendingAt = await page.evaluate(() => Date.now());
+        await page.clock.pauseAt(pendingAt + 1_000);
+        await page.evaluate(() => window.fileCopyProof.reject!());
+        if (lifecycle === "current") {
+          await panel
+            .getByRole("button", { name: "Copied!", exact: true })
+            .waitFor({ state: "visible" });
+        }
         const evidence = await page.evaluate(() => ({
           nativeWrites: window.fileCopyProof.nativeWrites,
           fallbacks: window.fileCopyProof.fallbacks,
@@ -117,7 +123,8 @@ suite.define(() => {
             name: action === "path" ? "Copy path" : "Copy file contents",
             exact: true,
           });
-          // Wait for the first attempt's feedback to retire before proving native success.
+          // Retire the first attempt's feedback before proving native success.
+          await page.clock.fastForward(1_500);
           await copyButton.waitFor({ state: "visible" });
           await copyButton.click();
           await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 2);

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { refreshControlUiServiceWorker } from "../../app/sw-refresh.runtime.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -8,11 +8,11 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", () => ({
   refreshControlUiServiceWorker: vi.fn(async () => false),
@@ -22,6 +22,11 @@ const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
 describe("OpenClawTerminalPanel reconnect", () => {
+  beforeAll(async () => {
+    // Load the real responder before short RPC assertions begin on a cold worker.
+    await import("@openclaw/libterminal/browser");
+  });
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -29,7 +34,9 @@ describe("OpenClawTerminalPanel reconnect", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     document.body.replaceChildren();
+    await Promise.resolve();
     createGhosttyTerminalMock.mockReset();
     vi.mocked(refreshControlUiServiceWorker).mockReset();
     vi.mocked(refreshControlUiServiceWorker).mockResolvedValue(false);
@@ -58,13 +65,15 @@ describe("OpenClawTerminalPanel reconnect", () => {
       addEventListener: () => () => {},
     };
     const mountPanel = () => {
-      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
       panel.client = client;
       panel.available = true;
       document.body.append(panel);
       return panel;
     };
     const panel = mountPanel();
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
     await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.open",
@@ -75,6 +84,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
     panel.remove();
     mountPanel();
+    await vi.dynamicImportSettled();
     await waitForFast(() => {
       expect(requests.filter(({ method }) => method === "terminal.open")).toHaveLength(2);
     });
@@ -85,7 +95,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     ).toHaveLength(1);
   });
 
-  it.each(["conn", "agent:agent:main:background-task"] as const)(
+  it.each(["agent:agent:main:background-task"] as const)(
     "attaches a %s session with its native title and actual owner",
     async (owner) => {
       const controllers = [createTerminalController(), createTerminalController()] as const;
@@ -143,36 +153,36 @@ describe("OpenClawTerminalPanel reconnect", () => {
         },
         addEventListener: () => () => {},
       };
-      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
       panel.client = client;
       panel.available = true;
       document.body.append(panel);
       panel.toggle();
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       await waitForFast(() => {
         expect(requests.some((request) => request.method === "terminal.open")).toBe(true);
       });
 
-      (
-        panel.renderRoot.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement
-      ).click();
+      (panel.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement).click();
       await waitForFast(() => {
-        expect(panel.renderRoot.querySelector(".tp-session-menu")?.textContent).toContain(
-          "detached-agent",
-        );
+        expect(panel.querySelector(".tp-session-menu")?.textContent).toContain("detached-agent");
       });
-      const menuText = panel.renderRoot.querySelector(".tp-session-menu")?.textContent;
+      const menuText = panel.querySelector(".tp-session-menu")?.textContent;
       expect(menuText).toContain("/work/detached");
       expect(
-        [...panel.renderRoot.querySelectorAll<HTMLElement>(".tp-session")]
+        [...panel.querySelectorAll<HTMLElement>(".tp-session")]
           .find((row) => row.textContent?.includes("detached-agent"))
           ?.querySelector(".tp-session__state")?.textContent,
-      ).toContain(owner === "conn" ? "detached" : "agent");
+      ).toContain("agent");
       expect(menuText).toContain("attached");
       expect(menuText).toContain("current");
-      const detachedRow = [
-        ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(".tp-session"),
-      ].find((button) => button.textContent?.includes("detached-agent"));
+      const detachedRow = [...panel.querySelectorAll<HTMLButtonElement>(".tp-session")].find(
+        (button) => button.textContent?.includes("detached-agent"),
+      );
       detachedRow?.click();
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
 
       await waitForFast(() => {
         expect(requests).toContainEqual({
@@ -184,10 +194,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
       expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
         "detached history",
       );
-      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe(
-        owner === "conn" ? undefined : "agent",
-      );
-      expect(panel.renderRoot.textContent).toContain("codex");
+      expect(panel.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
+      expect(panel.textContent).toContain("codex");
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
         JSON.stringify(["current-1", "detached-1"]),
       );
@@ -253,7 +261,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         };
       },
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -350,11 +358,12 @@ describe("OpenClawTerminalPanel reconnect", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.agentId = "research";
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
+    await panel.updateComplete;
 
     panel.available = false;
     await panel.updateComplete;
@@ -374,17 +383,13 @@ describe("OpenClawTerminalPanel reconnect", () => {
     });
     panel.handleToggleRequest(requested);
     panel.handleToggleRequest(requested);
-    const sessions = (
-      panel as unknown as {
-        terminalSessions: {
-          attachSessionById(sessionId: string, agentOwned?: boolean): Promise<void>;
-        };
-      }
-    ).terminalSessions;
-    void sessions.attachSessionById("picked-terminal");
-    void sessions.attachSessionById("picked-terminal");
+    const another = new CustomEvent("openclaw:terminal-toggle", {
+      detail: { open: true, terminalSessionId: "another-terminal" },
+    });
+    panel.handleToggleRequest(another);
+    panel.handleToggleRequest(another);
     await panel.updateComplete;
-    const newSession = panel.renderRoot.querySelector<HTMLButtonElement>(
+    const newSession = panel.querySelector<HTMLButtonElement>(
       '[aria-label="New terminal session"]',
     );
     expect(newSession?.disabled).toBe(false);
@@ -395,7 +400,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(requests).toHaveLength(0);
     await waitForFast(() => {
       expect(
-        panel.renderRoot
+        panel
           .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]')
           ?.getAttribute("aria-label"),
       ).toContain("Connecting to session");
@@ -412,13 +417,13 @@ describe("OpenClawTerminalPanel reconnect", () => {
       ),
     ).toEqual([
       { method: "terminal.attach", params: { sessionId: "requested-terminal" } },
-      { method: "terminal.attach", params: { sessionId: "picked-terminal" } },
+      { method: "terminal.attach", params: { sessionId: "another-terminal" } },
       {
         method: "terminal.open",
         params: { agentId: "research", cols: 100, rows: 30 },
       },
     ]);
-    expect(panel.renderRoot.querySelectorAll(".tabstrip-tab__badge")).toHaveLength(1);
+    expect(panel.querySelectorAll(".tabstrip-tab__badge")).toHaveLength(2);
   });
 
   it("cancels captured restore and explicit actions when the panel closes during the fence", async () => {
@@ -432,7 +437,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -497,10 +502,11 @@ describe("OpenClawTerminalPanel reconnect", () => {
           releases.push(resolve);
         }),
     );
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
+    await panel.updateComplete;
 
     panel.client = null;
     panel.available = false;
@@ -550,11 +556,12 @@ describe("OpenClawTerminalPanel reconnect", () => {
         releaseRefresh = resolve;
       }),
     );
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.catalogReadyTimeoutMs = 10;
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
+    await panel.updateComplete;
 
     panel.client = null;
     panel.available = false;
@@ -563,27 +570,27 @@ describe("OpenClawTerminalPanel reconnect", () => {
     panel.available = true;
     await panel.updateComplete;
     await vi.waitFor(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     panel.handleToggleRequest(
       new CustomEvent("openclaw:terminal-toggle", {
         detail: { open: true, terminalSessionId: "stalled-terminal" },
       }),
     );
 
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
-        "Reload this page to continue the terminal action",
-      );
-    });
+    await vi.advanceTimersByTimeAsync(10);
+    await panel.updateComplete;
+    expect(panel.querySelector(".tp-error")?.textContent).toContain(
+      "Reload this page to continue the terminal action",
+    );
     expect(
-      panel.renderRoot.querySelector(
-        'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
-      ),
+      panel.querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]'),
     ).toBeNull();
 
+    vi.useRealTimers();
     releaseRefresh?.(false);
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull();
-      expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
+      expect(panel.querySelector(".is-live")).not.toBeNull();
+      expect(panel.querySelector(".tp-error")).toBeNull();
     });
   });
 
@@ -605,10 +612,11 @@ describe("OpenClawTerminalPanel reconnect", () => {
       },
       addEventListener: () => () => {},
     };
-    const stalePanel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const stalePanel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     stalePanel.client = client;
     stalePanel.available = true;
     document.body.append(stalePanel);
+    await stalePanel.updateComplete;
 
     stalePanel.client = null;
     stalePanel.available = false;
@@ -634,9 +642,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(requests).toHaveLength(0);
 
     stalePanel.remove();
-    const currentPanel = document.createElement(
-      TERMINAL_PANEL_ELEMENT_NAME,
-    ) as OpenClawTerminalPanel;
+    const currentPanel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     currentPanel.client = client;
     currentPanel.available = true;
     document.body.append(currentPanel);

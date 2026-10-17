@@ -5,7 +5,7 @@ import { resolveMemoryPluginStatus } from "./memory-plugin.js";
 /** Projects CLI facts from the status owner's existing config and agent roster. */
 export function buildStatusCliProjection(
   cfg: OpenClawConfig,
-  agentList: ReturnType<typeof listGatewayAgentsBasic>,
+  agentList: Awaited<ReturnType<typeof listGatewayAgentsBasic>>,
 ) {
   return {
     agents: {

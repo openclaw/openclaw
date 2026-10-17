@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -116,12 +117,13 @@ function inspectNpmCli(launcher, env, cwd) {
     ? ["/d", "/s", "/c", buildCmdExeCommandLine(launcher, ["--version"])]
     : ["--version"];
   // Managers retain their own startup/pin selection. Only discovery uses the
-  // shim; the download below always runs as a directly owned Node process.
+  // shim; the download below always runs as a directly owned runtime process.
   const result = spawnSync(command, args, {
     cwd,
     env: {
       ...env,
       NODE_OPTIONS: [env.NODE_OPTIONS, `--import=${NPM_CLI_PRELOAD}`].filter(Boolean).join(" "),
+      BUN_OPTIONS: [env.BUN_OPTIONS, `--preload=${NPM_CLI_PRELOAD}`].filter(Boolean).join(" "),
     },
     encoding: "utf8",
     timeout: PROBE_TIMEOUT_MS,
@@ -281,7 +283,13 @@ export function restoreFsSafePrebuild(packageRoot, env = process.env, log = cons
     // An exclusive directory reservation preserves any pre-existing package.
     mkdirSync(destination);
     installedRoot = destination;
-    cpSync(stagedPackage, destination, { recursive: true, force: false, errorOnExist: true });
+    for (const entry of readdirSync(stagedPackage)) {
+      cpSync(path.join(stagedPackage, entry), path.join(destination, entry), {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+      });
+    }
     if (runProbe(packageRoot, env).status !== "ready") {
       throw new Error("the restored native binding could not be loaded or used");
     }

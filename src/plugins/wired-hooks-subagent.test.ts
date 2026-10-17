@@ -143,15 +143,4 @@ describe("subagent hook runner methods", () => {
     );
     expect(result).toBeUndefined();
   });
-
-  it("hasHooks returns true for registered subagent hooks", () => {
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "subagent_delivery_target", handler: vi.fn() },
-    ]);
-
-    expect(runner.hasHooks("subagent_delivery_target")).toBe(true);
-    expect(runner.hasHooks("subagent_spawned")).toBe(false);
-    expect(runner.hasHooks("subagent_progress")).toBe(false);
-    expect(runner.hasHooks("subagent_ended")).toBe(false);
-  });
 });

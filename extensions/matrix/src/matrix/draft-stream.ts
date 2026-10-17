@@ -7,24 +7,6 @@ import { MsgType } from "./send/types.js";
 const DEFAULT_THROTTLE_MS = 1000;
 type MatrixDraftPreviewMode = "partial" | "quiet";
 
-function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
-  msgtype: typeof MsgType.Text | typeof MsgType.Notice;
-  includeMentions?: boolean;
-} {
-  if (mode === "quiet") {
-    return {
-      msgtype: MsgType.Notice,
-      includeMentions: false,
-    };
-  }
-  // Drafts can contain partial model text and raw tool-progress paths; keep
-  // Matrix mentions inert until callers send a normal final message.
-  return {
-    msgtype: MsgType.Text,
-    includeMentions: false,
-  };
-}
-
 export function createMatrixDraftStream(params: {
   roomId: string;
   client: MatrixClient;
@@ -38,11 +20,19 @@ export function createMatrixDraftStream(params: {
   log?: (message: string) => void;
 }) {
   const { roomId, client, cfg, threadId, accountId, log } = params;
-  const preview = resolveDraftPreviewOptions(params.mode ?? "partial");
   // MSC4357 live markers are only useful for "partial" mode where users see
   // the draft evolve. "quiet" mode uses m.notice for background previews
   // where a streaming animation would be unexpected.
   const useLive = params.mode !== "quiet";
+  const previewOptions = {
+    client,
+    cfg,
+    threadId,
+    accountId,
+    msgtype: useLive ? MsgType.Text : MsgType.Notice,
+    // Partial model text and tool-progress paths must not notify mentioned users.
+    includeMentions: false,
+  };
 
   let currentEventId: string | undefined;
   let lastSentText = "";
@@ -74,22 +64,14 @@ export function createMatrixDraftStream(params: {
       );
       return false;
     }
-    if (sendFailed) {
-      return false;
-    }
     if (preparedText.trimmedText === lastSentText) {
       return true;
     }
     try {
       if (!currentEventId) {
         const result = await sendSingleTextMessageMatrix(roomId, preparedText.trimmedText, {
-          client,
-          cfg,
+          ...previewOptions,
           replyToId,
-          threadId,
-          accountId,
-          msgtype: preview.msgtype,
-          includeMentions: preview.includeMentions,
           live: useLive,
         });
         currentEventId = result.messageId;
@@ -98,12 +80,7 @@ export function createMatrixDraftStream(params: {
         log?.(`draft-stream: created message ${currentEventId}${useLive ? " (MSC4357 live)" : ""}`);
       } else {
         await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
-          client,
-          cfg,
-          threadId,
-          accountId,
-          msgtype: preview.msgtype,
-          includeMentions: preview.includeMentions,
+          ...previewOptions,
           live: useLive,
         });
         lastSentText = preparedText.trimmedText;
@@ -134,6 +111,7 @@ export function createMatrixDraftStream(params: {
     clear,
     retire,
     cleanupPending,
+    resetMessage,
   } = createFinalizableDraftLifecycle({
     throttleMs: DEFAULT_THROTTLE_MS,
     state: streamState,
@@ -162,12 +140,7 @@ export function createMatrixDraftStream(params: {
       liveFinalized = true;
       try {
         await editMessageMatrix(roomId, currentEventId, lastSentText, {
-          client,
-          cfg,
-          threadId,
-          accountId,
-          msgtype: preview.msgtype,
-          includeMentions: preview.includeMentions,
+          ...previewOptions,
           live: false,
         });
         log?.(`draft-stream: finalized ${currentEventId} (MSC4357 stream ended)`);
@@ -191,14 +164,10 @@ export function createMatrixDraftStream(params: {
   };
 
   const resetCurrentMessage = (): void => {
-    currentEventId = undefined;
-    lastSentText = "";
-    lastSentContent = "";
+    resetMessage();
     sendFailed = false;
     finalizeInPlaceBlocked = false;
     liveFinalized = false;
-    loop.resetPending();
-    loop.resetThrottleWindow();
   };
   const reset = (): void => {
     // A new block consumes the first-only reply reference; retraction does not.

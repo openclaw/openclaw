@@ -12,13 +12,16 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKeys = ["agent:main:perf-a", "agent:main:perf-b", "agent:main:perf-c"] as const;
-const hydrationMethods = new Set(["tasks.list", "artifacts.list"]);
+const hydrationMethods = ["sessions.branches.list", "sessions.companion.state"];
 
-function countSessionHydrationRequests(requests: MockGatewayRequest[], sessionKey: string): number {
-  return requests.filter((request) => {
-    const params = request.params as { sessionKey?: unknown } | undefined;
-    return params?.sessionKey === sessionKey && hydrationMethods.has(request.method);
-  }).length;
+function sessionHydrationMethods(requests: MockGatewayRequest[], sessionKey: string): string[] {
+  return requests
+    .filter((request) => {
+      const params = request.params as { sessionKey?: unknown } | undefined;
+      return params?.sessionKey === sessionKey && hydrationMethods.includes(request.method);
+    })
+    .map((request) => request.method)
+    .toSorted();
 }
 
 function sessionsResponse() {
@@ -49,10 +52,14 @@ suite.define(() => {
           "chat.startup",
           "sessions.diff",
           "sessions.files.list",
-          "tasks.list",
+          "sessions.branches.list",
+          "sessions.companion.state",
         ],
+        historyMessages: [{ role: "assistant", content: "Retained session transcript." }],
         methodResponses: {
           "artifacts.list": { artifacts: [] },
+          "sessions.branches.list": { branches: [] },
+          "sessions.companion.state": { exchanges: [] },
           "sessions.files.list": {
             browser: { entries: [], path: "" },
             files: [],
@@ -60,7 +67,6 @@ suite.define(() => {
             root: "",
           },
           "sessions.list": sessionsResponse(),
-          "tasks.list": { tasks: [] },
         },
         sessionKey: sessionKeys[0],
       });
@@ -79,10 +85,10 @@ suite.define(() => {
         // Initial after-paint hydration belongs outside the reconnect measurement.
         await gateway.resolveDeferred("chat.startup");
         await expect
-          .poll(async () =>
-            countSessionHydrationRequests(await gateway.getRequests(), sessionKeys[2]),
-          )
-          .toBe(2);
+          .poll(async () => sessionHydrationMethods(await gateway.getRequests(), sessionKeys[2]))
+          .toEqual(hydrationMethods);
+        const visiblePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        await visiblePane.getByText("Retained session transcript.", { exact: true }).waitFor();
         const before = (await gateway.getRequests()).length;
         const connectBefore = (await gateway.getRequests("connect")).length;
         await gateway.closeLatest(1012, "retained pane reconnect proof");
@@ -92,41 +98,25 @@ suite.define(() => {
         await expect
           .poll(
             async () =>
-              countSessionHydrationRequests(
-                (await gateway.getRequests()).slice(before),
-                sessionKeys[2],
-              ),
+              sessionHydrationMethods((await gateway.getRequests()).slice(before), sessionKeys[2]),
             { timeout: 10_000 },
           )
-          .toBe(2);
+          .toEqual(hydrationMethods);
         const requests = (await gateway.getRequests()).slice(before);
         const counts: Record<string, number> = {};
         for (const key of sessionKeys) {
-          counts[key] = countSessionHydrationRequests(requests, key);
+          counts[key] = sessionHydrationMethods(requests, key).length;
         }
         expect(requests.filter((request) => request.method === "sessions.files.list")).toHaveLength(
           0,
         );
+        expect(requests.filter((request) => request.method === "artifacts.list")).toHaveLength(0);
+        await visiblePane.getByText("Retained session transcript.", { exact: true }).waitFor();
         rounds.push(counts);
         const beforeEvents = (await gateway.getRequests()).length;
         const sessionListCount = (await gateway.getRequests("sessions.list")).length;
         const branchListCount = (await gateway.getRequests("sessions.branches.list")).length;
         const hiddenSessionKey = sessionKeys[0];
-        await gateway.emitGatewayEvent("task", {
-          action: "upserted",
-          task: {
-            id: "task-hidden",
-            taskId: "task-hidden",
-            kind: "subagent",
-            runtime: "subagent",
-            status: "running",
-            title: "Hidden retained task",
-            agentId: "main",
-            sessionKey: hiddenSessionKey,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        });
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: hiddenSessionKey,
           agentId: "main",
@@ -150,7 +140,7 @@ suite.define(() => {
           .toBeGreaterThan(sessionListCount);
         expect(await gateway.getRequests("sessions.branches.list")).toHaveLength(branchListCount);
         const afterEvents = (await gateway.getRequests()).slice(beforeEvents);
-        expect(countSessionHydrationRequests(afterEvents, hiddenSessionKey)).toBe(0);
+        expect(sessionHydrationMethods(afterEvents, hiddenSessionKey)).toHaveLength(0);
         const hiddenLink = page.locator(
           `.sidebar-recent-session[data-session-key="${hiddenSessionKey}"] a`,
         );
@@ -161,9 +151,9 @@ suite.define(() => {
         await expect
           .poll(async () => {
             const later = (await gateway.getRequests()).slice(before + requests.length);
-            return countSessionHydrationRequests(later, hiddenSessionKey);
+            return sessionHydrationMethods(later, hiddenSessionKey);
           })
-          .toBe(2);
+          .toEqual(hydrationMethods);
       } finally {
         await suite.closeBrowserContext(context);
       }

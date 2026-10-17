@@ -25,10 +25,7 @@ function resolveAcpRuntimeErrorNextStep(error: AcpRuntimeError): string | undefi
 /** Formats ACP runtime errors with the operator next-step hint attached when known. */
 export function formatAcpRuntimeErrorText(error: AcpRuntimeError): string {
   const next = resolveAcpRuntimeErrorNextStep(error);
-  if (!next) {
-    return `ACP error (${error.code}): ${error.message}`;
-  }
-  return `ACP error (${error.code}): ${error.message}\nnext: ${next}`;
+  return `ACP error (${error.code}): ${error.message}${next ? `\nnext: ${next}` : ""}`;
 }
 
 /** Normalizes unknown failures into ACP runtime error text for user-facing surfaces. */
@@ -37,11 +34,5 @@ export function toAcpRuntimeErrorText(params: {
   fallbackCode: AcpRuntimeErrorCode;
   fallbackMessage: string;
 }): string {
-  return formatAcpRuntimeErrorText(
-    toAcpRuntimeError({
-      error: params.error,
-      fallbackCode: params.fallbackCode,
-      fallbackMessage: params.fallbackMessage,
-    }),
-  );
+  return formatAcpRuntimeErrorText(toAcpRuntimeError(params));
 }

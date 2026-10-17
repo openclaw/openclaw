@@ -6,7 +6,6 @@ const maintenanceReasons = {
   "state-migrations": "state migration",
   "newer-schema": "a newer OpenClaw build",
   "agent-media": "offline media migration",
-  "agent-databases-composite-primary-key": "state database schema migration",
   "audit-events-v2": "state database schema migration",
   "legacy-workshop-review-index": "state database schema migration",
   "legacy-cron-run-logs": "cron run history migration",

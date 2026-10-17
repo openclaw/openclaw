@@ -7,7 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
-const getUserProfileListItem = vi.hoisted(() => vi.fn());
+const profileFixture = vi.hoisted(() => vi.fn());
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar: async () => null }));
@@ -15,10 +15,17 @@ vi.mock("./http-auth-utils.js", () => ({
   authorizeControlUiReadRequestOrReply,
 }));
 vi.mock("../state/user-profiles.js", () => ({
-  getProfileAvatar: () => undefined,
-  getUserProfileListItem,
   formatUserProfileAvatarEtag: () => "unused-upload-etag",
   UserProfileNotFoundError: class extends Error {},
+}));
+
+vi.mock("../state/user-profiles-avatar.js", () => ({
+  createProfileAvatarReader: (id: string) => ({
+    async inspect() {
+      const profile = profileFixture(id);
+      return { profile, emails: profile.emails, isCurrent: () => true };
+    },
+  }),
 }));
 
 describe("Gravatar HTTP waiter lifetimes", () => {
@@ -31,7 +38,6 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     const promise = handleUserProfileAvatarHttpRequest(req, res, pathname, {
       auth: { mode: "none", allowTailscale: false },
-      fetchImpl,
     });
     handled.set(pathname, { response: res, promise });
     void promise.catch((error: unknown) => {
@@ -58,7 +64,8 @@ describe("Gravatar HTTP waiter lifetimes", () => {
 
   beforeEach(() => {
     fetchImpl.mockReset();
-    getUserProfileListItem.mockReset();
+    vi.stubGlobal("fetch", fetchImpl);
+    profileFixture.mockReset();
     authorizeControlUiReadRequestOrReply
       .mockReset()
       .mockImplementation(({ res }: { res: ServerResponse }) =>
@@ -78,6 +85,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     producers.length = 0;
     handled.clear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   function startRequest(profileId: string) {
@@ -119,77 +127,68 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     };
   }
 
-  it("keeps a fresh HTTP waiter alive after the older waiter's deadline", async () => {
-    const totalDeadlines: AbortController[] = [];
-    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-    vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
-      if (delay !== 6_000) {
-        return nativeTimeout(delay);
+  it.each(["deadline", "disconnect"] as const)(
+    "keeps a fresh HTTP waiter alive after the older waiter's %s",
+    async (cause) => {
+      const totalDeadlines: AbortController[] = [];
+      if (cause === "deadline") {
+        const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+        vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+          if (delay !== 6_000) {
+            return nativeTimeout(delay);
+          }
+          const controller = new AbortController();
+          totalDeadlines.push(controller);
+          return controller.signal;
+        });
       }
-      const controller = new AbortController();
-      totalDeadlines.push(controller);
-      return controller.signal;
-    });
-    getUserProfileListItem.mockImplementation((id: string) => ({
-      id,
-      emails:
-        id === "deadline-older"
-          ? ["deadline-primary@example.test", "deadline-shared@example.test"]
-          : ["deadline-shared@example.test"],
-    }));
-    const shared = deferredFetch();
-    fetchImpl.mockResolvedValueOnce(new Response(null, { status: 404 }));
-    fetchImpl.mockImplementation((_input, init) => shared.fetch(init?.signal));
-    const older = startRequest("deadline-older");
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
-    const fresh = startRequest("deadline-fresh");
-    await vi.waitFor(() => expect(totalDeadlines).toHaveLength(2));
-
-    expectDefined(totalDeadlines[0], "older deadline").abort();
-    const olderResult = await older.result;
-    shared.resolve();
-    const freshResult = await fresh.result;
-
-    expect(olderResult.statusCode).toBe(502);
-    expect(freshResult).toEqual({ statusCode: 200, body: Buffer.from(imageBytes) });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-  });
-
-  it("settles a disconnected HTTP waiter without cancelling shared work or writing a response", async () => {
-    getUserProfileListItem.mockImplementation((id: string) => ({
-      id,
-      emails: ["disconnect-shared@example.test"],
-    }));
-    const shared = deferredFetch();
-    fetchImpl.mockImplementation((_input, init) => shared.fetch(init?.signal));
-    const disconnected = startRequest("disconnect-first");
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
-    const remaining = startRequest("disconnect-remaining");
-    await vi.waitFor(() => expect(handled.has(remaining.pathname)).toBe(true));
-    const first = expectDefined(handled.get(disconnected.pathname), "first HTTP waiter");
-    const end = vi.spyOn(first.response, "end");
-    const writeHead = vi.spyOn(first.response, "writeHead");
-    let settled = false;
-    void first.promise.then(() => {
-      settled = true;
-    });
-    const closed = once(first.response, "close");
-    disconnected.client.destroy();
-    await closed;
-    await setImmediate();
-
-    expect(settled).toBe(true);
-    expect(writeHead).not.toHaveBeenCalled();
-    expect(end).not.toHaveBeenCalled();
-    shared.resolve();
-    expect(await remaining.result).toEqual({ statusCode: 200, body: Buffer.from(imageBytes) });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
+      profileFixture.mockImplementation((id: string) => ({
+        id,
+        emails:
+          id === "deadline-older"
+            ? ["deadline-primary@example.test", "deadline-shared@example.test"]
+            : [`${cause}-shared@example.test`],
+      }));
+      const shared = deferredFetch();
+      if (cause === "deadline") {
+        fetchImpl.mockResolvedValueOnce(new Response(null, { status: 404 }));
+      }
+      fetchImpl.mockImplementation((_input, init) => shared.fetch(init?.signal));
+      const expectedFetches = cause === "deadline" ? 2 : 1;
+      const older = startRequest(`${cause}-older`);
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches));
+      const fresh = startRequest(`${cause}-fresh`);
+      if (cause === "deadline") {
+        await vi.waitFor(() => expect(totalDeadlines).toHaveLength(2));
+        expectDefined(totalDeadlines[0], "older deadline").abort();
+        expect((await older.result).statusCode).toBe(502);
+      } else {
+        await vi.waitFor(() => expect(handled.has(fresh.pathname)).toBe(true));
+        const first = expectDefined(handled.get(older.pathname), "first HTTP waiter");
+        const end = vi.spyOn(first.response, "end");
+        const writeHead = vi.spyOn(first.response, "writeHead");
+        let settled = false;
+        void first.promise.then(() => {
+          settled = true;
+        });
+        const closed = once(first.response, "close");
+        older.client.destroy();
+        await closed;
+        await setImmediate();
+        expect(settled).toBe(true);
+        expect(writeHead).not.toHaveBeenCalled();
+        expect(end).not.toHaveBeenCalled();
+      }
+      shared.resolve();
+      expect(await fresh.result).toEqual({ statusCode: 200, body: Buffer.from(imageBytes) });
+      expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches);
+    },
+  );
 
   it("does not start a Gravatar fetch for a client already disconnected during authorization", async () => {
     const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
     authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
-    getUserProfileListItem.mockReturnValue({
+    profileFixture.mockReturnValue({
       id: "disconnected-before-lookup",
       emails: ["disconnected-before-lookup@example.test"],
     });

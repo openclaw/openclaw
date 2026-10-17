@@ -15,10 +15,15 @@ export const nativeProcessTestEntrypoints = {
     sourceWorkerName: "diagnostics-timeline",
     distWorkerPath: "infra/diagnostics-timeline.js",
   },
-  fsSafeDefaults: {
+  fsSafeCore: {
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: "fs-safe-defaults",
-    distWorkerPath: "infra/fs-safe-defaults.js",
+    sourceWorkerName: "fs-safe",
+    distWorkerPath: "infra/fs-safe.js",
+  },
+  fsSafeEnv: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "fs-safe-env",
+    distWorkerPath: "infra/fs-safe-env.js",
   },
   memoryFsUtils: {
     currentModuleUrl: import.meta.url,

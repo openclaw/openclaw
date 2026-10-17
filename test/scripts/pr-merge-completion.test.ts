@@ -5,20 +5,32 @@ import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-suppor
 const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix } =
   createMergeOutcomeFixtureHarness();
 
-describePosix("native merge outcome with real Git and supervised lock recovery", () => {
-  it.each(["rejected", "lost"])("does not repeat a %s first completion POST", (comment) => {
-    const f = reconciledMergeAfterCleanup();
+describePosix("native merge completion", () => {
+  it.each([
+    ["explicit", "rejected"],
+    ["explicit", "lost"],
+    ["inline", "rejected"],
+    ["inline", "lost"],
+  ])("does not repeat a %s %s completion POST", (route, comment) => {
+    const explicit = route === "explicit";
+    const f = explicit ? reconciledMergeAfterCleanup() : fixture();
+    const complete = () => (explicit ? f.complete(f.git(["rev-parse", outcomeRef])) : f.run());
     f.save({ ...f.state(), comment });
-    const first = f.complete(f.git(["rev-parse", outcomeRef]));
+    const first = complete();
     expect(first.status, first.output).toBe(1);
     expect(f.record().phase).toBe("commenting");
     expect(f.state().posts).toBe(1);
     f.recover();
-    const second = f.complete(f.git(["rev-parse", outcomeRef]));
-    expect(second.status, second.output).toBe(comment === "lost" ? 0 : 1);
-    expect(f.record().phase).toBe(comment === "lost" ? "complete" : "commenting");
+    const second = complete();
+    expect(second.status, second.output).toBe(explicit && comment === "rejected" ? 1 : 0);
+    expect(f.record().phase).toBe(
+      comment === "lost" ? (explicit ? "complete" : "commented") : "commenting",
+    );
     expect(f.state().posts).toBe(1);
     expect(f.state().mutations).toBe(1);
+    if (!explicit) {
+      expect(existsSync(f.worktree)).toBe(true);
+    }
   });
 
   it("preserves unrelated local source-name branches during explicit completion", () => {
@@ -32,106 +44,72 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
   });
 
-  it("does not replace a missing admin landing audit with an unrecorded comment", () => {
-    const f = reconciledMergeAfterCleanup(true);
+  it.each([
+    "stale-oid",
+    "worktree",
+    "local-branch",
+    "remote-branch",
+    "admin-audit",
+    "ambiguous-marker",
+  ])("refuses explicit completion for %s without mutating resources or posting", (fault) => {
+    const f = reconciledMergeAfterCleanup(fault === "admin-audit");
     const oid = f.git(["rev-parse", outcomeRef]);
-    f.save({
-      ...f.state(),
-      comments: [{ body: `<!-- openclaw-merge:${f.record().attempt} -->`, html_url: "fixture" }],
-    });
-    const result = f.complete(oid);
+    if (fault === "worktree") {
+      f.git(["worktree", "add", "-q", "--detach", f.worktree, f.head]);
+    }
+    if (fault === "local-branch") {
+      f.git(["branch", "pr-123-prep", f.head]);
+    }
+    if (fault === "remote-branch") {
+      f.git(["push", "-q", "origin", `${f.head}:refs/heads/topic`]);
+    }
+    if (fault === "admin-audit" || fault === "ambiguous-marker") {
+      f.save({
+        ...f.state(),
+        comments: (fault === "admin-audit" ? [1] : [1, 2]).map((id) => ({
+          body: `<!-- openclaw-merge:${f.record().attempt} -->`,
+          html_url: `${f.state().pr.url}#issuecomment-${id}`,
+        })),
+      });
+    }
+    const result = f.complete(fault === "stale-oid" ? f.base : oid);
     expect(result.status, result.output).toBe(1);
     expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
-    expect(f.record().phase).toBe("merged");
     expect(f.state().posts).toBe(0);
     expect(f.state().mutations).toBe(1);
+    if (fault === "admin-audit") {
+      expect(f.record().phase).toBe("merged");
+    }
+    if (fault === "worktree") {
+      expect(existsSync(f.worktree)).toBe(true);
+    }
+    if (fault === "local-branch") {
+      expect(f.git(["rev-parse", "pr-123-prep"])).toBe(f.head);
+    }
+    if (fault === "remote-branch") {
+      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    }
   });
 
-  it.each(["stale-oid", "worktree", "local-branch", "remote-branch"])(
-    "refuses explicit completion for %s without mutating resources or posting",
-    (fault) => {
-      const f = reconciledMergeAfterCleanup();
-      const oid = f.git(["rev-parse", outcomeRef]);
-      if (fault === "worktree") {
-        f.git(["worktree", "add", "-q", "--detach", f.worktree, f.head]);
+  it.each(["explicit", "inline"])(
+    "preserves an advanced remote branch during %s completion",
+    (route) => {
+      const explicit = route === "explicit";
+      const f = explicit ? reconciledMergeAfterCleanup() : fixture();
+      f.save({ ...f.state(), cleanup: "advanced" });
+      const result = explicit ? f.complete(f.git(["rev-parse", outcomeRef])) : f.run();
+      expect(result.status, result.output).toBe(explicit ? 1 : 0);
+      expect(f.record().phase).toBe("commented");
+      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.state().cleanupHead);
+      if (!explicit) {
+        expect(result.output).toContain("completion pending");
+        const retry = f.run();
+        expect(retry.status, retry.output).toBe(0);
       }
-      if (fault === "local-branch") {
-        f.git(["branch", "pr-123-prep", f.head]);
-      }
-      if (fault === "remote-branch") {
-        f.git(["push", "-q", "origin", `${f.head}:refs/heads/topic`]);
-      }
-      const result = f.complete(fault === "stale-oid" ? f.base : oid);
-      expect(result.status, result.output).toBe(1);
-      expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
-      expect(f.state().posts).toBe(0);
+      expect(f.state().posts).toBe(1);
       expect(f.state().mutations).toBe(1);
-      if (fault === "worktree") {
-        expect(existsSync(f.worktree)).toBe(true);
-      }
-      if (fault === "local-branch") {
-        expect(f.git(["rev-parse", "pr-123-prep"])).toBe(f.head);
-      }
-      if (fault === "remote-branch") {
-        expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
-      }
     },
   );
-
-  it("preserves a branch recreated while the first completion comment is posted", () => {
-    const f = reconciledMergeAfterCleanup();
-    f.save({ ...f.state(), cleanup: "advanced" });
-    const result = f.complete(f.git(["rev-parse", outcomeRef]));
-    expect(result.status, result.output).toBe(1);
-    expect(f.record().phase).toBe("commented");
-    expect(f.state().posts).toBe(1);
-    expect(f.state().mutations).toBe(1);
-    expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.state().cleanupHead);
-  });
-
-  it("refuses ambiguous completion markers without posting or advancing the receipt", () => {
-    const f = reconciledMergeAfterCleanup();
-    const oid = f.git(["rev-parse", outcomeRef]);
-    const body = `<!-- openclaw-merge:${f.record().attempt} -->`;
-    f.save({
-      ...f.state(),
-      comments: [1, 2].map((id) => ({ body, html_url: `${f.state().pr.url}#issuecomment-${id}` })),
-    });
-    const result = f.complete(oid);
-    expect(result.status, result.output).toBe(1);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
-    expect(f.state().posts).toBe(0);
-    expect(f.state().mutations).toBe(1);
-  });
-
-  it.each(["rejected", "lost"])("does not duplicate a %s completion comment", (comment) => {
-    const f = fixture();
-    f.save({ ...f.state(), comment });
-    const first = f.run();
-    expect(first.status, first.output).toBe(1);
-    expect(f.record().phase).toBe("commenting");
-    f.recover();
-    const second = f.run();
-    expect(second.status, second.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
-    expect(f.state().posts).toBe(1);
-    expect(existsSync(f.worktree)).toBe(true);
-    expect(f.record().phase).toBe(comment === "lost" ? "commented" : "commenting");
-  });
-
-  it("does not delete an advanced remote branch and reports cleanup pending", () => {
-    const f = fixture();
-    f.save({ ...f.state(), cleanup: "advanced" });
-    const run = f.run();
-    expect(run.status, run.output).toBe(0);
-    expect(run.output).toContain("completion pending");
-    expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.state().cleanupHead);
-    expect(f.record().phase).toBe("commented");
-    const retry = f.run();
-    expect(retry.status, retry.output).toBe(0);
-    expect(f.state().posts).toBe(1);
-    expect(f.state().mutations).toBe(1);
-  });
 
   it("completes cleanup when GitHub already deleted the source branch", () => {
     const f = fixture();
@@ -166,7 +144,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         expect(f.record().phase).toBe("complete");
         expect(existsSync(f.worktree)).toBe(false);
         expect(f.git(["for-each-ref", "--format=%(refname)", "refs/heads/pr-123-prep"])).toBe("");
-        // Both verified identities survive removal of all disposable prepare artifacts.
         f.git(["merge-base", "--is-ancestor", localHead, outcomeRef]);
         f.git(["reflog", "expire", "--expire=now", "--all"]);
         f.git(["gc", "--prune=now"]);

@@ -64,10 +64,7 @@ export default definePluginEntry({
       api.pluginConfig,
     );
     const trace = createTraceWriter(tracePath, generation);
-    const sourceCredential = api.config.models?.providers?.[PROVIDER_ID]?.apiKey;
-    if (typeof sourceCredential !== "string" || !sourceCredential) {
-      throw new Error("qa worker generation provider requires a direct credential");
-    }
+    const sourceCredential = `qa-worker-source-${generation}`;
     trace("registered", { registrationMode: api.registrationMode });
     api.registerReload({
       hotPrefixes: [`plugins.entries.${PLUGIN_ID}.config`],

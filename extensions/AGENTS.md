@@ -1,7 +1,6 @@
 # Extensions Boundary
 
-This directory contains bundled plugins. Treat it as the same boundary that
-third-party plugins see.
+Bundled plugins. Same boundary as third-party plugins.
 
 ## Public Contracts
 
@@ -24,63 +23,28 @@ third-party plugins see.
 
 ## Boundary Rules
 
-- Extension production code should import from `openclaw/plugin-sdk/*` and its
-  own local barrels such as `./api.ts` and `./runtime-api.ts`.
-- Do not import core internals from `src/**`, `src/channels/**`,
-  `src/plugin-sdk-internal/**`, or another extension's `src/**`.
-- Do not use relative imports that escape the current extension package root.
-- Keep plugin metadata accurate in `openclaw.plugin.json` and the package
-  `openclaw` block so discovery and setup work without executing plugin code.
-- Plugin runtime dependencies belong to the owning plugin package. If a plugin
-  dependency has a runtime peer, declare/provide it in that plugin's
-  `package.json`; do not move it to root unless root/package dist owns the
-  import. Runtime never installs deps; install/update/doctor are repair points.
-- Keep plugin dependency assertions in generic contracts
-  (`package-manifest.contract.test.ts`,
-  `extension-runtime-dependencies.contract.test.ts`) rather than plugin e2e
-  tests when they express package ownership.
-- Treat files like `src/**`, `onboard.ts`, and other local helpers as private
-  unless you intentionally promote them through `api.ts` and, if needed, a
-  matching `src/plugin-sdk/<id>.ts` facade.
-- If core or core tests need a bundled plugin helper, export it from `api.ts`
-  first instead of letting them deep-import extension internals.
-- For provider plugins, keep auth, onboarding, catalog selection, and
-  vendor-only product behavior local to the plugin. Do not move those into
-  core just because two providers look similar.
-- Before adding a new provider-local `wrapStreamFn`, `buildReplayPolicy`,
-  `normalizeToolSchemas`, `inspectToolSchemas`, or compat patch helper, check
-  whether the same behavior already exists through `openclaw/plugin-sdk/*`.
-  Reuse shared family helpers first.
-- If two bundled providers share the same replay policy shape, tool-schema
-  compat rewrite, payload patch, or stream-wrapper chain, stop copying the
-  logic. Extract one shared helper and migrate both call sites in the same
-  change.
-- Prefer named provider-family helpers over repeating raw option bags. If a
-  provider needs OpenAI-style Anthropic tool payload compat, Gemini schema
-  cleanup, or an XAI compat patch, use a named shared helper instead of
-  inlining the policy knobs again.
-- Keep control-plane metadata separate from runtime logic. Discovery, config
-  validation, setup hints, onboarding hints, and activation planning should be
-  expressible from manifest/descriptors whenever possible.
-- If setup truly requires runtime execution, make that explicit in the plugin's
-  declared setup/runtime surface instead of letting metadata flows import
-  runtime code accidentally.
-- Plugin work that can outlive its originating caller or turn must use an active
-  service-owned capability. Never retain or extend caller-bound Gateway handles;
-  revalidate the service generation at the effect boundary.
-- Do not rely on eager global registry seeding or import-time side effects to
-  make a plugin “available”. Plugin availability should come from manifest
-  ownership plus targeted activation.
-- When core needs plugin-owned static data on a hot path, expose a lightweight
-  top-level artifact such as `gateway-auth-api.ts`, `message-tool-api.ts`, or a
-  similarly narrow `*-api.ts`. Reuse the same local helper from the artifact and
-  the full plugin so fast paths do not drift from runtime behavior.
+- Extension production imports: `openclaw/plugin-sdk/*` + own local barrels (`./api.ts`, `./runtime-api.ts`).
+- Never import core internals from `src/**`, `src/channels/**`, `src/plugin-sdk-internal/**`, or another extension's `src/**`.
+- No relative imports escaping current extension package root.
+- Accurate metadata in `openclaw.plugin.json` + package `openclaw` block: discovery/setup without executing plugin code.
+- Plugin runtime dependencies → owning plugin package. Runtime peer: declare/provide in plugin `package.json`; never move to root unless root/package dist owns import. Runtime never installs deps; repair points = install/update/doctor.
+- Package-ownership dependency assertions → generic contracts (`package-manifest.contract.test.ts`, `extension-runtime-dependencies.contract.test.ts`), not plugin e2e tests.
+- `src/**`, `onboard.ts`, other local helpers private unless intentionally promoted through `api.ts` + matching `src/plugin-sdk/<id>.ts` facade if needed.
+- Core/core tests needing bundled plugin helper: export from `api.ts` first, never deep-import extension internals.
+- Provider auth, onboarding, catalog selection, vendor-only product behavior: plugin-local. Never move to core merely because two providers look similar.
+- Before new provider-local `wrapStreamFn`, `buildReplayPolicy`, `normalizeToolSchemas`, `inspectToolSchemas`, or compat patch helper: check existing behavior via `openclaw/plugin-sdk/*`. Shared family helpers first.
+- Two bundled providers sharing replay policy shape, tool-schema compat rewrite, payload patch, or stream-wrapper chain: stop copying. Extract shared helper + migrate both call sites in same change.
+- Prefer named provider-family helpers over repeated raw option bags. OpenAI-style Anthropic tool payload compat, Gemini schema cleanup, XAI compat patch: named shared helper, never inline policy knobs again.
+- Separate control-plane metadata/runtime logic. Discovery, config validation, setup hints, onboarding hints, activation planning: manifest/descriptors whenever possible.
+- Setup truly needing runtime execution: explicit declared setup/runtime surface; never accidental runtime imports in metadata flows.
+- Plugin work outliving originating caller/turn: active service-owned capability required. Never retain/extend caller-bound Gateway handles; revalidate service generation at effect boundary.
+- Never eager global registry seeding/import-time side effects for plugin availability. Manifest ownership + targeted activation.
+- Core hot-path plugin-owned static data: lightweight top-level artifact (`gateway-auth-api.ts`, `message-tool-api.ts`, similarly narrow `*-api.ts`). Artifact + full plugin reuse same local helper; fast paths must not drift from runtime behavior.
 
 ## Expanding The Boundary
 
-- If an extension needs a new seam, add or replace a typed Plugin SDK subpath
-  instead of reaching into core.
-- ALL bundled plugins must move to modern SDK seams in the same change. Do not
-  keep extension-local compat paths for internal callers.
-- When intentionally expanding the contract, update the docs, exported subpath
-  list, package exports, and API/contract checks in the same change.
+- Changes to a shared SDK contract: use [plugin-sdk-impact](../.agents/skills/plugin-sdk-impact/SKILL.md) for public consumer evidence and coverage before proposing deprecation, removal, or incompatible behavior.
+- Extension needing new seam: add/replace typed Plugin SDK subpath, never reach into core.
+- ALL bundled plugins → modern SDK seams in same change. No extension-local compat paths for internal callers.
+- First-party plugins always release together with the host: support only the current host version. No older-host fallbacks, capability probes or legacy adapters for released hosts. Third-party SDK compatibility follows the SDK deprecation policy instead.
+- Intentional contract expansion: update docs, exported subpath list, package exports, API/contract checks in same change.

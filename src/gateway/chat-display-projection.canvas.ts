@@ -1,51 +1,23 @@
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord as readObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
+import {
+  MAX_TOOL_APPROVAL_REVIEWS,
+  normalizeToolApprovalReview,
+} from "../shared/tool-approval-reviews.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
 
-const MAX_TOOL_APPROVAL_REVIEWS = 16;
-const TOOL_APPROVAL_REVIEW_STATUSES = new Set([
-  "in_progress",
-  "approved",
-  "denied",
-  "timed_out",
-  "aborted",
-]);
-
-function boundedReviewText(value: unknown, maxChars: number): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? truncateUtf16Safe(text, maxChars) : undefined;
-}
-
-function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
+function isDisplayRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= maxChars &&
     value.trim() === value
   );
-}
-
-function projectToolApprovalReview(value: unknown): Record<string, unknown> | undefined {
-  const review = readRecord(value);
-  const id = boundedReviewText(review?.id, 256);
-  const label = boundedReviewText(review?.label, 80);
-  const status = boundedReviewText(review?.status, 32);
-  if (!id || !label || !status || !TOOL_APPROVAL_REVIEW_STATUSES.has(status)) {
-    return undefined;
-  }
-  const riskLevel = boundedReviewText(review?.riskLevel, 40);
-  const userAuthorization = boundedReviewText(review?.userAuthorization, 40);
-  const rationale = boundedReviewText(review?.rationale, 2_000);
-  return {
-    id,
-    label,
-    status,
-    ...(riskLevel ? { riskLevel } : {}),
-    ...(userAuthorization ? { userAuthorization } : {}),
-    ...(rationale ? { rationale } : {}),
-  };
 }
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
@@ -74,10 +46,10 @@ export function projectToolResultDetails(
   // A partial or shortened address can select a different browser. Only display
   // text may be truncated; route identifiers must survive projection unchanged.
   if (
-    isBrowserRouteIdentifier(browserTab?.targetId, 128) &&
-    isBrowserRouteIdentifier(browserTab?.profile, 128) &&
+    isDisplayRouteIdentifier(browserTab?.targetId, 128) &&
+    isDisplayRouteIdentifier(browserTab?.profile, 128) &&
     ((browserTab?.target === "host" && browserTab.node === undefined) ||
-      (browserTab?.target === "node" && isBrowserRouteIdentifier(browserTab.node, 256)))
+      (browserTab?.target === "node" && isDisplayRouteIdentifier(browserTab.node, 256)))
   ) {
     projected.browserTab = {
       targetId: browserTab.targetId,
@@ -92,10 +64,23 @@ export function projectToolResultDetails(
         : {}),
     };
   }
-  // The diff is the one display-capped field here; surface the fact so the
-  // message-level marker covers capped tool-result details too.
+  // Surface capped detail fields through the same message-level display marker.
   let truncated = false;
-  for (const key of ["changed", "created"] as const) {
+  for (const key of ["exitCode", "durationMs"] as const) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      projected[key] = value;
+    }
+  }
+  if (typeof record.cwd === "string") {
+    const cwd = truncateChatHistoryText(record.cwd, maxChars);
+    projected.cwd = cwd.text;
+    truncated ||= cwd.truncated;
+  }
+  if (isDisplayRouteIdentifier(record.sessionKey, maxChars)) {
+    projected.sessionKey = record.sessionKey;
+  }
+  for (const key of ["ok", "changed", "created"] as const) {
     if (typeof record[key] === "boolean") {
       projected[key] = record[key];
     }
@@ -103,12 +88,12 @@ export function projectToolResultDetails(
   if (typeof record.diff === "string" && record.diff.trim()) {
     const diff = truncateChatHistoryText(record.diff, maxChars);
     projected.diff = diff.text;
-    truncated = diff.truncated;
+    truncated ||= diff.truncated;
   }
   if (Array.isArray(record.approvalReviews)) {
     const reviews = record.approvalReviews
       .slice(-MAX_TOOL_APPROVAL_REVIEWS)
-      .flatMap((review) => projectToolApprovalReview(review) ?? []);
+      .flatMap((review) => normalizeToolApprovalReview(review) ?? []);
     if (reviews.length > 0) {
       projected.approvalReviews = reviews;
     }
@@ -144,23 +129,13 @@ export function messageHasToolResultShape(message: Record<string, unknown>): boo
     return true;
   }
   const content = Array.isArray(message.content) ? message.content : [];
-  if (
-    content.some(
-      (block) =>
-        block &&
-        typeof block === "object" &&
-        isToolResultHistoryBlockType((block as { type?: unknown }).type),
-    )
-  ) {
+  if (content.some((block) => isToolResultHistoryBlockType(readObjectRecord(block)?.type))) {
     return true;
   }
-  const hasToolCallBlock = content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      isToolHistoryBlockType((block as { type?: unknown }).type) &&
-      !isToolResultHistoryBlockType((block as { type?: unknown }).type),
-  );
+  const hasToolCallBlock = content.some((block) => {
+    const type = readObjectRecord(block)?.type;
+    return isToolHistoryBlockType(type) && !isToolResultHistoryBlockType(type);
+  });
   const hasToolId =
     typeof message.toolCallId === "string" ||
     typeof message.tool_call_id === "string" ||
@@ -171,10 +146,10 @@ export function messageHasToolResultShape(message: Record<string, unknown>): boo
 }
 
 export function extractChatHistoryBlockText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
+  const entry = readObjectRecord(message);
+  if (!entry) {
     return undefined;
   }
-  const entry = message as Record<string, unknown>;
   if (typeof entry.content === "string") {
     return entry.content;
   }
@@ -185,13 +160,7 @@ export function extractChatHistoryBlockText(message: unknown): string | undefine
     return undefined;
   }
   const textParts = entry.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return undefined;
-      }
-      const typed = block as { text?: unknown };
-      return typeof typed.text === "string" ? typed.text : undefined;
-    })
+    .map((block) => readObjectRecord(block)?.text)
     .filter((value): value is string => typeof value === "string");
   return textParts.length > 0 ? textParts.join("\n") : undefined;
 }
@@ -242,18 +211,12 @@ export function appendChatCanvasBlocks<T>(
     // Only retained blocks participate: rejecting an id collision must not
     // reserve that preview's different URL for subsequent previews.
     const alreadyPresent = baseContent.some((block) => {
-      if (!block || typeof block !== "object") {
-        return false;
-      }
-      const typed = block as { type?: unknown; preview?: unknown };
-      return (
-        typed.type === "canvas" &&
-        typed.preview &&
-        typeof typed.preview === "object" &&
-        (((typed.preview as { viewId?: unknown }).viewId &&
-          (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
-          ((typed.preview as { url?: unknown }).url &&
-            (typed.preview as { url?: unknown }).url === preview.url))
+      const typed = readObjectRecord(block);
+      const existing = typed?.type === "canvas" ? readObjectRecord(typed.preview) : undefined;
+      return Boolean(
+        existing &&
+        ((existing.viewId && existing.viewId === preview.viewId) ||
+          (existing.url && existing.url === preview.url)),
       );
     });
     if (!alreadyPresent) {
@@ -280,11 +243,7 @@ export function appendChatCanvasBlocksToMessage(
   return { ...message, content: appendChatCanvasBlocks(content, previews) };
 }
 
-function messageContainsToolHistoryContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
+function messageContainsToolHistoryContent(entry: Record<string, unknown>): boolean {
   if (
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string" ||
@@ -296,12 +255,7 @@ function messageContainsToolHistoryContent(message: unknown): boolean {
   if (!Array.isArray(entry.content)) {
     return false;
   }
-  return entry.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return isToolHistoryBlockType((block as { type?: unknown }).type);
-  });
+  return entry.content.some((block) => isToolHistoryBlockType(readObjectRecord(block)?.type));
 }
 
 export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown[] {
@@ -314,11 +268,10 @@ export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown
   let lastRenderableAssistantIndex = -1;
   const pending: ChatCanvasPreview[] = [];
   for (let index = 0; index < next.length; index++) {
-    const message = next[index];
-    if (!message || typeof message !== "object") {
+    const entry = readObjectRecord(next[index]);
+    if (!entry) {
       continue;
     }
-    const entry = message as Record<string, unknown>;
     const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
     if (role === "assistant") {
       lastAssistantIndex = index;

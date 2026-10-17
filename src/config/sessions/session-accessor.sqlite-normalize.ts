@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { SessionEntry } from "./types.js";
 
+export { normalizeNullableString as normalizeText } from "@openclaw/normalization-core/string-coerce";
+
 export function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   const now = Date.now();
   return {
@@ -8,10 +10,6 @@ export function createFallbackSessionEntry(patch: Partial<SessionEntry>): Sessio
     updatedAt: patch.updatedAt ?? now,
     ...patch,
   };
-}
-
-export function normalizeText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 export function normalizeSessionRowChatType(value: unknown): "direct" | "group" | "channel" | null {

@@ -1,4 +1,5 @@
 import type { RealtimeVoiceProviderCapabilities } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Realtime voice uses browser or Gateway-owned WebRTC when the host owns delegation,
 // and the Platform-key direct WebSocket transport elsewhere.
 
@@ -61,11 +62,8 @@ export function isSupportedOpenAIGptLiveModel(model: string | undefined): boolea
 export function resolveOpenAIQuicksilverVoice(model: string, value: unknown): OpenAIGptLiveVoice {
   const voices = resolveOpenAIQuicksilverVoices(model);
   const defaultVoice = isOpenAIGptLiveSubscriptionModel(model) ? "cove" : "marin";
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return voices.find((voice) => voice === normalized) ?? defaultVoice;
-  }
-  return defaultVoice;
+  const normalized = normalizeOptionalLowercaseString(value);
+  return voices.find((voice) => voice === normalized) ?? defaultVoice;
 }
 
 function resolveOpenAIQuicksilverVoices(model: string): readonly OpenAIGptLiveVoice[] {

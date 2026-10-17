@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -60,6 +61,12 @@ describe("guided onboarding inference composition", () => {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("OPENAI_API_KEY", "test-openai-key");
       setTestEnvValue("PATH", path.dirname(process.execPath));
+      // The live probe and owner revalidation must use the same packaged plugin tree.
+      // The shared source-test default otherwise mixes built fingerprints with source loading.
+      setTestEnvValue(
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        fileURLToPath(new URL("../../dist/extensions", import.meta.url)),
+      );
 
       await fs.mkdir(workspace, { recursive: true });
       await fs.writeFile(
@@ -116,6 +123,7 @@ describe("guided onboarding inference composition", () => {
         commitResult: vi.fn(async () => undefined),
       }));
       const launchHatchTui = vi.fn(async () => undefined);
+      const observeHandoff = vi.fn();
       const runSystemAgentChat = vi.fn(async () => undefined);
       const runtime = {
         log: vi.fn(),
@@ -129,7 +137,9 @@ describe("guided onboarding inference composition", () => {
       configModule.clearConfigCache();
       const setupInference = await import("../system-agent/setup-inference.js");
       const onboardInference = await import("./onboard-inference.js");
-      const { runGuidedOnboarding } = await import("./onboard-guided.js");
+      const { runGuidedOnboardingWithFixtures: runGuidedOnboarding } =
+        await import("./onboard-guided-runtime.test-support.js");
+      const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
       let activePrompter = prompter;
       let interruptAfterProvision = team;
       const deps: GuidedOnboardingDeps = {
@@ -148,10 +158,8 @@ describe("guided onboarding inference composition", () => {
                 platform: "linux",
                 deps: {
                   probeLocalCommand,
-                  detectClaudeLoginState: async () => ({ credentials: false }),
-                  readCodexCliCredentials: () => null,
+                  hasCodexCliAuthFile: () => false,
                   readGeminiCliCredentials: () => null,
-                  randomInt: () => 0,
                 },
               }),
             resolveManifestProviderAuthChoices: () => [],
@@ -175,13 +183,13 @@ describe("guided onboarding inference composition", () => {
               throw new Error("fixture interruption after member creation");
             });
           }
-          const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
           const result = await applySystemAgentSetup({ ...params, surface: "gateway" }, hooks);
           return interruptAfterProvision ? { ...result, workspaceReady: false } : result;
         },
         runSetupMemoryImportStep,
         runAppRecommendations,
         launchHatchTui,
+        observeHandoff,
         runSystemAgentChat,
       };
       const run = () =>
@@ -266,8 +274,17 @@ describe("guided onboarding inference composition", () => {
           workspaceDir: team ? path.join(workspace, "coordinator") : workspace,
         }),
       );
+      expect(observeHandoff).toHaveBeenCalledWith(
+        expect.objectContaining({
+          next: "hatch",
+          workspace: team ? path.join(workspace, "coordinator") : workspace,
+        }),
+      );
       expect(launchHatchTui).toHaveBeenCalledWith(
-        team ? path.join(workspace, "coordinator") : workspace,
+        expect.objectContaining({
+          deliver: false,
+          ...(team ? { session: "agent:coordinator:main" } : { local: true }),
+        }),
       );
       if (team) {
         expect(Object.keys(persisted.sourceConfig.agents?.entries ?? {})).toEqual([

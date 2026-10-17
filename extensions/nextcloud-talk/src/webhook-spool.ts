@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module owns durable webhook admission and replay draining.
 import {
   createChannelIngressMonitor,
   type ChannelIngressQueue,
@@ -15,12 +14,13 @@ import {
   NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
 } from "./replay-migration-contract.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
-import type { NextcloudTalkInboundMessage, NextcloudTalkWebhookPayload } from "./types.js";
+import type { NextcloudTalkInboundMessage } from "./types.js";
 import {
   inspectNextcloudTalkWebhookEnvelope,
   migrateNextcloudTalkLegacyReplayState,
   NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
   NextcloudTalkWebhookPayloadError,
+  parseNextcloudTalkFileSharedActivity,
   parseRawObject,
   requiredString,
   type NextcloudTalkIngressPayload,
@@ -39,8 +39,9 @@ function describeIgnoredWebhookEvent(rawEvent: string): string {
   return `type=${type} objectType=${objectType}`;
 }
 
-const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
-  type: z.enum(["Create", "Update", "Delete"]),
+// Activity Streams payload: https://nextcloud-talk.readthedocs.io/en/latest/bots/
+const NextcloudTalkWebhookPayloadSchema = z.object({
+  type: z.enum(["Create", "Update", "Delete", "Activity"]),
   actor: z.object({
     type: z.literal("Person"),
     id: z.string().min(1),
@@ -62,47 +63,38 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
 
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-type NextcloudTalkIngressMonitor = {
-  receive: (rawEvent: string) => Promise<"accepted" | "ignored">;
-  ready: () => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
-function parseClaimedMessage(
-  payload: NextcloudTalkIngressPayload,
-  claimedId: string,
-  claimedLaneKey: string | undefined,
-) {
-  if (payload.version !== NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION) {
-    throw new NextcloudTalkWebhookPayloadError(
-      `Nextcloud Talk ingress row ${claimedId} has an unsupported version.`,
-    );
-  }
-  const result = NextcloudTalkWebhookPayloadSchema.safeParse(parseRawObject(payload.rawEvent));
-  if (!result.success || result.data.type !== "Create" || result.data.object.id !== claimedId) {
+function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: string) {
+  const rawEnvelope = parseRawObject(payload.rawEvent);
+  const result = NextcloudTalkWebhookPayloadSchema.safeParse(rawEnvelope);
+  const fileShare = parseNextcloudTalkFileSharedActivity(rawEnvelope);
+  if (!result.success) {
     throw new NextcloudTalkWebhookPayloadError(
       `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
     );
   }
   const webhook = result.data;
-  const roomId = requiredString(webhook.target.id, "target.id");
-  if (claimedLaneKey !== `room:${roomId}`) {
+  const isSupportedEvent =
+    webhook.type === "Create" || (webhook.type === "Activity" && fileShare !== null);
+  if (!isSupportedEvent || webhook.object.id !== claimedId) {
     throw new NextcloudTalkWebhookPayloadError(
-      `Nextcloud Talk ingress row ${claimedId} changed room identity.`,
+      `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
     );
   }
+  const roomId = requiredString(webhook.target.id, "target.id");
   const message: NextcloudTalkInboundMessage = {
     messageId: webhook.object.id,
     roomToken: roomId,
     roomName: webhook.target.name,
     senderId: webhook.actor.id,
     senderName: webhook.actor.name,
-    text: webhook.object.content || webhook.object.name,
+    text: fileShare ? fileShare.text : webhook.object.content || webhook.object.name,
+    ...(fileShare ? { mentionText: fileShare.mentionText } : {}),
     mediaType: webhook.object.mediaType || "text/plain",
     timestamp: payload.receivedAt,
     // Activity Streams does not distinguish Talk room kinds. Runtime lookup refines this.
     isGroupChat: true,
+    ...(fileShare?.attachment ? { attachment: fileShare.attachment } : {}),
+    ...(fileShare?.attachmentIssue ? { attachmentIssue: fileShare.attachmentIssue } : {}),
   };
   return message;
 }
@@ -133,7 +125,7 @@ export function createNextcloudTalkWebhookSpool(options: {
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
   legacyReplayStore?: NextcloudTalkLegacyReplayStore | null;
-}): NextcloudTalkIngressMonitor {
+}) {
   let queue = options.queue;
 
   const getQueue = (): ChannelIngressQueue<NextcloudTalkIngressPayload> => {
@@ -183,7 +175,7 @@ export function createNextcloudTalkWebhookSpool(options: {
         ),
     },
     deliver: async (_rawEvent, lifecycle, claim) => {
-      const message = parseClaimedMessage(claim.payload, claim.id, claim.laneKey);
+      const message = parseClaimedMessage(claim.payload, claim.id);
       // The shared monitor translates these lifecycle callbacks into terminal or deferred
       // drain outcomes, including successful no-dispatch policy gates.
       await options.deliver(message, lifecycle);
@@ -216,7 +208,7 @@ export function createNextcloudTalkWebhookSpool(options: {
 
   return {
     ready: async () => await startAfterMigration,
-    receive: (rawEvent) => {
+    receive: (rawEvent: string) => {
       if (stopping) {
         return Promise.reject(new Error("Nextcloud Talk ingress stopped"));
       }

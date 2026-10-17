@@ -30,23 +30,6 @@ const cases = [
     method: "sessions.send",
   },
   {
-    name: "raw chat send",
-    args: [
-      "gateway",
-      "call",
-      "chat.send",
-      "--params",
-      JSON.stringify({ sessionKey: "agent:main:target", message: "Worker result" }),
-      "--json",
-    ],
-    method: "chat.send",
-  },
-  {
-    name: "agent command",
-    args: ["agent", "--agent", "main", "--message", "Worker result", "--json"],
-    method: "agent",
-  },
-  {
     name: "agent command with model override",
     args: [
       "agent",

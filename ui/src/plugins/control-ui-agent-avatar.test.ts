@@ -8,11 +8,11 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
 
 it.each([
-  { agentId: "writer", rosterPresent: true },
-  { agentId: "", rosterPresent: false },
+  { agentId: "writer", rosterPresent: true, disposeVia: "handle" },
+  { agentId: "", rosterPresent: false, disposeVia: "abort" },
 ])(
-  "hydrates and updates the host avatar for $agentId (roster present: $rosterPresent)",
-  async ({ agentId, rosterPresent }) => {
+  "hydrates and updates the host avatar for $agentId, then disposes via $disposeVia",
+  async ({ agentId, rosterPresent, disposeVia }) => {
     const rosterAvatar = "data:image/png;base64,cm9zdGVy";
     const identityAvatar = "data:image/png;base64,aWRlbnRpdHk=";
     let identity: AgentIdentityResult = {
@@ -56,7 +56,9 @@ it.each([
       container.remove();
     });
 
+    await vi.dynamicImportSettled();
     await vi.waitFor(() => {
+      expect(onError).not.toHaveBeenCalled();
       expect(container.querySelector("img")?.getAttribute("src")).toBe(identityAvatar);
     });
 
@@ -66,11 +68,15 @@ it.each([
       expect(container.querySelector("img")?.getAttribute("src")).toBe(identity.avatar);
     });
 
-    handle.dispose();
+    if (disposeVia === "abort") {
+      lifetime.abort();
+    } else {
+      handle.dispose();
+    }
+    expect(container.childElementCount).toBe(0);
     const requestCount = request.mock.calls.length;
     agentIdentity.invalidate(["writer"]);
     await Promise.resolve();
-    expect(container.childElementCount).toBe(0);
     expect(request.mock.calls).toHaveLength(requestCount);
     expect(onError).not.toHaveBeenCalled();
   },

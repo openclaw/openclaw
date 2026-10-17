@@ -25,44 +25,6 @@ function createSpawn(results: SpawnResult[]) {
 }
 
 describe("configurePrepareGitHooks", () => {
-  it("configures hooks through git without using a shell", () => {
-    const spawnSync = createSpawn([{ status: 0, stdout: "true\n" }, { status: 1 }, { status: 0 }]);
-
-    expect(
-      configurePrepareGitHooks({
-        cwd: "C:\\repo",
-        existsSync: () => true,
-        spawnSync,
-        warn: vi.fn(),
-      }),
-    ).toEqual({ configured: true, reason: "configured" });
-
-    const options = {
-      cwd: "C:\\repo",
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    };
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      1,
-      "git",
-      ["rev-parse", "--is-inside-work-tree"],
-      options,
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      2,
-      "git",
-      ["config", "--get", "core.hooksPath"],
-      options,
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      3,
-      "git",
-      ["config", "--worktree", "core.hooksPath", "git-hooks"],
-      options,
-    );
-    expect(spawnSync).toHaveBeenCalledTimes(3);
-  });
-
   it.each([0, 1, 2])("stays quiet when Git is unavailable at command %i", (command) => {
     const warn = vi.fn();
     const enoent = Object.assign(new Error("missing git"), { code: "ENOENT" });

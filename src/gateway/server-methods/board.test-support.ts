@@ -1,6 +1,10 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { BoardStore } from "../../boards/board-store.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createBoardHandlers } from "./board.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -10,45 +14,6 @@ type BoardMcpAppDependencies = {
   resolveAllowedToolNames: NonNullable<BoardHandlerDependencies["resolveAllowedToolNames"]>;
   mintFromTranscript: NonNullable<BoardHandlerDependencies["mintFromTranscript"]>;
 };
-
-const boardWidgetPermissionCases = [
-  { permissionMode: "full", grantState: "granted" },
-  { permissionMode: "workspace", reviewDecision: "allow-once", grantState: "granted" },
-  {
-    permissionMode: "workspace",
-    reviewDecision: "allow-once",
-    reviewRisk: "medium",
-    grantState: "rejected",
-  },
-  {
-    permissionMode: "workspace",
-    reviewDecision: "allow-once",
-    reviewRisk: "high",
-    grantState: "rejected",
-  },
-  { permissionMode: "workspace", reviewDecision: "ask", grantState: "rejected" },
-  {
-    permissionMode: "workspace",
-    reviewDecision: "deny",
-    reviewRisk: "low",
-    grantState: "rejected",
-  },
-  { permissionMode: "workspace", reviewFailure: true, grantState: "rejected" },
-  { permissionMode: "guarded", grantState: "pending" },
-  { permissionMode: "read-only", grantState: "rejected" },
-  { mode: "full", grantState: "granted" },
-  { mode: "auto", reviewDecision: "allow-once", grantState: "granted" },
-  { mode: "auto", reviewDecision: "ask", grantState: "rejected" },
-  { mode: "auto", reviewDecision: "deny", grantState: "rejected" },
-  { mode: "ask", grantState: "pending" },
-  { mode: "allowlist", grantState: "rejected" },
-  { mode: "deny", grantState: "rejected" },
-  { grantState: "granted" },
-] as const;
-
-export const boardWidgetContentPermissionCases = boardWidgetPermissionCases.flatMap((permission) =>
-  (["html", "mcp-app"] as const).map((contentKind) => Object.assign({ contentKind }, permission)),
-);
 
 export function createMcpAppDependencies(): BoardMcpAppDependencies {
   let lease = 0;
@@ -102,12 +67,14 @@ export function createBoardHarness(
     getMcpAppSandboxPort: () => 18790,
     getSessionEventSubscriberConnIds: () => [],
     getRuntimeConfig: () => ({
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: {} } },
       mcp: { apps: { enabled: true } },
       tools: { exec: { mode: "ask" } },
     }),
     ...contextOverrides,
   } as unknown as GatewayRequestContext;
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
+  onTestFinished(() => clearRuntimeConfigSnapshot());
   context.resolveGatewayContext ??= () => context;
   const invoke = async (method: string, params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();

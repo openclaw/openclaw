@@ -9,7 +9,7 @@ import { vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import {
   createWorkerProjectPreparation,
-  readWorkerProjectSetupRecipe,
+  readWorkerProjectEnvironmentRecipe,
 } from "./project-preparation.js";
 import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
 
@@ -32,11 +32,17 @@ export async function runProjectScriptWithGitProbe(
     umask: () => {},
     exitCode: 0,
     stdout: { write: (text: string) => (stdout += text) },
+    once: process.once.bind(process),
+    removeListener: process.removeListener.bind(process),
+    kill: process.kill.bind(process),
   };
   // Both provider scripts wrap their Node program in a shell heredoc.
-  await runInNewContext(script.split("\n").slice(2, -1).join("\n"), {
+  const source = script.slice(script.indexOf("\n", script.indexOf("node <<'PROJECT_")) + 1);
+  await runInNewContext(source.slice(0, source.lastIndexOf("\n")), {
     Buffer,
     performance,
+    setTimeout,
+    clearTimeout,
     process: guestProcess,
     console: { error: (text: string) => (stderr += text) },
     require: (id: string) => {
@@ -68,6 +74,7 @@ export async function createProjectPreparationFixture(
   directory: string,
   setup?: string,
   symlink = false,
+  files: Record<string, string> = {},
 ) {
   const root = await fs.realpath(directory);
   const repository = path.join(root, "repository");
@@ -88,6 +95,11 @@ export async function createProjectPreparationFixture(
       mode: 0o755,
     });
     await fs.writeFile(path.join(repository, ".gitignore"), "build/\n");
+  }
+  for (const [relative, content] of Object.entries(files)) {
+    const file = path.join(repository, relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content);
   }
   await requireGit(repository, ["add", "."]);
   await requireGit(repository, ["commit", "--quiet", "-m", "base"]);
@@ -122,6 +134,7 @@ export async function createProjectPreparationFixture(
     options: { project?: typeof project; key?: string; cacheKey?: string } = {},
   ) => {
     const snapshot = options.project ?? project;
+    const recipe = await readWorkerProjectEnvironmentRecipe(snapshot);
     return createWorkerProjectPreparation({
       project: snapshot,
       namespace: "gateway",
@@ -130,7 +143,8 @@ export async function createProjectPreparationFixture(
         demandAtMs: 1_000,
         key: options.key ?? "a".repeat(64),
         cacheKey: options.cacheKey ?? "c".repeat(64),
-        setupRecipe: await readWorkerProjectSetupRecipe(snapshot),
+        setupRecipe: recipe.identity,
+        recipe,
       },
       setupAuthorized: true,
       requireCurrent,

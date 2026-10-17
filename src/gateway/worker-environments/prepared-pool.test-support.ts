@@ -14,10 +14,10 @@ import {
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { createWorkerEnvironmentStore } from "./store.js";
-import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export const PROJECT_KEY = "a".repeat(64);
 export const PREPARATION_KEY = "b".repeat(64);
@@ -128,12 +128,14 @@ export function usePreparedPoolFixture() {
       purpose?: "reserve" | "build";
       runSetupScript?: boolean;
       repository?: RepositoryWorkerProjectSnapshot;
+      profileId?: string;
+      expiresAtMs?: number;
     } = {},
   ) {
     return store.createIntent({
       environmentId,
       providerId: provider.id,
-      profileId: "development",
+      profileId: options.profileId ?? "development",
       provisionOperationId: `provision:${environmentId}`,
       profileSnapshot: profile(
         options.projectKey,
@@ -147,7 +149,7 @@ export function usePreparedPoolFixture() {
               purpose: options.purpose ?? "reserve",
               key: options.preparationKey ?? PREPARATION_KEY,
               demandAtMs: nowMs,
-              expiresAtMs: nowMs + IDLE_TIMEOUT_MS,
+              expiresAtMs: options.expiresAtMs ?? nowMs + IDLE_TIMEOUT_MS,
             }
           : undefined,
     });
@@ -188,9 +190,9 @@ export function usePreparedPoolFixture() {
     const executionMode = "worker-turn";
     const identity = { sessionId, sessionKey, agentId: "main", executionMode } as const;
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const requested = placements.startDispatch(identity);
+    const requested = await placements.startDispatch(identity);
     const assigned = record.preparation
-      ? placements.bindPreparedEnvironment({
+      ? (await placements.bindPreparedEnvironment({
           ...identity,
           expectedGeneration: requested.generation,
           environmentId: record.environmentId,
@@ -202,8 +204,8 @@ export function usePreparedPoolFixture() {
           leaseId: record.leaseId!,
           bundleHash: BUNDLE_HASH,
           assertCurrent: () => {},
-        })!
-      : placements.transition({
+        }))!
+      : await placements.transition({
           sessionId,
           from: "requested",
           to: "provisioning",
@@ -213,7 +215,7 @@ export function usePreparedPoolFixture() {
     if (stage === "provisioning") {
       return store.get(record.environmentId)!;
     }
-    const syncing = placements.transition({
+    const syncing = await placements.transition({
       sessionId,
       from: "provisioning",
       to: "syncing",
@@ -239,7 +241,7 @@ export function usePreparedPoolFixture() {
       },
     });
     if (stage === "active") {
-      const starting = placements.transition({
+      const starting = await placements.transition({
         sessionId,
         from: "syncing",
         to: "starting",
@@ -247,7 +249,7 @@ export function usePreparedPoolFixture() {
         patch: { workspaceBaseManifestRef: "manifest", remoteWorkspaceDir: "/workspace" },
       });
       nowMs = activatedAtMs;
-      placements.transition({
+      await placements.transition({
         sessionId,
         from: "starting",
         to: "active",
@@ -267,10 +269,10 @@ export function usePreparedPoolFixture() {
       const ownerEpoch = placement.activeOwnerEpoch;
       const owner = { sessionId, environmentId, ownerEpoch };
       const expectedGeneration = placement.generation;
-      const draining = placements.startDrain({ ...owner, expectedGeneration });
-      placements.startReconcile({ ...owner, expectedGeneration: draining.generation });
+      const draining = await placements.startDrain({ ...owner, expectedGeneration });
+      await placements.startReconcile({ ...owner, expectedGeneration: draining.generation });
     }
-    placements.fail({ sessionId, recoveryError: "session teardown" });
+    await placements.fail({ sessionId, recoveryError: "session teardown" });
     await destroy(record);
   }
 
@@ -287,7 +289,7 @@ export function usePreparedPoolFixture() {
       store,
       getConfig: () => config,
       resolveProvider: () => provider,
-      prepareRetention: async () => ({ assertCurrent: () => {} }),
+      prepareRetention: async () => ({ isCurrent: () => true }),
       prepareIntent: async (_profileId, { projectPath }) => ({
         providerId: provider.id,
         profileSnapshot: profile(path.basename(projectPath!)),

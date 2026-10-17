@@ -9,6 +9,5 @@ export {
   pushMessagesLine,
   pushTemplateMessage,
   pushTextMessageWithQuickReplies,
-  sendMessageLine,
 } from "./send.js";
 export { buildTemplateMessageFromPayload } from "./template-messages.js";

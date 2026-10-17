@@ -13,15 +13,6 @@ const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const MEDIA_UNDERSTANDING_MAX_SOURCE_PIXELS = 40_000_000;
 
-function isHeicInput(params: { mime?: string; fileName?: string }): boolean {
-  const mime = normalizeMimeType(params.mime);
-  if (mime && HEIC_MIME_RE.test(mime)) {
-    return true;
-  }
-  const fileName = params.fileName?.trim();
-  return Boolean(fileName && HEIC_EXT_RE.test(fileName));
-}
-
 /** Normalizes image bytes before provider execution, converting HEIC/HEIF inputs to JPEG. */
 export async function normalizeImageDescriptionInput(params: {
   buffer: Buffer;
@@ -29,16 +20,17 @@ export async function normalizeImageDescriptionInput(params: {
   mime?: string;
   maxBytes?: number;
 }): Promise<{ buffer: Buffer; mime?: string }> {
-  if (!isHeicInput(params)) {
+  const mime = normalizeMimeType(params.mime);
+  if (!(mime && HEIC_MIME_RE.test(mime)) && !HEIC_EXT_RE.test(params.fileName?.trim() ?? "")) {
     return { buffer: params.buffer, mime: params.mime };
   }
-  const sourceMime = normalizeMimeType(params.mime) ?? "image/heic";
+  const sourceMime = mime ?? "image/heic";
   // Keep owned bytes through the shared MIME and size guards; only API content needs base64.
   const image = await normalizeInputImageBuffer({
     buffer: params.buffer,
     mimeType: sourceMime,
     limits: {
-      allowedMimes: new Set([sourceMime.toLowerCase(), "image/heic", "image/heif", "image/jpeg"]),
+      allowedMimes: new Set([sourceMime, "image/heic", "image/heif", "image/jpeg"]),
       maxBytes: params.maxBytes ?? DEFAULT_MAX_BYTES.image,
     },
   });

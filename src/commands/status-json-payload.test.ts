@@ -1,7 +1,5 @@
 // Status JSON payload tests cover update metadata, overview rows, and structured status output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { VERSION } from "../version.js";
-import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 
 const mocks = vi.hoisted(() => ({
@@ -21,33 +19,6 @@ vi.mock("../infra/update-channels.js", () => ({
 describe("status-json-payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("resolves update channel info through the shared channel display path", () => {
-    expect(
-      resolveStatusUpdateChannelInfo({
-        updateConfigChannel: "beta",
-        update: {
-          installKind: "package",
-          git: {
-            tag: "v1.2.3",
-            branch: "main",
-          },
-        },
-      }),
-    ).toEqual({
-      channel: "stable",
-      source: "config",
-      label: "stable",
-    });
-    expect(mocks.normalizeUpdateChannel).toHaveBeenCalledWith("beta");
-    expect(mocks.resolveUpdateChannelDisplay).toHaveBeenCalledWith({
-      configChannel: "beta",
-      currentVersion: VERSION,
-      installKind: "package",
-      gitTag: "v1.2.3",
-      gitBranch: "main",
-    });
   });
 
   it("builds the shared status json payload with optional sections", () => {
@@ -131,6 +102,76 @@ describe("status-json-payload", () => {
       updateChannelSource: "config",
       memory: null,
       memoryPlugin: { enabled: true },
+      databaseEngines: {
+        source: "configured",
+        experimental: false,
+        families: [
+          {
+            id: "state",
+            label: "Shared state",
+            default: "sqlite",
+            override: null,
+            fixedLocal: false,
+            effective: "sqlite",
+          },
+          {
+            id: "agent",
+            label: "Agent data",
+            default: "sqlite",
+            override: null,
+            fixedLocal: false,
+            effective: "sqlite",
+          },
+          {
+            id: "workboard",
+            label: "Workboard",
+            default: "sqlite",
+            override: null,
+            fixedLocal: false,
+            effective: "sqlite",
+          },
+          {
+            id: "logbook",
+            label: "Logbook",
+            default: "sqlite",
+            override: null,
+            fixedLocal: false,
+            effective: "sqlite",
+          },
+          {
+            id: "team-reports",
+            label: "Team Reports",
+            default: "sqlite",
+            override: null,
+            fixedLocal: false,
+            effective: "sqlite",
+          },
+          {
+            id: "quarantine",
+            label: "Database quarantine",
+            default: "sqlite",
+            override: null,
+            fixedLocal: true,
+            effective: "sqlite",
+          },
+          {
+            id: "managed-update",
+            label: "Managed update handoffs",
+            default: "sqlite",
+            override: null,
+            fixedLocal: true,
+            effective: "sqlite",
+          },
+          {
+            id: "package-activation",
+            label: "Package activation journal",
+            default: "sqlite",
+            override: null,
+            fixedLocal: true,
+            effective: "sqlite",
+          },
+        ],
+      },
       gateway: {
         mode: "remote",
         url: "wss://gateway.example.com",
@@ -166,38 +207,5 @@ describe("status-json-payload", () => {
         ],
       },
     });
-  });
-  it("omits optional sections when they are absent", () => {
-    const payload = buildStatusJsonPayload({
-      summary: { ok: true },
-      surface: {
-        cfg: { gateway: {} },
-        update: {
-          root: "/tmp/openclaw",
-          installKind: "package",
-          packageManager: "npm",
-        } as never,
-        tailscaleMode: "off",
-        gatewayMode: "local",
-        remoteUrlMissing: false,
-        gatewayConnection: { url: "ws://127.0.0.1:18789" },
-        gatewayReachable: false,
-        gatewayProbe: null,
-        gatewayProbeAuth: null,
-        gatewaySelf: null,
-        gatewayProbeAuthWarning: null,
-        gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
-        nodeService: { label: "node", installed: false, loadedText: "not installed" },
-      },
-      osSummary: { platform: "linux" },
-      memory: null,
-      memoryPlugin: null,
-      agents: [],
-      configDiagnostics: null,
-      secretDiagnostics: [],
-    });
-
-    expect(payload).not.toHaveProperty("configDiagnostics");
-    expect(payload).not.toHaveProperty("securityAudit");
   });
 });

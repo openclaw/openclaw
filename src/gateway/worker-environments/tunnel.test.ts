@@ -15,6 +15,104 @@ import {
 } from "./tunnel.test-support.js";
 
 describe("worker tunnel manager", () => {
+  it.each(["connected", "initializing"] as const)(
+    "rejects a revoked caller reusing a %s tunnel without stopping its owner",
+    async (phase) => {
+      const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
+      const entered = deferred<void>();
+      const fake = fakeRunner();
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const request = {
+        environmentId: "worker:shared-authority",
+        ownerEpoch: 1,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: () => {
+          entered.resolve();
+          return identity.promise;
+        },
+      };
+      const first = manager.start(request);
+      await entered.promise;
+      if (phase === "connected") {
+        identity.resolve(await resolveIdentity());
+        await first;
+      }
+      let authorized = phase === "initializing";
+      const closed = new Error("joining source closed");
+      const joining = manager.start({
+        ...request,
+        authorize: () => {
+          if (!authorized) {
+            throw closed;
+          }
+        },
+      });
+      const rejected = expect(joining).rejects.toBe(closed);
+      authorized = false;
+      identity.resolve(await resolveIdentity());
+      try {
+        const handle = await first;
+        await rejected;
+        expect(manager.status(request.environmentId)).toBe("connected");
+        await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
+      } finally {
+        await Promise.allSettled([first, joining]);
+        await manager.stopAll();
+      }
+    },
+  );
+
+  it.each(["tunnel", "initiating turn"] as const)(
+    "does not materialize a late identity after the %s stops",
+    async (boundary) => {
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const fake = fakeRunner();
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const writeFile = vi.spyOn(fs, "writeFile");
+      let authorized = true;
+      const starting = manager.start({
+        authorize: () => {
+          if (!authorized) {
+            throw new Error("initiating turn closed");
+          }
+        },
+        environmentId: "worker:late-identity",
+        ownerEpoch: 1,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: async () => {
+          entered.resolve();
+          await release.promise;
+          return { kind: "material", contents: "synthetic-worker-key" };
+        },
+      });
+      const rejected = expect(starting).rejects.toThrow(
+        boundary === "tunnel" ? "no longer connected" : "initiating turn closed",
+      );
+      try {
+        await entered.promise;
+        const stopping =
+          boundary === "tunnel" ? manager.stop("worker:late-identity", 1) : undefined;
+        if (boundary === "initiating turn") {
+          authorized = false;
+        }
+        release.resolve();
+        await Promise.all([rejected, stopping]);
+        expect(writeFile).not.toHaveBeenCalled();
+        expect(fake.runs).toEqual([]);
+        expect(fake.starts).toEqual([]);
+        expect(manager.status("worker:late-identity")).toBe("stopped");
+      } finally {
+        release.resolve();
+        await starting.catch(() => undefined);
+        await manager.stopAll();
+        writeFile.mockRestore();
+      }
+    },
+  );
+
   it("joins workspace cleanup before reporting a desktop stopAll failure", async () => {
     const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
     const entered = deferred<void>();
@@ -80,35 +178,16 @@ describe("worker tunnel manager", () => {
     expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed");
   });
 
-  it("prepares pinned workspace SSH without starting a persistent tunnel", async () => {
-    const fake = fakeRunner();
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const handle = await startTestTunnel(manager, "worker:one", 3);
-
-    expect(manager.status("worker:one")).toBe("connected");
-    expect(fake.starts).toHaveLength(0);
-    expect(handle.launchTurn).toBeUndefined();
-    await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
-
-    const workspace = fake.runs.at(-1);
-    expect(workspace?.argv).toContain("ClearAllForwardings=yes");
-    expect(workspace?.argv).toContain("ControlMaster=no");
-    expect(workspace?.argv).toContain("ControlPath=none");
-    expect(workspace?.argv).not.toContain("-R");
-    expect(workspace?.argv.at(-1)).toContain("pwd");
-
-    await handle.stop();
-    expect(manager.status("worker:one")).toBe("stopped");
-  });
-
   it("renews a workspace quiescence lease while reconciliation is still running", async () => {
     const nonce = "a".repeat(32);
+    const acquireArgs = "'/home/worker/workspace' '720000' 'dedicated'";
+    const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'heartbeat' 'dedicated'`;
     const fake = fakeRunner((argv) => {
       const remoteCommand = argv.at(-1) ?? "";
-      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+      if (remoteCommand.endsWith(acquireArgs)) {
         return success(`quiesced ${nonce}\n`);
       }
-      if (remoteCommand.includes('process.stdout.write("renewed "')) {
+      if (remoteCommand.endsWith(renewArgs)) {
         return success(`renewed ${nonce}\n`);
       }
       return undefined;
@@ -120,9 +199,7 @@ describe("worker tunnel manager", () => {
     try {
       const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
       await vi.advanceTimersByTimeAsync(4 * 60_000);
-      expect(
-        fake.runs.filter((entry) => entry.argv.at(-1)?.includes('process.stdout.write("renewed "')),
-      ).toHaveLength(1);
+      expect(fake.runs.filter((entry) => entry.argv.at(-1)?.endsWith(renewArgs))).toHaveLength(1);
       await quiescence.resume();
     } finally {
       vi.useRealTimers();
@@ -132,12 +209,14 @@ describe("worker tunnel manager", () => {
 
   it("passes shared-host isolation to initial and renewal quiescence commands", async () => {
     const nonce = "b".repeat(32);
+    const acquireArgs = "'/home/worker/workspace' '720000' 'shared-host'";
+    const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'final' 'shared-host'`;
     const fake = fakeRunner((argv) => {
       const remoteCommand = argv.at(-1) ?? "";
-      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+      if (remoteCommand.endsWith(acquireArgs)) {
         return success(`quiesced ${nonce}\n`);
       }
-      if (remoteCommand.includes('process.stdout.write("renewed "')) {
+      if (remoteCommand.endsWith(renewArgs)) {
         return success(`renewed ${nonce}\n`);
       }
       return undefined;
@@ -147,13 +226,8 @@ describe("worker tunnel manager", () => {
 
     const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
     await quiescence.assertActive();
-    const quiescenceCommands = fake.runs.filter((entry) =>
-      entry.argv.at(-1)?.includes("workspace quiescence"),
-    );
-    expect(quiescenceCommands).toHaveLength(2);
-    expect(quiescenceCommands.every((entry) => entry.argv.at(-1)?.includes("shared-host"))).toBe(
-      true,
-    );
+    expect(fake.runs).toHaveLength(2);
+    expect(fake.runs.every((entry) => entry.argv.at(-1)?.endsWith("'shared-host'"))).toBe(true);
     await quiescence.resume();
     await handle.stop();
   });
@@ -254,7 +328,7 @@ describe("worker tunnel manager", () => {
       try {
         await setImmediate();
         expect(settled).not.toHaveBeenCalled();
-        await expect(fs.access(knownHostsPath)).resolves.toBeUndefined();
+        await fs.access(knownHostsPath);
         await expect(handle.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
           "no longer connected",
         );

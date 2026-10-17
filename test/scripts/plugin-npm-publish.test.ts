@@ -56,26 +56,6 @@ describe("plugin npm publish wrapper", () => {
     expect(source.slice(identityIndex, publishIndex)).not.toContain("npm view");
   });
 
-  it("revalidates release tooling immediately before every npm dist-tag mutation", () => {
-    const source = readFileSync(scriptPath, "utf8");
-    const distTagIndex = source.indexOf('npm dist-tag add "${package_name}@${package_version}"');
-    const identityIndex = source.lastIndexOf("verify_release_tooling_identity", distTagIndex);
-
-    expect(identityIndex).toBeGreaterThan(-1);
-    expect(distTagIndex).toBeGreaterThan(identityIndex);
-    expect(source.slice(identityIndex, distTagIndex)).not.toContain("npm view");
-  });
-
-  it("prints help before package or npm checks", () => {
-    const result = runPluginPublishWrapper(["--help"]);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
-    );
-    expect(result.stderr).toBe("");
-  });
-
   it("rejects missing mode before package checks", () => {
     const result = runPluginPublishWrapper([]);
 
@@ -96,14 +76,6 @@ describe("plugin npm publish wrapper", () => {
     expect(result.stdout).toContain(`Resolved repository root: ${fixture.root}`);
     expect(result.stdout).toContain(`Resolved package dir: ${fixture.packageDir}`);
     expect(result.stdout).toContain("Resolved package name: @openclaw/demo");
-  });
-
-  it("requires an explicit artifact directory for real pack mode", () => {
-    const result = runPluginPublishWrapper(["--pack", "extensions/telegram"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("--pack requires OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
   });
 
   it("rejects option-like package dirs before package checks", () => {
@@ -133,16 +105,5 @@ describe("plugin npm publish wrapper", () => {
     expect(result.stdout).toContain("Resolved publish tag: extended-stable");
     expect(result.stdout).toContain("Resolved mirror dist-tags: <none>");
     expect(result.stdout).toContain("npm publish --access public --tag extended-stable");
-  });
-
-  it("rejects extended-stable versions below patch 33", () => {
-    const fixture = makePackage("2026.7.32");
-    const result = runPluginPublishWrapper(["--dry-run", fixture.packageDir], {
-      OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: "extended-stable",
-      PATH: fixture.path,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("PATCH >= 33");
   });
 });

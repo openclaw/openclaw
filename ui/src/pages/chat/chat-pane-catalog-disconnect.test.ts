@@ -65,7 +65,7 @@ function mountCatalogPane(request: ReturnType<typeof vi.fn<(method: string) => P
   pane.sessionKey = buildCatalogSessionKey(key, "main");
   const loads = vi.spyOn(pane, "loadCatalogSession");
   // The render fixture keeps the real DOM connection and teardown callbacks.
-  document.body.append(pane);
+  document.body.append(pane.element);
   return { pane, client, context: fixture.context, loads };
 }
 

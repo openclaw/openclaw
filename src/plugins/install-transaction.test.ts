@@ -16,6 +16,10 @@ import {
 const repairPeerLinks = vi.hoisted(() => vi.fn());
 vi.mock("./update-config.js", () => ({ repairOpenClawPeerLinksForNpmInstalls: repairPeerLinks }));
 
+function retainTransaction(owner: object, transaction: PluginInstallTransaction) {
+  retainPluginInstallTransaction(owner, attachPluginInstallTransaction({}, transaction));
+}
+
 describe("plugin install transaction ownership", () => {
   it("keeps synchronous planning callbacks synchronous", async () => {
     const beforePersistentEffect = vi.fn(() => {});
@@ -41,10 +45,7 @@ describe("plugin install transaction ownership", () => {
         { beforePersistentEffect },
         () => {},
         async (owned) => {
-          retainPluginInstallTransaction(
-            owned,
-            attachPluginInstallTransaction({}, { commit, rollback }),
-          );
+          retainTransaction(owned, { commit, rollback });
           try {
             await owned.beforePersistentEffect();
           } catch {
@@ -65,10 +66,7 @@ describe("plugin install transaction ownership", () => {
       {},
       () => {},
       async (owned) => {
-        retainPluginInstallTransaction(
-          owned,
-          attachPluginInstallTransaction({}, { commit, rollback }),
-        );
+        retainTransaction(owned, { commit, rollback });
         expect(commit).not.toHaveBeenCalled();
       },
     );
@@ -85,26 +83,41 @@ describe("plugin install transaction ownership", () => {
         () => {},
         async (owned) => {
           for (const name of ["first", "second"]) {
-            retainPluginInstallTransaction(
-              owned,
-              attachPluginInstallTransaction(
-                {},
-                {
-                  commit: async () => {
-                    settled.push(`commit:${name}`);
-                  },
-                  rollback: async () => {
-                    settled.push(`rollback:${name}`);
-                  },
-                },
-              ),
-            );
+            retainTransaction(owned, {
+              commit: async () => {
+                settled.push(`commit:${name}`);
+              },
+              rollback: async () => {
+                settled.push(`rollback:${name}`);
+              },
+            });
           }
           throw failure;
         },
       ),
     ).rejects.toBe(failure);
     expect(settled).toEqual(["rollback:second", "rollback:first"]);
+  });
+
+  it("retains the original install failure when rollback also fails", async () => {
+    const failure = new Error("record write failed");
+    const recoveryFailure = new Error("backup restore failed");
+    const rollback = vi.fn(async () => {
+      throw recoveryFailure;
+    });
+    const outcome = await withPluginInstallTransactions(
+      {},
+      () => {},
+      async (owned) => {
+        retainTransaction(owned, { commit: vi.fn(), rollback });
+        throw failure;
+      },
+    ).catch((error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect(outcome).toMatchObject({ cause: failure, errors: [failure, recoveryFailure] });
+    expect(String(outcome)).toContain(failure.message);
+    expect(rollback).toHaveBeenCalledOnce();
   });
 
   it("preserves published state when final cleanup fails after the record commit", async () => {
@@ -120,10 +133,7 @@ describe("plugin install transaction ownership", () => {
         {},
         () => {},
         async (owned) => {
-          retainPluginInstallTransaction(
-            owned,
-            attachPluginInstallTransaction({}, { commit, rollback }),
-          );
+          retainTransaction(owned, { commit, rollback });
           recordCommitted = true;
         },
       ),
@@ -146,21 +156,15 @@ describe("plugin install transaction ownership", () => {
       params,
       () => {},
       async (owned, assertCurrent) => {
-        retainPluginInstallTransaction(
-          owned,
-          attachPluginInstallTransaction(
-            {},
-            {
-              commit: async () => {
-                assertCurrent();
-                await commit();
-              },
-              rollback: async () => {
-                assertCurrent();
-              },
-            },
-          ),
-        );
+        retainTransaction(owned, {
+          commit: async () => {
+            assertCurrent();
+            await commit();
+          },
+          rollback: async () => {
+            assertCurrent();
+          },
+        });
       },
     );
     expect(transactions).toHaveLength(1);
@@ -189,20 +193,14 @@ describe("plugin install transaction ownership", () => {
           }
         },
         async (owned, assertCurrent) => {
-          retainPluginInstallTransaction(
-            owned,
-            attachPluginInstallTransaction(
-              {},
-              {
-                commit: async () => {
-                  await Promise.resolve();
-                  active = false;
-                  assertCurrent();
-                },
-                rollback,
-              },
-            ),
-          );
+          retainTransaction(owned, {
+            commit: async () => {
+              await Promise.resolve();
+              active = false;
+              assertCurrent();
+            },
+            rollback,
+          });
         },
       ),
     ).rejects.toBe(0);

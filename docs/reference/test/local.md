@@ -1,9 +1,9 @@
 ---
-summary: "Routine local test order, the core test commands, and the local PR gate"
+summary: "Focused local proof, core test commands, and optional full local runs"
 title: "Run tests locally"
 read_when:
   - You are running or fixing tests on your own machine
-  - You need the local land and gate command list
+  - You need focused local proof or an explicitly needed full local run
 ---
 
 ## Routine local order
@@ -18,6 +18,16 @@ This bounds the non-isolated module graph as the inventory grows without changin
 worker concurrency, heap limits, or individual file boundaries. Raw Vitest and
 existing single-invocation selections, such as explicit targets, coverage, report
 output, bail, and watch mode, retain their existing behavior.
+
+Expanded full-suite runs split infrastructure and host-owned SQLite tests into
+batches of at most 64 files. Each batch keeps isolated fork workers within the
+existing full-suite worker budget. Focused selections and watch mode retain their
+usual routing.
+
+Gateway configurations marked exclusive drain other test plans before starting
+and finish before later plans are admitted. This applies to full-suite runs and
+explicit `OPENCLAW_TEST_PROJECTS_PARALLEL` overrides as well as automatic
+exact-target scheduling. Ordinary plans retain their configured parallelism.
 
 Tests that create real managed worktrees must satisfy the
 [capacity and disk-space requirements](/concepts/managed-worktrees#capacity-and-disk-space),
@@ -81,8 +91,9 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
-runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
+Local tests and `pnpm dev` default to the pinned OpenClaw Bun fork. Node 24.16+
+or Node 26.1+ is still required for orchestration and build preparation. Older
+Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
 To compare the same Vitest selection on Node and Bun, use the existing wrapper:
 
@@ -91,14 +102,30 @@ OPENCLAW_VITEST_RUNTIME=node pnpm test <path-or-filter>
 OPENCLAW_VITEST_RUNTIME=bun pnpm test <path-or-filter>
 ```
 
-Install the exact Bun fork build pinned by `.github/actions/setup-test-bun/action.yml`
-for comparable results. This selects the
+The runner automatically stages the build pinned by `scripts/lib/openclaw-bun.json`
+using `scripts/stage-openclaw-bun.sh`, which verifies the release checksums. It
+reuses a verified per-user cache at
+`${XDG_CACHE_HOME:-~/.cache}/openclaw/bun/<tag>/<platform>-<arch>`.
+Set `OPENCLAW_BUN_PATH` to override the Bun executable explicitly.
+The runtime selection applies to the
 actual Vitest process and workers while retaining Node for orchestration and
-compiler preparation. It does not use Bun's native test runner. `bun run` alone
-does not select Bun for tests. Node remains the local default.
+compiler preparation. Source-runner CLI fixtures also use the selected runtime
+after Node completes build preparation. This does not use Bun's native test runner.
+Set `OPENCLAW_VITEST_RUNTIME=node` to force Node, or `bun` to require Bun.
+Without an explicit selection, CI retains Node (`CI` is nonempty and not `false`).
+When CI selects Bun, the runner uses the workflow-provisioned `bun` on PATH without
+staging a local cache, unless `OPENCLAW_BUN_PATH` explicitly overrides it.
+Windows and platforms without a pinned artifact fall back to Node, as do offline
+machines without a usable cached fork. The runner prints one notice with the
+reason; explicitly selecting Node silences it. An explicit Bun selection fails
+if its executable is unavailable.
+On macOS, Bun test runs select SQLite like a standalone Bun install and refuse
+Apple's system library; see [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
+For an x64 Bun under Rosetta, build the pinned library with
+`scripts/build-mac-sqlite.sh universal <dir>` and set
+`OPENCLAW_SQLITE_LIBRARY=<dir>/lib/libsqlite3.dylib`.
 
-For the CI Control UI comparison, run the full Node selection followed by its
-compatible Bun partition:
+For the CI Control UI comparison, run the full selection on Node followed by Bun:
 
 ```sh
 OPENCLAW_NODE_TEST_CONFIGS_JSON='["ui/vitest.config.ts"]' \
@@ -107,14 +134,9 @@ OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
 node --import tsx scripts/ci-run-node-test-shard.mts
 ```
 
-The pinned fork can loop in CSS tokenization after particular UI file orders.
-The nonbrowser UI setup prevents inlining the native tokenizer's `endOfFile`
-predicate on Bun while retaining baseline, DFG, and FTL JIT. It does nothing on Node, and
-Chromium keeps its existing setup. See the
-[CI runtime policy](/ci/pipeline#test-runtime-selection) for the removal proof.
-The Bun partition deliberately excludes two whole GC-sensitive files, which
-remain covered by Node. Running the complete UI config directly with
-`OPENCLAW_VITEST_RUNTIME=bun` also runs those currently incompatible assertions.
+Both passes include the retention assertions, which use runtime-neutral garbage
+collection and WeakRef checks. Run the complete UI selection only on Bun with
+`OPENCLAW_VITEST_RUNTIME=bun`.
 
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a
@@ -124,8 +146,18 @@ mitigation; production CLI exit behavior, assertions, and deadlines are unchange
 
 The script erasability gate uses Node's strip-only parser, including when package
 checks run under Bun. It selects an installed Node runtime and skips Bun's `node` shim.
+Maintainer-tooling tests that need `node:module.registerHooks` or
+`stripTypeScriptTypes` also select Node explicitly for their tooling children.
+Use `requireNodeTool("node")` and `stripNodeTypeScriptTypes` from
+`test/helpers/node-toolchain.ts`, which share that Node-selection owner, while
+keeping the Vitest worker on the selected test runtime.
 
-The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
+Isolated native worker and subprocess fixtures use `mockNativeModuleExports` from
+`test/helpers/native-module-mock.ts` for controlled module exports on either runtime.
+The mocks live until that child exits. Capture original call-through functions before
+registering replacements because Bun updates existing module namespace bindings.
+
+The test toolchain pins stable Vitest `5.0.3`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
 scope, and perform actions whose mock calls you assert inside the test.
@@ -196,9 +228,11 @@ plugin's KNN child, session transcript archive and reconciliation workers, and
 managed GitHub credential resolution. The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
-module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
-launches them with `--import tsx` for their own syntax, while Bun handles that
-syntax natively without the Node loader. Only their runtime imports change.
+module and WeakMap identity. Prepared TUI fixtures are compiled to `.mjs` and run
+as JavaScript without a TypeScript loader. Direct source fixtures
+remain `.mts`: Node launches them with `--import tsx`, while Bun handles their
+syntax natively. The session-identity PTY tests load real provider policies, so
+their runtime prerequisite prepares the built host SDK before Vitest workers start.
 Existing package build entry paths and Vitest source parents stay unchanged. The
 CLI fork-recovery regression also compiles the real CLI entry and its concurrent
 rebind's session accessor and binding helper together. Both processes use the same
@@ -207,6 +241,9 @@ Doctor process output tests with bundled plugins disabled reuse that compiled CL
 inside one lazily created package fixture per test run, keeping real UI checks on
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
 use live source inside the same fixture.
+
+Broadcast output coverage prepares its message helper and exit finalizer together,
+preserving command substitution and joining its process tree before fixture cleanup.
 
 Isolated Doctor config scripts also share the prepared config-flow, health-writer,
 and install-index modules. Each case still starts a fresh process with separate
@@ -230,18 +267,18 @@ session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
 
-Native Bash output-lifecycle fixtures also prepare the real tool and executor
-roots in this generation. Each scenario still uses a fresh process and real
-shell, pipe, and spill file; its unchanged child deadline covers prepared
-JavaScript startup and output handling instead of repeated TypeScript compilation.
-
 Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 
-Preparation is lazy across both projects and shards. Config imports, listing
-tests, and tiny tests that do not import these declarations do not load the
-subprocess compiler or compile workers. A shard that needs a declaration requests the
-outer runner's single build through its existing Node IPC channel during module
-collection, before fixture hooks and readiness deadlines. Every finite invocation
+Known core database-worker consumers prepare the invocation's compiled generation
+before test processes start, including when a case imports its worker declaration
+dynamically. Selection uses the existing database-worker inventory and honors CLI
+filters, exclusions, and include files. Other tests retain lazy preparation across
+projects and shards. Config imports, listing tests, watch runs, custom selections,
+and tiny tests that do not import these declarations do not eagerly compile workers.
+A shard that imports a declaration requests the outer runner's single build through
+its existing Node IPC channel; eager consumers reuse the completed generation.
+Static imports acquire it during module collection, before fixture hooks and readiness
+deadlines. Every finite invocation
 that needs a declaration pays for this fixed entry set; preparation timing is
 reported separately from child execution. The runner starts one short-lived native
 Node or Bun compiler child and joins it before returning the verified manifest to
@@ -324,9 +361,15 @@ Tests that discover real bundled provider runtimes declare that prerequisite in
 `scripts/lib/vitest-build-prerequisites.mts`, including Telegram sticker-model
 selection. Local runners and CI prepare those artifacts before admitting workers.
 
-## Local PR gate
+<a id="local-pr-gate" />
 
-For local PR land/gate checks, run:
+## Full local run (only when explicitly needed)
+
+PR CI is the broad gate. Before opening a ready PR, run focused tests for touched
+code and targeted typecheck, lint, and format checks. Do not run the full local
+suite to diagnose a failed PR CI run; use `pnpm test:ci-failed <pr>` instead.
+
+The full local commands remain available for an explicitly needed investigation:
 
 - `pnpm check:changed`
 - `pnpm check`
@@ -335,7 +378,20 @@ For local PR land/gate checks, run:
 - `pnpm test`
 - `pnpm check:docs`
 
-If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
+`pnpm check --base <ref>` pins the line-cap, max-lines suppression, and assertion
+safety ratchets to the merge base of `HEAD` and that ref. Native PR gates pass
+their candidate's fork from the captured main snapshot, so inherited main
+changes retain their allowance even when the shared `origin/main` ref is stale.
+Other check stages still run normally.
+
+If an explicitly requested full local run fails, isolate the failed tests with
+`pnpm test <path/to/test>` and investigate the owner; a passing replay does not
+prove a repair. For a PR CI failure, read its published classification, fix new
+failures, run `pnpm test:ci-failed <pr> --run` until those pass locally, then push
+once. Pre-existing failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
+Never rerun CI just to chase green. For memory-constrained hosts explicitly
+running the full local suite:
 
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`

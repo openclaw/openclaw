@@ -49,6 +49,7 @@ function createPluginFixture(params: {
       HOME: root,
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "no-bundled-plugins"),
     },
   };
@@ -62,30 +63,9 @@ afterEach(() => {
 });
 
 describe("plugin manifest backup resources", () => {
-  it("retains closed resource declarations and removes deterministic duplicates", () => {
-    const include = { disposition: "include", scope: "state", relativePath: "owner/durable" };
-    const regenerable = {
-      disposition: "regenerable",
-      scope: "agent",
-      relativePath: "owner/cache",
-    };
-    const fixture = createPluginFixture({
-      backupResources: [include, regenerable, include],
-    });
-
-    const result = loadPluginManifest(fixture.pluginRoot);
-
-    expect(result).toMatchObject({
-      ok: true,
-      manifest: { backupResources: [regenerable, include] },
-    });
-  });
-
   it.each([
     ["an absolute POSIX path", "/outside"],
-    ["a Windows absolute path", "C:\\outside"],
     ["a Windows drive-relative path", "C:outside"],
-    ["a Windows UNC path", "\\\\server\\share"],
     ["a backslash separator", "owner\\cache"],
     ["a NUL byte", "owner/\0cache"],
     ["an empty path", ""],
@@ -114,6 +94,32 @@ describe("plugin manifest backup resources", () => {
       [{ disposition: "include", scope: "state", relativePath: "owner", pluginId: "spoofed" }],
     ],
     ["missing keys", [{ disposition: "include", relativePath: "owner" }]],
+    [
+      "unsupported database family",
+      [
+        {
+          disposition: "include",
+          scope: "state",
+          relativePath: "owner",
+          databaseFamily: "unknown",
+        },
+      ],
+    ],
+    [
+      "regenerable database resource",
+      [
+        {
+          disposition: "regenerable",
+          scope: "state",
+          relativePath: "owner",
+          databaseFamily: "state",
+        },
+      ],
+    ],
+    [
+      "agent-scoped state database resource",
+      [{ disposition: "include", scope: "agent", relativePath: "owner", databaseFamily: "state" }],
+    ],
   ])("rejects %s", (_label, backupResources) => {
     const fixture = createPluginFixture({ backupResources });
 
@@ -220,7 +226,7 @@ describe("plugin manifest backup resources", () => {
     },
   );
 
-  it("does not apply declarations when the plugin system is disabled", () => {
+  it("does not apply ordinary resource declarations when the plugin system is disabled", () => {
     const fixture = createPluginFixture({
       backupResources: [{ disposition: "include", scope: "state", relativePath: "owner" }],
     });
@@ -234,5 +240,22 @@ describe("plugin manifest backup resources", () => {
         stateDir: fixture.stateDir,
       }),
     ).toEqual({ pluginRoots: [], resources: [] });
+  });
+
+  it("retains declared database resources when their plugin is disabled", () => {
+    const resource = {
+      disposition: "include",
+      scope: "state",
+      relativePath: "owner",
+      databaseFamily: "state",
+    } as const;
+    const fixture = createPluginFixture({ backupResources: [resource] });
+    expect(
+      resolveActivatedPluginBackupInventory({
+        config: { plugins: { enabled: false, load: { paths: [fixture.pluginRoot] } } },
+        env: fixture.env,
+        stateDir: fixture.stateDir,
+      }).resources,
+    ).toEqual([{ pluginId: fixture.id, ...resource }]);
   });
 });

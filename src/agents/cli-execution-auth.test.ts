@@ -8,8 +8,9 @@ const mocks = vi.hoisted(() => ({
   profiles: {} as Record<string, AuthProfileCredential>,
 }));
 
+// mock-isolation: profile selection uses fixture credentials without opening runtime auth stores.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: mocks.profiles }),
+  loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: mocks.profiles }),
 }));
 
 vi.mock("./auth-profiles/order.js", () => ({
@@ -52,7 +53,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
 
   it.each(["auto", "user"] as const)(
     "ignores a retired native Claude profile selected by %s",
-    (authProfileIdSource) => {
+    async (authProfileIdSource) => {
       const authProfileId = "anthropic:claude-cli";
       mocks.profiles[authProfileId] = {
         type: "oauth",
@@ -63,7 +64,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
       };
       mocks.order.push(authProfileId);
 
-      expect(
+      await expect(
         resolveCliExecutionAuthProfileId({
           cliExecutionProvider: "claude-cli",
           authProfileProvider: "claude-cli",
@@ -73,11 +74,11 @@ describe("resolveCliExecutionAuthProfileId", () => {
             ? { selected: { authProfileId, authProfileIdSource } }
             : {}),
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
     },
   );
 
-  it("keeps forwarding a non-retired Claude profile", () => {
+  it("keeps forwarding a non-retired Claude profile", async () => {
     const authProfileId = "claude-cli:work";
     mocks.profiles[authProfileId] = {
       type: "oauth",
@@ -87,7 +88,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
       expires: Date.now() + 60_000,
     };
 
-    expect(
+    await expect(
       resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "claude-cli",
         authProfileProvider: "claude-cli",
@@ -95,7 +96,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
         agentDir: "/tmp/unused-agent",
         selected: { authProfileId, authProfileIdSource: "user" },
       }),
-    ).toBe(authProfileId);
+    ).resolves.toBe(authProfileId);
   });
 
   it.each([
@@ -105,7 +106,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
     { type: "token", registry: "setup" },
   ] as const)(
     "forwards an explicitly selected canonical Anthropic $type through the $registry registry",
-    ({ type, registry }) => {
+    async ({ type, registry }) => {
       if (registry === "setup") {
         cliBackendsTesting.setDepsForTest({
           resolveRuntimeCliBackends: () => [],
@@ -136,7 +137,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
                 expires: Date.now() + 60_000,
               };
 
-      expect(
+      await expect(
         resolveCliExecutionAuthProfileId({
           cliExecutionProvider: "claude-cli",
           authProfileProvider: "anthropic",
@@ -144,11 +145,11 @@ describe("resolveCliExecutionAuthProfileId", () => {
           agentDir: "/tmp/unused-agent",
           selected: { authProfileId, authProfileIdSource: "user" },
         }),
-      ).toBe(authProfileId);
+      ).resolves.toBe(authProfileId);
     },
   );
 
-  it("loads the selected personal profile without falling back to an ambient Claude account", () => {
+  it("loads the selected personal profile without falling back to an ambient Claude account", async () => {
     const authProfileId =
       "personal:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222";
     const credential: AuthProfileCredential = {
@@ -159,14 +160,14 @@ describe("resolveCliExecutionAuthProfileId", () => {
     mocks.profiles["claude-cli:ambient"] = createApiKeyCredential("claude-cli", "test-ambient-key");
     mocks.order.push("claude-cli:ambient");
 
-    expect(
+    await expect(
       resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "claude-cli",
         authProfileProvider: "anthropic",
         config: {},
         agentDir: "/tmp/unused-agent",
         selected: { authProfileId, authProfileIdSource: "user" },
-        loadAuthProfileStoreForRuntime: (_agentDir, options) => ({
+        loadAuthProfileStoreForRuntimeAsync: async (_agentDir, options) => ({
           version: 1,
           profiles: {
             ...mocks.profiles,
@@ -174,12 +175,12 @@ describe("resolveCliExecutionAuthProfileId", () => {
           },
         }),
       }),
-    ).toBe(authProfileId);
+    ).resolves.toBe(authProfileId);
   });
 
   it.each(["absent", "auto"] as const)(
     "forwards only automatic Claude profiles owned by Claude CLI (%s selection)",
-    (selection) => {
+    async (selection) => {
       const selected =
         selection === "auto"
           ? { authProfileId: "anthropic:default", authProfileIdSource: selection }
@@ -190,7 +191,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
       );
       mocks.order.push("anthropic:default");
 
-      expect(
+      await expect(
         resolveCliExecutionAuthProfileId({
           cliExecutionProvider: "claude-cli",
           authProfileProvider: "anthropic",
@@ -198,12 +199,12 @@ describe("resolveCliExecutionAuthProfileId", () => {
           agentDir: "/tmp/unused-agent",
           selected,
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
 
       mocks.profiles["claude-cli:work"] = createApiKeyCredential("claude-cli", "test-claude-key");
       mocks.order.push("claude-cli:work");
 
-      expect(
+      await expect(
         resolveCliExecutionAuthProfileId({
           cliExecutionProvider: "claude-cli",
           authProfileProvider: "anthropic",
@@ -211,16 +212,16 @@ describe("resolveCliExecutionAuthProfileId", () => {
           agentDir: "/tmp/unused-agent",
           selected,
         }),
-      ).toBe("claude-cli:work");
+      ).resolves.toBe("claude-cli:work");
     },
   );
 
   it.each(["claude-cli", "google-gemini-cli"])(
     "rejects an explicitly selected profile from another provider for %s",
-    (cliExecutionProvider) => {
+    async (cliExecutionProvider) => {
       mocks.profiles["openai:work"] = createApiKeyCredential("openai", "test-openai-key");
 
-      expect(() =>
+      await expect(
         resolveCliExecutionAuthProfileId({
           cliExecutionProvider,
           authProfileProvider: "openai",
@@ -231,12 +232,12 @@ describe("resolveCliExecutionAuthProfileId", () => {
             authProfileIdSource: "user",
           },
         }),
-      ).toThrow(/cannot use auth profile "openai:work"/);
+      ).rejects.toThrow(/cannot use auth profile "openai:work"/);
     },
   );
 
-  it("rejects a missing explicitly selected profile instead of changing identities", () => {
-    expect(() =>
+  it("rejects a missing explicitly selected profile instead of changing identities", async () => {
+    await expect(
       resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "google-gemini-cli",
         authProfileProvider: "google-gemini-cli",
@@ -247,13 +248,13 @@ describe("resolveCliExecutionAuthProfileId", () => {
           authProfileIdSource: "user",
         },
       }),
-    ).toThrow(/No credentials found for profile "google-gemini-cli:missing"/);
+    ).rejects.toThrow(/No credentials found for profile "google-gemini-cli:missing"/);
   });
 
-  it("bridges only a stored canonical Google API key to Gemini CLI", () => {
+  it("bridges only a stored canonical Google API key to Gemini CLI", async () => {
     mocks.profiles["google:work"] = createApiKeyCredential("google", "test-google-key");
 
-    expect(
+    await expect(
       resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "google-gemini-cli",
         authProfileProvider: "google",
@@ -264,7 +265,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
           authProfileIdSource: "user",
         },
       }),
-    ).toBe("google:work");
+    ).resolves.toBe("google:work");
 
     mocks.profiles["google:work"] = {
       type: "oauth",
@@ -273,7 +274,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
       refresh: "test-refresh",
       expires: Date.now() + 60_000,
     };
-    expect(() =>
+    await expect(
       resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "google-gemini-cli",
         authProfileProvider: "google",
@@ -284,10 +285,10 @@ describe("resolveCliExecutionAuthProfileId", () => {
           authProfileIdSource: "user",
         },
       }),
-    ).toThrow(/cannot use auth profile "google:work"/);
+    ).rejects.toThrow(/cannot use auth profile "google:work"/);
   });
 
-  it("requires a Gemini-native selected profile to be owned by Gemini CLI", () => {
+  it("requires a Gemini-native selected profile to be owned by Gemini CLI", async () => {
     mocks.profiles["google-gemini-cli:work"] = createApiKeyCredential(
       "openai",
       "test-wrong-provider-key",
@@ -304,7 +305,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
         },
       });
 
-    expect(resolve).toThrow(/cannot use auth profile "google-gemini-cli:work"/);
+    await expect(resolve()).rejects.toThrow(/cannot use auth profile "google-gemini-cli:work"/);
 
     mocks.profiles["google-gemini-cli:work"] = {
       type: "oauth",
@@ -313,10 +314,10 @@ describe("resolveCliExecutionAuthProfileId", () => {
       refresh: "test-refresh",
       expires: Date.now() + 60_000,
     };
-    expect(resolve()).toBe("google-gemini-cli:work");
+    await expect(resolve()).resolves.toBe("google-gemini-cli:work");
   });
 
-  it("uses the stored owner for a Gemini-native model profile", () => {
+  it("uses the stored owner for a Gemini-native model profile", async () => {
     mocks.profiles["google-gemini-cli:alice"] = {
       type: "oauth",
       provider: "google-gemini-cli",
@@ -325,7 +326,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
       expires: Date.now() + 60_000,
     };
 
-    expect(
+    await expect(
       resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "google-gemini-cli",
         authProfileProvider: "google",
@@ -336,6 +337,6 @@ describe("resolveCliExecutionAuthProfileId", () => {
           authProfileIdSource: "user",
         },
       }),
-    ).toBe("google-gemini-cli:alice");
+    ).resolves.toBe("google-gemini-cli:alice");
   });
 });

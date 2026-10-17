@@ -3,6 +3,32 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolvePluginDoctorContractArtifact } from "../plugins/doctor-contract-artifact.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
+import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
+
+/** Optional source inspection must not turn a plugin syntax error into an update refusal. */
+export function inspectUpdateCandidatePluginSource(
+  entry: { pluginId: string; rootDir: string; entryFile: string },
+  warnings: string[],
+  dependencyLookupBoundary?: Parameters<typeof inspectPluginSourceDependencies>[1],
+) {
+  try {
+    return inspectPluginSourceDependencies([entry], dependencyLookupBoundary);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
+    if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+      warnings.push(
+        `Update checks could not inspect plugin ${entry.pluginId} (${entry.entryFile}): ${error.message}. Continuing without dependency inspection for this entry.`.slice(
+          0,
+          UPDATE_RUN_TEXT_LIMIT,
+        ),
+      );
+    }
+    return undefined;
+  }
+}
 
 /** Snapshot the executable surfaces their owners can demand during candidate validation. */
 export function resolveUpdateCandidatePluginSourceEntries(
@@ -25,19 +51,14 @@ export function resolveUpdateCandidatePluginSourceEntries(
       rootConfig: config,
     }).enabled;
     const packageManifest = candidate.packageManifest;
+    const addEntry = (entryFile: string, rootDir = candidate.rootDir) => {
+      entries.set(entryFile, { pluginId, rootDir, entryFile });
+    };
     if (enabled) {
-      entries.set(candidate.source, {
-        pluginId,
-        rootDir: candidate.rootDir,
-        entryFile: candidate.source,
-      });
+      addEntry(candidate.source);
     }
     if (candidate.setupSource && (enabled || packageManifest?.setupFeatures?.configPromotion)) {
-      entries.set(candidate.setupSource, {
-        pluginId,
-        rootDir: candidate.rootDir,
-        entryFile: candidate.setupSource,
-      });
+      addEntry(candidate.setupSource);
     }
     if (
       !manifest.ok ||
@@ -53,11 +74,7 @@ export function resolveUpdateCandidatePluginSourceEntries(
       packageManifest,
     });
     if (doctor) {
-      entries.set(doctor.modulePath, {
-        pluginId,
-        rootDir: doctor.boundaryRoot,
-        entryFile: doctor.modulePath,
-      });
+      addEntry(doctor.modulePath, doctor.boundaryRoot);
     }
   }
   return [...entries.values()];

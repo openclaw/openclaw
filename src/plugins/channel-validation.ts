@@ -1,11 +1,10 @@
-// Validates channel plugin metadata from manifests and config.
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -48,16 +47,9 @@ function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined
 }
 
 function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): string[] {
-  const missing: string[] = [];
-  if (!normalizeOptionalString(meta?.label)) {
-    missing.push("label");
-  }
-  if (!normalizeOptionalString(meta?.selectionLabel)) {
-    missing.push("selectionLabel");
-  }
-  if (!normalizeOptionalString(meta?.docsPath)) {
-    missing.push("docsPath");
-  }
+  const missing: string[] = (["label", "selectionLabel", "docsPath"] as const).filter(
+    (key) => !normalizeOptionalString(meta?.[key]),
+  );
   if (typeof meta?.blurb !== "string") {
     missing.push("blurb");
   }
@@ -70,20 +62,17 @@ const CHANNEL_CAPABILITY_CHAT_TYPES = new Set(["direct", "group", "channel", "th
 export function normalizeRegisteredChannelPlugin(params: {
   pluginId: string;
   source: string;
-  plugin: ChannelPlugin;
+  plugin: AnyChannelPlugin;
   pushDiagnostic: (diag: PluginDiagnostic) => void;
-}): ChannelPlugin | null {
+}): AnyChannelPlugin | null {
+  const diagnose = (level: PluginDiagnostic["level"], message: string) =>
+    params.pushDiagnostic({ level, pluginId: params.pluginId, source: params.source, message });
   const id =
     normalizeOptionalString(params.plugin?.id) ??
     normalizeStringifiedOptionalString(params.plugin?.id) ??
     "";
   if (!id) {
-    params.pushDiagnostic({
-      level: "error",
-      pluginId: params.pluginId,
-      source: params.source,
-      message: "channel registration missing id",
-    });
+    diagnose("error", "channel registration missing id");
     return null;
   }
   const chatTypes = params.plugin.capabilities?.chatTypes;
@@ -92,46 +81,35 @@ export function normalizeRegisteredChannelPlugin(params: {
     chatTypes.length === 0 ||
     chatTypes.some((chatType) => !CHANNEL_CAPABILITY_CHAT_TYPES.has(chatType))
   ) {
-    params.pushDiagnostic({
-      level: "error",
-      pluginId: params.pluginId,
-      source: params.source,
-      message: `channel "${id}" registration missing or invalid required capabilities.chatTypes`,
-    });
+    diagnose(
+      "error",
+      `channel "${id}" registration missing or invalid required capabilities.chatTypes`,
+    );
     return null;
   }
   if (
     typeof params.plugin.config?.listAccountIds !== "function" ||
     typeof params.plugin.config?.resolveAccount !== "function"
   ) {
-    params.pushDiagnostic({
-      level: "error",
-      pluginId: params.pluginId,
-      source: params.source,
-      message: `channel "${id}" registration missing required config helpers`,
-    });
+    diagnose("error", `channel "${id}" registration missing required config helpers`);
     return null;
   }
 
   const rawMeta = params.plugin.meta as Partial<ChannelMeta> | undefined;
   const rawMetaId = normalizeOptionalString(rawMeta?.id);
   if (rawMetaId && rawMetaId !== id) {
-    params.pushDiagnostic({
-      level: "warn",
-      pluginId: params.pluginId,
-      source: params.source,
-      message: `channel "${id}" meta.id mismatch ("${rawMetaId}"); using registered channel id`,
-    });
+    diagnose(
+      "warn",
+      `channel "${id}" meta.id mismatch ("${rawMetaId}"); using registered channel id`,
+    );
   }
 
   const missingFields = collectMissingChannelMetaFields(rawMeta);
   if (missingFields.length > 0) {
-    params.pushDiagnostic({
-      level: "warn",
-      pluginId: params.pluginId,
-      source: params.source,
-      message: `channel "${id}" registered incomplete metadata; filled missing ${missingFields.join(", ")}`,
-    });
+    diagnose(
+      "warn",
+      `channel "${id}" registered incomplete metadata; filled missing ${missingFields.join(", ")}`,
+    );
   }
 
   return {

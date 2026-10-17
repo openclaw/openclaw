@@ -2,12 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
-import { createAdmittedRunOperatorAuthority } from "../../../src/agents/admitted-run-context.js";
 import type { AgentQuestionDispatcher } from "../../../src/agents/harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "../../../src/agents/tools/ask-user-tool.js";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-approval-authority.js";
+import { captureGatewayOperatorRunAuthority } from "../../../src/gateway/operator-run-authority.js";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { QuestionManager } from "../../../src/gateway/question-manager.js";
 import { createGatewayBroadcaster } from "../../../src/gateway/server-broadcast.js";
@@ -18,7 +19,13 @@ import { createSecretStoreWriteService } from "../../../src/gateway/server-metho
 import type { GatewayClient, RespondFn } from "../../../src/gateway/server-methods/types.js";
 import { GatewayClientRegistry } from "../../../src/gateway/server/client-registry.js";
 import type { GatewayWsClient } from "../../../src/gateway/server/ws-types.js";
-import { canReceiveSessionEvent } from "../../../src/gateway/session-sharing.js";
+import { bindSessionRowProjection } from "../../../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../../src/gateway/session-row-projection.js";
+import {
+  canReceiveSessionEvent,
+  prepareProjectedSessionSharing,
+} from "../../../src/gateway/session-sharing.js";
+import { resolveSessionStoreIdentity } from "../../../src/gateway/session-store-key.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -28,6 +35,7 @@ import {
 } from "../../../src/infra/agent-run-registry.js";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 
 export const guestQuestionSessionKey = "agent:main:guest-question-proof";
 export const guestQuestionPrompt = "Which format should I use for your summary?";
@@ -47,6 +55,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey: guestQuestionSessionKey },
     {
@@ -64,7 +73,8 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     instanceId: "guest-question-instance",
     runId,
   });
-  const manager = new QuestionManager();
+  const scheduler = createTestGatewayScheduler();
+  const manager = new QuestionManager(scheduler);
   const unregister = registerAgentRunDelegatedAuthorityClosedHandler((authority) =>
     manager.cancelClosedAuthorities(authority.operationalRunInstance),
   );
@@ -76,8 +86,13 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     bufferedAmount: 0,
     close() {},
     terminate() {},
-    send(wire: string, callback?: (error?: Error) => void) {
-      const frame: unknown = JSON.parse(wire);
+    send(
+      wire: string | Buffer,
+      options?: { binary: false } | ((error?: Error) => void),
+      onSent?: (error?: Error) => void,
+    ) {
+      const callback = typeof options === "function" ? options : onSent;
+      const frame: unknown = JSON.parse(wire.toString());
       frames.push(frame);
       delivery = delivery
         .then(() => deliver(frame))
@@ -112,6 +127,17 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       updatedAt: profile.updatedAt,
     },
   };
+  const operator = await captureGatewayOperatorRunAuthority({
+    client: browser,
+    context: { getRuntimeConfig: () => cfg },
+    sourceAuthority: {
+      signal: source.signal,
+      assertCurrent: () => source.signal.throwIfAborted(),
+    },
+  });
+  if (!operator) {
+    throw new Error("expected the Guest's admitted operator authority");
+  }
   const runtime: GatewayClient = {
     ...browser,
     connect: {
@@ -119,12 +145,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       client: { id: "gateway-client", version: "e2e", platform: "test", mode: "backend" },
     },
     internal: {
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
-        profileId: profile.id,
-        scopes: guestQuestionScopes,
-        signal: source.signal,
-        assertCurrent: () => source.signal.throwIfAborted(),
-      }),
+      operatorRunAuthority: operator.authority,
       agentRuntimeIdentity: {
         kind: "agentRuntime",
         agentId: "main",
@@ -134,11 +155,36 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       },
     },
   };
+  const projection = await createSessionRowProjection({ cfg });
+  await projection.ensureMaterialized();
   const clients = new GatewayClientRegistry([browser]);
   const { broadcast } = createGatewayBroadcaster({
     clients,
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
+      canReceiveSessionEvent({
+        cfg,
+        client,
+        sessionKeys,
+        agentId,
+        event,
+        payload,
+        prepared: {
+          sharing: prepareProjectedSessionSharing({
+            cfg,
+            client,
+            isMember: (target, identityId) =>
+              projection.hasMembership(target.storePath, target.storeKey, identityId),
+          }),
+          target: (key, targetAgentId) => {
+            const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
+              cfg,
+              sessionKey: key,
+              agentId: targetAgentId,
+            });
+            return projection.sharingTarget({ key, agentId: ownerAgentId });
+          },
+        },
+      }),
   });
   const context = createDirectChatContext({
     broadcast,
@@ -146,9 +192,11 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     getRuntimeConfig: () => cfg,
   });
+  bindSessionRowProjection(context, () => projection);
   const handlers = createQuestionHandlers(
     manager,
     createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
+    scheduler,
   );
   const requests: Array<{ method: string; params: unknown; result?: RpcResult }> = [];
   const registration = createDeferredCore<RpcResult>();
@@ -228,13 +276,20 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     disconnect: () => clients.delete(browser),
     reconnect: () => clients.add(browser),
     async close() {
-      clients.clear();
-      source.abort();
-      releaseAgentRunDelegatedAuthority(requesterAuthority);
-      unregister();
-      manager.close();
-      clearAgentRunContext(runId);
-      await flushEvents();
+      try {
+        clients.clear();
+        source.abort();
+        releaseAgentRunDelegatedAuthority(requesterAuthority);
+        unregister();
+        manager.close();
+        await manager.drain();
+        await scheduler.stop();
+        clearAgentRunContext(runId);
+        operator.release();
+        await flushEvents();
+      } finally {
+        projection.dispose();
+      }
     },
   };
 }

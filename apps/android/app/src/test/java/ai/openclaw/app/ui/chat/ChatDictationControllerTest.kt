@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import android.speech.SpeechRecognizer
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
@@ -254,6 +255,47 @@ class ChatDictationControllerTest {
 
       assertEquals("replacement", replacementAttempt.await())
       assertEquals(ChatDictationState.Idle, controller.state.value)
+    }
+
+  @Test
+  fun lateCoroutineCancellationCannotStopReplacementDictation() =
+    runTest {
+      for (waitingForPermission in listOf(true, false)) {
+        val recognizer = FakeRecognizer()
+        val permission = CompletableDeferred<Boolean>()
+        var permissionRequests = 0
+        var released = 0
+        val controller =
+          controller(
+            recognizer = recognizer,
+            requestPermission = {
+              permissionRequests += 1
+              if (waitingForPermission && permissionRequests == 1) permission.await() else true
+            },
+            releaseMic = { released += 1 },
+          )
+        try {
+          val retired = async { controller.start() }
+          runCurrent()
+          controller.cancel()
+          retired.cancel()
+
+          // Admit the replacement before dispatching the old coroutine's cancellation.
+          val replacement = async(start = CoroutineStart.UNDISPATCHED) { controller.start() }
+          recognizer.emit(ChatDictationRecognitionEvent.Ready)
+          runCurrent()
+
+          assertTrue(retired.isCancelled)
+          assertEquals(ChatDictationState.Listening, controller.state.value)
+          assertFalse(replacement.isCompleted)
+          assertEquals(if (waitingForPermission) 0 else 1, released)
+          recognizer.emit(ChatDictationRecognitionEvent.Transcript("replacement"))
+          assertEquals("replacement", replacement.await())
+          assertEquals(if (waitingForPermission) 1 else 2, released)
+        } finally {
+          controller.destroy()
+        }
+      }
     }
 
   @Test

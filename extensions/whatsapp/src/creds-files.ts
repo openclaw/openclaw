@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { SignalDataTypeMap } from "baileys";
 import {
@@ -54,17 +55,9 @@ function resolveWebCredsParentCheck(filePath: string) {
   } as const;
 }
 
-async function assertWebCredsParentPathSafe(filePath: string): Promise<void> {
-  await assertNoSymlinkParents(resolveWebCredsParentCheck(filePath));
-}
-
-function assertWebCredsParentPathSafeSync(filePath: string): void {
-  assertNoSymlinkParentsSync(resolveWebCredsParentCheck(filePath));
-}
-
 export async function assertWebCredsPathRegularFileOrMissing(filePath: string): Promise<void> {
   try {
-    await assertWebCredsParentPathSafe(filePath);
+    await assertNoSymlinkParents(resolveWebCredsParentCheck(filePath));
     await statRegularFile(filePath);
   } catch (error) {
     throw new Error(
@@ -76,7 +69,7 @@ export async function assertWebCredsPathRegularFileOrMissing(filePath: string): 
 
 export function readWebCredsJsonRawSync(filePath: string): string | null {
   try {
-    assertWebCredsParentPathSafeSync(filePath);
+    assertNoSymlinkParentsSync(resolveWebCredsParentCheck(filePath));
     const { buffer, stat } = readRegularFileSync({
       filePath,
     });
@@ -88,7 +81,7 @@ export function readWebCredsJsonRawSync(filePath: string): string | null {
 
 export async function readWebCredsJsonRaw(filePath: string): Promise<string | null> {
   try {
-    await assertWebCredsParentPathSafe(filePath);
+    await assertNoSymlinkParents(resolveWebCredsParentCheck(filePath));
     const { buffer, stat } = await readRegularFile({
       filePath,
     });
@@ -100,7 +93,7 @@ export async function readWebCredsJsonRaw(filePath: string): Promise<string | nu
 
 export function statWebCredsFileSync(filePath: string): { mtimeMs: number; size: number } | null {
   try {
-    assertWebCredsParentPathSafeSync(filePath);
+    assertNoSymlinkParentsSync(resolveWebCredsParentCheck(filePath));
     const result = statRegularFileSync(filePath);
     if (result.missing || result.stat.size <= 1) {
       return null;
@@ -114,16 +107,19 @@ export function statWebCredsFileSync(filePath: string): { mtimeMs: number; size:
   }
 }
 
-export function hasWebCredsRegularFileSync(authDir: string): boolean {
-  try {
-    const credsPath = resolveWebCredsPath(authDir);
-    assertWebCredsParentPathSafeSync(credsPath);
-    return !statRegularFileSync(credsPath).missing;
-  } catch {
-    return false;
-  }
-}
-
 export function hasWebCredsSync(authDir: string): boolean {
   return statWebCredsFileSync(resolveWebCredsPath(authDir)) !== null;
+}
+
+export function collectWhatsAppAuthDirs(accountsRoot: string, authDirs: Set<string>): string[] {
+  try {
+    for (const entry of fs.readdirSync(accountsRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        authDirs.add(path.join(accountsRoot, entry.name));
+      }
+    }
+  } catch {
+    // Unreadable roots leave only the caller's configured auth directories.
+  }
+  return [...authDirs];
 }

@@ -5,10 +5,6 @@ import type { MigrationPlan } from "../../plugins/types.js";
 
 const MIGRATION_NOT_SELECTED_REASON = "not selected for migration";
 
-function formatSelectionRefList(values: readonly string[]): string {
-  return values.length === 0 ? "none" : values.map((value) => `"${value}"`).join(", ");
-}
-
 /** Applies an exact item-id selection to planned/conflicting migration items. */
 export function applyMigrationItemSelection(
   plan: MigrationPlan,
@@ -24,7 +20,7 @@ export function applyMigrationItemSelection(
   const unknown = uniqueStrings(selectedItemIds).filter((id) => !selectableIds.has(id));
   if (unknown.length > 0) {
     throw new Error(
-      `Unknown or unavailable migration item ids: ${formatSelectionRefList(unknown)}.`,
+      `Unknown or unavailable migration item ids: ${unknown.map((id) => `"${id}"`).join(", ")}.`,
     );
   }
   const selected = new Set(selectedItemIds);

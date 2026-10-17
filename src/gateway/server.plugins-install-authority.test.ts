@@ -5,7 +5,6 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -15,7 +14,7 @@ import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { resetLogger } from "../logging/logger.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -142,20 +141,36 @@ describe("gateway plugin install authority", () => {
     );
   });
 
-  async function startGateway(token: GatewayAuthConfig["token"] = OLD_TOKEN) {
+  async function startGateway() {
     await state.writeConfig({
       gateway: {
         mode: "local",
         bind: "loopback",
-        auth: { mode: "token", token },
+        auth: { mode: "token", token: OLD_TOKEN },
         controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${port}`] },
         reload: { mode: "hybrid" },
       },
       logging: { level: "silent", consoleLevel: "silent" },
       agents: { defaults: { workspace: state.workspaceDir } },
     });
-    server = await startGatewayServerCore(port, { controlUiEnabled: false });
-    await server.startupSettled;
+    const startupPlugins = await import("./server-startup-plugins.js");
+    const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+    const maintenanceSettled = createDeferredCore();
+    const observer = vi
+      .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+      .mockImplementation((params) => {
+        const maintenance = runMaintenance(params);
+        maintenanceSettled.resolve(maintenance);
+        return maintenance;
+      });
+    try {
+      server = await startGatewayServerCore(port, { controlUiEnabled: false });
+      await server.startupSettled;
+      // Post-ready registry maintenance owns the lease that plugin installs refuse to wait for.
+      await maintenanceSettled.promise;
+    } finally {
+      observer.mockRestore();
+    }
   }
 
   async function connect(
@@ -166,8 +181,6 @@ describe("gateway plugin install authority", () => {
   ) {
     const connected = createDeferredCore<HelloOk>();
     const closed = createDeferredCore<{ code: number; reason: string }>();
-    const closeEvents: Array<{ code: number; reason: string }> = [];
-    let hellos = 0;
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${port}`,
       clientName: "gateway-client",
@@ -183,21 +196,17 @@ describe("gateway plugin install authority", () => {
         storeDeviceAuthToken: () => {},
         clearDeviceAuthToken: () => {},
       },
-      onHelloOk: (hello) => {
-        hellos += 1;
-        connected.resolve(hello);
-      },
+      onHelloOk: (hello) => connected.resolve(hello),
       onConnectError: (error) => connected.reject(error),
       onClose: (code, reason) => {
-        closeEvents.push({ code, reason });
         connected.reject(new Error(`closed ${code}: ${reason}`));
         closed.resolve({ code, reason });
       },
     });
     clients.push(client);
     client.start();
-    const hello = await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
-    return { client, hello, closed: closed.promise, closeEvents, hellos: () => hellos };
+    await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
+    return { client, closed: closed.promise };
   }
 
   async function openDeviceTokenClient(pluginId: string) {
@@ -339,6 +348,12 @@ describe("gateway plugin install authority", () => {
         await withTestTimeout(
           Promise.race([
             reached.promise,
+            reply.then((response) => {
+              if ("error" in response) {
+                throw response.error;
+              }
+              throw new Error("Install replied before boundary");
+            }),
             finished.promise.then(({ error }) => {
               throw error instanceof Error
                 ? error
@@ -375,7 +390,7 @@ describe("gateway plugin install authority", () => {
             },
           });
         }
-        const records = readPersistedInstalledPluginIndexInstallRecords();
+        const records = await readPersistedInstalledPluginIndexInstallRecordsAsync();
         const after = await admin.client.request<ConfigSnapshot>("config.get");
         const revoked = action === "revoke" || action === "disconnect-revoke";
         const committed = !revoked || phase === "runtime";

@@ -16,9 +16,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const makeRoot = () => fs.realpath(tempDirs.make("skill-library-persistence-"));
 
 describe("skill library persistence across process lifetimes", () => {
-  it("reopens personal and team pins with complete original bytes after revision replacement, rename, and removal", async () => {
+  it("reopens personal and team pins with complete original bytes after revision replacement, rename, and removal", async ({
+    signal,
+  }) => {
     const root = await makeRoot();
-    const seed = await runPersistenceChild(root, { action: "seed" });
+    const seed = await runPersistenceChild(root, { action: "seed" }, signal);
     expect(seed.kind).toBe("seeded");
     const before = readPersistenceDisk(root);
     expect(before.pins).toHaveLength(2);
@@ -30,7 +32,7 @@ describe("skill library persistence across process lifetimes", () => {
 
     // Both writes happen after the creating process has closed, and neither process
     // survives to supply an in-memory catalog or pin cache to the final reader.
-    await runPersistenceChild(root, { action: "update-remove" });
+    await runPersistenceChild(root, { action: "update-remove" }, signal);
     const removed = readPersistenceDisk(root);
     expect(removed.pins).toEqual(before.pins);
     expect(removed.revisions).toHaveLength(4);
@@ -45,7 +47,7 @@ describe("skill library persistence across process lifetimes", () => {
       );
       await assertPersistenceBundle(root, pin, "old");
     }
-    const reopened = await runPersistenceChild(root, { action: "read" });
+    const reopened = await runPersistenceChild(root, { action: "read" }, signal);
     assertPersistenceSelection(root, reopened, before.pins);
     expect(reopened).toMatchObject({ kind: "selected", available: [] });
     expect(readPersistenceDisk(root)).toEqual(removed);
@@ -55,15 +57,16 @@ describe("skill library persistence across process lifetimes", () => {
   // Restart/byte persistence above still runs there; these two tests prove the POSIX crash path.
   it.runIf(process.platform !== "win32")(
     "keeps the original pointer and pin when a publisher is killed after all filesystem publication syncs",
-    async () => {
+    async ({ signal }) => {
       const root = await makeRoot();
-      await runPersistenceChild(root, { action: "seed" });
+      await runPersistenceChild(root, { action: "seed" }, signal);
       const before = readPersistenceDisk(root);
       const pin = before.pins[0]!;
       let orphanRevision = "";
       await withPersistenceChild(
         root,
         { action: "publish-hold", pin, version: "orphan" },
+        signal,
         async (reply, child) => {
           expect(reply.kind).toBe("published");
           if (reply.kind !== "published") {
@@ -88,14 +91,14 @@ describe("skill library persistence across process lifetimes", () => {
       expect(readPersistenceDisk(root)).toEqual(before);
       assertPersistenceSelection(
         root,
-        await runPersistenceChild(root, { action: "read" }),
+        await runPersistenceChild(root, { action: "read" }, signal),
         before.pins,
       );
       for (const selected of before.pins) {
         await assertPersistenceBundle(root, selected, "old");
       }
 
-      await runPersistenceChild(root, { action: "save", pin, version: "new" });
+      await runPersistenceChild(root, { action: "save", pin, version: "new" }, signal);
       const recovered = readPersistenceDisk(root);
       expect(recovered.revisions.some((row) => row.revision === orphanRevision)).toBe(false);
       expect(recovered.events.some((row) => row.revision === orphanRevision)).toBe(false);
@@ -108,7 +111,7 @@ describe("skill library persistence across process lifetimes", () => {
       await assertPersistenceBundle(root, { ...pin, revision: orphanRevision }, "orphan", false);
       assertPersistenceSelection(
         root,
-        await runPersistenceChild(root, { action: "read" }),
+        await runPersistenceChild(root, { action: "read" }, signal),
         before.pins,
       );
     },
@@ -116,9 +119,9 @@ describe("skill library persistence across process lifetimes", () => {
 
   it.runIf(process.platform !== "win32")(
     "cleans only an aged owned dead-publisher stage while retaining live, recent, ambiguous, linked, and published content",
-    async () => {
+    async ({ signal }) => {
       const root = await makeRoot();
-      await runPersistenceChild(root, { action: "seed" });
+      await runPersistenceChild(root, { action: "seed" }, signal);
       const before = readPersistenceDisk(root);
       const pin = before.pins[0]!;
       const oldTime = new Date(Date.now() - 24 * 60 * 60 * 1_000);
@@ -127,6 +130,7 @@ describe("skill library persistence across process lifetimes", () => {
       await withPersistenceChild(
         root,
         { action: "stage-hold", pin, version: "new" },
+        signal,
         async (live, liveChild) => {
           if (live.kind !== "staged") {
             throw new Error("Expected a real live publisher stage");
@@ -137,6 +141,7 @@ describe("skill library persistence across process lifetimes", () => {
           await withPersistenceChild(
             root,
             { action: "stage-hold", pin, version: "orphan" },
+            signal,
             async (dead, child) => {
               if (dead.kind !== "staged") {
                 throw new Error("Expected a real abandoned publisher stage");
@@ -173,7 +178,7 @@ describe("skill library persistence across process lifetimes", () => {
           await fs.writeFile(ordinaryFile, "not a staging directory");
           await fs.utimes(ordinaryFile, oldTime, oldTime);
 
-          await runPersistenceChild(root, { action: "save", pin, version: "new" });
+          await runPersistenceChild(root, { action: "save", pin, version: "new" }, signal);
           await expect(fs.lstat(deadStage)).rejects.toMatchObject({ code: "ENOENT" });
           expect(process.kill(liveChild.pid, 0)).toBe(true);
           await assertPersistenceFiles(live.directory, "new");
@@ -193,7 +198,7 @@ describe("skill library persistence across process lifetimes", () => {
           }
           assertPersistenceSelection(
             root,
-            await runPersistenceChild(root, { action: "read" }),
+            await runPersistenceChild(root, { action: "read" }, signal),
             before.pins,
           );
           await liveChild.kill();

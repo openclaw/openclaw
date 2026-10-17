@@ -534,7 +534,7 @@ export function defineInstallerNpmFreshnessContract({
       const installPrefix = join(root, "prefix");
       const home = join(root, "home");
       const project = join(root, "project");
-      const nodeDir = join(installPrefix, "tools", "node-v24.19.0");
+      const nodeDir = join(installPrefix, "tools", "node-v24.21.0");
       const bin = prefix ? join(nodeDir, "bin") : join(root, "bin");
       const argsLog = join(root, "npm-args.log");
       if (prefix) {

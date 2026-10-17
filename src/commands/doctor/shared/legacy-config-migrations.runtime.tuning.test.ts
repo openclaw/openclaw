@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
@@ -23,20 +22,14 @@ describe("retired tuning notices", () => {
 
   it("keeps removed wildcard paths on one notice line", () => {
     const raw = {
-      agents: {
-        defaults: {
-          cliBackends: { "local\nlegacy": { reliability: { outputLimits: {} } } },
-        },
-      },
+      channels: { "local\nlegacy": { streaming: { progress: { render: {} } } } },
     };
     const changes: string[] = [];
-    const migration = expectDefined(
-      LEGACY_CONFIG_MIGRATIONS.find(({ id }) => id === "runtime.tuning-knobs-purge"),
-      "tuning-knob migration",
-    );
-    migration.apply(raw, changes);
+    for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+      migration.apply(raw, changes);
+    }
     expect(changes).toEqual([
-      "Removed retired runtime tuning knobs: agents.defaults.cliBackends.local\\nlegacy.reliability.outputLimits; built-in defaults now apply.",
+      "Removed retired runtime tuning knobs: channels.local\\nlegacy.streaming.progress.render; built-in defaults now apply.",
     ]);
   });
 });

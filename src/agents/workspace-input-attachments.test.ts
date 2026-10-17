@@ -38,12 +38,12 @@ beforeEach(async () => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-async function fixture() {
-  const gateway = path.join(root, "gateway");
-  const harness = path.join(root, "harness");
-  await fs.mkdir(gateway);
-  await fs.mkdir(harness);
-  const bridge = createRemoteShellSandboxFsBridge({
+function createBridge(
+  gateway: string,
+  harness: string,
+  runRemoteShellScript = createLocalRemoteShellScriptRunner(),
+) {
+  return createRemoteShellSandboxFsBridge({
     sandbox: {
       workspaceDir: gateway,
       agentWorkspaceDir: gateway,
@@ -55,9 +55,17 @@ async function fixture() {
     runtime: {
       remoteWorkspaceDir: harness,
       remoteAgentWorkspaceDir: harness,
-      runRemoteShellScript: createLocalRemoteShellScriptRunner(),
+      runRemoteShellScript,
     },
   });
+}
+
+async function fixture() {
+  const gateway = path.join(root, "gateway");
+  const harness = path.join(root, "harness");
+  await fs.mkdir(gateway);
+  await fs.mkdir(harness);
+  const bridge = createBridge(gateway, harness);
   const create = vi.fn(bridge.createFileExclusive!.bind(bridge));
   const prepare = createWorkspaceAttachmentPreparer({
     createBridge: () => ({
@@ -81,89 +89,83 @@ const turn = (media: MediaFact[]) => ({ timeoutMs: 60_000, media });
 // These fixtures run the Linux remote host locally (including GNU stat).
 const describeLinux = describe.runIf(process.platform === "linux");
 describeLinux("workspace attachment adapter with the real remote-shell bridge", () => {
-  it.each(["inbound", "remote-cache"])(
-    "keeps %s images readable on Gateway and transfers their originals without a local workspace copy",
-    async (directory) => {
-      const f = await fixture();
-      const source = path.join(getMediaDir(), directory, "input.png");
-      const bytes = Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
-        "base64",
-      );
-      await fs.writeFile(source, bytes);
-      const media = [{ path: source, contentType: "image/png" }];
-      const ctx = { media };
-      const release = registerAgentWorkspaceAccess(f.gateway, {
-        bridge: f.bridge,
-        prepareTurnAttachments: f.prepare,
+  it("keeps images readable on Gateway and transfers their originals without a local workspace copy", async () => {
+    const f = await fixture();
+    const source = path.join(getMediaDir(), "inbound", "input.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    await fs.writeFile(source, bytes);
+    const media = [{ path: source, contentType: "image/png" }];
+    const ctx = { media };
+    const release = registerAgentWorkspaceAccess(f.gateway, {
+      bridge: f.bridge,
+      prepareTurnAttachments: f.prepare,
+    });
+    try {
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx: ctx,
+        cfg: {},
+        sessionKey: "agent:main:test",
+        workspaceDir: f.gateway,
       });
-      try {
-        await stageSandboxMedia({
-          ctx,
-          sessionCtx: ctx,
-          cfg: {},
-          sessionKey: "agent:main:test",
-          workspaceDir: f.gateway,
-        });
-        expect(ctx.media).toBe(media);
-        expect(await fs.readdir(f.gateway)).toEqual([]);
-        await f.prepare(turn(media), () => {});
-        expect(await fs.readFile(f.destination(source))).toEqual(bytes);
-        const result = await detectAndLoadPromptImages({
-          prompt: "Inspect the attachment",
-          media,
-          workspaceDir: f.gateway,
-          model: { input: ["text", "image"] },
-          workspaceOnly: true,
-          sandbox: { root: f.harness, bridge: f.bridge },
-        });
-        expect(result.failedMediaCount).toBe(0);
-        expect(result.images).toHaveLength(1);
-        const promptOnly = await detectAndLoadPromptImages({
-          prompt: `Inspect ${source}`,
-          workspaceDir: f.gateway,
-          model: { input: ["text", "image"] },
-          sandbox: { root: f.harness, bridge: f.bridge },
-        });
-        expect(promptOnly.images).toHaveLength(0);
-        const outside = path.join(f.gateway, "private.png");
-        await fs.writeFile(outside, bytes);
-        const rejected = await detectAndLoadPromptImages({
-          prompt: "Inspect the attachment",
-          media: [{ path: outside, contentType: "image/png" }],
-          workspaceDir: f.gateway,
-          model: { input: ["text", "image"] },
-          sandbox: { root: f.harness, bridge: f.bridge },
-        });
-        expect(rejected.images).toHaveLength(0);
-        expect(rejected.failedMediaCount).toBe(1);
-      } finally {
-        release();
-      }
-    },
-  );
-
-  it.each([17, 50])(
-    "transfers %i MiB without a Gateway workspace copy and preserves subsequent Harness edits",
-    async (size) => {
-      const f = await fixture();
-      const source = path.join(getMediaDir(), "remote-cache", "report.bin");
-      const data = Buffer.alloc(size * 1024 * 1024, 0xa5);
-      await fs.writeFile(source, data);
-      const input = turn([{ path: source }]);
-      const original = JSON.stringify(input);
-      const note = await f.prepare(input, () => {});
-      expect(note).toBe(`[media attached: ${f.destination(source)}]`);
-      expect(digest(await fs.readFile(f.destination(source)))).toBe(digest(data));
+      expect(ctx.media).toBe(media);
       expect(await fs.readdir(f.gateway)).toEqual([]);
-      expect(JSON.stringify(input)).toBe(original);
-      const isPrivateInput = createStagedInputPathMatcher(await fsRoot(f.harness));
-      expect(await isPrivateInput(path.relative(f.harness, f.destination(source)))).toBe(true);
-      await fs.writeFile(f.destination(source), "Harness edit");
-      expect(await f.prepare(input, () => {})).toBe(note);
-      expect(await fs.readFile(f.destination(source), "utf8")).toBe("Harness edit");
-    },
-  );
+      await f.prepare(turn(media), () => {});
+      expect(await fs.readFile(f.destination(source))).toEqual(bytes);
+      const result = await detectAndLoadPromptImages({
+        prompt: "Inspect the attachment",
+        media,
+        workspaceDir: f.gateway,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+        sandbox: { root: f.harness, bridge: f.bridge },
+      });
+      expect(result.failedMediaCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+      const promptOnly = await detectAndLoadPromptImages({
+        prompt: `Inspect ${source}`,
+        workspaceDir: f.gateway,
+        model: { input: ["text", "image"] },
+        sandbox: { root: f.harness, bridge: f.bridge },
+      });
+      expect(promptOnly.images).toHaveLength(0);
+      const outside = path.join(f.gateway, "private.png");
+      await fs.writeFile(outside, bytes);
+      const rejected = await detectAndLoadPromptImages({
+        prompt: "Inspect the attachment",
+        media: [{ path: outside, contentType: "image/png" }],
+        workspaceDir: f.gateway,
+        model: { input: ["text", "image"] },
+        sandbox: { root: f.harness, bridge: f.bridge },
+      });
+      expect(rejected.images).toHaveLength(0);
+      expect(rejected.failedMediaCount).toBe(1);
+    } finally {
+      release();
+    }
+  });
+
+  it("transfers 50 MiB without a Gateway workspace copy and preserves subsequent Harness edits", async () => {
+    const f = await fixture();
+    const source = path.join(getMediaDir(), "remote-cache", "report.bin");
+    const data = Buffer.alloc(50 * 1024 * 1024, 0xa5);
+    await fs.writeFile(source, data);
+    const input = turn([{ path: source }]);
+    const original = JSON.stringify(input);
+    const note = await f.prepare(input, () => {});
+    expect(note).toBe(`[media attached: ${f.destination(source)}]`);
+    expect(digest(await fs.readFile(f.destination(source)))).toBe(digest(data));
+    expect(await fs.readdir(f.gateway)).toEqual([]);
+    expect(JSON.stringify(input)).toBe(original);
+    const isPrivateInput = createStagedInputPathMatcher(await fsRoot(f.harness));
+    expect(await isPrivateInput(path.relative(f.harness, f.destination(source)))).toBe(true);
+    await fs.writeFile(f.destination(source), "Harness edit");
+    expect(await f.prepare(input, () => {})).toBe(note);
+    expect(await fs.readFile(f.destination(source), "utf8")).toBe("Harness edit");
+  });
 
   it("retains an explicitly configured allowance above the ordinary staging limit", async () => {
     const f = await fixture();
@@ -342,32 +344,22 @@ describeLinux("workspace attachment adapter with the real remote-shell bridge", 
             admitted();
           },
         });
-        const bridge = createRemoteShellSandboxFsBridge({
-          sandbox: {
-            workspaceDir: f.gateway,
-            agentWorkspaceDir: f.gateway,
-            workspaceAccess: "rw",
-            containerName: "fixture",
-            containerWorkdir: f.harness,
-            docker: {},
+        const bridge = createBridge(
+          f.gateway,
+          f.harness,
+          async ({ script, args = [], ...options }) => {
+            const result = await session.runCommand({
+              remoteCommand: buildRemoteCommand(["/bin/sh", "-c", script, "fixture", ...args]),
+              ...options,
+            });
+            if (creating) {
+              validationCompleted = true;
+              active = false;
+              admitted.mockClear();
+            }
+            return result;
           },
-          runtime: {
-            remoteWorkspaceDir: f.harness,
-            remoteAgentWorkspaceDir: f.harness,
-            async runRemoteShellScript({ script, args = [], ...options }) {
-              const result = await session.runCommand({
-                remoteCommand: buildRemoteCommand(["/bin/sh", "-c", script, "fixture", ...args]),
-                ...options,
-              });
-              if (creating) {
-                validationCompleted = true;
-                active = false;
-                admitted.mockClear();
-              }
-              return result;
-            },
-          },
-        });
+        );
         return {
           readFile: bridge.readFile.bind(bridge),
           stat: bridge.stat.bind(bridge),

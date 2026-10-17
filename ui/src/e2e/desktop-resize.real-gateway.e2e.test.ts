@@ -23,7 +23,10 @@ import {
   type GatewayReadinessDiagnostic,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createDesktopResizeGuest,
@@ -146,7 +149,7 @@ async function captureDesktopSockets(page: Page) {
   // No connection, RFB authentication, RPC, or bridge is replaced.
   await page.addInitScript(() => {
     localStorage.setItem(
-      "openclaw:control-ui:community-invite",
+      "openclaw:control-ui:community-invite:v2",
       JSON.stringify({ dismissedAtMs: 1770000000000 }),
     );
     const NativeSocket = window.WebSocket;
@@ -279,7 +282,7 @@ suite.define(() => {
             },
             gateway: {
               auth: { mode: "trusted-proxy", password: gatewayToken, trustedProxy },
-              // The Gateway approves the local device; the fixture approves its command surface.
+              // The Gateway approves the local device and its initial command surface.
               nodes: { pairing: { autoApproveLocal: true } },
               controlUi: {
                 enabled: true,
@@ -394,7 +397,9 @@ suite.define(() => {
           const assets = new Map<string, string>();
           const assetReads: Promise<unknown>[] = [];
           page.on("response", (response) => {
-            if (/\/assets\/(?:index|desktop)[^/]*\.js$/u.test(new URL(response.url()).pathname)) {
+            if (
+              /\/assets\/(?:index|desktop|novnc-)[^/]*\.js$/u.test(new URL(response.url()).pathname)
+            ) {
               assetReads.push(
                 response.body().then(
                   (bytes) =>
@@ -411,6 +416,7 @@ suite.define(() => {
           await page.goto(new URL("activity", baseUrl).href);
           phase("ui-ready");
           await waitForControlUiGatewayReady(page);
+          await waitForControlUiRoute(page, { routeId: "activity" });
           await page.evaluate(() => {
             window.dispatchEvent(
               new CustomEvent("openclaw:desktop-toggle", {
@@ -429,15 +435,13 @@ suite.define(() => {
               JSON.stringify(
                 {
                   panel: await panel.evaluate((element) => ({
-                    html: element.shadowRoot?.innerHTML,
+                    html: element.innerHTML,
                     bounds: element.getBoundingClientRect().toJSON(),
-                    canvases: [...(element.shadowRoot?.querySelectorAll("canvas") ?? [])].map(
-                      (surface) => ({
-                        width: surface.width,
-                        height: surface.height,
-                        bounds: surface.getBoundingClientRect().toJSON(),
-                      }),
-                    ),
+                    canvases: [...element.querySelectorAll("canvas")].map((surface) => ({
+                      width: surface.width,
+                      height: surface.height,
+                      bounds: surface.getBoundingClientRect().toJSON(),
+                    })),
                   })),
                   sockets: await page.evaluate(() =>
                     (
@@ -634,7 +638,12 @@ suite.define(() => {
             await verifyMatch(stage, observerCanvas);
             expect(
               await observerPanel.locator(".desktop-touch-action, .desktop-sizing").count(),
-            ).toBe(5);
+            ).toBe(6);
+            expect(
+              await observerPanel
+                .getByRole("button", { name: "Audio unavailable", exact: true })
+                .isDisabled(),
+            ).toBe(true);
           }
           const colorCount = await sampledFramebufferColors(observerCanvas);
           expect(colorCount).toBeGreaterThan(8);

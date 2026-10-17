@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "../app-server/client.js";
+import { readCodexExperimentalFeature } from "../app-server/experimental-features.js";
 import type { CodexExperimentalFeatureListResponse } from "../app-server/protocol-control-plane.js";
 import type {
   CodexConfigReadResponse,
@@ -158,21 +160,13 @@ async function readNativeCredential(
   if (mode === "file") {
     record = await readAuthFile(home);
   } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
-    let cursor: string | undefined;
-    let encrypted: boolean | undefined;
-    do {
-      const features = await client.request<CodexExperimentalFeatureListResponse>(
-        "experimentalFeature/list",
-        { limit: 100, cursor },
-        { signal },
-      );
-      const storage = features.data.find((feature) => feature.name === "secret_auth_storage");
-      if (storage) {
-        encrypted = storage.enabled;
-        break;
-      }
-      cursor = features.nextCursor ?? undefined;
-    } while (cursor);
+    const encrypted = await readCodexExperimentalFeature(
+      (params) =>
+        client.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params, {
+          signal,
+        }),
+      "secret_auth_storage",
+    );
     if (encrypted !== false) {
       return undefined;
     }
@@ -200,15 +194,8 @@ async function readNativeCredential(
 }
 
 function jwtExpiry(token: string): number | undefined {
-  try {
-    const data = asOptionalRecord(
-      JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")),
-    );
-    const exp = data?.exp;
-    return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
-  } catch {
-    return undefined;
-  }
+  const exp = decodeOpenAICodexJwtPayload(token)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
 }
 
 function parseOAuthCredential(data: Record<string, unknown>): CodexCliCredential | undefined {

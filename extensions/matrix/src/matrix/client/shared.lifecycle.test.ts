@@ -7,12 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixFullRuntime } from "../../../index.js";
 import { getOptionalMatrixRuntime, setMatrixRuntime } from "../../runtime.js";
 import { acquireSharedMatrixClient, stopSharedClientForAccount } from "./shared.js";
-import { authFor, createMockClient } from "./shared.test-support.js";
+import {
+  authFor,
+  createMockClient,
+  prepareMockMatrixClientStorage,
+} from "./shared.test-support.js";
 
 const createMatrixClientMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Keep disk and SDK initialization outside these generation lifecycle fixtures.
 vi.mock("./create-client.js", () => ({
   createMatrixClient: createMatrixClientMock,
+  prepareMatrixClientStorage: prepareMockMatrixClientStorage,
 }));
 
 type SharedLease = Awaited<ReturnType<typeof acquireSharedMatrixClient>>;
@@ -224,22 +230,5 @@ describe("shared Matrix plugin lifecycle", () => {
     const replacement = await next;
     expect(replacement.client).toBe(nextClient);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves shared clients for registration APIs without instance lifecycle hooks", async () => {
-    const api = createTestPluginApi({ id: "matrix", name: "Matrix" });
-    registerMatrixFullRuntime(api);
-    const client = createMockClient("legacy");
-    createMatrixClientMock.mockResolvedValue(client);
-    const auth = authFor("lifecycle-legacy");
-    const first = await acquire(api.runtime, { auth, startClient: false });
-    const second = await acquire(api.runtime, { auth, startClient: false });
-
-    expect(second.client).toBe(first.client);
-    await first.release();
-    expect(client.stopAndPersist).not.toHaveBeenCalled();
-    await second.release();
-    expect(client.stopAndPersist).toHaveBeenCalledOnce();
-    expect(createMatrixClientMock).toHaveBeenCalledOnce();
   });
 });

@@ -2,16 +2,6 @@
 import Foundation
 import WebKit
 
-#if os(iOS)
-import UIKit
-
-typealias ChatInlineWidgetSnapshotImage = UIImage
-#elseif os(macOS)
-import AppKit
-
-typealias ChatInlineWidgetSnapshotImage = NSImage
-#endif
-
 struct ChatInlineWidgetSnapshotRequest: Equatable {
     enum Action: Equatable {
         case copy
@@ -25,7 +15,7 @@ struct ChatInlineWidgetSnapshotRequest: Equatable {
 }
 
 enum ChatInlineWidgetSnapshotOutcome {
-    case success(ChatInlineWidgetSnapshotRequest, ChatInlineWidgetSnapshotImage)
+    case success(ChatInlineWidgetSnapshotRequest, OpenClawPlatformImage)
     case failure(ChatInlineWidgetSnapshotRequest)
 }
 
@@ -33,8 +23,6 @@ enum ChatInlineWidgetSnapshotOutcome {
 final class ChatInlineWidgetSnapshotCapture {
     private var request: ChatInlineWidgetSnapshotRequest?
     private weak var webView: WKWebView?
-    private var generation: UUID?
-    private var resource: OpenClawChatWidgetResource?
 
     func capture(
         _ request: ChatInlineWidgetSnapshotRequest?,
@@ -43,7 +31,7 @@ final class ChatInlineWidgetSnapshotCapture {
         resource: OpenClawChatWidgetResource,
         onSnapshot: @escaping @MainActor @Sendable (ChatInlineWidgetSnapshotOutcome) -> Void)
     {
-        if self.webView !== webView || self.generation != generation || self.resource != resource {
+        if self.webView !== webView || self.request?.generation != generation || self.request?.resource != resource {
             self.invalidate()
         }
         guard let request,
@@ -53,16 +41,12 @@ final class ChatInlineWidgetSnapshotCapture {
         else { return }
         self.request = request
         self.webView = webView
-        self.generation = generation
-        self.resource = resource
 
         webView.takeSnapshot(with: WKSnapshotConfiguration()) { [weak self, weak webView] image, _ in
             guard let self,
                   let webView,
                   self.request == request,
-                  self.webView === webView,
-                  self.generation == request.generation,
-                  self.resource == request.resource
+                  self.webView === webView
             else { return }
             self.invalidate()
             onSnapshot(image.map { .success(request, $0) } ?? .failure(request))
@@ -72,8 +56,6 @@ final class ChatInlineWidgetSnapshotCapture {
     func invalidate() {
         self.request = nil
         self.webView = nil
-        self.generation = nil
-        self.resource = nil
     }
 }
 #endif

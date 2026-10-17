@@ -11,6 +11,7 @@ export function createToolingIsolatedVitestConfig(env?: Record<string, string | 
     isolate: true,
     name: "tooling-isolated",
     passWithNoTests: true,
+    pool: "forks",
     useNonIsolatedRunner: false,
   });
 }

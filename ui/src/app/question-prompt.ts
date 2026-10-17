@@ -1,15 +1,15 @@
+import type { QuestionRecord } from "@openclaw/gateway-client/browser";
 import {
   asSafeIntegerInRange,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
-  Question,
   QuestionAnswers,
-  QuestionRecord,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -36,14 +36,13 @@ export type QuestionDraft = {
 
 type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
 
-export type QuestionPrompt = {
-  id: string;
-  questions: Question[];
+export type QuestionPrompt = Pick<
+  QuestionRecord,
+  "id" | "questions" | "createdAtMs" | "expiresAtMs"
+> & {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  createdAtMs: number;
-  expiresAtMs: number;
   status: QuestionPromptStatus;
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
@@ -60,14 +59,14 @@ export type QuestionPrompt = {
 type QuestionPromptState = QuestionClientResolutionOwner & {
   ownerClient: QuestionClient | null;
   prompts: Map<string, QuestionPrompt>;
+  readonly snapshot: QuestionPrompt[];
   unmatchedResolutions: Map<string, QuestionResolvedEvent>;
   revision: number;
   expiryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   onChange: () => void;
+  subscribe: (listener: () => void) => () => void;
 };
-
-type QuestionAnswerValues = Record<string, string[]>;
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
@@ -81,10 +80,7 @@ function parseQuestionAnswers(value: unknown): QuestionAnswers | null {
   }
   const answers: QuestionAnswers["answers"] = {};
   for (const [questionId, answerValue] of Object.entries(value.answers)) {
-    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !Array.isArray(answerValue)) {
-      return null;
-    }
-    if (!answerValue.every((answer) => typeof answer === "string")) {
+    if (!/^[a-z][a-z0-9_]*$/.test(questionId) || !isStringArray(answerValue)) {
       return null;
     }
     answers[questionId] = [...answerValue];
@@ -158,14 +154,8 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   if (payload.status === "pending") {
     return { ...base, status: "pending" };
   }
-  if (payload.status === "answered") {
-    const answers = parseQuestionAnswers(payload.answers);
-    return answers ? { ...base, status: "answered", answers } : null;
-  }
-  if (payload.status === "cancelled") {
-    return { ...base, status: "cancelled" };
-  }
-  return payload.status === "expired" ? { ...base, status: "expired" } : null;
+  const resolved = parseQuestionResolvedEvent(payload);
+  return resolved ? { ...base, ...resolved } : null;
 }
 
 function parseQuestionRequestedEvent(payload: unknown): QuestionRecord | null {
@@ -191,27 +181,49 @@ function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | n
   return null;
 }
 
-export function createQuestionPromptState(onChange: () => void): QuestionPromptState {
+export function createQuestionPromptState(onChange: () => void = () => {}): QuestionPromptState {
+  const listeners = new Set<() => void>();
+  let snapshot: QuestionPrompt[] = [];
   const state: QuestionPromptState = {
     client: null,
     ownerClient: null,
     clientGeneration: 0,
     prompts: new Map(),
+    get snapshot() {
+      return snapshot;
+    },
     unmatchedResolutions: new Map(),
     revision: 0,
     expiryTimer: null,
     refreshRetryTimer: null,
-    onChange,
+    onChange: () => {
+      snapshot = [...state.prompts.values()].toSorted(
+        (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
+      );
+      onChange();
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    subscribe: (listener) => registerListener(listeners, listener),
     onQuestionResolution: (resolution) => recordQuestionResolution(state, resolution),
   };
   return state;
 }
 
-function scheduleExpiry(state: QuestionPromptState): void {
-  if (state.expiryTimer) {
-    globalThis.clearTimeout(state.expiryTimer);
-    state.expiryTimer = null;
+function clearQuestionPromptTimer(
+  state: QuestionPromptState,
+  field: "expiryTimer" | "refreshRetryTimer",
+): void {
+  const timer = state[field];
+  if (timer) {
+    globalThis.clearTimeout(timer);
+    state[field] = null;
   }
+}
+
+function scheduleExpiry(state: QuestionPromptState): void {
+  clearQuestionPromptTimer(state, "expiryTimer");
   let nextExpiry = Infinity;
   for (const prompt of state.prompts.values()) {
     if (prompt.status === "pending") {
@@ -246,31 +258,22 @@ function scheduleExpiry(state: QuestionPromptState): void {
   );
 }
 
-function promptFromRecord(
+function storeQuestionRecord(
   state: QuestionPromptState,
+  id: string,
   record: QuestionRecord,
   previous?: QuestionPrompt,
-): QuestionPrompt {
+): void {
   const revision = ++state.revision;
   const drafts = previous?.drafts ?? new Map();
   if (record.status !== "pending") {
     clearSecretQuestionDrafts(record.questions, drafts);
   }
-  return {
-    id: record.id,
-    questions: record.questions,
-    ...(record.agentId ? { agentId: record.agentId } : {}),
-    ...(record.sessionKey ? { sessionKey: record.sessionKey } : {}),
-    ...(record.runId ? { runId: record.runId } : {}),
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-    status: record.status,
-    ...(record.status === "answered" ? { answers: record.answers } : {}),
+  const prompt: QuestionPrompt = {
+    ...record,
     ...(previous?.submittedAnswers ? { submittedAnswers: previous.submittedAnswers } : {}),
     answeredElsewhere:
-      record.status === "answered"
-        ? !(previous?.localResolutionConfirmed ?? false) && !(previous?.submitting ?? false)
-        : false,
+      record.status === "answered" && !previous?.localResolutionConfirmed && !previous?.submitting,
     localResolutionConfirmed: previous?.localResolutionConfirmed ?? false,
     locallyExpired: false,
     submitting:
@@ -285,6 +288,12 @@ function promptFromRecord(
       : {}),
     revision,
   };
+  const unmatched = state.unmatchedResolutions.get(id);
+  if (unmatched) {
+    state.unmatchedResolutions.delete(id);
+    applyQuestionResolution(state, prompt, unmatched);
+  }
+  state.prompts.set(id, prompt);
 }
 
 function applyQuestionResolution(
@@ -348,13 +357,7 @@ export function handleQuestionPromptEvent(
     if (previous && previous.status !== "pending") {
       return true;
     }
-    const prompt = promptFromRecord(state, record, previous);
-    const unmatched = state.unmatchedResolutions.get(record.id);
-    if (unmatched) {
-      state.unmatchedResolutions.delete(record.id);
-      applyQuestionResolution(state, prompt, unmatched);
-    }
-    state.prompts.set(record.id, prompt);
+    storeQuestionRecord(state, record.id, record, previous);
     scheduleExpiry(state);
     state.onChange();
     return true;
@@ -378,11 +381,7 @@ function parseQuestionListResult(value: unknown): QuestionRecord[] | null {
   return questions.every((question) => question !== null) ? questions : null;
 }
 
-function parseQuestionGetResult(value: unknown): QuestionRecord | null {
-  return isRecord(value) ? parseQuestionRecord(value.question) : null;
-}
-
-function isQuestionNotFoundError(error: unknown): boolean {
+export function isQuestionNotFoundError(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&
     isRecord(error.details) &&
@@ -407,7 +406,7 @@ function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPro
 async function refreshPendingQuestions(
   state: QuestionPromptState,
   client: QuestionClient,
-  isCurrentClient: () => boolean = () => state.client === client,
+  isCurrentClient: () => boolean,
 ): Promise<boolean> {
   const startedAtRevision = state.revision;
   const listResult = await requestQuestionGateway(client, "question.list", {});
@@ -423,13 +422,7 @@ async function refreshPendingQuestions(
   for (const record of records) {
     const previous = state.prompts.get(record.id);
     if (!previous || previous.revision <= startedAtRevision || previous.locallyExpired) {
-      const prompt = promptFromRecord(state, record, previous);
-      const unmatched = state.unmatchedResolutions.get(record.id);
-      if (unmatched) {
-        state.unmatchedResolutions.delete(record.id);
-        applyQuestionResolution(state, prompt, unmatched);
-      }
-      state.prompts.set(record.id, prompt);
+      storeQuestionRecord(state, record.id, record, previous);
     }
   }
   scheduleExpiry(state);
@@ -492,17 +485,11 @@ async function refreshPendingQuestions(
         state.onChange();
         return true;
       }
-      const record = parseQuestionGetResult(result.value);
+      const record = isRecord(result.value) ? parseQuestionRecord(result.value.question) : null;
       if (!record) {
         return false;
       }
-      const prompt = promptFromRecord(state, record, current);
-      const unmatched = state.unmatchedResolutions.get(candidate.id);
-      if (unmatched) {
-        state.unmatchedResolutions.delete(candidate.id);
-        applyQuestionResolution(state, prompt, unmatched);
-      }
-      state.prompts.set(candidate.id, prompt);
+      storeQuestionRecord(state, candidate.id, record, current);
       scheduleExpiry(state);
       // Publish each settled recovery immediately; a hung sibling must never
       // withhold an already-authoritative answer until its own deadline.
@@ -549,10 +536,7 @@ export function setQuestionPromptClient(
   state: QuestionPromptState,
   client: QuestionClient | null,
 ): void {
-  if (state.refreshRetryTimer) {
-    globalThis.clearTimeout(state.refreshRetryTimer);
-    state.refreshRetryTimer = null;
-  }
+  clearQuestionPromptTimer(state, "refreshRetryTimer");
   if (state.client === client) {
     return;
   }
@@ -571,10 +555,7 @@ export function setQuestionPromptClient(
 
   if (ownerChanged) {
     const changed = state.prompts.size > 0 || state.unmatchedResolutions.size > 0;
-    if (state.expiryTimer) {
-      globalThis.clearTimeout(state.expiryTimer);
-      state.expiryTimer = null;
-    }
+    clearQuestionPromptTimer(state, "expiryTimer");
     state.prompts.clear();
     state.unmatchedResolutions.clear();
     if (changed) {
@@ -609,14 +590,8 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
   if (state.client) {
     unregisterQuestionClientOwner(state.client, state);
   }
-  if (state.expiryTimer) {
-    globalThis.clearTimeout(state.expiryTimer);
-    state.expiryTimer = null;
-  }
-  if (state.refreshRetryTimer) {
-    globalThis.clearTimeout(state.refreshRetryTimer);
-    state.refreshRetryTimer = null;
-  }
+  clearQuestionPromptTimer(state, "expiryTimer");
+  clearQuestionPromptTimer(state, "refreshRetryTimer");
   state.clientGeneration += 1;
   // Retained records belong to the previous client: remount on it may recover
   // them, while a different Gateway must still recognize and purge its state.
@@ -626,7 +601,7 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
 async function resolveQuestionPrompt(
   state: QuestionPromptState,
   id: string,
-  resolution: { answers: QuestionAnswerValues } | { cancel: true },
+  resolution: { answers: QuestionAnswers["answers"] } | { cancel: true },
 ): Promise<void> {
   const prompt = state.prompts.get(id);
   const client = state.client;
@@ -682,11 +657,7 @@ async function resolveQuestionPrompt(
     current.submitting = false;
     if (current.status === "pending") {
       current.error = formatUiError(error);
-      current.revision = ++state.revision;
-      state.onChange();
-      return;
-    }
-    if (current.status === "answered" && !current.localResolutionConfirmed) {
+    } else if (current.status === "answered" && !current.localResolutionConfirmed) {
       current.answeredElsewhere = !questionAnswersEqual(current.submittedAnswers, current.answers);
     }
     current.revision = ++state.revision;
@@ -697,7 +668,7 @@ async function resolveQuestionPrompt(
 export async function submitQuestionPrompt(
   state: QuestionPromptState,
   id: string,
-  answers: QuestionAnswerValues,
+  answers: QuestionAnswers["answers"],
 ): Promise<void> {
   await resolveQuestionPrompt(state, id, { answers });
 }
@@ -707,7 +678,5 @@ export async function cancelQuestionPrompt(state: QuestionPromptState, id: strin
 }
 
 export function listQuestionPrompts(state: QuestionPromptState): QuestionPrompt[] {
-  return [...state.prompts.values()].toSorted(
-    (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
-  );
+  return state.snapshot;
 }

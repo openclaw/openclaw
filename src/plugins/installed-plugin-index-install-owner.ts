@@ -1,4 +1,3 @@
-type InstalledPluginIndexInstallOwner = { installOwner?: string; ambiguous?: true };
 type InstalledPluginIndexRecordWithOwner = {
   installOwner?: string;
   installOwnerAmbiguous?: true;
@@ -23,21 +22,12 @@ export function recordInstalledPluginIndexInstallOwner<T extends object>(
   return record;
 }
 
-function readInstalledPluginIndexInstallOwner(
-  record: object,
-): InstalledPluginIndexInstallOwner | undefined {
-  const ownedRecord = record as InstalledPluginIndexRecordWithOwner;
-  return ownedRecord.installOwnerAmbiguous
-    ? { ambiguous: true }
-    : ownedRecord.installOwner
-      ? { installOwner: ownedRecord.installOwner }
-      : undefined;
-}
-
 export function resolveInstalledPluginIndexInstallOwner(record: object): string | undefined {
-  return readInstalledPluginIndexInstallOwner(record)?.installOwner;
+  const ownedRecord = record as InstalledPluginIndexRecordWithOwner;
+  return ownedRecord.installOwnerAmbiguous ? undefined : ownedRecord.installOwner || undefined;
 }
 
 export function isInstalledPluginIndexInstallOwnerAmbiguous(record: object): boolean {
-  return readInstalledPluginIndexInstallOwner(record)?.ambiguous === true;
+  // SAFETY: recordInstalledPluginIndexInstallOwner owns these optional record markers.
+  return Boolean((record as InstalledPluginIndexRecordWithOwner).installOwnerAmbiguous);
 }

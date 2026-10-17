@@ -11,16 +11,12 @@ function normalizeMeetKey(value?: string): string | undefined {
   if (!value) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    if (url.hostname.toLowerCase() !== "meet.google.com") {
-      return value;
-    }
-    const match = /^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:$|[/?#])/i.exec(url.pathname);
-    return match?.[1]?.toLowerCase() ?? value;
-  } catch {
+  const url = URL.parse(value);
+  if (url?.hostname.toLowerCase() !== "meet.google.com") {
     return value;
   }
+  const match = /^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:$|[/?#])/i.exec(url.pathname);
+  return match?.[1]?.toLowerCase() ?? value;
 }
 
 export const handleGoogleMeetNodeHostCommand = MeetingPlatformAdapter.createNodeHostHandler({

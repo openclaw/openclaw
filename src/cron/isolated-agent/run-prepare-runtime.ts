@@ -1,12 +1,12 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -15,35 +15,27 @@ import type {
 } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
-import type { RunCronAgentTurnResult } from "./run.types.js";
+import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
+  /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */
+  trigger?: "cron" | "event";
+  deliveryAttemptFence: CronCompletionDeliveryFence | null;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-  onLaneWait?: (info?: { waiting?: boolean }) => void;
+  onLaneWait?: CronLaneWaitCallback;
   sessionKey: string;
   agentId?: string;
   lane?: string;
   executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
-  /** Host-only root for system-owned turns; never persisted in cron state. */
-  executionRoot?: string;
-  /** Explicit instruction set for a host-owned turn, including an empty review context. */
-  skillsSnapshot?: SkillSnapshot;
 };
-
-export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
-  if (input.job.payload.kind === "agentTurn") {
-    return input.job.payload.message;
-  }
-  return input.message;
-}
 
 export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
@@ -64,10 +56,6 @@ export async function loadSessionAccessorRuntime() {
 
 export async function loadCronExternalContentRuntime() {
   return await cronExternalContentRuntimeLoader.load();
-}
-
-async function loadCronAuthProfileRuntime() {
-  return await cronAuthProfileRuntimeLoader.load();
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -101,11 +89,11 @@ export async function resolveCronAuthSelection(params: {
   if (
     !hasSessionOverride &&
     !hasConfiguredAuthProfiles(params.cfg) &&
-    !hasAnyAuthProfileStoreSource(params.agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(params.agentDir))
   ) {
     return undefined;
   }
-  const runtime = await loadCronAuthProfileRuntime();
+  const runtime = await cronAuthProfileRuntimeLoader.load();
   return await runtime.resolveSessionAuthSelection({
     agentId: params.agentId,
     cfg: params.cfg,
@@ -122,7 +110,7 @@ export async function resolveCronAuthSelection(params: {
   });
 }
 
-type CronAuthProfileRuntime = Awaited<ReturnType<typeof loadCronAuthProfileRuntime>>;
+type CronAuthProfileRuntime = typeof import("./run-auth-profile.runtime.js");
 
 export async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
@@ -151,7 +139,9 @@ export function appendCronUnattendedRunPreamble(
   commandBody: string,
   opts: { externalHook: boolean },
 ) {
-  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${SILENT_REPLY_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
+  // Keep the suffix static for prompt caching. External hooks cannot override
+  // this trusted guidance or gain permission to remove jobs through fenced content.
+  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently. If you cannot complete the task, explain what blocked it and what you tried.`;
   const trustedExtra =
     " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
   return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;

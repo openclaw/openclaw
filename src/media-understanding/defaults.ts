@@ -13,17 +13,7 @@ import {
   resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry-metadata.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
-export {
-  CLI_OUTPUT_MAX_BUFFER,
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_CHARS,
-  DEFAULT_MAX_CHARS_BY_CAPABILITY,
-  DEFAULT_MEDIA_CONCURRENCY,
-  DEFAULT_PROMPT,
-  DEFAULT_TIMEOUT_SECONDS,
-  DEFAULT_VIDEO_MAX_BASE64_BYTES,
-  MIN_AUDIO_FILE_BYTES,
-} from "./defaults.constants.js";
+export { CLI_OUTPUT_MAX_BUFFER, DEFAULT_TIMEOUT_SECONDS } from "./defaults.constants.js";
 
 function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
@@ -76,26 +66,6 @@ function isExecutionAliasProvider(providerId: string): boolean {
   return normalizeMediaProviderId(providerId) !== providerId;
 }
 
-function insertConfiguredImageProviders(params: {
-  prioritized: string[];
-  configured: string[];
-}): string[] {
-  const merged = [...params.prioritized];
-  for (const providerId of params.configured.filter(isExecutionAliasProvider)) {
-    const canonicalProviderId = normalizeMediaProviderId(providerId);
-    const canonicalIndex = merged.indexOf(canonicalProviderId);
-    if (canonicalIndex >= 0) {
-      merged.splice(canonicalIndex, 0, providerId);
-    } else {
-      merged.unshift(providerId);
-    }
-  }
-  for (const providerId of params.configured.filter((id) => !isExecutionAliasProvider(id))) {
-    merged.push(providerId);
-  }
-  return uniqueStrings(merged);
-}
-
 /** Resolves the default provider model for a media capability from config or manifest metadata. */
 export function resolveDefaultMediaModel(params: {
   providerId: string;
@@ -144,10 +114,20 @@ export function resolveAutoMediaKeyProviders(params: {
   if (params.providerRegistry || params.capability !== "image") {
     return prioritized;
   }
-  return insertConfiguredImageProviders({
-    prioritized,
-    configured: resolveConfiguredImageProviderIds(params.cfg),
-  });
+  const configured = resolveConfiguredImageProviderIds(params.cfg);
+  const merged = [...prioritized];
+  for (const providerId of configured.filter(isExecutionAliasProvider)) {
+    const canonicalIndex = merged.indexOf(normalizeMediaProviderId(providerId));
+    if (canonicalIndex >= 0) {
+      merged.splice(canonicalIndex, 0, providerId);
+    } else {
+      merged.unshift(providerId);
+    }
+  }
+  for (const providerId of configured.filter((id) => !isExecutionAliasProvider(id))) {
+    merged.push(providerId);
+  }
+  return uniqueStrings(merged);
 }
 
 /** Returns whether provider metadata declares native PDF document input support. */

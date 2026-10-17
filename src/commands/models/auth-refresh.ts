@@ -11,6 +11,26 @@ import type { RuntimeEnv } from "../../runtime.js";
 export type ModelAuthRefreshOperation = "login" | "logout" | "update";
 export type ModelAuthRefreshOutcome = "refreshed" | "gateway-rejected" | "gateway-unreachable";
 
+export async function refreshProviderAuthAfterLogin(params: {
+  agentId: string;
+  refreshAfterLogin?: (agentId: string) => Promise<void>;
+  runtime: RuntimeEnv;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+}): Promise<ModelAuthRefreshOutcome> {
+  if (!params.refreshAfterLogin) {
+    return refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
+  }
+  try {
+    await params.refreshAfterLogin(params.agentId);
+    return "refreshed";
+  } catch {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+    return "gateway-rejected";
+  }
+}
+
 export async function refreshRunningGatewayAuthState(
   agentId: string | undefined,
   operation: ModelAuthRefreshOperation,

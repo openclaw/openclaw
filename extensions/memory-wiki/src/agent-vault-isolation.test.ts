@@ -85,7 +85,7 @@ describe("agent-scoped memory-wiki tools", () => {
       // This suite registers memory-core directly; runtime discovery would load unrelated plugins.
       plugins: { enabled: false },
       agents: {
-        list: [{ id: "support", default: true }, { id: "marketing" }],
+        entries: { support: {}, marketing: {} },
       },
     } as OpenClawConfig;
     const baseConfig = resolveMemoryWikiConfig({

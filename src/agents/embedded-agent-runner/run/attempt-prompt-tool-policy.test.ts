@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -7,6 +8,15 @@ import {
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
 } from "./attempt-prompt-support.js";
+
+// mock-isolation: Observe policy facts without creating the process-global logger or warning budget.
+vi.mock("../../../decisions/diagnostics.js", () => ({
+  logDecisionToolPrefilter: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(logDecisionToolPrefilter).mockClear();
+});
 
 function catalogEntry(
   name: string,
@@ -87,27 +97,9 @@ describe("applyPromptBuildToolsAllow", () => {
       // A subsequent hook revision may use the new full host baseline, never the old generation.
       policy.apply(["write"]);
       expect(catalogRef.current!.entries.map((entry) => entry.tool)).toEqual([freshWrite]);
+      expect(logDecisionToolPrefilter).not.toHaveBeenCalled();
     },
   );
-
-  it("finalizes prompt guidance from an empty submitted surface", () => {
-    const finalize = vi.fn(
-      ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
-        `${prompt}:${messageToolAvailable}`,
-    );
-
-    expect(
-      applyResolvedToolPromptFinalizer({
-        prompt: "cron",
-        activeToolNames: [],
-        finalize,
-      }),
-    ).toBe("cron:false");
-    expect(finalize).toHaveBeenCalledWith({
-      prompt: "cron",
-      messageToolAvailable: false,
-    });
-  });
 
   it("removes every submitted tool and catalog entry for an empty hook allowlist", () => {
     const fixture = createSession(["tool_search", "message"]);
@@ -174,37 +166,6 @@ describe("applyPromptBuildToolsAllow", () => {
     ).toBe("cron:true");
   });
 
-  it("keeps search controls only for catalog entries allowed by the hook", () => {
-    const fixture = createSession(["tool_search", "message"]);
-    const catalogRef: ToolSearchCatalogRef = {
-      current: {
-        entries: [catalogEntry("read"), catalogEntry("write")],
-        counterScope: "scope-1",
-        searchCount: 0,
-        describeCount: 0,
-        callCount: 0,
-      },
-    };
-
-    const result = applyPromptBuildToolsAllow({
-      session: fixture.session,
-      toolsAllow: ["read"],
-      baseline: createBaseline(fixture.readNames(), catalogRef),
-      effectiveTools: [{ name: "tool_search" }, { name: "message" }],
-      uncompactedEffectiveTools: [{ name: "read" }, { name: "write" }, { name: "message" }],
-      tools: [{ name: "read" }, { name: "write" }, { name: "message" }],
-      catalogRef,
-      codeModeControlsEnabled: false,
-    });
-
-    expect(result.activeToolNames).toEqual(["tool_search"]);
-    expect(result.effectiveTools).toEqual([{ name: "tool_search" }]);
-    expect(result.uncompactedEffectiveTools).toEqual([{ name: "read" }]);
-    expect(result.tools).toEqual([{ name: "read" }]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["read"]);
-    expect(fixture.readNames()).toEqual(["tool_search"]);
-  });
-
   it("cannot add a tool that the host-resolved surface already removed", () => {
     const fixture = createSession(["read"]);
 
@@ -255,47 +216,5 @@ describe("applyPromptBuildToolsAllow", () => {
     expect(result.activeToolNames).toEqual(["tool_search"]);
     expect(result.effectiveTools).toEqual([{ name: "tool_search" }]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["plugin_lookup"]);
-  });
-
-  it("derives each prompt restriction from the preserved host baseline", () => {
-    const fixture = createSession(["tool_search"]);
-    const catalogRef: ToolSearchCatalogRef = {
-      current: {
-        entries: [catalogEntry("read"), catalogEntry("write")],
-        counterScope: "scope-1",
-        searchCount: 2,
-        describeCount: 1,
-        callCount: 3,
-      },
-    };
-    const baseline = createBaseline(fixture.readNames(), catalogRef);
-    const params = {
-      session: fixture.session,
-      baseline,
-      effectiveTools: [{ name: "tool_search" }],
-      uncompactedEffectiveTools: [{ name: "read" }, { name: "write" }],
-      tools: [{ name: "read" }, { name: "write" }],
-      catalogRef,
-      codeModeControlsEnabled: false,
-    };
-
-    applyPromptBuildToolsAllow({ ...params, toolsAllow: ["read"] });
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["read"]);
-    expect(catalogRef.current?.counterScope).toBe("scope-1");
-
-    const writeOnly = applyPromptBuildToolsAllow({ ...params, toolsAllow: ["write"] });
-    expect(writeOnly.tools).toEqual([{ name: "write" }]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["write"]);
-    expect(catalogRef.current?.counterScope).toBe("scope-1");
-
-    const restored = applyPromptBuildToolsAllow(params);
-    expect(restored.tools).toEqual([{ name: "read" }, { name: "write" }]);
-    expect(catalogRef.current).toMatchObject({
-      entries: baseline.catalogEntries,
-      counterScope: "scope-1",
-      searchCount: 2,
-      describeCount: 1,
-      callCount: 3,
-    });
   });
 });

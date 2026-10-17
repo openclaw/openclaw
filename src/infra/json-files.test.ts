@@ -153,6 +153,44 @@ describe("json file helpers", () => {
     });
   });
 
+  it("keeps empty stage prefixes as the default and ignores unrelated options", async () => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "note.txt");
+      const options = {
+        tempPrefix: "",
+        beforeRename: undefined,
+        get encoding() {
+          throw new Error("unrelated options must not be read");
+        },
+      };
+
+      await writeTextAtomic(filePath, "café", options);
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("café");
+      await expect(fsPromises.readdir(base)).resolves.toEqual(["note.txt"]);
+    });
+  });
+
+  it("preserves the destination when the pre-publication hook rejects", async () => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "note.txt");
+      const refusal = new Error("publication refused");
+      await fsPromises.writeFile(filePath, "old");
+
+      await expect(
+        writeTextAtomic(filePath, "new", {
+          beforeRename: async ({ tempPath }) => {
+            await expect(fsPromises.readFile(tempPath, "utf8")).resolves.toBe("new");
+            throw refusal;
+          },
+        }),
+      ).rejects.toBe(refusal);
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("old");
+      await expect(fsPromises.readdir(base)).resolves.toEqual(["note.txt"]);
+    });
+  });
+
   it("refuses Windows copy fallback through symlink destinations", async () => {
     await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");

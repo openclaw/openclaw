@@ -12,6 +12,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
 } from "./backend-handle.types.js";
+import type { PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
 import { relativePathEscapesContainerRoot } from "./path-utils.js";
 import type { RemoteCanonicalPath } from "./remote-fs-bridge-canonical-path.js";
 import {
@@ -19,24 +20,6 @@ import {
   resolveRemoteMountByContainerPath,
   type RemoteMountInfo,
 } from "./remote-fs-bridge-paths.js";
-
-/** Maps a resolver action to the mutation action label used in errors. */
-const REMOTE_PINNED_ACTION_LABELS: Record<
-  "write" | "create" | "mkdir" | "remove" | "copy-destination",
-  string
-> = {
-  write: "write files",
-  create: "create files",
-  mkdir: "create directories",
-  remove: "remove files",
-  "copy-destination": "copy files",
-};
-
-export function remotePinnedActionLabel(
-  action: "write" | "create" | "mkdir" | "remove" | "copy-destination",
-): string {
-  return REMOTE_PINNED_ACTION_LABELS[action];
-}
 
 /**
  * Builds the canonical frame for an already-authorized pinned destination.
@@ -55,11 +38,11 @@ async function resolveRemotePinnedCanonicalFrame(params: {
   const pinnedPath = normalizeContainerPath(params.pinnedPath);
   const probePath = params.directory ? pinnedPath : path.posix.dirname(pinnedPath);
   const result = await params.runRemoteShellScript({
-    script: 'canonical_root=$(readlink -f -- "$1")\nprintf "%s\\n" "$canonical_root"',
+    script: 'readlink -n -f -- "$1"',
     args: [params.mountRootPath],
     signal: params.signal,
   });
-  const canonicalMountRoot = normalizeContainerPath(result.stdout.toString("utf8").trim());
+  const canonicalMountRoot = normalizeContainerPath(result.stdout.toString("utf8"));
   if (!canonicalMountRoot.startsWith("/")) {
     throw new Error(`Sandbox path canonicalization failed; cannot ${params.action}: ${pinnedPath}`);
   }
@@ -111,17 +94,12 @@ export type RemotePinnedTargetParams = {
   requireWritable?: boolean;
   directory?: boolean;
   includeDescendants?: boolean;
-  allowFinalSymlinkForUnlink?: boolean;
   /** Pre-authorized canonical pin path; skips destination re-canonicalization. */
   pinnedCanonicalPath?: string;
   signal?: AbortSignal;
 };
 
-export type RemotePinnedTarget = {
-  mountRootPath: string;
-  relativeParentPath: string;
-  basename: string;
-};
+export type RemotePinnedTarget = PinnedSandboxEntry;
 
 /**
  * Resolves the pinned mutation entry for a remote destination. Mount policy
@@ -136,7 +114,6 @@ export async function resolveRemotePinnedTarget(
       containerPath: string;
       mountRootPath: string;
       action: string;
-      allowFinalSymlinkForUnlink?: boolean;
       signal?: AbortSignal;
     }): Promise<RemoteCanonicalPath>;
     assertRemoteProtectedPathWritable(params: {
@@ -167,14 +144,13 @@ export async function resolveRemotePinnedTarget(
           runRemoteShellScript: (command) => deps.runRemoteShellScript(command),
         })
       : await deps.resolveCanonicalPath({
-          // mkdirp pins the directory itself; file operations pin their parent and
-          // retain no-follow handling for the final filename.
+          // Resolve the full parent; the guest mutation owns the final entry's
+          // no-follow unlink/rename semantics after the basename is separated.
           containerPath: normalizeContainerPath(
             params.directory ? params.containerPath : path.posix.dirname(params.containerPath),
           ),
           mountRootPath: params.mountRootPath,
           action: params.action,
-          allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
           signal: params.signal,
         });
   const mount = resolveRemoteMountByContainerPath(deps.mounts, logicalPath);

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import "../agents/utility-completion.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import {
   createHarness,
+  event,
   flushObserver,
   preparedModel,
   resetSessionObserverEventSequence,
@@ -11,16 +14,12 @@ import {
 const runtimeMocks = vi.hoisted(() => ({
   completeDirect: vi.fn(),
   selectModel: vi.fn(),
-  prepareUtility: vi.fn(),
   completeIsolated: vi.fn(),
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: runtimeMocks.completeDirect,
   resolveSimpleCompletionSelectionForAgent: runtimeMocks.selectModel,
-}));
-vi.mock("../agents/utility-completion.js", () => ({
-  prepareUtilityCompletionForAgent: runtimeMocks.prepareUtility,
 }));
 vi.mock("../agents/isolated-completion.js", () => ({
   runIsolatedCompletion: runtimeMocks.completeIsolated,
@@ -56,15 +55,11 @@ describe("session observer model preparation", () => {
       runtimeMocks.completeDirect
         .mockReset()
         .mockRejectedValue(new Error("HTTP 401 invalid credential"));
-      const { prepareUtilityCompletionForAgent } = await vi.importActual<
-        typeof import("../agents/utility-completion.js")
-      >("../agents/utility-completion.js");
       runtimeMocks.selectModel.mockReturnValue({
         provider,
         modelId: prepared.model,
         agentDir: prepared.agentDir,
       });
-      runtimeMocks.prepareUtility.mockImplementation(prepareUtilityCompletionForAgent);
       const completion = {
         text: JSON.stringify({ headline: "Reviewing the implementation", health: "on-track" }),
         provider: "anthropic",
@@ -97,7 +92,8 @@ describe("session observer model preparation", () => {
       expect(runtimeMocks.completeIsolated).toHaveBeenCalledWith(
         expect.objectContaining({
           ...prepared,
-          timeoutMs: 10_000,
+          purpose: "session-observer",
+          timeoutMs: 30_000,
           abortSignal: expect.any(AbortSignal),
         }),
       );
@@ -135,24 +131,27 @@ describe("session observer model preparation", () => {
     harness.observer.dispose();
   });
 
-  it("times out stalled model preparation without starting another preparation", async () => {
+  it("times out stalled model preparation without starting another preparation", async ({
+    signal,
+  }) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const prepareModel = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Intentionally unresolved: the observer timeout owns this test path.
-        }),
-    );
+    const preparation = createDeferred<ReturnType<typeof preparedModel>>();
+    const prepareModel = vi.fn(() => preparation.promise);
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    try {
+      startAndAddToolNotes(harness.observer);
 
-    await vi.advanceTimersByTimeAsync(34_000);
-    await flushObserver();
+      await vi.advanceTimersByTimeAsync(42_000);
+      await flushObserver();
 
-    expect(prepareModel).toHaveBeenCalledOnce();
-    expect(harness.completeModel).not.toHaveBeenCalled();
-    harness.observer.dispose();
+      expect(prepareModel).toHaveBeenCalledOnce();
+      expect(harness.completeModel).not.toHaveBeenCalled();
+    } finally {
+      const disposal = harness.observer.disposeAsync();
+      preparation.resolve(preparedModel());
+      await withinTest(disposal, signal);
+    }
   });
 
   it("retries after a rejected preparation", async () => {
@@ -171,6 +170,72 @@ describe("session observer model preparation", () => {
     expect(prepareModel).toHaveBeenCalledTimes(2);
     expect(harness.completeModel).toHaveBeenCalledOnce();
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
+    harness.observer.dispose();
+  });
+
+  it.each([
+    {
+      route: "borrowed the primary's CLI runtime",
+      override: "claude-cli" as string | undefined,
+      outcome: "re-decides on the next digest",
+      preparations: 2,
+    },
+    {
+      route: "borrowed no runtime",
+      override: undefined,
+      outcome: "keeps its single preparation",
+      preparations: 1,
+    },
+  ])("a route that $route $outcome", async ({ override, preparations }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const prepareModel = vi.fn(async () => ({
+      ...preparedModel(),
+      ...(override ? { agentHarnessRuntimeOverride: override } : {}),
+    }));
+    const harness = createHarness({ prepareModel });
+    startAndAddToolNotes(harness.observer);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(prepareModel).toHaveBeenCalledOnce();
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+
+    harness.observer.handleEvent(
+      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
+    );
+    await flushObserver();
+
+    expect(harness.completeModel).toHaveBeenCalledTimes(2);
+    expect(prepareModel).toHaveBeenCalledTimes(preparations);
+    harness.observer.dispose();
+  });
+
+  it("routes the next digest over HTTP once a credential arrives mid-run", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let credentialPresent = false;
+    const prepareModel = vi.fn(async () => ({
+      ...preparedModel(),
+      ...(credentialPresent ? {} : { agentHarnessRuntimeOverride: "claude-cli" }),
+    }));
+    const harness = createHarness({ prepareModel });
+    startAndAddToolNotes(harness.observer);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(harness.completeModel.mock.calls[0]?.[0]).toMatchObject({
+      agentHarnessRuntimeOverride: "claude-cli",
+    });
+
+    credentialPresent = true;
+    harness.observer.handleEvent(
+      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
+    );
+    await flushObserver();
+
+    expect(prepareModel).toHaveBeenCalledTimes(2);
+    expect(harness.completeModel.mock.calls[1]?.[0]).not.toHaveProperty(
+      "agentHarnessRuntimeOverride",
+    );
     harness.observer.dispose();
   });
 });

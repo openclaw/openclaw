@@ -103,6 +103,10 @@ Create the wiki vault layout and starter pages, including top-level indexes and 
 
 Import a local markdown or text file into the wiki `sources/` folder as a source page. `<path>` must be a local file path; there is no URL ingest today. Rejects binary files.
 
+Source files must be valid UTF-8. Malformed input is rejected without replacing an existing source page. Save the source as valid UTF-8 and retry the ingest.
+
+`wiki ingest`, bridge/unsafe-local sync, and ChatGPT imports also reject existing source pages with malformed UTF-8 instead of rewriting their human notes. Save the affected page as valid UTF-8 and retry.
+
 Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Ingest always recompiles the vault afterward.
 
 Flags: `--title <title>` overrides the source title (default: derived from the filename).
@@ -155,7 +159,7 @@ Use `wiki search` for wiki-specific ranking and provenance. For one broad shared
 
 Search modes:
 
-- `find-person`: aliases, handles, socials, canonical IDs, and person pages
+- `find-person`: aliases, handles, socials, primary IDs, and person pages
 - `route-question`: ask-for/best-used-for hints and relationship context
 - `source-evidence`: source pages and structured evidence fields
 - `raw-claim`: structured claim text with claim/evidence metadata
@@ -174,7 +178,7 @@ Text output includes `Claim:` and `Evidence:` lines when a result matches a stru
 ### `wiki get <lookup>`
 
 Read a wiki page by id or relative path. Compiled claim IDs are resolved first.
-After vault activation, an existing, visible canonical Markdown path reads only
+After vault activation, an existing, visible Markdown path reads only
 the requested page. A fresh CLI process still validates the compiled snapshot
 against the vault; missing indexes or snapshots can trigger automatic compilation.
 Missing or invalid candidates, extensionless paths, basenames, and page IDs
@@ -222,6 +226,12 @@ openclaw wiki chatgpt import --export ./conversations.json --dry-run
 | `--dry-run`       | `false`    | Preview created/updated/skipped counts without writing pages. |
 
 A non-dry-run import that changes any page records an import run id, printed in the summary, needed for rollback.
+
+Malformed UTF-8 exports are rejected before the vault is initialized or imported
+pages are changed. If the error names an invalid export, download a fresh ChatGPT
+export and retry the import.
+
+Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 
 ### `wiki chatgpt rollback <run-id>`
 

@@ -39,9 +39,9 @@ function cronListResponse(jobs: CronJob[]) {
 }
 
 async function chooseRemove(page: Page) {
-  const menu = page.locator("wa-dropdown.cron-job-menu").first();
+  const menu = page.locator(".cron-job-menu").first();
   await menu.locator(".cron-job-menu__trigger").click();
-  await menu.locator('wa-dropdown-item[value="remove"]').click();
+  await menu.locator('[data-value="remove"]').click();
 }
 
 suite.define(() => {

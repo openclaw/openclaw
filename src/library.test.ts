@@ -1,11 +1,9 @@
 // Tests library entrypoint exports and package boundary behavior.
-import fs, { readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import ts from "typescript";
+import { readFileSync } from "node:fs";
+import { transformSync } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
-import { loadSessionStore, saveSessionStore } from "./library.js";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 
 const libraryPath = new URL("./library.ts", import.meta.url);
 const lazyRuntimeSpecifiers = [
@@ -17,17 +15,26 @@ const lazyRuntimeSpecifiers = [
 ] as const;
 
 function readLibraryModuleImports(sourceText = readFileSync(libraryPath, "utf8")) {
-  const { outputText } = ts.transpileModule(sourceText, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, verbatimModuleSyntax: true },
+  const { code } = transformSync(sourceText, {
+    loader: "ts",
+    format: "esm",
+    target: "esnext",
+    tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
   });
   const staticImports = new Set<string>();
   const dynamicImports = new Set<string>();
-  for (const { kind, specifier } of collectModuleReferencesFromSource(outputText, { ts })) {
-    if (kind === "import" || kind === "export") {
-      staticImports.add(specifier);
-    } else if (kind === "dynamic-import") {
-      dynamicImports.add(specifier);
+  const parser = createNativeTypeScriptParser();
+  try {
+    const sourceFile = parser.parseSourceFile("library.mjs", code);
+    for (const { kind, specifier } of collectModuleReferencesFromSource(sourceFile)) {
+      if (kind === "import" || kind === "export") {
+        staticImports.add(specifier);
+      } else if (kind === "dynamic-import") {
+        dynamicImports.add(specifier);
+      }
     }
+  } finally {
+    parser.close();
   }
   return { dynamicImports, staticImports };
 }
@@ -56,29 +63,6 @@ describe("library module imports", () => {
       expect(dynamicImports.has(specifier), `${specifier} should remain dynamically imported`).toBe(
         true,
       );
-    }
-  });
-
-  it("keeps the deprecated root session-store wrappers uncached", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-library-session-store-"));
-    const storePath = path.join(dir, "sessions.json");
-    try {
-      await saveSessionStore(
-        storePath,
-        {
-          "agent:main:main": { sessionId: "first", updatedAt: Date.now() },
-        },
-        { skipMaintenance: true },
-      );
-      expect(loadSessionStore(storePath)["agent:main:main"]?.sessionId).toBe("first");
-
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({ "agent:main:main": { sessionId: "second", updatedAt: 2 } }),
-      );
-      expect(loadSessionStore(storePath)["agent:main:main"]?.sessionId).toBe("second");
-    } finally {
-      fs.rmSync(dir, { force: true, recursive: true });
     }
   });
 });

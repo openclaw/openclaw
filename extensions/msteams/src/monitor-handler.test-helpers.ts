@@ -11,13 +11,12 @@ import {
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type RuntimeRoutePeer = { peer: { kind: string; id: string } };
+type RuntimeRoutePeer = { accountId?: string | null; peer: { kind: string; id: string } };
 
 type MSTeamsTestRuntimeOptions = {
   enqueueSystemEvent?: ReturnType<typeof vi.fn>;
@@ -32,7 +31,7 @@ type MSTeamsTestRuntimeOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
-  resolveStorePath?: () => string;
+  resolveStorePath?: () => string | undefined;
   runPrepared?: typeof runPreparedInboundReply;
 };
 
@@ -174,11 +173,6 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       reply: {
         dispatchReplyWithBufferedBlockDispatcher:
           dispatchReplyWithBufferedBlockDispatcher as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-        createReplyDispatcherWithTyping: () => ({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-        }),
         formatAgentEnvelope: ({ body }: { body: string }) => body,
         finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
         resolveHumanDelayConfig: () => undefined,
@@ -196,31 +190,16 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
   } as unknown as PluginRuntime);
 }
 
-export function createActivityHandler(
-  run = vi.fn(async () => undefined),
-): MSTeamsActivityHandler & {
-  run: NonNullable<MSTeamsActivityHandler["run"]>;
-} {
-  const handler: MSTeamsActivityHandler & {
-    run: NonNullable<MSTeamsActivityHandler["run"]>;
-  } = {
-    onMessage: () => handler,
-    onMembersAdded: () => handler,
-    onReactionsAdded: () => handler,
-    onReactionsRemoved: () => handler,
-    run,
-  };
-  return handler;
-}
-
 export function createMSTeamsMessageHandlerDeps(params?: {
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
 }): MSTeamsMessageHandlerDeps {
   const app = {
-    tokenManager: {
-      getBotToken: async () => ({ toString: () => "bot-token" }),
-      getGraphToken: async () => ({ toString: () => "graph-token" }),
+    tokenProvider: {
+      getAppToken: async (scope: string) => ({
+        toString: () =>
+          scope === "https://graph.microsoft.com/.default" ? "graph-token" : "bot-token",
+      }),
     },
     api: {},
     graph: {},
@@ -244,6 +223,7 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   return {
     cfg: params?.cfg ?? {},
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
+    accountId: "default",
     appId: "test-app-id",
     app,
     tokenProvider: {

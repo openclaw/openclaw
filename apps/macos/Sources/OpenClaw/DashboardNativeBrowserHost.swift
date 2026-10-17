@@ -123,8 +123,7 @@ final class DashboardNativeBrowserHost {
     }
 
     @discardableResult
-    func open(tabId: String, url: URL, sessionKey: String?) throws -> String {
-        let requestedURL = try DashboardBrowserMessageHandler.url(url.absoluteString)
+    func open(tabId: String, url requestedURL: URL, sessionKey: String?) throws -> String {
         // Prefer the page currently at this URL over another tab's initial redirect alias.
         // An explicit blank new tab must never collapse onto an existing blank tab.
         if requestedURL.absoluteString != "about:blank",
@@ -163,7 +162,6 @@ final class DashboardNativeBrowserHost {
     }
 
     func navigate(tabId: String, url: URL) throws {
-        _ = try DashboardBrowserMessageHandler.url(url.absoluteString)
         let webView = try self.requireWebView(tabId)
         webView.load(URLRequest(url: url))
     }
@@ -372,7 +370,6 @@ extension DashboardNativeBrowserHost {
 
     func inspect(tabId: String, x: Double, y: Double) async throws -> [String: Any] {
         let webView = try self.requireWebView(tabId)
-        guard x.isFinite, y.isFinite, x >= 0, y >= 0 else { throw DashboardBrowserError.invalidRequest }
         let script = BrowserInspectScript.source
         let node = try await webView.evaluateJavaScript("(\(script))(\(x), \(y))")
         guard self.webView(for: tabId) === webView else { throw DashboardBrowserError.unknownTab }

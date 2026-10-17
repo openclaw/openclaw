@@ -18,6 +18,8 @@ metadata:
 
 Automatically saves session context to workspace memory on `/new`, `/reset`, daily reset, or idle expiry.
 
+Incognito sessions are excluded and never create these memory files.
+
 ## What It Does
 
 When a manual or automatic reset starts a fresh session:

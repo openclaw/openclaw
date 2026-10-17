@@ -38,6 +38,7 @@ type SessionNavigationTarget<TRouteId extends string> = {
   isCurrent: () => boolean;
 };
 
+/** Chat owns this mounted capability; session menus do not own its DOM. */
 export function canSplitSessionView(): boolean {
   return (
     document.querySelector<SessionSplitHost>("openclaw-chat-page")?.sessionSplitAvailable === true
@@ -48,6 +49,7 @@ export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | un
   return readSessionMethodAccess(snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   }).allowed;
 }
 
@@ -60,6 +62,7 @@ async function copySessionMarkdown<TRouteId extends string>(
   const access = readSessionMethodAccess(gateway.snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
   if (!access.allowed || !client) {
     throw new Error(access.allowed ? t("sessionsView.actionRequiresConnection") : access.reason);
@@ -155,6 +158,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
         !window.dispatchEvent(
           new CustomEvent(UI_COMMAND_EVENT, {
             detail: {
+              agentId: params.agentId,
               command: {
                 kind: "split",
                 direction: kind === "split-right" ? "right" : "down",

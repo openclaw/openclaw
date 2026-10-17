@@ -1,4 +1,3 @@
-// Resolves additional CA certificate settings for Node child processes.
 import fs from "node:fs";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 

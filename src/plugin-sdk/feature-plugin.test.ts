@@ -6,7 +6,7 @@ import type {
   PluginCommandContext,
   OpenClawPluginCommandDefinition,
 } from "../plugins/plugin-command.types.js";
-import { startPluginServices } from "../plugins/services.js";
+import { startPluginServices } from "../plugins/services.test-support.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { defineFeatureContract } from "./feature-contract.js";

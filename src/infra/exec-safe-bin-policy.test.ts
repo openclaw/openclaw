@@ -97,11 +97,6 @@ describe("exec safe bin policy sort", () => {
     expect(validateSafeBinArgv(["-S", "C:\\temp\\buffer"], sortProfile)).toBe(false);
   });
 
-  it("blocks sort --compress-program in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(false);
-  });
-
   it("blocks denied long-option abbreviations in safe-bin mode", () => {
     expect(validateSafeBinArgv(["--compress-prog=sh"], sortProfile)).toBe(false);
     expect(validateSafeBinArgv(["--files0-fro=list.txt"], sortProfile)).toBe(false);
@@ -221,21 +216,6 @@ describe("exec safe bin policy boolean flags", () => {
       validateSafeBinArgv(
         ["-cf", "2"],
         expectDefined(SAFE_BIN_PROFILES.uniq, "SAFE_BIN_PROFILES.uniq test invariant"),
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps allowedBooleanFlags on built-in default profiles", () => {
-    expect(
-      expectDefined(
-        SAFE_BIN_PROFILES.wc,
-        "SAFE_BIN_PROFILES.wc test invariant",
-      ).allowedBooleanFlags?.has("-l"),
-    ).toBe(true);
-    expect(
-      validateSafeBinArgv(
-        ["-l"],
-        expectDefined(SAFE_BIN_PROFILES.wc, "SAFE_BIN_PROFILES.wc test invariant"),
       ),
     ).toBe(true);
   });

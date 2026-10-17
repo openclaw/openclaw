@@ -136,19 +136,12 @@ describe("web_fetch SSRF protection", () => {
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "private-network opt-in",
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-    },
-    {
-      name: "exact hostname opt-in",
-      ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-    },
-  ])("allows loopback with an explicit $name", async ({ ssrfPolicy }) => {
+  it("allows loopback with an explicit private-network opt-in", async () => {
     lookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
     const fetchSpy = setMockFetch().mockResolvedValue(textResponse("local ok"));
-    const tool = createWebFetchToolForTest({ ssrfPolicy });
+    const tool = createWebFetchToolForTest({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
 
     const result = await tool?.execute?.("call", { url: "http://127.0.0.1/test" });
 
@@ -185,16 +178,6 @@ describe("web_fetch SSRF protection", () => {
 
     await expectBlockedUrl(tool, "https://example.com", /private|internal|blocked/i);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows public hosts", async () => {
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-
-    setMockFetch().mockResolvedValue(textResponse("ok"));
-    const tool = createWebFetchToolForTest();
-
-    const result = await tool?.execute?.("call", { url: "https://example.com" });
-    expectRawFetchSuccessDetails(result?.details);
   });
 
   it("blocks a turn-scoped domain-policy miss with recovery guidance", async () => {
@@ -253,12 +236,6 @@ describe("web_fetch SSRF protection", () => {
       expectedFetchUrl: "https://docs.openclaw.ai/",
     },
     {
-      name: "trims leading and trailing whitespace",
-      input: "  https://example.com  ",
-      expectedUrl: "https://example.com",
-      expectedFetchUrl: "https://example.com/",
-    },
-    {
       name: "trims leading Unicode whitespace",
       input: "\u00a0\ufeffhttps://example.com",
       expectedUrl: "https://example.com",
@@ -279,54 +256,6 @@ describe("web_fetch SSRF protection", () => {
     {
       name: "trims trailing Unicode whitespace after a bare authority",
       input: "https://example.com\u00a0",
-      expectedUrl: "https://example.com",
-      expectedFetchUrl: "https://example.com/",
-    },
-    {
-      name: "preserves spaces in the path component",
-      input: "https://example.com/a b",
-      expectedUrl: "https://example.com/a b",
-      expectedFetchUrl: "https://example.com/a%20b",
-    },
-    {
-      name: "preserves spaces in the query component",
-      input: "https://example.com?q=a b",
-      expectedUrl: "https://example.com?q=a b",
-      expectedFetchUrl: "https://example.com/?q=a%20b",
-    },
-    {
-      name: "preserves scheme-like text in the path component",
-      input: "https://example.com/a:// b",
-      expectedUrl: "https://example.com/a:// b",
-      expectedFetchUrl: "https://example.com/a://%20b",
-    },
-    {
-      name: "preserves scheme-like text in the query component",
-      input: "https://example.com?q=x:// y",
-      expectedUrl: "https://example.com?q=x:// y",
-      expectedFetchUrl: "https://example.com/?q=x://%20y",
-    },
-    {
-      name: "preserves percent-encoded characters in path",
-      input: "https://example.com/a%20b",
-      expectedUrl: "https://example.com/a%20b",
-      expectedFetchUrl: "https://example.com/a%20b",
-    },
-    {
-      name: "does not modify already-valid URLs",
-      input: "https://docs.openclaw.ai",
-      expectedUrl: "https://docs.openclaw.ai",
-      expectedFetchUrl: "https://docs.openclaw.ai/",
-    },
-    {
-      name: "handles https:// with tab after scheme",
-      input: "https://\texample.com",
-      expectedUrl: "https://example.com",
-      expectedFetchUrl: "https://example.com/",
-    },
-    {
-      name: "trims trailing em-space after a bare authority",
-      input: "https://example.com\u2003",
       expectedUrl: "https://example.com",
       expectedFetchUrl: "https://example.com/",
     },

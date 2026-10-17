@@ -5,22 +5,26 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import { pruneDeliveryQueueTombstones } from "./delivery-queue-sqlite-bound.js";
 import {
   countFailedDeliveryQueueEntries,
-  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
   pruneExpiredDeliveryQueueTombstones,
   terminalizePendingDeliveryQueueEntry,
-  updateDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
 import {
   completeDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
+  updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -198,14 +202,18 @@ describe("delivery queue pending terminal transition", () => {
   it.each(["exact lookup", "global cleanup"] as const)(
     "groups backfilled bounded count limits by queue and producer prefix during %s",
     (mode) => {
-      const { db } = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const db = requireNativeSqliteDatabase(
+        openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        }).db,
+      );
       const insert = db.prepare(
         `INSERT INTO delivery_queue_entries (
          queue_name, id, status, retry_count, recovery_state, entry_json,
-         enqueued_at, updated_at, failed_at
-       ) VALUES (?, ?, 'failed', 0, 'completed_bounded', ?, ?, ?, ?)`,
+         enqueued_at, updated_at, failed_at,
+         retention_id_prefix, retention_max_age_ms, retention_max_entries
+       ) VALUES (?, ?, 'failed', 0, 'completed_bounded', ?, ?, ?, ?,
+         @retention_id_prefix, @retention_max_age_ms, @retention_max_entries)`,
       );
       const policies = [
         { ...boundedRetention, maxAgeMs: 12 * 60 * 60_000, maxEntries: 1 },
@@ -216,17 +224,19 @@ describe("delivery queue pending terminal transition", () => {
       for (const ownerQueue of [queueName, otherQueue]) {
         ids.forEach((id, index) => {
           const failedAt = Date.now() + index;
+          const entryJson = JSON.stringify({
+            id,
+            enqueuedAt: failedAt,
+            retryCount: 0,
+            failedAt,
+            completionRetention: policies[index],
+            recoveryState: "completed_bounded",
+          });
           insert.run(
+            deriveDeliveryQueueRetentionColumns(id, entryJson),
             ownerQueue,
             id,
-            JSON.stringify({
-              id,
-              enqueuedAt: failedAt,
-              retryCount: 0,
-              failedAt,
-              completionRetention: policies[index],
-              recoveryState: "completed_bounded",
-            }),
+            entryJson,
             failedAt,
             failedAt,
             failedAt,
@@ -255,7 +265,7 @@ describe("delivery queue pending terminal transition", () => {
           expect(getDeliveryQueueEntryStatus(queueName, ids[0], stateDir)).toBeUndefined();
           const prune = prepare.mock.results
             .flatMap((result) => (result.type === "return" ? [result.value] : []))
-            .find((statement) => statement.sourceSQL.startsWith("WITH "));
+            .find((statement) => /^with\s/i.test(statement.sourceSQL));
           expect(prune).toBeDefined();
           const plan = db
             .prepare(`EXPLAIN QUERY PLAN ${prune!.expandedSQL}`)
@@ -263,7 +273,7 @@ describe("delivery queue pending terminal transition", () => {
             .map((row) => row.detail)
             .join("\n");
           expect(plan).toMatch(
-            /SEARCH delivery_queue_entries USING INDEX \S+ \(queue_name=\? AND status=\?\)/,
+            /SEARCH delivery_queue_entries USING INDEX \S+ \((?:queue_name=\? AND (?:status|retention_id_prefix)=\?|status=\? AND queue_name=\?)\)/,
           );
           expect(plan).not.toContain("SCAN delivery_queue_entries");
         } else {
@@ -283,14 +293,18 @@ describe("delivery queue pending terminal transition", () => {
     const now = Date.now();
     const hour = 60 * 60_000;
     const retention = { idPrefix: "health:", maxAgeMs: hour, maxEntries: 1 } as const;
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = requireNativeSqliteDatabase(
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }).db,
+    );
     const insertFailed = db.prepare(
       `INSERT INTO delivery_queue_entries (
          queue_name, id, status, retry_count, recovery_state, entry_json,
-         enqueued_at, updated_at, failed_at
-       ) VALUES (?, ?, 'failed', 0, ?, ?, ?, ?, ?)`,
+         enqueued_at, updated_at, failed_at,
+         retention_id_prefix, retention_max_age_ms, retention_max_entries
+       ) VALUES (?, ?, 'failed', 0, ?, ?, ?, ?, ?,
+         @retention_id_prefix, @retention_max_age_ms, @retention_max_entries)`,
     );
     const insertRetained = (
       id: string,
@@ -299,18 +313,20 @@ describe("delivery queue pending terminal transition", () => {
     ) => {
       const recoveryState =
         completionRetention === "permanent" ? "completed_permanent" : "completed_bounded";
+      const entryJson = JSON.stringify({
+        id,
+        enqueuedAt: failedAt,
+        retryCount: 0,
+        failedAt,
+        completionRetention,
+        recoveryState,
+      });
       insertFailed.run(
+        deriveDeliveryQueueRetentionColumns(id, entryJson),
         queueName,
         id,
         recoveryState,
-        JSON.stringify({
-          id,
-          enqueuedAt: failedAt,
-          retryCount: 0,
-          failedAt,
-          completionRetention,
-          recoveryState,
-        }),
+        entryJson,
         failedAt,
         failedAt,
         failedAt,
@@ -321,6 +337,7 @@ describe("delivery queue pending terminal transition", () => {
     insertRetained("health:newest", now - hour / 4, retention);
     insertRetained("health:permanent", 1_000, "permanent");
     insertFailed.run(
+      deriveDeliveryQueueRetentionColumns("health:malformed", "{broken"),
       queueName,
       "health:malformed",
       "completed_bounded",
@@ -329,31 +346,39 @@ describe("delivery queue pending terminal transition", () => {
       1_000,
       1_000,
     );
-    seedDeliveryQueueEntry({
-      queueName,
-      entry: {
-        id: "health:ordinary-completed",
-        enqueuedAt: now - 31 * 24 * 60 * 60_000,
-        retryCount: 0,
-      },
-      status: "completed",
-      stateDir,
-    });
+    for (const [id, status, recoveryState, enqueuedAt] of [
+      ["health:ordinary-completed", "completed", undefined, now - 31 * 24 * 60 * 60_000],
+      ["health:ordinary-live", "completed", undefined, now],
+      ["health:completed-permanent", "completed", "completed_permanent", 1_000],
+      ["health:pending", "pending", undefined, 1_000],
+      ["health:settlement", "failed", "settlement_pending", 1_000],
+    ] as const) {
+      seedDeliveryQueueEntry({
+        queueName,
+        entry: { id, enqueuedAt, retryCount: 0, recoveryState },
+        status,
+        stateDir,
+      });
+    }
 
     expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
-      { queueName, count: 5, oldestFailedAt: 1_000 },
+      { queueName, count: 6, oldestFailedAt: 1_000 },
     ]);
     expect(
       db
         .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
         .all(queueName),
     ).toEqual([
+      { id: "health:completed-permanent" },
       { id: "health:expired" },
       { id: "health:malformed" },
       { id: "health:newest" },
       { id: "health:ordinary-completed" },
+      { id: "health:ordinary-live" },
       { id: "health:over-cap" },
+      { id: "health:pending" },
       { id: "health:permanent" },
+      { id: "health:settlement" },
     ]);
 
     await pruneExpiredDeliveryQueueTombstones(stateDir);
@@ -362,10 +387,17 @@ describe("delivery queue pending terminal transition", () => {
         .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
         .all(queueName),
     ).toEqual([
+      { id: "health:completed-permanent" },
       { id: "health:malformed" },
       { id: "health:newest" },
+      { id: "health:ordinary-live" },
       { id: "health:over-cap" },
+      { id: "health:pending" },
       { id: "health:permanent" },
+      { id: "health:settlement" },
+    ]);
+    expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
+      { queueName, count: 5, oldestFailedAt: 1_000 },
     ]);
   });
 
@@ -577,10 +609,15 @@ describe("delivery queue pending terminal transition", () => {
   it("does not terminalize a replacement pending owner", () => {
     const entry = { id: "terminal-race", enqueuedAt: 1_000, retryCount: 0 };
     seedDeliveryQueueEntry({ queueName, entry, stateDir });
-    updateDeliveryQueueEntry(queueName, entry.id, stateDir, (current) => ({
-      ...current,
-      retryCount: 1,
-    }));
+    updateDeliveryQueueEntryInDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+      queueName,
+      entry.id,
+      (current) => ({
+        ...current,
+        retryCount: 1,
+      }),
+    );
     expect(
       terminalizePendingDeliveryQueueEntry({ queueName, id: entry.id, entry, stateDir }),
     ).toEqual({ status: "not_pending" });

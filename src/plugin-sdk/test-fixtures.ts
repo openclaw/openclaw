@@ -1,5 +1,7 @@
 // Focused public test helpers for generic fixtures shared by plugin tests.
 
+export { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
+
 export {
   createCliRuntimeCapture,
   firstWrittenJsonArg,
@@ -30,6 +32,12 @@ export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { typedCases } from "../test-utils/typed-cases.js";
 export { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+export { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+export {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+export type { FixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
 export { createRequireRecord } from "../../test/helpers/record.js";
 export type { RecordRequirementKind, RecordRequirementMessage } from "../../test/helpers/record.js";
 export {

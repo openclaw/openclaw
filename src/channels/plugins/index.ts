@@ -17,7 +17,7 @@ export {
   resolveNestedAllowlistDecision,
   type ChannelEntryMatch,
   type ChannelMatchSource,
-} from "./channel-config.js";
+} from "../channel-config.js";
 export {
   formatAllowlistMatchMeta,
   type AllowlistMatch,

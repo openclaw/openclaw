@@ -78,70 +78,35 @@ describe("createFailoverDecisionLogger timeout normalization", () => {
 });
 
 describe("createFailoverDecisionLogger counters", () => {
-  it.each([
-    ["retry increment", "retry_same_model", 0, 0, { retryCount: 1, profileRotationCount: 0 }, 1, 0],
-    [
-      "rotation increment",
-      "rotate_profile",
-      0,
-      0,
-      { retryCount: 0, profileRotationCount: 1 },
-      0,
-      1,
-    ],
-    ["explicit zero", "retry_same_model", 3, 2, { retryCount: 0, profileRotationCount: 0 }, 0, 0],
-    ["absent extras", "retry_same_model", 3, 2, undefined, 3, 2],
-    ["absent rotation", "retry_same_model", 3, 2, { retryCount: 1 }, 1, 2],
-    ["absent retry", "rotate_profile", 3, 2, { profileRotationCount: 1 }, 3, 1],
-  ] as const)(
-    "keeps %s identical in structured and console details",
-    (
-      _name,
-      decision,
-      retryCount,
-      profileRotationCount,
-      extra,
-      expectedRetry,
-      expectedRotations,
-    ) => {
-      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-      createDecisionLogger({
-        failoverReason: "overloaded",
-        retryCount,
-        profileRotationCount,
-      })(decision, extra);
+  it("keeps current retry and carried rotation counts identical in structured and console details", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    createDecisionLogger({
+      failoverReason: "overloaded",
+      retryCount: 3,
+      profileRotationCount: 2,
+    })("retry_same_model", { retryCount: 1 });
 
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      const details = firstWarnDetails(warnSpy);
-      expect(details).toMatchObject({
-        decision,
-        retryCount: expectedRetry,
-        profileRotationCount: expectedRotations,
-      });
-      expect(details.consoleMessage).toContain(
-        `retry=${expectedRetry} rotations=${expectedRotations} `,
-      );
-    },
-  );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const details = firstWarnDetails(warnSpy);
+    expect(details).toMatchObject({
+      decision: "retry_same_model",
+      retryCount: 1,
+      profileRotationCount: 2,
+    });
+    expect(details.consoleMessage).toContain("retry=1 rotations=2 ");
+  });
 });
 
 describe("createFailoverDecisionLogger", () => {
-  it.each([true, false])("keeps normal continuation at debug level (enabled=%s)", (enabled) => {
-    vi.spyOn(log, "isEnabled").mockReturnValue(enabled);
+  it("omits normal continuation logs when debug is disabled", () => {
+    vi.spyOn(log, "isEnabled").mockReturnValue(false);
     const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
 
     createDecisionLogger()("continue_normal");
 
     expect(warnSpy).not.toHaveBeenCalled();
-    expect(debugSpy).toHaveBeenCalledTimes(enabled ? 1 : 0);
-    if (enabled) {
-      expect(firstWarnDetails(debugSpy)).toMatchObject({
-        event: "embedded_run_failover_decision",
-        decision: "continue_normal",
-        failoverReason: null,
-      });
-    }
+    expect(debugSpy).not.toHaveBeenCalled();
   });
 
   it("includes from and to model refs when the source differs from the selected target", () => {
@@ -180,26 +145,6 @@ describe("createFailoverDecisionLogger", () => {
     expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
   });
 
-  it("omits to model refs when the source matches the selected target", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const logDecision = createDecisionLogger({
-      runId: "run:same-model",
-      rawError: "timeout",
-      failoverReason: "timeout",
-      profileFailureReason: "timeout",
-      model: "gpt-5.4",
-      sourceProvider: "openai",
-      sourceModel: "gpt-5.4",
-      fallbackConfigured: true,
-      timedOut: true,
-    });
-
-    logDecision("surface_error");
-
-    expect(firstWarnDetails(warnSpy).consoleMessage).toContain("from=openai/gpt-5.4");
-    expect(firstWarnDetails(warnSpy).consoleMessage).not.toContain("to=openai/gpt-5.4");
-  });
-
   it("omits raw HTML auth bodies from consoleMessage for HTML 401 auth failures", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
     const logDecision = createDecisionLogger({
@@ -216,12 +161,10 @@ describe("createFailoverDecisionLogger", () => {
     logDecision("rotate_profile");
 
     const observation = firstWarnDetails(warnSpy);
-    // Raw provider bodies stay in structured preview fields; console output
-    // must not dump HTML auth pages into user-visible retry diagnostics.
+    // Preserve classification without writing provider bodies to either log sink.
     expect(observation.providerRuntimeFailureKind).toBe("auth_html");
-    expect(observation.rawErrorPreview).toBe(
-      "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
-    );
+    expect(observation).not.toHaveProperty("rawErrorPreview");
+    expect(JSON.stringify(observation)).not.toContain("<html>");
     expect(observation.consoleMessage).not.toContain("rawError=");
     expect(observation.consoleMessage).not.toContain("<html>");
   });
@@ -250,7 +193,8 @@ describe("createFailoverDecisionLogger", () => {
     // blocks, not auth failures. Their raw HTML must stay out of console
     // failover diagnostics just like auth_html bodies.
     expect(observation.providerRuntimeFailureKind).toBe("upstream_html");
-    expect(observation.rawErrorPreview).toBe(cfChallengeHtml);
+    expect(observation).not.toHaveProperty("rawErrorPreview");
+    expect(JSON.stringify(observation)).not.toContain("<html>");
     expect(observation.consoleMessage).not.toContain("rawError=");
     expect(observation.consoleMessage).not.toContain("<html>");
   });

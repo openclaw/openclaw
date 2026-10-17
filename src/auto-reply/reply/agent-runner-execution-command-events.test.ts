@@ -142,6 +142,68 @@ describe("executeAgentTurn: command events", () => {
     });
   });
 
+  it("projects transient model waits and clears them across later model calls", async () => {
+    const onItemEvent = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      for (const data of [
+        { phase: "waiting_for_model", reason: "response" },
+        { phase: "waiting_for_model", reason: "slot" },
+        { phase: "starting_model" },
+        { phase: "waiting_for_model", reason: "response" },
+        { phase: "starting_model" },
+      ]) {
+        await params.onAgentEvent?.({ stream: "run_status", data });
+      }
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: { Provider: "whatsapp", MessageSid: "msg" } as TemplateContext,
+      opts: { onItemEvent },
+      typingSignals: createMockTypingSignaler(),
+      ...createAgentTurnExecutionDefaults(),
+    });
+
+    expect(onItemEvent.mock.calls.map(([payload]) => payload)).toEqual([
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "update",
+        progressText: "Waiting for the local model to respond",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "update",
+        progressText: "Waiting for a free model slot",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "end",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "update",
+        progressText: "Waiting for the local model to respond",
+      },
+      {
+        itemId: "model-wait",
+        kind: "model-wait",
+        suppressDurableProgress: true,
+        phase: "end",
+      },
+    ]);
+  });
+
   it("forwards Codex command tool results as command output completion", async () => {
     const onCommandOutput = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

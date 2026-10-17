@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -18,8 +19,9 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
@@ -59,9 +61,10 @@ const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactive
 describe("secret store mutation lifecycle", () => {
   it("rejects a redaction sentinel without replacing the stored credential", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const name = "OPENCLAW_GATEWAY_TOKEN";
       const value = "synthetic-gateway-token";
-      writeSecretStoreEntry({
+      await writeSecretStoreEntry({
         scope: { kind: "team" },
         name,
         value,
@@ -86,7 +89,10 @@ describe("secret store mutation lifecycle", () => {
         undefined,
         { code: "INVALID_REQUEST", message: expect.stringContaining(name) },
       ]);
-      expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({ ok: true, value });
+      expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
+        ok: true,
+        value,
+      });
       expect(reloadSecrets).not.toHaveBeenCalled();
     });
   });
@@ -95,9 +101,10 @@ describe("secret store mutation lifecycle", () => {
     "does not delete when admitted authority closes during %s",
     async (closure) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const name = "SYNTHETIC_DELETE_KEY";
         const value = "test-secret-delete-must-survive";
-        writeSecretStoreEntry({
+        await writeSecretStoreEntry({
           scope: { kind: "team" },
           name,
           value,
@@ -138,7 +145,7 @@ describe("secret store mutation lifecycle", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
           expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-          expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
+          expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
             ok: true,
             value,
           });
@@ -148,7 +155,7 @@ describe("secret store mutation lifecycle", () => {
             true,
             { ok: true },
           ]);
-          expect(readSecretStoreValue({ scope: { kind: "team" }, name }).ok).toBe(false);
+          expect((await readSecretStoreValue({ scope: { kind: "team" }, name })).ok).toBe(false);
         } finally {
           releaseAgentRunDelegatedAuthority(authority);
           clearAgentRunContext("delete-run");
@@ -159,6 +166,7 @@ describe("secret store mutation lifecycle", () => {
 
   it("reports only committed safe facts when the operator replaces proposed hosts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const authority = claimAgentRunDelegatedAuthority({
         instanceId: "tool-instance",
         runId: "tool-run",
@@ -175,11 +183,12 @@ describe("secret store mutation lifecycle", () => {
           },
         },
       } as GatewayClient;
-      const manager = new QuestionManager();
+      const scheduler = createTestGatewayScheduler();
+      const manager = new QuestionManager(scheduler);
       const reloadSecrets = async () => ({ warningCount: 0 });
       const storeWriteService = createSecretStoreWriteService({ reloadSecrets });
       const handlers = {
-        ...createQuestionHandlers(manager, storeWriteService),
+        ...createQuestionHandlers(manager, storeWriteService, scheduler),
         ...createSecretsHandlers({ reloadSecrets, resolveSecrets, storeWriteService }),
       };
       const methods: string[] = [];
@@ -217,7 +226,7 @@ describe("secret store mutation lifecycle", () => {
           name: "APPROVED_POLICY_KEY",
           allowedHosts: ["proposed.example.test"],
         });
-        expect(listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
           { name: "APPROVED_POLICY_KEY", allowedHosts: ["approved.example.test"] },
         ]);
         expect(result.details).toEqual({
@@ -242,6 +251,7 @@ describe("secret store mutation lifecycle", () => {
     "refreshes an auth-profile-only %s ref on create, rotation, and delete",
     async (type) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const name = "AUTH_PROFILE_ONLY_KEY";
         const ref = { source: "store", provider: "default", id: name } as const;
         const profileId = "custom:store";
@@ -322,7 +332,7 @@ describe("secret store mutation lifecycle", () => {
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
         expect(
-          readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
+          await readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
         ).toEqual({ ok: true, value: "enabled" });
         clearSecretsRuntimeSnapshot();
       });

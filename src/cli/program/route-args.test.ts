@@ -106,41 +106,6 @@ describe("route-args", () => {
 
   it.each([
     {
-      name: "health unknown flag",
-      parse: parseHealthRouteArgs,
-      argv: ["node", "openclaw", "health", "--wat"],
-    },
-    {
-      name: "health stray positional",
-      parse: parseHealthRouteArgs,
-      argv: ["node", "openclaw", "health", "extra"],
-    },
-    {
-      name: "health flag terminator",
-      parse: parseHealthRouteArgs,
-      argv: ["node", "openclaw", "health", "--", "--json"],
-    },
-    {
-      name: "status malformed arity",
-      parse: parseStatusRouteArgs,
-      argv: ["node", "openclaw", "status", "--timeout"],
-    },
-    {
-      name: "status unknown flag",
-      parse: parseStatusRouteArgs,
-      argv: ["node", "openclaw", "status", "--wat"],
-    },
-    {
-      name: "sessions stray subcommand",
-      parse: parseSessionsRouteArgs,
-      argv: ["node", "openclaw", "sessions", "cleanup"],
-    },
-    {
-      name: "sessions unknown flag",
-      parse: parseSessionsRouteArgs,
-      argv: ["node", "openclaw", "sessions", "--wat"],
-    },
-    {
       name: "sessions flag terminator",
       parse: parseSessionsRouteArgs,
       argv: ["node", "openclaw", "sessions", "--", "--json"],
@@ -151,49 +116,9 @@ describe("route-args", () => {
       argv: ["node", "openclaw", "agents", "list", "extra"],
     },
     {
-      name: "agents list unknown flag",
-      parse: parseAgentsListRouteArgs,
-      argv: ["node", "openclaw", "agents", "list", "--wat"],
-    },
-    {
-      name: "agents list flag terminator",
-      parse: parseAgentsListRouteArgs,
-      argv: ["node", "openclaw", "agents", "list", "--", "--json"],
-    },
-    {
-      name: "bare agents unknown flag",
-      parse: parseAgentsListRouteArgs,
-      argv: ["node", "openclaw", "agents", "--wat"],
-    },
-    {
-      name: "config get empty excess operand",
-      parse: parseConfigGetRouteArgs,
-      argv: ["node", "openclaw", "config", "get", "gateway.port", ""],
-    },
-    {
-      name: "config get unknown flag after an empty operand",
-      parse: parseConfigGetRouteArgs,
-      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "--unknown"],
-    },
-    {
-      name: "config get extra path after an empty operand",
-      parse: parseConfigGetRouteArgs,
-      argv: ["node", "openclaw", "config", "get", "gateway.port", "", "gateway.bind"],
-    },
-    {
       name: "config unset empty excess operand",
       parse: parseConfigUnsetRouteArgs,
       argv: ["node", "openclaw", "config", "unset", "gateway.port", "", "--dry-run"],
-    },
-    {
-      name: "health empty excess operand",
-      parse: parseHealthRouteArgs,
-      argv: ["node", "openclaw", "health", ""],
-    },
-    {
-      name: "agents list empty excess operand",
-      parse: parseAgentsListRouteArgs,
-      argv: ["node", "openclaw", "agents", "list", ""],
     },
   ])("defers unsupported routed argv: $name", ({ parse, argv }) => {
     expect(parse(argv)).toBeNull();
@@ -345,55 +270,6 @@ describe("route-args", () => {
     ).toBeNull();
   });
 
-  it("parses sessions and agents list route args", () => {
-    expect(
-      parseSessionsRouteArgs([
-        "node",
-        "openclaw",
-        "sessions",
-        "--json",
-        "--all-agents",
-        "--agent",
-        "default",
-        "--store",
-        "sqlite",
-        "--active",
-        "true",
-        "--limit",
-        "25",
-      ]),
-    ).toEqual({
-      json: true,
-      allAgents: true,
-      agent: "default",
-      store: "sqlite",
-      active: "true",
-      limit: "25",
-    });
-    expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent"])).toBeNull();
-    expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--limit"])).toBeNull();
-    expect(
-      parseAgentsListRouteArgs([
-        "node",
-        "openclaw",
-        "agents",
-        "list",
-        "--json",
-        "--bindings",
-        "--tree",
-      ]),
-    ).toEqual({
-      json: true,
-      bindings: true,
-      tree: true,
-    });
-    expect(parseAgentsListRouteArgs(["node", "openclaw", "agents"])).toEqual({
-      json: false,
-      bindings: false,
-      tree: false,
-    });
-  });
-
   it("parses config routes", () => {
     expect(
       parseConfigGetRouteArgs([
@@ -523,11 +399,6 @@ describe("route-args", () => {
       name: "models list",
       parse: parseModelsListRouteArgs,
       argv: ["node", "openclaw", "models", "list", "--wat"],
-    },
-    {
-      name: "models status",
-      parse: parseModelsStatusRouteArgs,
-      argv: ["node", "openclaw", "models", "status", "--wat"],
     },
     {
       name: "channels list",

@@ -61,12 +61,14 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const config = {
         agents: {
+          ownership: "explicit",
           defaults: {
+            systemAgent: { agentId: "main" },
             workspace: "/tmp/agents",
             model: { primary: primaryModel, fallbacks: [inheritedFallback] },
           },
           entries: {
-            main: { default: true },
+            main: {},
             writer: model === undefined ? {} : { model },
           },
         },
@@ -107,7 +109,7 @@ suite.define(() => {
       await agentPicker.locator(".agent-select__trigger").click();
       // Switching agents is the user action under test; the Tools panel must survive it.
       await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Writer" })
         .evaluate((item) => (item as HTMLElement).click());
       await expect

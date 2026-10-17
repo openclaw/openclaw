@@ -1,6 +1,23 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { TalkCatalogResultSchema } from "./channels.js";
+import { TalkCatalogResultSchema, TalkSessionCloseParamsSchema } from "./channels.js";
+
+describe("TalkSessionCloseParamsSchema", () => {
+  it.each([undefined, "abort", "detach"])("accepts close disposition %s", (disposition) => {
+    expect(
+      Value.Check(TalkSessionCloseParamsSchema, {
+        sessionId: "relay-1",
+        ...(disposition ? { disposition } : {}),
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["cancel", "", null, true])("rejects close disposition %s", (disposition) => {
+    expect(Value.Check(TalkSessionCloseParamsSchema, { sessionId: "relay-1", disposition })).toBe(
+      false,
+    );
+  });
+});
 
 function catalogWithActiveVoicePolicy(activeVoiceSelectionPolicy: unknown) {
   return {

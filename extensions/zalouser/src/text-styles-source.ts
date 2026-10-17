@@ -1,18 +1,18 @@
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
-import { protectLiteral, protectLocalInlineSyntax } from "./text-styles-inline.js";
+import { isEscaped, protectLiteral, protectLocalInlineSyntax } from "./text-styles-inline.js";
 import type { MarkdownIRWithBlockMetadata, TokenRegistry } from "./text-styles-shared.js";
 import {
   sourceBlockquotePrefixLength,
   sourceContainerProjection,
+  type MarkdownSource,
 } from "./text-styles-source-spans.js";
 import type { Style } from "./zca-constants.js";
 
 export function restoreLeadingBlankLines(
   rendered: { text: string; styles: Style[] },
-  source: string,
+  { lines: sourceLines }: MarkdownSource,
 ): { text: string; styles: Style[] } {
   let sourceLeading = 0;
-  const sourceLines = source.split("\n");
   for (const [lineIndex, line] of sourceLines.entries()) {
     if (lineIndex === sourceLines.length - 1) {
       break;
@@ -35,10 +35,8 @@ export function restoreLeadingBlankLines(
 
 export function stripUnsupportedHeadingStyles(
   ir: MarkdownIRWithBlockMetadata,
-  sourceIR: MarkdownIRWithBlockMetadata,
-  source: string,
+  { ir: sourceIR, lines: sourceLines }: MarkdownSource,
 ): void {
-  const sourceLines = source.split("\n");
   const unsupportedLines = new Set(
     (sourceIR.blocks ?? []).flatMap((block) =>
       block.kind === "heading" &&
@@ -93,23 +91,15 @@ export function parseSharedIR(source: string): MarkdownIRWithBlockMetadata {
 }
 
 export function protectInlineSyntaxOutsideCode(
-  source: string,
-  ir: MarkdownIRWithBlockMetadata,
+  context: MarkdownSource,
   registry: TokenRegistry,
 ): string {
-  const sourceLines = source.split("\n");
-  const sourceLineStarts = sourceLines.reduce<number[]>((starts, _line, index) => {
-    starts.push(
-      index === 0 ? 0 : (starts[index - 1] ?? 0) + (sourceLines[index - 1]?.length ?? 0) + 1,
-    );
-    return starts;
-  }, []);
+  const { ir, lines: sourceLines, lineStarts: sourceLineStarts } = context;
   const codeLines = new Set<number>();
   const thematicBreakLines = new Set<number>();
   const structuralPaddingLines = new Set<number>();
   const emptyAtxMarkers = new Map<number, string>();
   const closingAtxLines = new Set<number>();
-  const atxHeadingLines = new Set<number>();
   const blockquoteDepthByLine = new Map<number, number>();
   for (const block of ir.blocks ?? []) {
     if (block.kind === "blockquote") {
@@ -119,9 +109,6 @@ export function protectInlineSyntaxOutsideCode(
           Math.max(blockquoteDepthByLine.get(line) ?? 0, block.blockquoteDepth ?? 0),
         );
       }
-    }
-    if (block.kind === "heading" && block.headingOrigin === "atx") {
-      atxHeadingLines.add(block.sourceStartLine ?? 0);
     }
     if (block.kind === "heading" && block.headingOrigin === "atx" && block.start === block.end) {
       const lineIndex = block.sourceStartLine ?? 0;
@@ -193,11 +180,8 @@ export function protectInlineSyntaxOutsideCode(
           (block) => block.kind === "heading" && block.sourceStartLine === lineIndex,
         );
         const projection = sourceContainerProjection(
-          rawLine,
+          context,
           lineIndex,
-          ir,
-          sourceLineStarts,
-          sourceLines,
           heading?.blockquoteDepth ?? 0,
         );
         const markerOffset = rawLine.indexOf(emptyMarker, projection.offset);
@@ -242,7 +226,7 @@ export function protectInlineSyntaxOutsideCode(
       line = protectResidualBlockPadding(
         line,
         registry,
-        atxHeadingLines.has(lineIndex),
+        closingAtxLines.has(lineIndex) || emptyAtxMarkers.has(lineIndex),
         !listLines.has(lineIndex),
         blockquoteDepthByLine.get(lineIndex) ?? 0,
       );
@@ -306,7 +290,6 @@ function protectUnpairedDelimiterRuns(
   registry: TokenRegistry,
   preservedOffsets: ReadonlySet<number> = new Set(),
 ): string {
-  const original = line;
   let protectedLine = line;
   const replacements: Array<{
     end: number;
@@ -317,24 +300,19 @@ function protectUnpairedDelimiterRuns(
   }> = [];
   for (const marker of ["*", "_", "~"] as const) {
     const pattern = new RegExp(`${marker === "*" ? "\\*" : marker}+`, "gu");
-    const matches = [...original.matchAll(pattern)].filter((match) => {
-      if (preservedOffsets.has(match.index)) {
-        return false;
-      }
-      let backslashes = 0;
-      for (let index = match.index - 1; index >= 0 && original[index] === "\\"; index -= 1) {
-        backslashes += 1;
-      }
-      return backslashes % 2 === 0;
-    });
-    const remaining = new Map(matches.map((match) => [match, match[0].length]));
-    const opens = new Map<(typeof matches)[number], boolean>();
-    const both = new Map<(typeof matches)[number], boolean>();
-    const closingConsumed = new Map<(typeof matches)[number], number>();
+    const matches = [...line.matchAll(pattern)]
+      .filter((match) => !preservedOffsets.has(match.index) && !isEscaped(line, match.index))
+      .map((match) => ({
+        start: match.index,
+        length: match[0].length,
+        remaining: match[0].length,
+        literalFirst: false,
+        both: false,
+      }));
     const stack: Array<(typeof matches)[number]> = [];
     for (const match of matches) {
-      const previous = original[match.index - 1] ?? "";
-      const next = original[match.index + match[0].length] ?? "";
+      const previous = line[match.start - 1] ?? "";
+      const next = line[match.start + match.length] ?? "";
       const previousWhitespace = !previous || /\s/u.test(previous);
       const nextWhitespace = !next || /\s/u.test(next);
       const previousPunctuation = /[\p{P}\p{S}]/u.test(previous);
@@ -347,49 +325,47 @@ function protectUnpairedDelimiterRuns(
         marker === "_" ? leftFlanking && (!rightFlanking || previousPunctuation) : leftFlanking;
       const canClose =
         marker === "_" ? rightFlanking && (!leftFlanking || nextPunctuation) : rightFlanking;
-      opens.set(match, canOpen);
-      both.set(match, canOpen && canClose);
+      match.literalFirst = canOpen;
+      match.both = canOpen && canClose;
       if (canClose) {
-        let closing = remaining.get(match) ?? 0;
-        while (closing > 0 && stack.length > 0) {
+        while (match.remaining > 0 && stack.length > 0) {
           const openingIndex = stack.findLastIndex(
             (candidate) =>
               !(
-                (both.get(candidate) || both.get(match)) &&
-                (candidate[0].length + match[0].length) % 3 === 0 &&
-                candidate[0].length % 3 !== 0 &&
-                match[0].length % 3 !== 0
+                (candidate.both || match.both) &&
+                (candidate.length + match.length) % 3 === 0 &&
+                candidate.length % 3 !== 0 &&
+                match.length % 3 !== 0
               ),
           );
           const opening = stack[openingIndex];
           if (!opening) {
             break;
           }
-          const matched = Math.min(closing, remaining.get(opening) ?? 0);
-          closingConsumed.set(match, (closingConsumed.get(match) ?? 0) + matched);
-          closing -= matched;
-          remaining.set(match, closing);
-          remaining.set(opening, (remaining.get(opening) ?? 0) - matched);
-          if ((remaining.get(opening) ?? 0) === 0) {
+          const matched = Math.min(match.remaining, opening.remaining);
+          match.literalFirst = false;
+          match.remaining -= matched;
+          opening.remaining -= matched;
+          if (opening.remaining === 0) {
             stack.splice(openingIndex, 1);
           }
         }
       }
-      if (canOpen && (remaining.get(match) ?? 0) > 0) {
+      if (canOpen && match.remaining > 0) {
         stack.push(match);
       }
     }
     for (const match of matches.toReversed()) {
-      const unmatched = remaining.get(match) ?? 0;
+      const unmatched = match.remaining;
       if (unmatched === 0) {
         continue;
       }
       replacements.push({
-        start: match.index,
-        end: match.index + match[0].length,
+        start: match.start,
+        end: match.start + match.length,
         literal: marker.repeat(unmatched),
-        literalFirst: opens.get(match) === true && (closingConsumed.get(match) ?? 0) === 0,
-        matched: marker.repeat(match[0].length - unmatched),
+        literalFirst: match.literalFirst,
+        matched: marker.repeat(match.length - unmatched),
       });
     }
   }
