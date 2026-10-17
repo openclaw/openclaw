@@ -23,12 +23,7 @@ export const QA_TEST_RUNNER_DEFAULTS = {
 
 export function createScenarioRunnerTestHarness() {
   const tempDirs = createTempDirHarness();
-
-  return {
-    makeTempDir: tempDirs.makeTempDir,
-    makeTempRepo: (prefix: string) => tempDirs.makeTempDir(prefix),
-    cleanup: tempDirs.cleanup,
-  };
+  return { ...tempDirs, makeTempRepo: tempDirs.makeTempDir };
 }
 
 export function makeTestFileScenario(
@@ -62,17 +57,11 @@ export function makeTestFileScenario(
 }
 
 export function makeDockerE2eScenario(id: string, lane: string): QaSeedScenarioWithSource {
-  const scenario = makeTestFileScenario("script", "test/e2e/qa-lab/runtime/docker-e2e-lane.ts");
-  if (scenario.execution.kind !== "script") {
-    throw new Error("expected script scenario");
-  }
+  const file = "test/e2e/qa-lab/runtime/docker-e2e-lane.ts";
   return {
-    ...scenario,
+    ...makeTestFileScenario("script", file),
     id,
-    execution: {
-      ...scenario.execution,
-      args: ["--lane", lane],
-    },
+    execution: { kind: "script", path: file, args: ["--lane", lane] },
   };
 }
 
@@ -123,43 +112,29 @@ export async function writeNativeVitestReport(
     counts.testName ??
     (testNamePatternIndex < 0 ? undefined : command.args[testNamePatternIndex + 1]) ??
     "executes the requested scenario";
-  await fs.writeFile(
-    reportArg.slice("--outputFile.json=".length),
-    JSON.stringify({
-      numFailedTests: counts.failed ?? 0,
-      numPassedTests: counts.passed,
-      success: (counts.failed ?? 0) === 0,
-      testResults: [
-        {
-          name: path.resolve(command.cwd, counts.testFilePath ?? requestedTestPath ?? "unknown"),
-          status: counts.passed > 0 ? "passed" : "skipped",
-          assertionResults:
-            counts.passed > 0
-              ? [
-                  {
-                    ancestorTitles: counts.ancestorTitles ?? [],
-                    fullName: [...(counts.ancestorTitles ?? []), testName].join(" "),
-                    title: testName,
-                    status: "passed",
-                  },
-                ]
-              : [],
-        },
-      ],
-    }),
-    "utf8",
-  );
+  const { passed, failed = 0, ancestorTitles = [] } = counts;
+  const assertion = {
+    ancestorTitles,
+    fullName: [...ancestorTitles, testName].join(" "),
+    title: testName,
+    status: "passed",
+  };
+  const testResult = {
+    name: path.resolve(command.cwd, counts.testFilePath ?? requestedTestPath ?? "unknown"),
+    status: passed > 0 ? "passed" : "skipped",
+    assertionResults: passed > 0 ? [assertion] : [],
+  };
+  await writeFixtureJson(reportArg.slice("--outputFile.json=".length), {
+    numFailedTests: failed,
+    numPassedTests: passed,
+    success: failed === 0,
+    testResults: [testResult],
+  });
 }
-
-type ScriptEvidenceArtifact = {
-  kind: string;
-  path: string;
-  source?: string;
-};
 
 type ScriptProducerEvidenceParams = {
   additionalEntries?: QaEvidenceSummaryJson["entries"];
-  artifacts?: ScriptEvidenceArtifact[];
+  artifacts?: { kind: string; path: string; source?: string }[];
   coverage?: QaEvidenceSummaryJson["entries"][number]["coverage"];
   failureReason?: string;
   producerId?: string;
@@ -188,12 +163,7 @@ export function buildScriptProducerEvidence(
         execution: {
           runner: "evidence-producer-script",
           environment: { ref: "scenario-ref", os: "darwin", nodeVersion: "v24.0.0" },
-          provider: {
-            id: "script-producer",
-            live: false,
-            model: { name: null, ref: null },
-            fixture: "synthetic-script-evidence",
-          },
+          provider: { id: "script-producer", live: false, model: { name: null, ref: null } },
           packageSource: { kind: "source-checkout", sha: "abc123" },
           artifacts: (params.artifacts ?? []).map((artifact) =>
             Object.assign({ source: "script-producer:web-ui:smoke" }, artifact),

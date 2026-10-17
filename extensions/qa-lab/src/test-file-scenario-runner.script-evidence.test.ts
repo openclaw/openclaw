@@ -5,7 +5,6 @@ import {
   projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { resolveQaScriptRuntimeExecutable } from "./test-file-scenario-runner-commands.js";
 import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
@@ -191,66 +190,37 @@ describe("qa test file scenario runner", () => {
       failureMessage: `${commandName} exited with 7`,
       status: "fail",
     });
-    expect(result.evidence.entries).toHaveLength(3);
-    expect(
-      result.evidence.entries.find((entry) => entry.test.id === "scenario-script"),
-    ).toMatchObject({
-      coverage: [],
-      execution: {
-        artifacts: [{ kind: "log", path: expect.stringContaining("producer.log") }],
-        runner: "evidence-producer-script",
-      },
-      result: { status: "pass" },
-    });
-    expect(
-      result.evidence.entries.find((entry) => entry.test.id === "producer-diagnostic"),
-    ).toMatchObject({ result: { status: "pass" } });
-    expect(result.evidence.entries[2]).toMatchObject({
-      test: { id: "scenario-script", kind: "script-test" },
-      coverage: [],
-      result: {
-        failure: {
-          reason: `${commandName} exited with 7`,
+    expect(result.evidence.entries).toMatchObject([
+      {
+        test: { id: "scenario-script" },
+        coverage: [],
+        execution: {
+          artifacts: [{ kind: "log", path: expect.stringContaining("producer.log") }],
+          runner: "evidence-producer-script",
         },
-        status: "fail",
+        result: { status: "pass" },
       },
-    });
+      { test: { id: "producer-diagnostic" }, result: { status: "pass" } },
+      {
+        test: { id: "scenario-script", kind: "script-test" },
+        coverage: [],
+        result: {
+          failure: {
+            reason: `${commandName} exited with 7`,
+          },
+          status: "fail",
+        },
+      },
+    ]);
   });
 
-  it("carries the suite profile into merged producer evidence", async () => {
-    const repoRoot = await harness.makeTempRepo("qa-script-profile-");
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-profile");
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
-      outputDir,
-      runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        await writeScriptProducerEvidence({
-          evidenceLocation: "scenario-root",
-          latestRun: "none",
-          outputDir: attemptOutputDir,
-          profile: "smoke-ci",
-          status: "pass",
-        });
-        return { exitCode: 0, stdout: "script pass\n", stderr: "" };
-      },
-      env: {
-        OPENCLAW_QA_REF: "scenario-ref",
-        OPENCLAW_QA_PROFILE: "smoke-ci",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(result.evidence.profile).toBe("smoke-ci");
-  });
   it("imports coverage-free structured evidence through the real script lifecycle", async () => {
     const tempRoot = await harness.makeTempDir("qa-script-real-evidence-");
-    const outputDir = path.join(tempRoot, "out");
     const scriptPath = path.join(tempRoot, "minimal-evidence-producer.mjs");
     const producerEvidence = buildScriptProducerEvidence({
       artifacts: [{ kind: "log", path: "artifact.log" }],
       coverage: [],
+      profile: "smoke-ci",
       status: "pass",
     });
     await fs.writeFile(
@@ -261,61 +231,42 @@ describe("qa test file scenario runner", () => {
         "const artifactBaseIndex = process.argv.indexOf('--artifact-base');",
         "if (artifactBaseIndex < 0) throw new Error('missing --artifact-base');",
         "const artifactBase = process.argv[artifactBaseIndex + 1];",
-        "const runRoot = path.join(artifactBase, 'run-1');",
+        "const runRoot = artifactBase;",
         "await fs.mkdir(runRoot, { recursive: true });",
         "await fs.writeFile(path.join(runRoot, 'artifact.log'), 'structured evidence\\n', 'utf8');",
         `const evidence = ${JSON.stringify(producerEvidence)};`,
         "await fs.writeFile(path.join(runRoot, 'qa-evidence.json'), JSON.stringify(evidence), 'utf8');",
-        "await fs.writeFile(path.join(artifactBase, 'latest-run.json'), JSON.stringify({ qaEvidence: 'run-1/qa-evidence.json' }), 'utf8');",
       ].join("\n"),
       "utf8",
     );
-    const infrastructureFixture: QaSeedScenarioWithSource = {
-      id: "scenario-script",
-      title: "Temporary script evidence fixture",
-      surface: "qa-lab",
-      objective: "Exercise structured evidence import through the real script lifecycle.",
-      successCriteria: ["The runner imports coverage-free producer evidence and artifacts."],
-      codeRefs: ["external/qa/minimal-evidence-producer.mjs"],
-      sourcePath: "external/qa/minimal-evidence-scenario.yaml",
-      execution: {
-        kind: "script",
-        path: scriptPath,
-        args: ["--artifact-base", "${outputDir}"],
-      },
-    };
+    const infrastructureFixture = makeTestFileScenario("script", scriptPath);
+    delete infrastructureFixture.coverage;
 
     const result = await runQaTestFileScenarios({
       repoRoot: process.cwd(),
       ...QA_TEST_RUNNER_DEFAULTS,
-      outputDir,
+      outputDir: path.join(tempRoot, "out"),
       scenarios: [infrastructureFixture],
       commandTimeoutMs: 20_000,
-      env: { OPENCLAW_QA_REF: "temporary-script-fixture" } as NodeJS.ProcessEnv,
+      env: { OPENCLAW_QA_REF: "temporary-script-fixture", OPENCLAW_QA_PROFILE: "smoke-ci" },
     });
 
     expect(result.executionKind).toBe("script");
+    expect(result.evidence.profile).toBe("smoke-ci");
     expect(result.results[0]).toMatchObject({
       status: "pass",
       producerEvidence: {
         entries: [{ test: { id: "script-producer.web-ui.smoke" } }],
       },
     });
+    const artifact = path.join(
+      path.dirname(result.results[0]!.logPath),
+      "scenario-script",
+      "artifact.log",
+    );
     expect(result.evidence.entries[0]).toMatchObject({
       coverage: [],
-      execution: {
-        artifacts: [
-          {
-            kind: "log",
-            path: path.join(
-              path.dirname(result.results[0]!.logPath),
-              "scenario-script",
-              "run-1",
-              "artifact.log",
-            ),
-          },
-        ],
-      },
+      execution: { artifacts: [{ kind: "log", path: artifact }] },
       test: { id: "script-producer.web-ui.smoke" },
     });
   });

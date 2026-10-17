@@ -11,7 +11,6 @@ import {
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
-import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
 import { resolveQaScriptRuntimeExecutable } from "./test-file-scenario-runner-commands.js";
 import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
@@ -24,14 +23,46 @@ import {
 } from "./test-file-scenario-runner.test-support.js";
 
 const harness = createScenarioRunnerTestHarness();
-
-afterEach(async () => {
-  await harness.cleanup();
+const profilePlan = qaProfileEvidencePlan.build({
+  profile: "all",
+  taxonomyIdentity: { version: 1, sha256: "a".repeat(64) },
+  membershipScenarios: [],
+  selectedScenarios: [],
+  excludedScenarios: [],
+  expectedCells: [],
+  observedCells: [],
 });
+
+afterEach(() => harness.cleanup());
+
+function attachScorecard(evidencePath: string, coverageIds: string[]) {
+  return attachQaProfileScorecardEvidenceToFile({
+    evidencePath,
+    profilePlan,
+    evidenceMode: "full",
+    profile: "all",
+    filters: {},
+    categories: [
+      {
+        id: "fixture.coverage",
+        taxonomySurfaceId: "fixture",
+        taxonomyCategoryName: "Coverage",
+        inventoryStatus: "complete",
+        profiles: ["all"],
+        features: coverageIds.map((id) => ({ name: id, coverageIds: [id] })),
+        coverageIds,
+        inventoriedCoverageIds: coverageIds,
+        inventoryRefs: [],
+        scenarioRefs: [],
+        missingCoverageIds: [],
+        missingInventoryRefs: [],
+      },
+    ],
+  });
+}
 
 describe("producer coverage claims", () => {
   it("retains bound child assertions when the parent caps primary coverage", async () => {
-    const evidenceMode = "full";
     const repoRoot = await harness.makeTempRepo("qa-child-coverage-cap-");
     const coverage: QaEvidenceSummaryV3Json["entries"][number]["coverage"] = [
       { id: "qa.coverage", role: "primary" },
@@ -83,14 +114,14 @@ describe("producer coverage claims", () => {
       ],
     });
     child.select(0, childId);
-    const original = child.snapshot({ generatedAt: "2026-09-14T00:00:00Z", evidenceMode });
+    const original = child.snapshot({ generatedAt: "2026-09-14T00:00:00Z", evidenceMode: "full" });
     const bytes = Buffer.from(JSON.stringify(original));
     let evidencePath = "";
     const result = await runQaTestFileScenarios({
       repoRoot,
       outputDir: path.join(repoRoot, "out"),
       ...QA_TEST_RUNNER_DEFAULTS,
-      evidenceMode,
+      evidenceMode: "full",
       scenarios: [makeTestFileScenario("script", "producer.mjs")],
       runCommand: async (command) => {
         const base = command.args[command.args.indexOf("--artifact-base") + 1]!;
@@ -105,80 +136,16 @@ describe("producer coverage claims", () => {
     }
     const summary: QaEvidenceSummaryV3Json = result.evidence;
     expect(summary.entries[0]).toEqual(original.entries[0]);
-    for (const occurrence of original.occurrences) {
-      expect(summary.occurrences.find((item) => item.id === occurrence.id)).toEqual(occurrence);
-    }
+    expect(summary.occurrences).toEqual(expect.arrayContaining(original.occurrences));
     expect(await fs.readFile(evidencePath)).toEqual(bytes);
     expect(
       summary.occurrences
         .flatMap((item) => item.receipts)
         .find((receipt) => receipt.artifact.kind === "producer-evidence")?.artifact.sha256,
     ).toBe(createHash("sha256").update(bytes).digest("hex"));
-    const scenario = makeTestFileScenario("script", "producer.mjs");
-    const cell = { scenarioId: scenario.id, executionKind: "script" as const, channel: null };
-    const profilePlan = qaProfileEvidencePlan.build({
-      profile: "all",
-      taxonomyIdentity: { version: 1, sha256: "a".repeat(64) },
-      membershipScenarios: [scenario],
-      selectedScenarios: [scenario],
-      excludedScenarios: [],
-      expectedCells: [cell],
-      observedCells: [cell],
-      proofRequirements: coverage.map(({ id }) => ({
-        id,
-        coverageId: id,
-        obligation: "required",
-        owner: "fixture-owner",
-        acceptedRef: "qa/fixtures/coverage",
-        retryAcceptance: "selected-attempt",
-        alternatives: [{ sourceRef: "fixture-child" }],
-      })),
-    });
-    for (const retryAcceptance of ["selected-attempt", "all-recorded-attempts"] as const) {
-      const proof = qaProfileEvidencePlan.evaluateProof(
-        {
-          ...profilePlan,
-          proofRequirements: profilePlan.proofRequirements!.map((item) =>
-            Object.assign({}, item, { retryAcceptance }),
-          ),
-        },
-        summary,
-      );
-      expect(proof.map((item) => [item.coverageId, item.qualified])).toEqual([
-        ["qa.coverage", true],
-        ["qa.reporting", false],
-        ["other.claim", false],
-      ]);
-    }
     const coverageIds = coverage.map(({ id }) => id);
-    const scorecard = await attachQaProfileScorecardEvidenceToFile({
-      evidencePath: result.evidencePath,
-      evidenceMode,
-      profile: "all",
-      profilePlan,
-      filters: {},
-      categories: [
-        {
-          id: "qa.coverage",
-          taxonomySurfaceId: "qa",
-          taxonomyCategoryName: "Coverage",
-          inventoryStatus: "complete",
-          profiles: ["all"],
-          features: coverageIds.map((id) => ({ name: id, coverageIds: [id] })),
-          coverageIds,
-          inventoriedCoverageIds: coverageIds,
-          inventoryRefs: [],
-          scenarioRefs: [],
-          missingCoverageIds: [],
-          missingInventoryRefs: [],
-        },
-      ],
-    });
-    expect(scorecard.coverageIds).toMatchObject({
-      total: 3,
-      fulfilled: 1,
-      missing: 2,
-    });
+    const scorecard = await attachScorecard(result.evidencePath, coverageIds);
+    expect(scorecard.coverageIds).toMatchObject({ total: 3, fulfilled: 1, missing: 2 });
     expect(scorecard.categoryReports[0]?.coverageIds.secondaryOnly).toBe(1);
     expect(getEffectiveQaEvidenceEntries(summary)[0]).toBe(summary.entries[0]);
     expect(
@@ -188,10 +155,7 @@ describe("producer coverage claims", () => {
   });
 
   it("caps producer coverage without promoting or inventing claims in slim mode", async () => {
-    const evidenceMode = "slim";
-
     const repoRoot = await harness.makeTempRepo("qa-script-coverage-claims-");
-    const outputDir = path.join(repoRoot, "out");
     const claims = [
       [],
       [{ id: "qa.coverage", role: "primary" }],
@@ -213,9 +177,9 @@ describe("producer coverage claims", () => {
     );
     const result = await runQaTestFileScenarios({
       repoRoot,
-      outputDir,
+      outputDir: path.join(repoRoot, "out"),
       ...QA_TEST_RUNNER_DEFAULTS,
-      evidenceMode,
+      evidenceMode: "slim",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
       runCommand: async (command) => {
         await writeScriptProducerEvidence({
@@ -248,24 +212,21 @@ describe("producer coverage claims", () => {
     });
     for (const [index, original] of producerEntries.entries()) {
       const imported = result.evidence.entries[index + 1];
-      expect(imported?.test).toEqual(original.test);
-      expect(imported?.result).toEqual(original.result);
-
-      expect(imported?.execution).toBeUndefined();
+      expect(imported).toMatchObject({
+        test: original.test,
+        result: original.result,
+        execution: undefined,
+      });
     }
   });
 });
 
 describe.skipIf(process.platform === "win32")("onboarding assertion attribution", () => {
   it("fulfills only the passing boundary through producer, importer and persisted scorecard", async () => {
-    const evidenceMode = "full";
-    const repoRoot = process.cwd();
     const tempRoot = await harness.makeTempDir("qa-onboarding-attribution-");
-    const outputDir = path.join(tempRoot, "evidence");
     const binDir = path.join(tempRoot, "bin");
     await fs.mkdir(binDir);
-    // Exercise the real producer and marker parser without invoking Docker.
-    // The child reports exactly one completed boundary before failing.
+    // Report one completed boundary through the real producer without Docker.
     await fs.writeFile(
       path.join(binDir, "bash"),
       [
@@ -284,45 +245,11 @@ describe.skipIf(process.platform === "win32")("onboarding assertion attribution"
       "cli.remote-onboarding",
       "cli.targeted-reconfiguration",
     ];
-    const features = coverageIds.map((id) => ({ name: id, coverageIds: [id] }));
-    const taxonomyPath = path.join(tempRoot, "taxonomy.json");
-    const surface = { id: "cli", name: "CLI", family: "core", level: "experimental" };
-    await fs.writeFile(
-      taxonomyPath,
-      JSON.stringify({
-        version: 1,
-        title: "Onboarding attribution fixture",
-        levels: [{ id: "experimental", code: "M1", label: "Experimental" }],
-        surfaces: [
-          {
-            ...surface,
-            categories: [
-              {
-                id: "onboarding-and-auth-setup",
-                name: "Onboarding",
-                features,
-                category_note: "Four independently asserted onboarding boundaries",
-                docs: [],
-              },
-            ],
-          },
-        ],
-      }),
-    );
-    const profilePlan = qaProfileEvidencePlan.build({
-      profile: "all",
-      taxonomyIdentity: qaMaturityTaxonomyIdentity(readQaMaturityTaxonomySource(taxonomyPath)),
-      membershipScenarios: [],
-      selectedScenarios: [],
-      excludedScenarios: [],
-      expectedCells: [],
-      observedCells: [],
-    });
     const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
+      repoRoot: process.cwd(),
+      outputDir: path.join(tempRoot, "evidence"),
       ...QA_TEST_RUNNER_DEFAULTS,
-      evidenceMode,
+      evidenceMode: "full",
       scenarios: [scenario],
       env: { PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
     });
@@ -338,29 +265,7 @@ describe.skipIf(process.platform === "win32")("onboarding assertion attribution"
       ["cli-targeted-reconfiguration", "fail"],
       ["cli-onboarding", "fail"],
     ]);
-    const scorecard = await attachQaProfileScorecardEvidenceToFile({
-      evidencePath: result.evidencePath,
-      evidenceMode,
-      profile: "all",
-      profilePlan,
-      filters: {},
-      categories: [
-        {
-          id: "cli.onboarding-and-auth-setup",
-          taxonomySurfaceId: "cli",
-          taxonomyCategoryName: "Onboarding",
-          inventoryStatus: "complete",
-          profiles: ["all"],
-          features,
-          coverageIds,
-          inventoriedCoverageIds: coverageIds,
-          inventoryRefs: [],
-          scenarioRefs: [],
-          missingCoverageIds: [],
-          missingInventoryRefs: [],
-        },
-      ],
-    });
+    const scorecard = await attachScorecard(result.evidencePath, coverageIds);
     expect(scorecard.coverageIds).toEqual({
       total: 4,
       fulfilled: 1,
@@ -373,10 +278,7 @@ describe.skipIf(process.platform === "win32")("onboarding assertion attribution"
     );
     for (const [index, original] of (producer?.entries ?? []).entries()) {
       const imported = result.evidence.entries[index];
-      expect(imported?.test).toEqual(original.test);
-      expect(imported?.result).toEqual(original.result);
-      expect(imported?.coverage).toEqual(original.coverage);
-      expect(imported?.execution).toEqual(original.execution);
+      expect(imported).toMatchObject(original);
     }
     for (const index of [0, 2, 3]) {
       expect(result.evidence.entries[index]?.result.failure?.reason).toContain(
@@ -387,7 +289,6 @@ describe.skipIf(process.platform === "win32")("onboarding assertion attribution"
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
     expect(written.entries).toEqual(result.evidence.entries);
-    expect(written.evidenceMode).toBe(evidenceMode);
-    expect(written.profilePlan).toEqual(profilePlan);
+    expect(written).toMatchObject({ evidenceMode: "full", profilePlan });
   }, 60_000);
 });

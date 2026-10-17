@@ -15,11 +15,12 @@ const NATIVE_COVERAGE = {
   capabilityLayer: "codex-native-workspace",
   required: true,
 };
+type ScenarioConfig = { toolCoverage?: Record<string, unknown>; [key: string]: unknown };
 
 function makeScenario(
   id: string,
   tool: string,
-  config: Record<string, unknown> = {},
+  config: ScenarioConfig = {},
 ): QaSeedScenarioWithSource {
   return {
     id,
@@ -33,7 +34,7 @@ function makeScenario(
       kind: "flow",
       config: {
         ...config,
-        toolCoverage: { ...readToolCoverageConfig(config), family: tool },
+        toolCoverage: { ...config.toolCoverage, family: tool },
       },
       flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
     },
@@ -50,13 +51,6 @@ function makeRequiredToolScenario(tool: string, toolName: string) {
       required: true,
     },
   });
-}
-
-function readToolCoverageConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const toolCoverage = config.toolCoverage;
-  return typeof toolCoverage === "object" && toolCoverage !== null && !Array.isArray(toolCoverage)
-    ? (toolCoverage as Record<string, unknown>)
-    : {};
 }
 
 function makeCell(
@@ -174,10 +168,7 @@ describe("qa tool coverage report", () => {
             expectedLayer: "codex-native-workspace",
             required: true,
           },
-          knownBroken: {
-            issue: "#80236",
-            reason: "tracked runtime drift",
-          },
+          knownBroken: { issue: "#80236", reason: "tracked runtime drift" },
         }),
       ],
       {
@@ -195,9 +186,7 @@ describe("qa tool coverage report", () => {
       },
     );
 
-    expect(report.pass).toBe(true);
-    expect(report.passingTools).toBe(2);
-    expect(report.trackedTools).toBe(1);
+    expect(report).toMatchObject({ pass: true, passingTools: 2, trackedTools: 1 });
     expect(report.rows.find((row) => row.tool === "write")).toMatchObject({
       drift: "tool-result-shape",
       tracking: "#80236 tracked runtime drift",
@@ -216,22 +205,16 @@ describe("qa tool coverage report", () => {
           },
         }),
       ],
-      summary(
-        result(
-          "tool-searchable-web-search",
-          "tool-call-shape",
-          [call("web_search")],
-          [],
-          "searchable discovery was report-only",
-        ),
-      ),
+      summary(result("tool-searchable-web-search", "tool-call-shape", [call("web_search")], [])),
     );
 
-    expect(report.pass).toBe(true);
-    expect(report.failures).toEqual([]);
-    expect(report.reportOnlyTools).toBe(1);
-    expect(report.passingTools).toBe(0);
-    expect(report.searchableDynamicTools).toBe(1);
+    expect(report).toMatchObject({
+      pass: true,
+      failures: [],
+      reportOnlyTools: 1,
+      passingTools: 0,
+      searchableDynamicTools: 1,
+    });
     expect(report.rows[0]).toMatchObject({
       capabilityLayer: "openclaw-dynamic-searchable",
       required: false,
@@ -248,24 +231,17 @@ describe("qa tool coverage report", () => {
           toolCoverage: NATIVE_COVERAGE,
         }),
       ],
-      {
-        scenarios: [
-          {
-            name: "tool exec",
-            status: "pass",
-            runtimeParity: result(
-              "tool-exec",
-              "tool-call-shape",
-              [call("exec", "openclaw-ok")],
-              [call("bash", "codex-ok", "b")],
-            ),
-          },
-        ],
-      },
+      summary(
+        result(
+          "tool-exec",
+          "tool-call-shape",
+          [call("exec", "openclaw-ok")],
+          [call("bash", "codex-ok", "b")],
+        ),
+      ),
     );
 
-    expect(report.pass).toBe(true);
-    expect(report.failures).toEqual([]);
+    expect(report).toMatchObject({ pass: true, failures: [] });
     expect(report.rows[0]).toMatchObject({
       runtimeToolName: "exec",
       codexRuntimeToolName: "bash",
@@ -291,10 +267,7 @@ describe("qa tool coverage report", () => {
     );
 
     expect(report.pass).toBe(false);
-    expect(report.rows[0]).toMatchObject({
-      codexToolCalls: 2,
-      codexSuccessfulToolCalls: 0,
-    });
+    expect(report.rows[0]).toMatchObject({ codexToolCalls: 2, codexSuccessfulToolCalls: 0 });
     expect(report.passingTools).toBe(0);
     expect(report.failures).toEqual([
       "web-search missing successful codex tool call/result web_search",
@@ -363,16 +336,14 @@ describe("qa tool coverage report", () => {
 
   it("rejects unknown runtime capability layers", () => {
     expect(() =>
-      buildQaToolCoverageReport({
-        scenarios: [
-          makeScenario("tool-bad-layer", "bad", {
-            toolCoverage: {
-              bucket: "openclaw-dynamic-integration",
-              capabilityLayer: "everything-everywhere",
-            },
-          }),
-        ],
-      }),
+      makeReport([
+        makeScenario("tool-bad-layer", "bad", {
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            capabilityLayer: "everything-everywhere",
+          },
+        }),
+      ]),
     ).toThrow("unknown runtime tool capabilityLayer");
   });
 

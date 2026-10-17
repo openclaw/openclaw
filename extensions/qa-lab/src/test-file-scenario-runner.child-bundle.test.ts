@@ -32,25 +32,32 @@ function requireV3(evidence: QaEvidenceSummaryJson): asserts evidence is QaEvide
 }
 
 function continueChildEvidence(evidence?: QaEvidenceSummaryV3Json) {
-  return evidence
-    ? {
-        evidenceContinuation: evidence,
-        evidenceAnchors: resolveQaEvidenceContainment(evidence.occurrences, evidence.entries)
-          .rootInstances,
-      }
-    : {};
+  return {
+    evidenceContinuation: evidence,
+    evidenceAnchors:
+      evidence &&
+      resolveQaEvidenceContainment(evidence.occurrences, evidence.entries).rootInstances,
+  };
 }
+
+const childCoverage = ["qa.coverage", "qa.reporting", "other.claim"].map((id) => ({
+  id,
+  role: "primary" as const,
+}));
+const unresolved = {
+  status: "blocked",
+  failureMessage: expect.stringContaining("unresolved scheduled scenario"),
+};
 
 describe("native attempt child bundles", () => {
   it("retains a later failing producer check and its fallback diagnostic after a blocked retry", async () => {
     const root = await harness.makeTempRepo("qa-native-multicheck-retry-");
-    const scenarios = [makeTestFileScenario("script", "producer.mjs")];
     const run = async (continuation?: QaEvidenceSummaryV3Json) =>
       runQaTestFileScenarios({
         repoRoot: root,
         ...QA_TEST_RUNNER_DEFAULTS,
         outputDir: path.join(root, "out"),
-        scenarios,
+        scenarios: [makeTestFileScenario("script", "producer.mjs")],
         ...continueChildEvidence(continuation),
         runCommand: async (command) => {
           await writeScriptProducerEvidence({
@@ -98,9 +105,8 @@ import { createQaEvidenceInvocation } from ${JSON.stringify(api)};
 const value = (flag) => process.argv[process.argv.indexOf(flag) + 1];
 const status = value("--status");
 const output = value("--artifact-base");
-const source = { ref: null, integrity: null };
 const launch = {
-  source, runtime: { id: "node", version: process.version }, package: null,
+  source: { ref: null, integrity: null }, runtime: { id: "node", version: process.version }, package: null,
   protocol: null, accountRef: null, proofClass: null,
 };
 const scenarios = ["same", "other", "same"].map((id) => ({
@@ -113,11 +119,7 @@ for (const [index, result] of results.entries()) {
   const id = owner.begin(index);
   owner.complete(id, { status: result, entries: index === 0 && value("--omit-first") === "true" ? [] : [{
     test: { id: scenarios[index].id, title: "Actual child check", kind: "script-test" },
-    coverage: [
-      { id: "qa.coverage", role: "primary" },
-      { id: "qa.reporting", role: "primary" },
-      { id: "other.claim", role: "primary" },
-    ],
+    coverage: ${JSON.stringify(childCoverage)},
     result: { status: result },
   }] });
   owner.select(index, id);
@@ -125,7 +127,6 @@ for (const [index, result] of results.entries()) {
 if (value("--open") === "true") owner.begin(2);
 await fs.writeFile(path.join(output, "qa-evidence.json"),
   JSON.stringify(owner.snapshot({ generatedAt: new Date().toISOString() })), { flag: "wx" });
-console.log("child pid=" + process.pid);
 process.exitCode = Number(value("--exit"));
 `,
       );
@@ -201,12 +202,9 @@ process.exitCode = Number(value("--exit"));
               allowBlockedEvidence,
             });
             requireV3(incomplete.evidence);
-            expect(incomplete.results[0]).toMatchObject({
-              status: "blocked",
-              failureMessage: expect.stringContaining("unresolved scheduled scenario"),
-            });
-            expect(projectQaEvidenceScenarioOutcomes(incomplete.evidence)).toEqual([
-              expect.objectContaining({ status: "blocked" }),
+            expect(incomplete.results[0]).toMatchObject(unresolved);
+            expect(projectQaEvidenceScenarioOutcomes(incomplete.evidence)).toMatchObject([
+              { status: "blocked" },
             ]);
             expect(
               incomplete.evidence.occurrences.filter(
@@ -222,12 +220,8 @@ process.exitCode = Number(value("--exit"));
           omitFirstRow: true,
           allowBlockedEvidence: true,
         });
-        // A terminal pointer without an effective row remains unresolved by the
-        // canonical reader, even when terminal blocked evidence is allowed.
-        expect(terminal.results[0]).toMatchObject({
-          status: "blocked",
-          failureMessage: expect.stringContaining("unresolved scheduled scenario"),
-        });
+        // Terminal pointers without effective rows cannot finish the schedule.
+        expect(terminal.results[0]).toMatchObject(unresolved);
         expect(
           projectQaEvidenceScenarioOutcomes(terminal.results[0]!.producerEvidence!)[0]?.status,
         ).toBeNull();
@@ -250,11 +244,7 @@ process.exitCode = Number(value("--exit"));
         });
       }
       expect(await fs.readFile(originalPath)).toEqual(originalBytes);
-      for (const occurrence of original.occurrences) {
-        expect(second.evidence.occurrences.find((item) => item.id === occurrence.id)).toEqual(
-          occurrence,
-        );
-      }
+      expect(second.evidence.occurrences).toEqual(expect.arrayContaining(original.occurrences));
       const finalBytes = JSON.stringify(second.evidence);
       for (const evidenceMode of ["full", "slim"] as const) {
         const projected = validateQaEvidenceSummaryJson({
@@ -271,11 +261,7 @@ process.exitCode = Number(value("--exit"));
           status === "pass" ? ["pass", "pass", "pass", "pass"] : ["fail", "pass", "fail"],
         );
         expect(active.slice(0, -1).map((entry) => entry.coverage)).toEqual(
-          Array.from({ length: status === "pass" ? 3 : 2 }, () => [
-            { id: "qa.coverage", role: "primary" },
-            { id: "qa.reporting", role: "primary" },
-            { id: "other.claim", role: "primary" },
-          ]),
+          Array.from({ length: status === "pass" ? 3 : 2 }, () => childCoverage),
         );
         requireV3(projected);
         const containment = resolveQaEvidenceContainment(projected.occurrences, projected.entries);
