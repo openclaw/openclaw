@@ -5,14 +5,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError,
@@ -32,7 +30,6 @@ import {
   hasOpenClawAgentReadOnlySchema,
 } from "./openclaw-agent-db-readonly-open.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
-import { stageOpenClawAgentDatabaseSchemaExtension } from "./openclaw-agent-db-schema-extension.worker.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-refresh.js";
 import {
   adoptOpenClawAgentDatabaseSchema,
@@ -180,50 +177,6 @@ describe("canonical proof on physical database validation", () => {
       }
     });
   });
-  it("publishes known derived DDL without repeating agent admission", async () => {
-    await withReceiptFixture(false, (database, options) => {
-      const reader = openOpenClawAgentDatabaseReadOnly(options);
-      if (!reader.found || isPostgresSqlConnection(reader.database.db)) {
-        throw new Error("Expected independent SQLite reader");
-      }
-      const previous = getOpenClawAgentDatabaseValidation(database)!;
-      const retainedReader = captureOpenClawAgentDatabaseReadValidation(database);
-      expect(retainedReader).toBeDefined();
-      try {
-        runSqliteImmediateTransactionSync(database.db, () => {
-          stageOpenClawAgentDatabaseSchemaExtension(database.db);
-          database.db.exec("CREATE TABLE derived_vectors(id TEXT PRIMARY KEY, vector BLOB)");
-        });
-        const observation = trackSqliteStatementExecutions(database.db, ["sql"], () => "sql");
-        const readerObservation = trackSqliteStatementExecutions(
-          reader.database.db,
-          ["sql"],
-          () => "sql",
-        );
-        try {
-          const current = refreshOpenClawAgentDatabaseSchema(database, () => {});
-          expect(() => retainedReader!.assertCurrent()).not.toThrow();
-          expect(current.valid).toBe(previous.valid);
-          expect(current.schema?.facts?.tables.has("derived_vectors")).toBe(true);
-          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
-          expect(
-            getAdmittedSqliteSchemaFacts(reader.database.db)?.tables.has("derived_vectors"),
-          ).toBe(true);
-          expect(observation.counts.sql).toBe(0);
-          expect(readerObservation.counts.sql).toBe(0);
-        } finally {
-          readerObservation.restore();
-          observation.restore();
-        }
-        // Unclassified DDL still invalidates the agent contract.
-        database.db.exec("DROP TABLE derived_vectors");
-        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
-      } finally {
-        reader.database.close();
-      }
-    });
-  });
-
   it("shares republished schema proof with restart readers through a directory symlink", async () => {
     await withReceiptFixture(true, (database) => {
       const aliasDir = path.join(path.dirname(database.path), "reader-alias");

@@ -37,6 +37,20 @@ vi.mock("./exec-termination.js", () => ({
 
 const scopes: Promise<unknown>[] = [];
 const fixtures: Array<() => void> = [];
+const uncertainCleanup = { code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" };
+const emptyResult = {
+  stdout: Buffer.alloc(0),
+  stderr: Buffer.alloc(0),
+  exitCode: 0,
+  failed: false,
+  timedOut: false,
+  isCanceled: false,
+  isMaxBuffer: false,
+  isTerminated: false,
+  isForcefullyTerminated: false,
+};
+const spawnFixture = () => spawnCommand(["fixture"], { reject: false });
+
 function ownScope<T>(
   run: (stop: () => void) => Promise<T>,
   custody?: CommandProcessCustody,
@@ -51,17 +65,7 @@ function commandFixture() {
   const child = new BrokerChild(1, ["fixture"], async () => {});
   const ready = createDeferredCore();
   const closed = createDeferredCore();
-  const result = createDeferredCore<{
-    stdout: Buffer;
-    stderr: Buffer;
-    exitCode: number;
-    failed: boolean;
-    timedOut: boolean;
-    isCanceled: boolean;
-    isMaxBuffer: boolean;
-    isTerminated: boolean;
-    isForcefullyTerminated: boolean;
-  }>();
+  const result = createDeferredCore<typeof emptyResult>();
   const cleanup = createDeferredCore<"forced" | "uncertain">();
   vi.spyOn(child, "ready").mockReturnValue(ready.promise);
   vi.spyOn(child, "waitForClose").mockReturnValue(closed.promise);
@@ -84,17 +88,7 @@ function commandFixture() {
     finish(close = true) {
       child.exitCode = 0;
       child.emit("exit", 0, null);
-      result.resolve({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        exitCode: 0,
-        failed: false,
-        timedOut: false,
-        isCanceled: false,
-        isMaxBuffer: false,
-        isTerminated: false,
-        isForcefullyTerminated: false,
-      });
+      result.resolve({ ...emptyResult });
       if (close) {
         closed.resolve();
       }
@@ -143,10 +137,9 @@ describe("command scope physical settlement", () => {
       });
       let finished = false;
       const failure = new Error("transport failed");
-      const scope = ownScope(
-        () => ownScope(async () => void (await spawnCommand(["fixture"], { reject: false }))),
-        { reserve },
-      ).finally(() => {
+      const scope = ownScope(() => ownScope(async () => void (await spawnFixture())), {
+        reserve,
+      }).finally(() => {
         finished = true;
       });
       const outcome = scope.catch((error: unknown) => error);
@@ -179,12 +172,9 @@ describe("command scope physical settlement", () => {
     async (notStarted) => {
       const fixture = commandFixture();
       const reservation = { spawned: vi.fn(), settled: vi.fn() };
-      const scope = ownScope(
-        async () => void (await spawnCommand(["fixture"], { reject: false })),
-        {
-          reserve: () => reservation,
-        },
-      );
+      const scope = ownScope(async () => void (await spawnFixture()), {
+        reserve: () => reservation,
+      });
       const outcome = scope.catch((error: unknown) => error);
       if (notStarted) {
         fixture.child.markNotStarted();
@@ -235,7 +225,7 @@ describe("command scope physical settlement", () => {
         await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
         vi.useRealTimers();
       }
-      expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+      expect(await outcome).toMatchObject(uncertainCleanup);
       expect(beforeInput).not.toHaveBeenCalled();
       expect(reservation.settled).toHaveBeenCalledTimes(live ? 0 : 1);
     },
@@ -269,7 +259,7 @@ describe("command scope physical settlement", () => {
       expect(scopeFinished).toBe(false);
       fixture.cleanup.resolve(cleanup);
       if (cleanup === "uncertain") {
-        expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+        expect(await outcome).toMatchObject(uncertainCleanup);
       } else {
         await scope;
       }
@@ -285,9 +275,7 @@ describe("command scope physical settlement", () => {
       let scopeFinished = false;
       const scope = ownScope(async () => {
         const pending =
-          api === "exec"
-            ? runExec("fixture", [], { logOutput: false })
-            : spawnCommand(["fixture"], { reject: false });
+          api === "exec" ? runExec("fixture", [], { logOutput: false }) : spawnFixture();
         void pending.catch(() => {});
         throw failure;
       }).finally(() => {
@@ -310,14 +298,14 @@ it.skipIf(process.platform === "win32")(
     vi.spyOn(process, "kill").mockReturnValue(true);
     const fixture = commandFixture();
     const scope = ownScope(async () => {
-      await spawnCommand(["fixture"], { reject: false });
+      await spawnFixture();
     });
     const outcome = scope.catch((error: unknown) => error);
     fixture.open();
     fixture.finish();
     try {
       await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
-      expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+      expect(await outcome).toMatchObject(uncertainCleanup);
     } finally {
       vi.useRealTimers();
     }
@@ -338,7 +326,7 @@ it.skipIf(process.platform === "win32")(
     const reservation = { spawned: vi.fn(), settled: vi.fn() };
     const scope = ownScope(
       async () => {
-        await spawnCommand(["fixture"], { reject: false });
+        await spawnFixture();
       },
       { reserve: () => reservation },
     );
@@ -360,14 +348,14 @@ it("keeps Windows transport failure uncertain without a native exit", async () =
   await withMockedWindowsPlatform(async () => {
     const fixture = commandFixture();
     const scope = ownScope(async () => {
-      const pending = spawnCommand(["fixture"], { reject: false });
+      const pending = spawnFixture();
       fixture.open();
       await setImmediate();
       fixture.fail(new Error("transport failed after readiness"));
       await pending.catch(() => {});
     });
     const outcome = scope.catch((error: unknown) => error);
-    expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+    expect(await outcome).toMatchObject(uncertainCleanup);
   });
 });
 

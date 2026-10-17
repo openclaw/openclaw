@@ -2,7 +2,6 @@ import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type {
   SidebarRecentSession,
@@ -10,7 +9,7 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 
-export interface SessionOrganizerControllerHost extends SolidControllerHost {
+export interface SessionOrganizerDependencies {
   readonly sessionData: Pick<
     SessionDataOwner,
     | "beginSessionMutation"
@@ -28,7 +27,6 @@ export interface SessionOrganizerControllerHost extends SolidControllerHost {
   sessionsShowSystem: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
-  findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
   listSessionGroupFolders(path?: string): Promise<FsListDirResult>;

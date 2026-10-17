@@ -4,6 +4,7 @@ import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.j
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
+import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
 import {
   markdownFileLinkFromEvent,
@@ -16,10 +17,10 @@ import {
   markdownSessionLinkFromKeyboardEvent,
   type SessionLinkTarget,
 } from "../../../components/markdown-session-links.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import "../../../components/tooltip.ts";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -420,7 +421,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
   const markdownRef = markdownBlocksRef(markdownPresented);
   return (
     <div
-      class={fillHost() ? "sidebar-panel-host--fill" : ""}
+      class={{ "sidebar-panel-host--fill": fillHost() }}
       ref={markdownRef}
       onClick={(event) => props.onClick(event)}
       onKeyDown={(event) => props.onKeydown(event)}
@@ -635,20 +636,26 @@ export function SidebarPanel(props: SidebarPanelProps) {
                         </div>
                       }
                     >
-                      <MarkdownHtml
-                        as="article"
-                        class="sidebar-markdown-reader sidebar-markdown"
-                        dir={detectTextDirection(content().content)}
-                        markdown={content().content}
-                        options={{
-                          codeBlockInteraction: "interactive",
-                          fileLinks: true,
-                          githubRepo: props.githubRepo ?? null,
-                          githubRepositories: props.githubRepositories,
-                          interactiveImages: props.onOpenImage !== undefined,
-                          sessionLinks: true,
-                        }}
-                      />
+                      {(_visible) => {
+                        const markdown = createMarkdownRef(() => ({
+                          incremental: true,
+                          content: toSanitizedMarkdownHtml(content().content, {
+                            codeBlockInteraction: "interactive",
+                            fileLinks: true,
+                            githubRepo: props.githubRepo ?? null,
+                            githubRepositories: props.githubRepositories,
+                            interactiveImages: props.onOpenImage !== undefined,
+                            sessionLinks: true,
+                          }),
+                        }));
+                        return (
+                          <article
+                            ref={markdown}
+                            class="sidebar-markdown-reader sidebar-markdown"
+                            dir={detectTextDirection(content().content)}
+                          />
+                        );
+                      }}
                     </Show>
                   </section>
                 )}

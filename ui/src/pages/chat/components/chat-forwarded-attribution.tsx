@@ -74,16 +74,20 @@ function ForwardedLink(props: { source: ForwardedSource; basePath?: string }) {
   const initialLabel = createMemo(
     () => props.source.sourceLabel ?? props.source.linkableSourceKey ?? "",
   );
-  const linkClass = createMemo(
-    () =>
-      `markdown-session-link${props.source.sourceLabel ? " markdown-session-link--titled" : ""}${props.source.sourceIsOtherAgent && props.source.sourceIsMainSession ? " markdown-session-link--agent" : ""}`,
-  );
   return (
     <Show
       when={props.source.cronJobId && props.source.cronRunSessionId}
       fallback={
         <a
-          class={linkClass()}
+          class={[
+            "markdown-session-link",
+            {
+              "markdown-session-link--titled": Boolean(props.source.sourceLabel),
+              "markdown-session-link--agent": Boolean(
+                props.source.sourceIsOtherAgent && props.source.sourceIsMainSession,
+              ),
+            },
+          ]}
           role="link"
           tabindex="0"
           data-session-key={props.source.linkableSourceKey}
@@ -115,9 +119,6 @@ export function ForwardedAttribution(props: {
   const source = createMemo(() => forwardedSource(props.group, props.options));
   const initialPlainLabel = createMemo(
     () => source().sourceLabel ?? source().sourceSessionKey ?? "",
-  );
-  const plainClass = createMemo(() =>
-    source().sourceLabel ? "markdown-session-link--titled" : undefined,
   );
   const avatarAgentId = () =>
     source().sourceIsOtherAgent && props.options.updateCount === undefined
@@ -184,7 +185,7 @@ export function ForwardedAttribution(props: {
               data-session-key={
                 source().sourceParsed && !source().cronJobId ? source().sourceSessionKey : undefined
               }
-              class={plainClass()}
+              class={{ "markdown-session-link--titled": Boolean(source().sourceLabel) }}
             >
               <span class="session-label" textContent={initialPlainLabel()} />
             </span>

@@ -167,7 +167,7 @@ export function* selectSessionEntries(
 function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
   list: SessionEntrySelection & { now: number; storePath: string },
-  { sessions, previousRows }: { sessions: GatewaySessionRow[]; previousRows?: GatewaySessionRow[] },
+  { sessions, rowHistory }: { sessions: GatewaySessionRow[]; rowHistory?: GatewaySessionRow[][] },
   policyConfig: OpenClawConfig,
   client?: GatewayClient | null,
 ): SessionsListResult {
@@ -222,7 +222,7 @@ function buildSessionsListResult(
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
     ...(opts.rowMode === "sidebar"
-      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, previousRows)
+      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, rowHistory)
       : { sessions }),
   };
 }

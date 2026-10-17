@@ -99,7 +99,7 @@ export function UpdatesStatus(props: UpdatesViewProps) {
   });
   return (
     <span
-      class={status().checkFailed ? "updates-status-check-failed" : undefined}
+      class={{ "updates-status-check-failed": status().checkFailed }}
       role={status().countdown ? "timer" : undefined}
       aria-live={status().countdown ? "off" : undefined}
     >

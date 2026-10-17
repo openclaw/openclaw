@@ -1,9 +1,10 @@
 import hljs from "highlight.js/lib/core";
 import { createComponent, createStore, flush } from "solid-js";
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { loadMarkdownHighlighter } from "../../components/markdown-code-blocks.ts";
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -18,6 +19,8 @@ import {
   useDebugTestEnvironment,
 } from "./debug.test-support.ts";
 import { DebugPageView, type DebugProps } from "./view.tsx";
+
+beforeAll(loadMarkdownHighlighter);
 
 type TestDebugPage = HTMLElement;
 const pages = new WeakMap<

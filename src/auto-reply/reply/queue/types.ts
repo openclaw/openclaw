@@ -3,6 +3,7 @@ import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/session-binding.types.js";
+import type { CronCreatorAuthorityCapability } from "../../../agents/cron-creator-authority-context.js";
 import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
@@ -116,6 +117,8 @@ export type FollowupRun = {
   prompt: string;
   /** Original admitted source; queued execution must not replace it with a backend run ID. */
   sourceTurnId?: string;
+  /** Fresh channel ingress only; recreate exact-run authority after queue admission. */
+  createChannelCronAuthority?: (runId: string) => CronCreatorAuthorityCapability | undefined;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /**

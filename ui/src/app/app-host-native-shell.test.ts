@@ -363,53 +363,56 @@ describe("OpenClaw native shell", () => {
     },
   );
 
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
-    "opens a draft from the composer on %s without taking New Window or modified Enter",
-    (platform) => {
-      const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-      const navigate = vi.fn();
-      const shell = createShellOwner() as unknown as ShellKeyboardState;
-      shell.runtime = {
-        context: nativeSessionContext(navigate, "research", {
-          scopes: ["operator.sessions.write"],
-        }),
-      };
-      const textarea = document.createElement("textarea");
-      textarea.value = "Keep this foreground draft";
-      textarea.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
-      const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
-      try {
-        // Receiver semantics only; synthetic DOM events cannot prove browser delivery.
-        const event = new KeyboardEvent("keydown", {
-          key: "O",
-          code: "KeyO",
-          shiftKey: true,
-          cancelable: true,
-          ...modifier,
-        });
-        textarea.dispatchEvent(event);
-        expect(event.defaultPrevented).toBe(true);
-        expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
-          search: "?agent=research",
-        });
-        expect(textarea.value).toBe("Keep this foreground draft");
-        for (const init of [
-          { key: "n", code: "KeyN" },
-          { key: "Enter", code: "Enter" },
-          { key: "O", code: "KeyO", shiftKey: true, repeat: true },
-          { key: "O", code: "KeyO", shiftKey: true, isComposing: true },
-          { key: "O", code: "KeyO", shiftKey: true, keyCode: 229 },
-        ]) {
-          const ignored = new KeyboardEvent("keydown", { ...modifier, ...init, cancelable: true });
-          textarea.dispatchEvent(ignored);
-          expect(ignored.defaultPrevented).toBe(false);
-        }
-        expect(navigate).toHaveBeenCalledOnce();
-      } finally {
-        platformSpy.mockRestore();
+  it.each(
+    ["MacIntel", "Win32", "Linux x86_64"].flatMap((platform) =>
+      [false, true].map((native) => ({ platform, native })),
+    ),
+  )("opens a draft from the composer on $platform (native=$native)", ({ platform, native }) => {
+    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
+    const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    const navigate = vi.fn();
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: nativeSessionContext(navigate, "research", {
+        scopes: ["operator.sessions.write"],
+      }),
+    };
+    const textarea = document.createElement("textarea");
+    textarea.value = "Keep this foreground draft";
+    textarea.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+    const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+    try {
+      // Receiver semantics only; synthetic DOM events cannot prove OS delivery.
+      const chord = native
+        ? { key: "n", code: "KeyN", shiftKey: false }
+        : { key: "O", code: "KeyO", shiftKey: true };
+      const event = new KeyboardEvent("keydown", {
+        ...chord,
+        cancelable: true,
+        ...modifier,
+      });
+      textarea.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
+        search: "?agent=research",
+      });
+      expect(textarea.value).toBe("Keep this foreground draft");
+      for (const init of [
+        native ? { key: "O", code: "KeyO", shiftKey: true } : { key: "n", code: "KeyN" },
+        { key: "Enter", code: "Enter" },
+        { ...chord, repeat: true },
+        { ...chord, isComposing: true },
+        { ...chord, keyCode: 229 },
+      ]) {
+        const ignored = new KeyboardEvent("keydown", { ...modifier, ...init, cancelable: true });
+        textarea.dispatchEvent(ignored);
+        expect(ignored.defaultPrevented).toBe(false);
       }
-    },
-  );
+      expect(navigate).toHaveBeenCalledOnce();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 
   it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
     "leaves the New Session shortcut unhandled during %s",

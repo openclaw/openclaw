@@ -249,6 +249,7 @@ export function openExistingStatePostgresConnection(pathname: string, expectedId
       prepareAnchor: () => {},
       openSqlite: () => {},
       existingOnly: true,
+      reusePostgresConnection: true,
       existingVersion: true,
       admitPostgres: admitStatePostgres,
       closeOnFailure: (connection, error) => {

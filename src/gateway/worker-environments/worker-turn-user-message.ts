@@ -10,6 +10,7 @@ import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -79,6 +80,7 @@ type WorkerTurnInputParams = {
   modelRef: { provider: string; model: string };
   startedAt: number;
   assertCurrent: () => void;
+  assertSourceCurrent: SessionSourceAssertion;
   onBlocked: () => void;
 };
 
@@ -89,6 +91,7 @@ export async function gateWorkerTurnInput({
   modelRef,
   startedAt,
   assertCurrent,
+  assertSourceCurrent,
   onBlocked,
 }: WorkerTurnInputParams) {
   const recorder = turn.userTurnTranscriptRecorder;
@@ -127,7 +130,7 @@ export async function gateWorkerTurnInput({
   }
   onBlocked();
   const message = buildAgentRunBlockedUserMessage(turn.runId, block);
-  await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, async () => {
+  await withSessionTranscriptWriteAssertion(transcriptTarget, assertSourceCurrent, async () => {
     if (recorder) {
       const persisted = await recorder.persistBlocked(message, {
         storageTarget: transcriptTarget,

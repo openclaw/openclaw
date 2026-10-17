@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
@@ -17,44 +19,73 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 afterEach(() => vi.restoreAllMocks());
 
-it("deletes a completed run alias without losing the shared transcript or retaining a cached entry", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
-    const events = [
-      { type: "session", id: f.scope.sessionId, version: 3 },
-      {
-        type: "message",
-        id: "retained-message",
-        message: { role: "user", content: "Retain the stable conversation." },
-      },
-    ];
-    await replaceTranscriptEvents(f.scope, events);
-    const alias = { ...f.scope, sessionKey: "agent:main:cron:job:run:completed" };
-    replaceSessionEntrySync(alias, {
-      sessionId: f.scope.sessionId,
-      updatedAt: 2,
-      label: "completed run",
-    });
-    const expectedEntry = await readSessionEntryInWorker(alias);
-    expect(expectedEntry).toMatchObject({ sessionId: "original", label: "completed run" });
+it.each(["main", "other"])(
+  "deletes a completed %s run alias while reporting transcript attribution changes",
+  async (agentId) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("shared.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      const scope = {
+        agentId: "main",
+        storePath,
+        sessionKey: "agent:main:compound-worker",
+        sessionId: "original",
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        label: "initial",
+      });
+      const events = [
+        { type: "session", id: scope.sessionId, version: 3 },
+        {
+          type: "message",
+          id: "retained-message",
+          message: { role: "user", content: "Retain the stable conversation." },
+        },
+      ];
+      await replaceTranscriptEvents(scope, events);
+      const alias = { ...scope, agentId, sessionKey: `agent:${agentId}:cron:job:run:completed` };
+      replaceSessionEntrySync(alias, {
+        sessionId: scope.sessionId,
+        updatedAt: 2,
+        label: "completed run",
+      });
+      const expectedEntry = await readSessionEntryInWorker(alias);
+      expect(expectedEntry).toMatchObject({ sessionId: "original", label: "completed run" });
 
-    await expect(
-      deleteSessionEntryLifecycle({
-        ...alias,
-        target: { canonicalKey: alias.sessionKey, storeKeys: [alias.sessionKey] },
-        archiveTranscript: false,
-        expectedEntry,
-      }),
-    ).resolves.toMatchObject({ deleted: true, archivedTranscripts: [] });
+      const facts: Array<SessionRowFacts | undefined> = [];
+      const unsubscribe = sessionChanges.subscribeFacts((change) => {
+        if ("sessionKey" in change && change.sessionKey === alias.sessionKey) {
+          facts.push(change.facts);
+        }
+      });
+      try {
+        await expect(
+          deleteSessionEntryLifecycle({
+            ...alias,
+            target: { canonicalKey: alias.sessionKey, storeKeys: [alias.sessionKey] },
+            archiveTranscript: false,
+            expectedEntry,
+          }),
+        ).resolves.toMatchObject({ deleted: true, archivedTranscripts: [] });
+      } finally {
+        unsubscribe();
+      }
+      expect(facts).toContainEqual({
+        kind: "removed",
+        ...(agentId === "main" ? { transcriptInventoryUnchanged: true } : {}),
+      });
 
-    await expect(readSessionEntryInWorker(alias)).resolves.toBeUndefined();
-    await expect(readSessionEntryInWorker(f.scope)).resolves.toMatchObject({
-      sessionId: "original",
-      label: "initial",
+      await expect(readSessionEntryInWorker(alias)).resolves.toBeUndefined();
+      await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject({
+        sessionId: "original",
+        label: "initial",
+      });
+      await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual(events);
     });
-    await expect(loadSessionTranscriptEvents(f.scope)).resolves.toEqual(events);
-  });
-});
+  },
+);
 
 it.each([
   { change: "metadata", sessionId: "original", label: "new metadata" },

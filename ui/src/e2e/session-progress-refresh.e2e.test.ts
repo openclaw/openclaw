@@ -133,7 +133,7 @@ suite.define(() => {
           sessionKey: scenario.sessionKey,
           idempotencyKey: expect.any(String),
         });
-        await expect.poll(() => button.getAttribute("data-state")).toBe("pending");
+        await expect.poll(() => options.getAttribute("data-state")).toBe("pending");
         await options.click();
         expect(await button.isDisabled()).toBe(true);
         expect(await button.getAttribute("aria-busy")).toBe("true");
@@ -177,7 +177,7 @@ suite.define(() => {
           revision: null,
         });
         await gateway.waitForRequest("progressCard.get", { after: reads });
-        expect(await button.getAttribute("data-state")).toBe("pending");
+        expect(await options.getAttribute("data-state")).toBe("pending");
         expect(await card.locator("time").getAttribute("datetime")).toBe(timestamp);
         const nextCard = {
           ...scenario.methodResponses["progressCard.get"].card,
@@ -195,8 +195,10 @@ suite.define(() => {
           sessionKey: scenario.sessionKey,
           revision: 2,
         });
-        await expect.poll(() => button.getAttribute("data-state")).toBe("updated");
+        await expect.poll(() => options.getAttribute("data-state")).toBe("updated");
+        await options.click();
         expect(await button.isDisabled()).toBe(false);
+        await page.keyboard.press("Escape");
         expect(await card.locator("time").getAttribute("datetime")).toBe(
           new Date(nextCard.updatedAt).toISOString(),
         );
@@ -266,7 +268,7 @@ suite.define(() => {
         status: "accepted",
         revision: 1,
       });
-      await expect.poll(() => button.getAttribute("data-state")).toBe("pending");
+      await expect.poll(() => options.getAttribute("data-state")).toBe("pending");
       await gateway.setMethodResponse("progressCard.get", {
         card: {
           ...scenario.methodResponses["progressCard.get"].card,
@@ -278,7 +280,7 @@ suite.define(() => {
         sessionKey: scenario.sessionKey,
         revision: 2,
       });
-      await expect.poll(() => button.getAttribute("data-state")).toBe("updated");
+      await expect.poll(() => options.getAttribute("data-state")).toBe("updated");
       expect(await transcriptSnapshot(page)).toEqual(initial);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(2);
