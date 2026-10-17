@@ -53,13 +53,34 @@ const selectedRelease = () => fs.readlinkSync(currentPointer());
 const adopt = (value = descriptor) => createImmutableInstallRecord(value, () => {});
 const update = (
   record: ImmutableInstallRecord,
-  change: Parameters<typeof updateImmutableInstallRecord>[1],
-) => updateImmutableInstallRecord(record, change, () => {});
+  change: Partial<Parameters<typeof updateImmutableInstallRecord>[1]>,
+) => updateImmutableInstallRecord(record, { ...record, ...change }, () => {});
+const updateDescriptor = (
+  record: ImmutableInstallRecord,
+  patch: Partial<ImmutableInstallDescriptor>,
+) => update(record, { descriptor: { ...record.descriptor, ...patch } });
 const prepare = (record: ImmutableInstallRecord, generation = prepared) =>
   recordImmutablePreparedGeneration(record, generation, () => {});
 const publish = (record: ImmutableInstallRecord, target: "candidate" | "previous") =>
   publishImmutablePointer(record, target, () => {});
 const reconcile = (record: ImmutableInstallRecord) => reconcileImmutablePointer(record, () => {});
+const updateOperation = (
+  record: ImmutableInstallRecord,
+  patch: Partial<ImmutableActivationOperation>,
+) =>
+  update(record, {
+    activation: {
+      ...record.activation,
+      operation: { ...record.activation!.operation!, ...patch },
+    },
+  });
+function expectSelection(record: ImmutableInstallRecord, selected = sha, pointerIdentity?: string) {
+  expect(selectedRelease()).toBe(`releases/${selected}`);
+  expect(read()).toEqual(record);
+  if (pointerIdentity !== undefined) {
+    expect(identity(currentPointer())).toBe(pointerIdentity);
+  }
+}
 function retentionDescriptor(
   pins: NonNullable<ImmutableInstallDescriptor["releaseRetention"]>["pins"] = [],
 ): ImmutableInstallDescriptor {
@@ -146,24 +167,24 @@ function beginActivation(): ImmutableInstallRecord {
 }
 
 function retainUnpublishedIntent(record: ImmutableInstallRecord) {
-  const operation = record.activation!.operation!;
-  const temporary = path.join(root, `.openclaw-current-${operation.operationId}`);
+  const temporary = temporaryPointer(record);
   fs.symlinkSync(`releases/${candidateSha}`, temporary);
-  return update(record, {
-    ...record,
-    activation: {
-      ...record.activation,
-      operation: {
-        ...operation,
-        pointerIntent: {
-          fromIdentity: descriptor.current.pointerIdentity,
-          targetSha: candidateSha,
-          temporaryIdentity: identity(temporary),
-        },
-      },
+  return updateOperation(record, {
+    pointerIntent: {
+      fromIdentity: descriptor.current.pointerIdentity,
+      targetSha: candidateSha,
+      temporaryIdentity: identity(temporary),
     },
   });
 }
+
+const temporaryPointer = (record: ImmutableInstallRecord) =>
+  path.join(root, `.openclaw-current-${record.activation!.operation!.operationId}`);
+const hotJournal = () =>
+  createHotSqliteRollbackJournal({
+    path: journalPath(),
+    mutationSql: "UPDATE immutable_installation SET revision = revision + 100",
+  });
 
 it("does not adopt a release layout when inspecting an absent record", async () => {
   expect(await readImmutableInstallRecord(root)).toBeNull();
@@ -175,8 +196,7 @@ it("persists adoption and preparation without changing the selected generation",
   expect(read()).toEqual({ revision: 0, descriptor, prepared: null });
   const receipt = prepare(adopted, prepared);
   expect(receipt).toEqual({ revision: 1, descriptor, prepared });
-  expect(read()).toEqual(receipt);
-  expect(selectedRelease()).toBe(`releases/${sha}`);
+  expectSelection(receipt);
   expect(fs.statSync(controlPath()).mode & 0o777).toBe(0o755);
   expect(fs.statSync(journalPath()).mode & 0o777).toBe(0o644);
 });
@@ -186,10 +206,7 @@ it.each(["candidate-verification-pending", "private error: token=fixture-secret 
   (failure) => {
     const record = beginActivation();
     const operation = record.activation!.operation!;
-    update(record, {
-      ...record,
-      activation: { operation: { ...operation, failure } },
-    });
+    updateOperation(record, { failure });
     const before = controlFiles();
     const projection = projectImmutableInstall(read());
     expect(projection.activation).toEqual({
@@ -200,58 +217,48 @@ it.each(["candidate-verification-pending", "private error: token=fixture-secret 
       failure: failure === "candidate-verification-pending" ? failure : "details-withheld",
       recoveryCommand: `${descriptor.runtime.path} ${operation.recovery.helperPath}`,
     });
-    expect(projection.prepared).toEqual({
-      sha: candidateSha,
-      path: prepared.path,
-      buildDigest: prepared.buildDigest,
-      preparedAtMs: 1234,
-    });
+    const { identity: _identity, ...projectedPrepared } = prepared;
+    expect(projection.prepared).toEqual(projectedPrepared);
     expect(projection).not.toHaveProperty("lastActivation");
-    expect(JSON.stringify(projection)).not.toContain("fixture-secret");
-    expect(JSON.stringify(projection)).not.toContain("synthetic-state-key");
+    expect(JSON.stringify(projection)).not.toMatch(/fixture-secret|synthetic-state-key/u);
     expect(controlFiles()).toEqual(before);
   },
 );
 
 it.each([
-  {
-    outcome: "succeeded",
-    gateway: { pid: 4242, bootId: "fixture-boot", version: "2026.10.1", buildId: "fixture-build" },
-  },
-  {
-    outcome: "rolled-back",
-    gateway: {
-      pid: 4243,
-      bootId: "restored-boot",
-      version: "2026.10.1",
-      buildId: "restored-build",
-    },
-  },
-  { outcome: "succeeded", gateway: undefined },
-] as const)(
-  "projects a historical $outcome receipt from a fresh observer",
-  ({ outcome, gateway }) => {
-    const record = beginActivation();
-    const lastResult = {
-      operationId: record.activation!.operation!.operationId,
-      outcome,
-      selectedSha: sha,
-      verifiedAtMs: 1000,
-      ...(gateway ? { gateway } : {}),
-    };
-    update(record, { ...record, activation: { lastResult } });
-    const projection = projectImmutableInstall(read());
-    expect(projection.lastActivation).toEqual(lastResult);
-    expect(projection).not.toHaveProperty("activation");
-  },
-);
+  ["succeeded", 4242, "fixture"],
+  ["rolled-back", 4243, "restored"],
+  ["succeeded", null, null],
+] as const)("projects a historical %s receipt from a fresh observer", (outcome, pid, prefix) => {
+  const gateway =
+    pid === null
+      ? undefined
+      : {
+          pid,
+          bootId: `${prefix}-boot`,
+          version: "2026.10.1",
+          buildId: `${prefix}-build`,
+        };
+  const record = beginActivation();
+  const lastResult = {
+    operationId: record.activation!.operation!.operationId,
+    outcome,
+    selectedSha: sha,
+    verifiedAtMs: 1000,
+    ...(gateway ? { gateway } : {}),
+  };
+  update(record, { activation: { lastResult } });
+  const projection = projectImmutableInstall(read());
+  expect(projection.lastActivation).toEqual(lastResult);
+  expect(projection).not.toHaveProperty("activation");
+});
 it("retains publication provenance across preparations without backfilling older releases", () => {
   const adopted = adopt();
   const legacy = prepare(adopted, prepared);
-  const enabled = update(legacy, {
-    ...legacy,
-    descriptor: retentionDescriptor([{ sha, identity: descriptor.current.identity }]),
-  });
+  const enabled = updateDescriptor(
+    legacy,
+    retentionDescriptor([{ sha, identity: descriptor.current.identity }]),
+  );
   expect(enabled.releases).toEqual([]);
   const publishGeneration = (previous: ImmutableInstallRecord, nextSha: string) => {
     const nextPath = path.join(root, "releases", nextSha);
@@ -271,14 +278,13 @@ it("retains publication provenance across preparations without backfilling older
     ["c".repeat(40), first.revision, null],
     ["d".repeat(40), second.revision, null],
   ]);
-  expect(read()).toEqual(second);
+  expectSelection(second);
   expect(fs.readdirSync(path.join(root, "releases")).toSorted()).toEqual([
     sha,
     candidateSha,
     "c".repeat(40),
     "d".repeat(40),
   ]);
-  expect(selectedRelease()).toBe(`releases/${sha}`);
   expect(() => prepare(first, prepared)).toThrow("no longer current");
   expect(read()).toEqual(second);
 });
@@ -299,12 +305,9 @@ it("rolls back inventory publication with a failed preparation receipt", () => {
 it("refuses conflicting publication identities instead of rewriting owned provenance", () => {
   const adopted = adopt(retentionDescriptor());
   const published = prepare(adopted, prepared);
-  expect(() =>
-    prepare(published, {
-      ...prepared,
-      buildDigest: "9".repeat(64),
-    }),
-  ).toThrow("conflicts with its retained identity");
+  expect(() => prepare(published, { ...prepared, buildDigest: "9".repeat(64) })).toThrow(
+    "conflicts with its retained identity",
+  );
   expect(read()).toEqual(published);
 });
 
@@ -334,8 +337,7 @@ it("rolls back a preparation when executor authority is lost before commit", () 
       }
     }),
   ).toThrow("executor ended");
-  expect(read()).toEqual(adopted);
-  expect(selectedRelease()).toBe(`releases/${sha}`);
+  expectSelection(adopted);
 });
 
 it("preserves existing package journals for their original recovery owner", () => {
@@ -390,28 +392,16 @@ it("upgrades a slice-1 control in place only with explicit activation consent", 
   const journalIdentity = identity(journalPath());
   const original = read();
   expect(original.descriptor.activationEnabled).toBeUndefined();
-  expect(() =>
-    update(original, {
-      ...original,
-      descriptor: { ...descriptor, version: 2 },
-    }),
-  ).toThrow("explicitly enabled");
+  expect(() => updateDescriptor(original, { version: 2 })).toThrow("explicitly enabled");
   expect(read()).toEqual(original);
 
-  const enabled = update(original, {
-    ...original,
-    descriptor: { ...descriptor, version: 2, activationEnabled: true },
-  });
-  expect(read()).toEqual(enabled);
+  const enabled = updateDescriptor(original, { version: 2, activationEnabled: true });
+  expectSelection(enabled);
   expect(enabled.prepared).toEqual(prepared);
   expect(identity(journalPath())).toBe(journalIdentity);
-  expect(selectedRelease()).toBe(`releases/${sha}`);
-  expect(() =>
-    update(original, {
-      ...original,
-      descriptor: { ...descriptor, version: 2, activationEnabled: true },
-    }),
-  ).toThrow("no longer current");
+  expect(() => updateDescriptor(original, { version: 2, activationEnabled: true })).toThrow(
+    "no longer current",
+  );
   expect(read()).toEqual(enabled);
 });
 
@@ -444,8 +434,7 @@ it("retains a renamed pointer intent until recovery durably syncs it, then recon
     fsync(fd);
   });
   expect(() => reconcile(interrupted)).toThrow("synthetic pointer directory sync failed");
-  expect(read()).toEqual(interrupted);
-  expect(identity(currentPointer())).toBe(selectedIdentity);
+  expectSelection(interrupted, candidateSha, selectedIdentity);
   allowSync = true;
 
   const recovered = reconcile(interrupted);
@@ -461,22 +450,14 @@ it("retains a renamed pointer intent until recovery durably syncs it, then recon
   );
   expect(recovered.revision).toBe(interrupted.revision + 1);
   expect(publish(recovered, "candidate")).toEqual(recovered);
-  expect(read()).toEqual(recovered);
-  expect(identity(currentPointer())).toBe(selectedIdentity);
+  expectSelection(recovered, candidateSha, selectedIdentity);
 });
 
 it("refuses an old durable intent before publishing after its SQLite revision advances", () => {
   const intent = retainUnpublishedIntent(beginActivation());
-  const newer = update(intent, {
-    ...intent,
-    activation: {
-      ...intent.activation,
-      operation: { ...intent.activation!.operation!, phase: "recovery-required" },
-    },
-  });
+  const newer = updateOperation(intent, { phase: "recovery-required" });
   expect(() => publish(intent, "candidate")).toThrow("no longer current");
-  expect(selectedRelease()).toBe(`releases/${sha}`);
-  expect(read()).toEqual(newer);
+  expectSelection(newer);
 });
 
 it("refuses a foreign current pointer and leaves its retained intent intact", () => {
@@ -486,8 +467,7 @@ it("refuses a foreign current pointer and leaves its retained intent intact", ()
   fs.renameSync(foreign, currentPointer());
   const foreignIdentity = identity(currentPointer());
   expect(() => reconcile(intent)).toThrow("differs from its durable publication intent");
-  expect(identity(currentPointer())).toBe(foreignIdentity);
-  expect(read()).toEqual(intent);
+  expectSelection(intent, candidateSha, foreignIdentity);
 });
 
 it("refuses a replaced prepared generation before selecting its directory", () => {
@@ -495,8 +475,7 @@ it("refuses a replaced prepared generation before selecting its directory", () =
   fs.renameSync(prepared.path, `${prepared.path}.retained`);
   fs.mkdirSync(prepared.path, { mode: 0o755 });
   expect(() => publish(intent, "candidate")).toThrow("target generation changed");
-  expect(selectedRelease()).toBe(`releases/${sha}`);
-  expect(read()).toEqual(intent);
+  expectSelection(intent);
 });
 
 it("rolls back to the recorded sealed predecessor while retaining recovery evidence", () => {
@@ -504,7 +483,7 @@ it("rolls back to the recorded sealed predecessor while retaining recovery evide
   const activated = publish(admitted, "candidate");
   expect(selectedRelease()).toBe(`releases/${candidateSha}`);
   const rolledBack = publish(activated, "previous");
-  expect(selectedRelease()).toBe(`releases/${sha}`);
+  expectSelection(rolledBack);
   expect(rolledBack.descriptor.current).toMatchObject({
     sha,
     identity: descriptor.current.identity,
@@ -512,16 +491,12 @@ it("rolls back to the recorded sealed predecessor while retaining recovery evide
   });
   expect(rolledBack.activation?.operation).toEqual(admitted.activation?.operation);
   expect(rolledBack.activation?.operation?.pointerIntent).toBeUndefined();
-  expect(read()).toEqual(rolledBack);
   expect(fs.existsSync(prepared.path)).toBe(true);
 });
 
 it("recovers the predecessor after rollback stops before its pointer intent commits", () => {
   const activated = publish(beginActivation(), "candidate");
-  const temporary = path.join(
-    root,
-    `.openclaw-current-${activated.activation?.operation?.operationId}`,
-  );
+  const temporary = temporaryPointer(activated);
   let ended = false;
   const createLink = fs.symlinkSync;
   const create = vi.spyOn(fs, "symlinkSync").mockImplementation((...args) => {
@@ -540,8 +515,7 @@ it("recovers the predecessor after rollback stops before its pointer intent comm
   ).toThrow("executor ended before pointer intent");
   create.mockRestore();
 
-  expect(read()).toEqual(activated);
-  expect(selectedRelease()).toBe(`releases/${candidateSha}`);
+  expectSelection(activated, candidateSha);
   const retainedIdentity = identity(temporary);
   const recovered = publish(read(), "previous");
   expect(selectedRelease()).toBe(`releases/${sha}`);
@@ -556,10 +530,7 @@ it.each(["wrong-target", "regular-file"] as const)(
   "preserves a %s occupying the rollback operation's temporary pointer",
   (kind) => {
     const activated = publish(beginActivation(), "candidate");
-    const temporary = path.join(
-      root,
-      `.openclaw-current-${activated.activation?.operation?.operationId}`,
-    );
+    const temporary = temporaryPointer(activated);
     if (kind === "wrong-target") {
       fs.symlinkSync(`releases/${candidateSha}`, temporary);
     } else {
@@ -571,8 +542,7 @@ it.each(["wrong-target", "regular-file"] as const)(
     expect(
       kind === "wrong-target" ? fs.readlinkSync(temporary) : fs.readFileSync(temporary, "utf8"),
     ).toBe(kind === "wrong-target" ? `releases/${candidateSha}` : "unrelated fixture file");
-    expect(selectedRelease()).toBe(`releases/${candidateSha}`);
-    expect(read()).toEqual(activated);
+    expectSelection(activated, candidateSha);
   },
 );
 
@@ -580,10 +550,7 @@ it.skipIf(process.platform === "win32")(
   "recovers committed activation control only after explicit native rollback admission",
   async () => {
     const committed = beginActivation();
-    createHotSqliteRollbackJournal({
-      path: journalPath(),
-      mutationSql: "UPDATE immutable_installation SET revision = revision + 100",
-    });
+    hotJournal();
     const before = controlFiles();
     expect(read).toThrow(expect.objectContaining({ errcode: 776 }));
     const recovery = await readImmutableInstallRecordForRecovery(root);
@@ -607,9 +574,8 @@ it.skipIf(process.platform === "win32")(
     ).toThrow("executor revoked before rollback");
     expect(controlFiles()).toEqual(before);
     recovery.admit(() => {});
-    expect(read()).toEqual(committed);
+    expectSelection(committed);
     expect(fs.readdirSync(controlPath())).toEqual(["operation.sqlite"]);
-    expect(selectedRelease()).toBe(`releases/${sha}`);
   },
 );
 
@@ -624,10 +590,7 @@ it.skipIf(process.platform === "win32").each([
   "preserves immutable %s with changed %s instead of admitting old recovery evidence",
   async (changed, mutation) => {
     beginActivation();
-    createHotSqliteRollbackJournal({
-      path: journalPath(),
-      mutationSql: "UPDATE immutable_installation SET revision = revision + 100",
-    });
+    hotJournal();
     const recovery = await readImmutableInstallRecordForRecovery(root);
     const source = changed === "database" ? journalPath() : `${journalPath()}-journal`;
     if (mutation === "inode") {

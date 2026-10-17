@@ -8,7 +8,6 @@ import {
   openPackageActivationJournal,
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
-  resolvePackageActivationHelper,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
@@ -60,7 +59,7 @@ async function swap(
 
 describe.skipIf(process.platform === "win32")("verified package cleanup", () => {
   it.each(["rollback", "displacement"] as const)(
-    "settles the previous generation after link-count drift following %s",
+    "settles link-count drift after %s",
     async (boundary) => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
@@ -71,7 +70,6 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
         if (boundary === "rollback") {
           expect(await transaction.rollback(fence.assertCurrent)).toMatchObject({ exitCode: 0 });
         } else {
-          // Recreate the durable cut after displacement, before publication.
           fs.renameSync(f.packageRoot, path.join(anchor, "candidate"));
           const journal = openPackageActivationJournal(anchor);
           journal.transition(
@@ -85,8 +83,7 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       const previous = boundary === "rollback" ? f.packageRoot : path.join(anchor, "previous");
       const manifest = path.join(previous, "package.json");
       const before = fs.statSync(manifest, { bigint: true });
-      const link = path.join(root, "retained-manifest");
-      fs.linkSync(manifest, link);
+      fs.linkSync(manifest, path.join(root, "retained-manifest"));
       const after = fs.statSync(manifest, { bigint: true });
       expect(after.nlink).toBe(before.nlink + 1n);
       expect(after).toMatchObject({ dev: before.dev, ino: before.ino, mtimeNs: before.mtimeNs });
@@ -105,49 +102,39 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
     },
   );
 
-  it.each(["helper", "candidate"] as const)(
-    "preserves damaged unused %s while settling an unpublished preparation",
-    async (changed) => {
-      const f = await fixtures.prepare();
-      const manifest = fs.readFileSync(path.join(f.packageRoot, "package.json"));
-      const launcher = fs.readFileSync(f.launcher);
-      const evidence = changed === "helper" ? "control/recovery.mjs" : "candidate/note.txt";
-      fs.writeFileSync(
-        changed === "helper"
-          ? resolvePackageActivationHelper(f.anchor)
-          : path.join(f.anchor, evidence),
-        "preserved unused evidence",
-      );
-      const reported = vi.fn().mockImplementationOnce(() => {
-        throw new Error("reporting interrupted before archival");
-      });
-      await expect(settlePendingPackageActivation(f.packageRoot, reported)).rejects.toThrow(
-        "reporting interrupted before archival",
-      );
-      expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
-        phase: "superseded",
-        intent: { settled: true },
-      });
-      expect(reported).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reason: "publication-not-started",
-        }),
-      );
-      await expect(settlePendingPackageActivation(f.packageRoot, reported)).resolves.toMatchObject({
-        reason: "publication-settled-external-change",
-        retained: `${f.anchor}.superseded-${f.operationId}`,
-      });
-      expect(reported).toHaveBeenCalledTimes(2);
-      expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(manifest);
-      expect(fs.readFileSync(f.launcher)).toEqual(launcher);
-      expect(fs.readFileSync(`${f.anchor}.superseded-${f.operationId}/${evidence}`, "utf8")).toBe(
-        "preserved unused evidence",
-      );
-      assertAdmitted(f.packageRoot);
-      const next = await fixtures.prepare();
-      expect(next.operationId).not.toBe(f.operationId);
-    },
-  );
+  it.each(["helper", "candidate"] as const)("preserves unpublished damaged %s", async (changed) => {
+    const f = await fixtures.prepare();
+    const manifest = fs.readFileSync(path.join(f.packageRoot, "package.json"));
+    const launcher = fs.readFileSync(f.launcher);
+    const evidence = changed === "helper" ? "control/recovery.mjs" : "candidate/note.txt";
+    fs.writeFileSync(path.join(f.anchor, evidence), "preserved unused evidence");
+    const reported = vi.fn().mockImplementationOnce(() => {
+      throw new Error("reporting interrupted before archival");
+    });
+    await expect(settlePendingPackageActivation(f.packageRoot, reported)).rejects.toThrow(
+      "reporting interrupted before archival",
+    );
+    expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
+      phase: "superseded",
+      intent: { settled: true },
+    });
+    expect(reported).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "publication-not-started" }),
+    );
+    await expect(settlePendingPackageActivation(f.packageRoot, reported)).resolves.toMatchObject({
+      reason: "publication-settled-external-change",
+      retained: `${f.anchor}.superseded-${f.operationId}`,
+    });
+    expect(reported).toHaveBeenCalledTimes(2);
+    expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(manifest);
+    expect(fs.readFileSync(f.launcher)).toEqual(launcher);
+    expect(fs.readFileSync(`${f.anchor}.superseded-${f.operationId}/${evidence}`, "utf8")).toBe(
+      "preserved unused evidence",
+    );
+    assertAdmitted(f.packageRoot);
+    const next = await fixtures.prepare();
+    expect(next.operationId).not.toBe(f.operationId);
+  });
 
   it.each(["previous root", "helper", "unknown artifact", "archive failure"])(
     "preserves changed %s after verified completion",
@@ -172,12 +159,7 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
           fs.renameSync(path.join(anchor, "previous"), path.join(root, "original-previous"));
           fs.mkdirSync(path.join(anchor, "previous"));
         }
-        fs.writeFileSync(
-          changed === "helper"
-            ? resolvePackageActivationHelper(anchor)
-            : path.join(anchor, preserved),
-          "preserved bytes",
-        );
+        fs.writeFileSync(path.join(anchor, preserved), "preserved bytes");
         if (changed === "archive failure") {
           const rename = fs.renameSync.bind(fs);
           vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
@@ -200,13 +182,12 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
           await next.complete({ activationVerified: true }, fence.assertCurrent);
           expect(version(f.packageRoot)).toBe("3.0.0");
           assertAdmitted(f.packageRoot);
-          expect(text(retained, preserved)).toBe("preserved bytes");
         } else {
           expect(completion).toMatchObject({ name: "package-backup-retention" });
-          expect(text(retained, preserved)).toBe("preserved bytes");
           expect(text(f.launcher)).toBe("candidate launcher\n");
           expect(await complete(true)).toBe(completion);
         }
+        expect(text(retained, preserved)).toBe("preserved bytes");
       });
     },
   );

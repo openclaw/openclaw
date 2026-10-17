@@ -35,6 +35,9 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const sha = "a".repeat(40);
+const runtimeBytes = "built runtime";
+const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const recoveryArgs = ["--json", "--timeout", "10", "--drain-timeout", "30"];
 let record: ImmutableInstallRecord;
 let source: string;
 let control: string;
@@ -47,6 +50,11 @@ const assertCurrent = () => {
 const prepare = () => prepareImmutableRecoveryRuntime({ record, assertCurrent });
 const verify = (reference: Awaited<ReturnType<typeof prepare>>) =>
   verifyImmutableRecoveryRuntime({ reference, descriptor: record.descriptor, assertCurrent });
+const writeSource = (file: string, content: string) => {
+  const target = path.join(source, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
+  fs.writeFileSync(target, content);
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -55,22 +63,16 @@ beforeEach(() => {
   const root = path.join(parent, "installation");
   source = path.join(root, "releases", sha);
   control = resolvePackageActivationControl(resolvePackageActivationAnchor(root));
-  fs.mkdirSync(path.join(source, "dist"), { recursive: true, mode: 0o755 });
-  fs.mkdirSync(path.join(source, "node_modules", "fixture"), { recursive: true, mode: 0o755 });
+  writeSource("dist/index.js", runtimeBytes);
+  writeSource("dist/worker.js", "copied worker");
+  writeSource("node_modules/fixture/index.cjs", "module.exports = 'copied dependency';");
+  writeSource("node_modules/fixture/addon.node", "native artifact bytes");
   fs.mkdirSync(control, { mode: 0o755 });
-  for (const [file, content] of [
-    ["dist/index.js", "built runtime"],
-    ["dist/worker.js", "copied worker"],
-    ["node_modules/fixture/index.cjs", "module.exports = 'copied dependency';"],
-    ["node_modules/fixture/addon.node", "native artifact bytes"],
-  ]) {
-    fs.writeFileSync(path.join(source, file!), content!);
-  }
   const dependencies = path.join(source, "node_modules");
   fs.symlinkSync(path.join(dependencies, "fixture"), path.join(dependencies, "absolute"));
   fs.symlinkSync("fixture", path.join(dependencies, "relative"));
-  fs.writeFileSync(
-    path.join(source, "openclaw.mjs"),
+  writeSource(
+    "openclaw.mjs",
     `
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -83,9 +85,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), dependency: createRequ
     expect(expectedSha).toBe(sha);
     return {
       identity: identity(directory),
-      buildDigest: createHash("sha256")
-        .update(fs.readFileSync(path.join(directory, "dist", "index.js")))
-        .digest("hex"),
+      buildDigest: digest(fs.readFileSync(path.join(directory, "dist", "index.js"))),
     };
   });
   record = {
@@ -95,7 +95,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), dependency: createRequ
       ...immutableDescriptor(
         root,
         sha,
-        createHash("sha256").update("built runtime").digest("hex"),
+        digest(runtimeBytes),
         {
           scope: "system",
           unit: "fixture.service",
@@ -115,42 +115,23 @@ afterEach(() => vi.restoreAllMocks());
 
 it("runs retained recovery after the original generation is gone", async () => {
   const reference = await prepare();
+  expect(await prepare()).toEqual(reference);
   fs.rmSync(source, { recursive: true });
   await verify(reference);
   expect(text(reference.path, "node_modules/fixture/addon.node")).toBe("native artifact bytes");
   expect(fs.realpathSync(path.join(reference.path, "node_modules", "relative"))).toBe(
     path.join(reference.path, "node_modules", "fixture"),
   );
-  const result = spawnSync(
-    process.execPath,
-    [reference.helperPath, "--json", "--timeout", "10", "--drain-timeout", "30"],
-    {
-      encoding: "utf8",
-      timeout: 5000,
-    },
-  );
+  const result = spawnSync(process.execPath, [reference.helperPath, ...recoveryArgs], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({
-    args: [
-      "update",
-      "recover",
-      "--root",
-      record.descriptor.root,
-      "--json",
-      "--timeout",
-      "10",
-      "--drain-timeout",
-      "30",
-    ],
+    args: ["update", "recover", "--root", record.descriptor.root, ...recoveryArgs],
     dependency: "copied dependency",
     worker: "copied worker",
   });
-});
-
-it("reuses the verified copy and helper identities", async () => {
-  const first = await prepare();
-  const second = await prepare();
-  expect(second).toEqual(first);
 });
 
 it("rejects a foreign checkout before publication", async () => {
