@@ -234,11 +234,8 @@ describe("node workspace retain coordinator", () => {
     );
     const dispatched = createDeferredCore<string>();
     const client = makeClient("connection-1", "node-1", [], { clientId: "node-host" });
-    vi.spyOn(client.socket, "send").mockImplementation((data: unknown) => {
-      if (typeof data !== "string") {
-        return;
-      }
-      const frame = JSON.parse(data) as { event?: string; payload?: { id: string } };
+    vi.spyOn(client.socket, "send").mockImplementation((data) => {
+      const frame = JSON.parse(data.toString()) as { event?: string; payload?: { id: string } };
       if (frame.event === "node.invoke.request" && frame.payload) {
         dispatched.resolve(frame.payload.id);
       }

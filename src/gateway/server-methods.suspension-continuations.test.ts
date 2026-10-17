@@ -689,7 +689,7 @@ describe("restart lifecycle completion ownership", () => {
           expect.objectContaining({ code: "UNAVAILABLE" }),
         );
         if (changed === "owner" || changed === "pairing") {
-          expect(invoke.send).toHaveBeenCalledWith(
+          expect(invoke.send.mock.calls.map(([frame]) => frame.toString())).toContainEqual(
             expect.stringContaining('"event":"node.invoke.cancel"'),
           );
           await expect(invoke.result).resolves.toMatchObject({
@@ -740,7 +740,7 @@ describe("restart lifecycle completion ownership", () => {
         }
         resumeHandler.resolve();
         expect(await response).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);
-        expect(invoke.send).toHaveBeenCalledWith(
+        expect(invoke.send.mock.calls.map(([frame]) => frame.toString())).toContainEqual(
           expect.stringContaining('"event":"node.invoke.cancel"'),
         );
         await expect(invoke.result).resolves.toMatchObject({
