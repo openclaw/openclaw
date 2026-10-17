@@ -330,15 +330,9 @@ it.each(["before", "during", "revoked"] as const)(
   "keeps native selection bound to its admitted lease (publication/authority=%s)",
   async (transition) => {
     const { input, owner, b, loadB } = await fixture(false, true);
-    const lease = await acquirePreparedModelRuntimeSnapshot(input);
+    await using lease = await acquirePreparedModelRuntimeSnapshot(input);
     let leaseOpen = true;
     let runCurrent = true;
-    const closeLease = async () => {
-      if (leaseOpen) {
-        leaseOpen = false;
-        await lease[Symbol.asyncDispose]();
-      }
-    };
     const replacePublication = async () => {
       await publishPreparedModelRuntimeSnapshot(input, {
         force: true,
@@ -390,10 +384,8 @@ it.each(["before", "during", "revoked"] as const)(
       expect(loadB).toHaveBeenCalledOnce();
     } finally {
       discovery.release();
-      if (setup) {
-        await Promise.allSettled([setup]);
-      }
-      await closeLease();
+      await Promise.allSettled([setup]);
+      leaseOpen = false;
     }
   },
 );

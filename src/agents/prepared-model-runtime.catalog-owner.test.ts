@@ -59,14 +59,27 @@ function setCatalogApiKey(
   });
 }
 
-function holdCatalogWrite() {
+function holdCatalogWrite(agentDir: string) {
   const started = createDeferred();
   const result = createDeferred<{ agentDir: string; wrote: false }>();
+  const pending: Promise<unknown>[] = [];
+  const release = () => result.resolve({ agentDir, wrote: false });
   mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
     started.resolve();
     return await result.promise;
   });
-  return { started, result };
+  return {
+    started: started.promise,
+    release,
+    track<T>(promise: Promise<T>) {
+      pending.push(promise);
+      return promise;
+    },
+    async [Symbol.asyncDispose]() {
+      release();
+      await Promise.allSettled(pending);
+    },
+  };
 }
 
 function publishStandaloneCatalog() {
@@ -129,31 +142,32 @@ describe("prepared catalog owner lifecycle", () => {
     const workspaceDir = "/tmp/fresh-workspace";
     mocks.configuredWorkspaces.set("alpha", workspaceDir);
     const config = { plugins: {} };
-    const { started, result: source } = holdCatalogWrite();
-    const { started: authStarted, result: auth } = holdCatalogWrite();
+    await using source = holdCatalogWrite(agentDir);
+    await using auth = holdCatalogWrite(agentDir);
     const phases: string[] = [];
     const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) =>
       phases.push(phase),
     );
-    const publication = refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const publication = source.track(
+      refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true }),
+    );
     const published = vi.fn();
     void publication.then(published, () => undefined);
-    let dispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
     const dispatched = vi.fn();
     try {
-      await started.promise;
-      dispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "alpha" });
+      await source.started;
+      const dispatch = source.track(loadPublishedGatewayReplyDispatchRuntime({ agentId: "alpha" }));
       void dispatch.then(dispatched, () => undefined);
       // Any later inference is now wrong, including an auth build with no completed snapshot.
       mocks.configuredAgentDirs.set("alpha", "/tmp/later-agent");
       mocks.configuredWorkspaces.set("alpha", "/tmp/later-workspace");
       mocks.mutationListener!({ agentDir, affectsInheritedStores: false });
-      source.resolve({ agentDir, wrote: false });
-      await authStarted.promise;
+      source.release();
+      await auth.started;
       expect(published).not.toHaveBeenCalled();
       expect(dispatched).not.toHaveBeenCalled();
       expect(phases).not.toContain("published");
-      auth.resolve({ agentDir, wrote: false });
+      auth.release();
       await publication;
       await expect(dispatch).resolves.toMatchObject({
         agentId: "alpha",
@@ -169,9 +183,6 @@ describe("prepared catalog owner lifecycle", () => {
       expect(phases.filter((phase) => phase === "published")).toHaveLength(1);
       expect(phases).not.toContain("failed");
     } finally {
-      source.resolve({ agentDir, wrote: false });
-      auth.resolve({ agentDir, wrote: false });
-      await Promise.allSettled([publication, dispatch]);
       unregister();
     }
   });
@@ -187,55 +198,49 @@ describe("prepared catalog owner lifecycle", () => {
     mocks.configuredAgentIds = ["beta"];
     mocks.configuredAgentDirs.set("beta", agentDir);
     const freshInput = { ...input, config: { plugins: {} } };
-    const { started, result: source } = holdCatalogWrite();
-    const fresh = publishPreparedModelRuntimeSnapshot(freshInput, { force: true });
+    await using source = holdCatalogWrite(agentDir);
+    const fresh = source.track(publishPreparedModelRuntimeSnapshot(freshInput, { force: true }));
     void fresh.catch(() => undefined);
-    let refreshed: Promise<Awaited<ReturnType<typeof prepareModelRuntimeSnapshot>>> | undefined;
+    await source.started;
+    expect(resolvePublishedModelCatalogOwner(alpha)).toMatchObject({ agentId: "alpha" });
+    // The beta fact must already exist; neither the old snapshot nor ambient inference can supply it.
+    mocks.configuredAgentIds = ["gamma"];
+    mocks.configuredAgentDirs.set("gamma", agentDir);
+    mocks.mutationListener!({ agentDir, affectsInheritedStores: false });
+    const refreshed = source.track(prepareModelRuntimeSnapshot(freshInput));
+    void refreshed.catch(() => undefined);
+    source.release();
+    await expect(fresh).rejects.toThrow("superseded");
+    const snapshot = await refreshed;
+    expect(snapshot.agentId).toBeUndefined();
+    expect(resolvePublishedModelCatalogOwner(snapshot)).toMatchObject({
+      agentId: "beta",
+      workspaceDir,
+    });
+    const events = vi.fn();
+    const stopObserving = registerPreparedModelRuntimePublicationListener(events);
     try {
-      await started.promise;
-      expect(resolvePublishedModelCatalogOwner(alpha)).toMatchObject({ agentId: "alpha" });
-      // The beta fact must already exist; neither the old snapshot nor ambient inference can supply it.
-      mocks.configuredAgentIds = ["gamma"];
-      mocks.configuredAgentDirs.set("gamma", agentDir);
-      mocks.mutationListener!({ agentDir, affectsInheritedStores: false });
-      refreshed = prepareModelRuntimeSnapshot(freshInput);
-      void refreshed.catch(() => undefined);
-      source.resolve({ agentDir, wrote: false });
-      await expect(fresh).rejects.toThrow("superseded");
-      const snapshot = await refreshed;
-      expect(snapshot.agentId).toBeUndefined();
-      expect(resolvePublishedModelCatalogOwner(snapshot)).toMatchObject({
-        agentId: "beta",
-        workspaceDir,
+      snapshot.accountCatalog?.prepareServiceTierObserver({
+        selectedCredential: {
+          source: "direct",
+          provider: "openai",
+          identityKey: "direct:openai",
+        },
+      })({
+        modelId: "fixture-model",
+        runtimeId: "openclaw",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        requestedTier: "ultrafast",
+        responseTier: "priority",
       });
-      const events = vi.fn();
-      const stopObserving = registerPreparedModelRuntimePublicationListener(events);
-      try {
-        snapshot.accountCatalog?.prepareServiceTierObserver({
-          selectedCredential: {
-            source: "direct",
-            provider: "openai",
-            identityKey: "direct:openai",
-          },
-        })({
-          modelId: "fixture-model",
-          runtimeId: "openclaw",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          requestedTier: "ultrafast",
-          responseTier: "priority",
-        });
-        expect(events).toHaveBeenCalledExactlyOnceWith({
-          phase: "catalog-observation",
-          modelFactsChanged: false,
-          agentId: "beta",
-        });
-      } finally {
-        stopObserving();
-      }
+      expect(events).toHaveBeenCalledExactlyOnceWith({
+        phase: "catalog-observation",
+        modelFactsChanged: false,
+        agentId: "beta",
+      });
     } finally {
-      source.resolve({ agentDir, wrote: false });
-      await Promise.allSettled([fresh, refreshed]);
+      stopObserving();
     }
   });
 
@@ -266,91 +271,82 @@ describe("prepared catalog owner lifecycle", () => {
 });
 
 describe("prepared build candidate lifetime", () => {
-  it("retires an unpublished run timeout while fencing late work ahead of the retry", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
-    const input = {
-      config: {},
-      agentDir: fixture.state.agentDir("timed-out-admission"),
-    };
-    const started = createDeferred();
-    const finish = createDeferred();
-    mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
-      started.resolve();
-      await finish.promise;
-      return {};
-    });
-    using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
-    const first = acquireAgentRunPreparedModelRuntime(input);
-    const timedOut = expect(first).rejects.toThrow(
-      "prepared model runtime publication (ambient credentials; agent standalone) timed out",
-    );
-    let retry: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
-    try {
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(1);
-      await timedOut;
-      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
-        PreparedModelRuntimeOwnerNotPublishedError,
-      );
-      retry = acquireAgentRunPreparedModelRuntime(input);
-      expect(builds).toHaveBeenCalledTimes(2);
-      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledOnce();
-
-      finish.resolve();
-      const lease = await retry;
-      expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
-      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
-      // The retired build must stop after its held preparation, before discovery or publication.
-      expect(mocks.discoverModels).toHaveBeenCalledOnce();
-    } finally {
-      finish.resolve();
-      await Promise.allSettled([first, retry?.then((lease) => lease[Symbol.asyncDispose]())]);
-      await Promise.all(builds.mock.results.map((result) => result.value.completion));
-    }
-  });
-
-  it("fails a timed-out publication without overlapping its late build with a retry", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
-    const { started: sourceStarted, result: source } = holdCatalogWrite();
-    const input = { config: {}, agentDir: fixture.state.agentDir("timeout") };
-    using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
-    const publication = publishPreparedModelRuntimeSnapshot(input);
-    const timedOut = expect(publication).rejects.toThrow(
-      "prepared model runtime publication (agent catalog sources) timed out",
-    );
-    try {
-      await sourceStarted.promise;
-      await vi.advanceTimersByTimeAsync(1);
-      await timedOut;
-      await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication (agent catalog sources) timed out",
-      );
-      await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication (agent catalog sources) timed out",
-      );
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-
-      source.resolve({ agentDir: input.agentDir, wrote: false });
-      // The timeout settles admission before capture finishes; join the native build, not discovery.
-      await builds.mock.results[0]!.value.completion;
-      expect(mocks.discoverModels).toHaveBeenCalledOnce();
-      await expect(publishPreparedModelRuntimeSnapshot(input)).resolves.toMatchObject({
-        agentDir: input.agentDir,
-      });
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-    } finally {
-      source.resolve({ agentDir: input.agentDir, wrote: false });
-      await Promise.all(builds.mock.results.map((result) => result.value.completion));
-    }
-  });
+  it.each([
+    [true, "ambient credentials; agent standalone"],
+    [false, "agent catalog sources"],
+  ] as const)(
+    "fences late work after a publication timeout (admission=%s, stage=%s)",
+    async (admission, stage) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
+      const input = { config: {}, agentDir: fixture.state.agentDir("timeout") };
+      const started = createDeferred();
+      const finish = createDeferred();
+      const wait = async () => {
+        started.resolve();
+        await finish.promise;
+      };
+      if (admission) {
+        mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
+          await wait();
+          return {};
+        });
+      } else {
+        mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+          await wait();
+          return { agentDir: input.agentDir, wrote: false };
+        });
+      }
+      using builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
+      const first = admission
+        ? acquireAgentRunPreparedModelRuntime(input)
+        : publishPreparedModelRuntimeSnapshot(input);
+      const message = `prepared model runtime publication (${stage}) timed out`;
+      const timedOut = expect(first).rejects.toThrow(message);
+      let retry: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
+      try {
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(1);
+        await timedOut;
+        if (admission) {
+          await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
+            PreparedModelRuntimeOwnerNotPublishedError,
+          );
+          retry = acquireAgentRunPreparedModelRuntime(input);
+          expect(builds).toHaveBeenCalledTimes(2);
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledOnce();
+          finish.resolve();
+          const lease = await retry;
+          expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+          // Late ambient work must stop before discovery or publication.
+          expect(mocks.discoverModels).toHaveBeenCalledOnce();
+        } else {
+          await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(message);
+          await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(message);
+          expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+          finish.resolve();
+          // Admission settles before capture: join the build, not discovery.
+          await builds.mock.results[0]!.value.completion;
+          expect(mocks.discoverModels).toHaveBeenCalledOnce();
+          await expect(publishPreparedModelRuntimeSnapshot(input)).resolves.toMatchObject({
+            agentDir: input.agentDir,
+          });
+          expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([first, retry?.then((lease) => lease[Symbol.asyncDispose]())]);
+        await Promise.all(builds.mock.results.map((result) => result.value.completion));
+      }
+    },
+  );
 
   it.each(["workspace", "standalone"] as const)(
     "serializes conflicting %s publications for one catalog owner",
     async (kind) => {
       const agentDir = fixture.state.agentDir("serial-publication");
-      const { started, result } = holdCatalogWrite();
+      await using write = holdCatalogWrite(agentDir);
       const workspace = kind === "workspace";
       const firstInput = {
         config: {},
@@ -365,38 +361,28 @@ describe("prepared build candidate lifetime", () => {
       const publish = workspace
         ? publishPreparedModelRuntimeSnapshot
         : activateStandalonePreparedModelRuntime;
-      let first: ReturnType<typeof publish> | undefined;
-      let replacement: ReturnType<typeof publish> | undefined;
-      let reader: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
-      try {
-        first = publish(firstInput);
-        await started.promise;
-        expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-        if (workspace) {
-          reader = prepareModelRuntimeSnapshot(firstInput);
-        }
-        replacement = publish(nextInput);
-        await Promise.resolve();
-        expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-        result.resolve({ agentDir, wrote: false });
-        const [initial, next] = await Promise.all([first, replacement]);
-        expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-        if (workspace) {
-          expect(await reader).toBe(initial);
-          expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
-            firstInput.config,
-            agentDir,
-            expect.objectContaining({ workspaceDir: "/tmp/workspace-new" }),
-          );
-          expect(await prepareModelRuntimeSnapshot(nextInput)).toBe(next);
-        } else {
-          expect(initial?.config).toBe(firstInput.config);
-          expect(next?.config).toBe(nextInput.config);
-          expect(initial).not.toBe(next);
-        }
-      } finally {
-        result.resolve({ agentDir, wrote: false });
-        await Promise.allSettled([first, replacement, reader]);
+      const first = write.track(publish(firstInput));
+      await write.started;
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+      const reader = workspace ? write.track(prepareModelRuntimeSnapshot(firstInput)) : undefined;
+      const replacement = write.track(publish(nextInput));
+      await Promise.resolve();
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+      write.release();
+      const [initial, next] = await Promise.all([first, replacement]);
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+      if (workspace) {
+        expect(await reader).toBe(initial);
+        expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
+          firstInput.config,
+          agentDir,
+          expect.objectContaining({ workspaceDir: "/tmp/workspace-new" }),
+        );
+        expect(await prepareModelRuntimeSnapshot(nextInput)).toBe(next);
+      } else {
+        expect(initial?.config).toBe(firstInput.config);
+        expect(next?.config).toBe(nextInput.config);
+        expect(initial).not.toBe(next);
       }
     },
   );

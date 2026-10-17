@@ -298,9 +298,8 @@ describe("prepared model runtime owner selection", () => {
     expect(admitted?.pluginGeneration).toBeDefined();
     expect(previousSnapshot).toBeDefined();
 
-    const outerLease = await acquirePrevious();
+    await using outerLease = scopePreparedModelRuntimeLease(await acquirePrevious());
     expect(outerLease.snapshot).toBe(previousSnapshot);
-    let outerLeaseActive = true;
 
     await refreshPreparedModelRuntimeSnapshots(committedConfig, publicationOptions);
     const committedSnapshot = getPreparedModelRuntimeSnapshot(committedInput);
@@ -311,38 +310,31 @@ describe("prepared model runtime owner selection", () => {
     let detachedAdmission!: Promise<unknown>;
 
     try {
-      await withPreparedModelRuntimePluginGenerationScope(
-        generation,
-        async () => {
-          const resumed = await withPreparedModelRuntimePluginGenerationScope(
-            generation,
-            acquirePrevious,
-          );
+      await outerLease.run(async () => {
+        const resumed = await withPreparedModelRuntimePluginGenerationScope(
+          generation,
+          acquirePrevious,
+        );
 
-          expect(resumed.snapshot).toBe(previousSnapshot);
-          expect(getPreparedModelRuntimeSnapshot(committedInput)).toBe(committedSnapshot);
-          expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(registryLoads);
-          await resumed[Symbol.asyncDispose]();
-          const clonedConfigLease = await acquirePrevious(
-            runInput(structuredClone(previousConfig)),
-          );
-          expect(clonedConfigLease.snapshot).toBe(previousSnapshot);
-          await clonedConfigLease[Symbol.asyncDispose]();
-          await expect(
-            acquirePrevious({
-              ...previousInput,
-              workspaceDir: "/tmp/different-workspace",
-            }),
-          ).rejects.toThrow("plugin generation was superseded");
-          await expect(acquirePrevious(previousInput, { ...generation })).rejects.toThrow(
+        expect(resumed.snapshot).toBe(previousSnapshot);
+        expect(getPreparedModelRuntimeSnapshot(committedInput)).toBe(committedSnapshot);
+        expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(registryLoads);
+        await resumed[Symbol.asyncDispose]();
+        {
+          await using cloned = await acquirePrevious(runInput(structuredClone(previousConfig)));
+          expect(cloned.snapshot).toBe(previousSnapshot);
+        }
+        for (const [input, requestedGeneration] of [
+          [{ ...previousInput, workspaceDir: "/tmp/different-workspace" }, generation],
+          [previousInput, { ...generation }],
+        ] as const) {
+          await expect(acquirePrevious(input, requestedGeneration)).rejects.toThrow(
             "plugin generation was superseded",
           );
-          detachedAdmission = detachedAdmissionGate.promise.then(() => acquirePrevious());
-        },
-        () => (outerLeaseActive ? outerLease.snapshot : undefined),
-      );
+        }
+        detachedAdmission = detachedAdmissionGate.promise.then(() => acquirePrevious());
+      });
     } finally {
-      outerLeaseActive = false;
       await outerLease[Symbol.asyncDispose]();
       detachedAdmissionGate.resolve();
       await Promise.allSettled([detachedAdmission]);
@@ -468,13 +460,12 @@ describe("prepared model runtime snapshots", () => {
     const config = {};
     await publishGateway(config);
     const input = agentInput(config, { workspaceDir: "/tmp/stale-dynamic-workspace" });
-    const firstLease = await acquireAgentRunPreparedModelRuntime(input);
+    await using _ = await acquireAgentRunPreparedModelRuntime(input);
 
     markPreparedModelRuntimeSnapshotsStale("test dynamic owner staling");
     await expect(acquireAgentRunPreparedModelRuntime(input)).rejects.toThrow(
       "prepared model runtime owner was not committed",
     );
-    await firstLease[Symbol.asyncDispose]();
   });
 
   it.each(["openclaw", "missing"] as const)(
@@ -654,21 +645,23 @@ describe("prepared model runtime snapshots", () => {
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       events.push(event.phase);
     });
-    const firstWrite = holdNextCatalogWrite();
-    const secondWrite = holdNextCatalogWrite();
-
-    let dispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let reader: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
-    const inheritance = vi.spyOn(legacyAuth, "resolveLegacyInheritedAuthDir");
+    using _ = { [Symbol.dispose]: unregister };
+    using inheritance = vi.spyOn(legacyAuth, "resolveLegacyInheritedAuthDir");
+    await using firstWrite = holdNextCatalogWrite();
+    await using secondWrite = holdNextCatalogWrite();
     try {
       mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
       await firstWrite.started.promise;
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-      dispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+      const dispatch = firstWrite.track(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      );
       void dispatch.catch(() => undefined);
       inheritance.mockReturnValue(undefined);
       mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      reader = prepareModelRuntimeSnapshot({ config, agentId: "default", agentDir });
+      const reader = secondWrite.track(
+        prepareModelRuntimeSnapshot({ config, agentId: "default", agentDir }),
+      );
       void reader.catch(() => undefined);
       firstWrite.release.resolve();
       await secondWrite.started.promise;
@@ -691,13 +684,7 @@ describe("prepared model runtime snapshots", () => {
     } finally {
       firstWrite.release.resolve();
       secondWrite.release.resolve();
-      await Promise.allSettled([
-        dispatch,
-        reader,
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ]);
-      inheritance.mockRestore();
-      unregister();
+      await Promise.allSettled([loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })]);
     }
   });
 
@@ -707,20 +694,15 @@ describe("prepared model runtime snapshots", () => {
     const failingDir = fixture.state.agentDir("auth-failing-sibling");
     await publishPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
     await publishPreparedModelRuntimeSnapshot({ config, agentDir: failingDir });
-    const supersededWrite = holdNextCatalogWrite();
-    const siblingGate = createDeferred<{ agentDir: string; wrote: false }>();
-    let failSiblingRefresh: (() => void) | undefined;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
-      failSiblingRefresh = () => siblingGate.reject(new Error("genuine sibling refresh failure"));
-      return await siblingGate.promise;
-    });
+    await using supersededWrite = holdNextCatalogWrite();
+    await using siblingWrite = holdNextCatalogWrite();
 
     try {
       mocks.mutationListener?.({ affectsInheritedStores: true });
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
       mocks.mutationListener?.({ agentDir: supersededDir, affectsInheritedStores: false });
       supersededWrite.release.resolve();
-      failSiblingRefresh?.();
+      siblingWrite.release.reject(new Error("genuine sibling refresh failure"));
 
       await vi.waitFor(() =>
         expect(mocks.warn).toHaveBeenCalledWith(
@@ -730,7 +712,7 @@ describe("prepared model runtime snapshots", () => {
       expect(mocks.warn).toHaveBeenCalledOnce();
     } finally {
       supersededWrite.release.resolve();
-      siblingGate.resolve({ agentDir: failingDir, wrote: false });
+      siblingWrite.release.resolve();
       await Promise.allSettled([
         prepareModelRuntimeSnapshot({ config, agentDir: supersededDir }),
         prepareModelRuntimeSnapshot({ config, agentDir: failingDir }),
