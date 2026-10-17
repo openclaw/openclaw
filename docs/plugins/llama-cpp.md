@@ -513,6 +513,42 @@ embeddings are not reused, and keyword search remains available during recovery.
 Run `openclaw memory status --index` after intentionally changing the embedding
 model.
 
+## Download access and offline hosts
+
+Local inference does not mean setup is offline. Managed setup downloads separate
+artifacts on the **Gateway host**:
+
+| Stage                                                                          | Source                                                                  | Existing offline alternative                                                                               |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Chat, embeddings, OCR models, and vision projectors                            | Hugging Face model repositories and their download redirects            | Provide local GGUF paths; image models also need their matching local projector                            |
+| Pinned `llama-server` and CUDA libraries                                       | `ggml-org/llama.cpp` GitHub release assets and their download redirects | Install a compatible server and set `models.providers.llama-cpp.localService.command` to its absolute path |
+| Windows Visual C++ runtime, when the installed runtime cannot start the server | Microsoft download service                                              | Install the required runtime on the host or provide a working custom server                                |
+
+Access to a repository page alone does not prove access to its redirected model
+or release download. Check each failing stage from the Gateway host, including
+redirect destinations. Regional availability varies; OpenClaw does not automatically
+select a regional mirror or disable TLS or checksum verification.
+
+For operator-managed routing, use the existing [Network Proxy](/security/network-proxy)
+controls and [proxy validation](/cli/proxy#validate). Configure them for the Gateway
+process, not only the browser or a separate terminal. The managed proxy's default
+loopback policy keeps the local server direct; for environment-only proxy routing,
+keep it in `NO_PROXY` as described above. A Hugging Face route does not replace
+GitHub or Microsoft access.
+
+For a host without download access, transfer models and a working `llama-server`
+from a trusted connected machine, then use the existing local paths or choose
+**Existing llama-server**. Verify the files against their publisher's checksums
+before configuring them. A cache-relative filename is an explicit local path;
+it is not a request to discover a remote model. Recommended model caches retain
+pinned checksums. Custom `hf:` sources still need their upstream integrity
+metadata after a process restart; use explicit local paths when preparing a
+fully offline host.
+
+ONNX model setup has its own artifacts and local export controls; see
+[ONNX](/plugins/onnx). A local GGUF or a working llama.cpp runtime does not satisfy
+an ONNX model download.
+
 ## Troubleshooting
 
 - Managed setup: run `openclaw doctor` and `openclaw memory status --deep`.
