@@ -107,6 +107,24 @@ function expectPayload(request: { id: string; frames: readonly string[] }, paylo
   });
 }
 
+async function read(
+  harness: ReturnType<typeof createReadHarness>,
+  id: string,
+  payload: unknown,
+  params?: Record<string, unknown>,
+) {
+  const request = harness.request(id, params);
+  await request.done;
+  expectPayload(request, payload);
+  return request;
+}
+
+const preparedHarness = (run: (respond: RespondFn) => void | Promise<void>, method?: string) =>
+  createReadHarness(
+    createPreparedReadHandler(() => ({ run })),
+    method,
+  );
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 });
@@ -213,23 +231,13 @@ describe("shared read response dispatch", () => {
   it("refreshes runner status before its asynchronous session change event is published", async () => {
     let available = true;
     const produce = vi.fn((respond: RespondFn) => respond(true, { available }));
-    const harness = createReadHarness(
-      createPreparedReadHandler(() => ({ run: produce })),
-      "sessions.list",
-    );
-    const first = harness.request("before-disconnect");
-    await first.done;
-    expectPayload(first, { available: true });
+    const harness = preparedHarness(produce, "sessions.list");
+    await read(harness, "before-disconnect", { available: true });
 
     available = false;
     harness.runnerChanged();
-    const second = harness.request("before-row-event");
-    await second.done;
-    expectPayload(second, { available: false });
-
-    const third = harness.request("same-runner-revision");
-    await third.done;
-    expectPayload(third, { available: false });
+    await read(harness, "before-row-event", { available: false });
+    await read(harness, "same-runner-revision", { available: false });
     expect(produce).toHaveBeenCalledTimes(2);
   });
 
@@ -283,14 +291,9 @@ describe("shared read response dispatch", () => {
   it("keeps an omitted toJSON payload valid across shared and ordinary JSON responses", async () => {
     const toJSON = vi.fn(() => undefined);
     const produce = vi.fn((respond: RespondFn) => respond(true, { toJSON }));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("omitted-first");
-    await first.done;
-    const second = harness.request("omitted-second");
-    await second.done;
-
-    expectPayload(first, undefined);
-    expectPayload(second, undefined);
+    const harness = preparedHarness(produce);
+    const first = await read(harness, "omitted-first", undefined);
+    await read(harness, "omitted-second", undefined);
     expect(JSON.stringify({ ok: true, payload: first.respond.mock.calls[0]![1] })).toBe(
       '{"ok":true}',
     );
@@ -301,14 +304,9 @@ describe("shared read response dispatch", () => {
   it("does not retain scalar responses exceeding the encoded byte limit", async () => {
     const payload = "é".repeat(600 * 1024);
     const produce = vi.fn((respond: RespondFn) => respond(true, payload));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("large-first");
-    await first.done;
-    const second = harness.request("large-second");
-    await second.done;
-
-    expectPayload(first, payload);
-    expectPayload(second, payload);
+    const harness = preparedHarness(produce);
+    await read(harness, "large-first", payload);
+    await read(harness, "large-second", payload);
     expect(produce).toHaveBeenCalledTimes(2);
   });
 
@@ -424,7 +422,7 @@ describe("shared read response dispatch", () => {
       }
       respond(true, { generation: current });
     });
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
+    const harness = preparedHarness(produce);
     const first = harness.request("before");
     let second: ReturnType<typeof harness.request> | undefined;
     try {
@@ -440,47 +438,35 @@ describe("shared read response dispatch", () => {
       releaseOld.resolve();
       await first.done;
     }
-    const third = harness.request("after-old-completed");
-    await third.done;
+    await read(harness, "after-old-completed", { generation: 2 });
 
     expect(produce).toHaveBeenCalledTimes(2);
     expectPayload(first, { generation: 1 });
     expectPayload(second!, { generation: 2 });
-    expectPayload(third, { generation: 2 });
   });
 
   it("expires a response at the absolute ceiling even when recent readers used it", async () => {
     vi.setSystemTime(1_000);
     let generation = 0;
     const produce = vi.fn((respond: RespondFn) => respond(true, { generation: ++generation }));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("initial");
-    await first.done;
+    const harness = preparedHarness(produce);
+    await read(harness, "initial", { generation: 1 });
     vi.setSystemTime(1_999);
-    const lastHit = harness.request("last-hit");
-    await lastHit.done;
+    await read(harness, "last-hit", { generation: 1 });
     vi.setSystemTime(2_000);
-    const expired = harness.request("expired");
-    await expired.done;
+    await read(harness, "expired", { generation: 2 });
 
     expect(produce).toHaveBeenCalledTimes(2);
-    expectPayload(first, { generation: 1 });
-    expectPayload(lastHit, { generation: 1 });
-    expectPayload(expired, { generation: 2 });
   });
 
   it("executes every explicit model refresh when the method's share key opts out", async () => {
     let generation = 0;
     const produce = vi.fn((respond: RespondFn) => respond(true, { generation: ++generation }));
-    const harness = createReadHarness(createPreparedReadHandler(() => ({ run: produce })));
-    const first = harness.request("refresh-first", { refresh: true });
-    await first.done;
-    const second = harness.request("refresh-second", { refresh: true });
-    await second.done;
+    const harness = preparedHarness(produce);
+    await read(harness, "refresh-first", { generation: 1 }, { refresh: true });
+    await read(harness, "refresh-second", { generation: 2 }, { refresh: true });
 
     expect(produce).toHaveBeenCalledTimes(2);
-    expectPayload(first, { generation: 1 });
-    expectPayload(second, { generation: 2 });
   });
 
   it.each(["sessions.catalog.list", "workboard.cards.list"])(

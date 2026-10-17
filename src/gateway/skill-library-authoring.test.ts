@@ -79,26 +79,31 @@ async function admitted(
   };
 }
 
+function configureRoles(owner: SkillLibraryRequestOwner, role: "administrator" | "writer") {
+  const definition = (scope: string) => ({
+    scopes: [scope],
+    agents: "*" as const,
+    sessions: { others: "view" as const },
+  });
+  owner.context.getRuntimeConfig = () => ({
+    gateway: {
+      roles: {
+        default: role,
+        definitions: {
+          [role]: definition(role === "administrator" ? "operator.admin" : "operator.write"),
+          reader: definition("operator.read"),
+        },
+      },
+    },
+  });
+}
+
 describe("human personal namespace authority", () => {
   it("checks workspace authority from committed profile facts without a main-thread read", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
     owner.client!.connect.scopes = ["operator.admin"];
-    owner.context.getRuntimeConfig = () => ({
-      gateway: {
-        roles: {
-          default: "administrator",
-          definitions: {
-            administrator: {
-              scopes: ["operator.admin"],
-              agents: "*",
-              sessions: { others: "view" },
-            },
-            reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
-          },
-        },
-      },
-    });
+    configureRoles(owner, "administrator");
     const run = await admitted(
       (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
     );
@@ -258,17 +263,7 @@ describe("human personal namespace authority", () => {
   it("enforces current roles after session preparation and at publication after staging", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
-    owner.context.getRuntimeConfig = () => ({
-      gateway: {
-        roles: {
-          default: "writer",
-          definitions: {
-            writer: { scopes: ["operator.write"], agents: "*", sessions: { others: "view" } },
-            reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
-          },
-        },
-      },
-    });
+    configureRoles(owner, "writer");
     await expect(
       prepareGatewaySkillLibraryTurn(
         { owner, sessionKey: "agent:main:shared", isHumanTurn: true },
@@ -386,58 +381,46 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       payload: runtime.cancel(input),
     }),
   })[0]!;
+  const readResult = (result: Awaited<ReturnType<typeof proxy.execute>>) =>
+    JSON.parse(result.content.find((block) => block.type === "text")!.text!);
+  const createInput = () => ({
+    action: "create",
+    name: "worker-created",
+    proposal_content: content,
+    files: [
+      { path: "scripts/edit.sh", content: "#!/bin/sh\nprintf original", executable: true },
+      { path: "scripts/keep.sh", content: "#!/bin/sh\nprintf preserved", executable: true },
+      { path: "data.bin", content: "AP+A", encoding: "base64" },
+    ],
+  });
   try {
-    const result = await proxy.execute("create-1", {
-      action: "create",
-      name: "worker-created",
-      proposal_content: content,
-      files: [
-        { path: "scripts/edit.sh", content: "#!/bin/sh\nprintf original", executable: true },
-        { path: "scripts/keep.sh", content: "#!/bin/sh\nprintf preserved", executable: true },
-        { path: "data.bin", content: "AP+A", encoding: "base64" },
-      ],
-    });
+    const result = await proxy.execute("create-1", createInput());
     expect(JSON.stringify(result)).toContain(alice.id);
     expect((await listSkillLibrary(libraryAuthority(request(alice.id)))).entries).toHaveLength(1);
-    expect(
-      await proxy.execute("create-1", {
-        action: "create",
-        name: "worker-created",
-        proposal_content: content,
-        files: [
-          { path: "scripts/edit.sh", content: "#!/bin/sh\nprintf original", executable: true },
-          { path: "scripts/keep.sh", content: "#!/bin/sh\nprintf preserved", executable: true },
-          { path: "data.bin", content: "AP+A", encoding: "base64" },
-        ],
-      }),
-    ).toEqual(result);
+    expect(await proxy.execute("create-1", createInput())).toEqual(result);
     const entry = (await listSkillLibrary(libraryAuthority(request(alice.id)))).entries[0]!;
-    const readArtifact = await proxy.execute("read-helper", {
-      action: "read",
-      skill_id: entry.skillId,
-      artifact_path: "scripts/edit.sh",
-    });
-    expect(
-      JSON.parse(readArtifact.content.find((block) => block.type === "text")!.text!),
-    ).toMatchObject({
+    const readArtifact = async (id: string, artifact_path: string) =>
+      readResult(
+        await proxy.execute(id, { action: "read", skill_id: entry.skillId, artifact_path }),
+      );
+    const update = (id: string, patch: Record<string, unknown>, revision = entry.revision) =>
+      proxy.execute(id, {
+        action: "update",
+        skill_id: entry.skillId,
+        expected_revision: revision,
+        ...patch,
+      });
+    expect(await readArtifact("read-helper", "scripts/edit.sh")).toMatchObject({
       slug: "worker-created",
       artifactPath: "scripts/edit.sh",
       content: "#!/bin/sh\nprintf original",
       contentIncluded: true,
     });
-    const binary = await proxy.execute("read-binary", {
-      action: "read",
-      skill_id: entry.skillId,
-      artifact_path: "data.bin",
-    });
-    expect(JSON.parse(binary.content.find((block) => block.type === "text")!.text!)).toMatchObject({
+    expect(await readArtifact("read-binary", "data.bin")).toMatchObject({
       contentIncluded: false,
       omissionReason: "binary",
     });
-    await proxy.execute("edit-helper", {
-      action: "update",
-      skill_id: entry.skillId,
-      expected_revision: entry.revision,
+    await update("edit-helper", {
       files: [{ path: "scripts/edit.sh", content: "#!/bin/sh\nprintf changed" }],
     });
     const edited = await readSkillLibrary(libraryAuthority(request(alice.id)), entry.skillId);
@@ -458,10 +441,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       ]),
     );
     expect(
-      await proxy.execute("stale-edit", {
-        action: "update",
-        skill_id: entry.skillId,
-        expected_revision: entry.revision,
+      await update("stale-edit", {
         files: [{ path: "scripts/edit.sh", content: "stale" }],
       }),
     ).toMatchObject({ details: { status: "error" } });
@@ -481,32 +461,15 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       { delete_files: ["../escape"] },
       { delete_files: ["data.bin", "data.bin"] },
     ].entries()) {
-      expect(
-        await proxy.execute(`invalid-${index}`, {
-          action: "update",
-          skill_id: entry.skillId,
-          expected_revision: edited.entry.revision,
-          ...patch,
-        }),
-      ).toMatchObject({ details: { status: "error" } });
+      expect(await update(`invalid-${index}`, patch, edited.entry.revision)).toMatchObject({
+        details: { status: "error" },
+      });
     }
-    await proxy.execute("delete-helper", {
-      action: "update",
-      skill_id: entry.skillId,
-      expected_revision: edited.entry.revision,
-      delete_files: ["scripts/keep.sh"],
-    });
+    await update("delete-helper", { delete_files: ["scripts/keep.sh"] }, edited.entry.revision);
     const removed = await readSkillLibrary(libraryAuthority(request(alice.id)), entry.skillId);
     expect(removed.files.map((file) => file.path)).toEqual(["data.bin", "scripts/edit.sh"]);
-    const unchanged = await proxy.execute("empty-upserts", {
-      action: "update",
-      skill_id: entry.skillId,
-      expected_revision: removed.entry.revision,
-      files: [],
-    });
-    expect(
-      JSON.parse(unchanged.content.find((block) => block.type === "text")!.text!),
-    ).toMatchObject({ state: "unchanged" });
+    const unchanged = await update("empty-upserts", { files: [] }, removed.entry.revision);
+    expect(readResult(unchanged)).toMatchObject({ state: "unchanged" });
     current = false;
     await expect(
       proxy.execute("create-2", {
