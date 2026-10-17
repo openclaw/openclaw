@@ -10,6 +10,7 @@
     "legacy-operator-state",
     "workshop-doctor-recovery",
     "update-report-recovery",
+    "update-recovery-crashing-candidate",
     "dreaming-cron-doctor",
     "cron-owner-doctor",
     "mobile-pairing-reconnect",
