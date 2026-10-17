@@ -262,7 +262,8 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           return 123;
         }
         // A synchronous identity probe can consume the remaining observation budget.
-        vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+        // Advance the monotonic deadline (performance.now), not just wall-clock Date.
+        vi.advanceTimersByTime(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
         finalIdentityRead = true;
         return reused ? 124 : probeError === "ESRCH" ? null : 123;
       });
@@ -371,7 +372,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           isChildExited: () => parent.exitCode !== null || parent.signalCode !== null,
           isCommandSettled: () => false,
         });
-        vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+        vi.useFakeTimers({ toFake: ["setTimeout", "Date", "performance"] });
         try {
           owner.terminate();
           const completion = owner.settle();

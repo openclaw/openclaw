@@ -8,7 +8,12 @@ import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
-import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
+import {
+  COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
+  spawnCommand,
+  waitForCommandProcessGroupExit,
+  withCommandProcessScope,
+} from "./exec-spawn.js";
 
 // A foreign descendant has no retained ChildProcess handle after its root exits.
 async function waitForGroupExit(child: ChildProcess, signal: AbortSignal): Promise<void> {
@@ -283,6 +288,29 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
       killPidIfAlive(unrelated.pid);
       await childResult;
       await unrelated;
+    }
+  });
+});
+
+describe("command process group exit confirmation", () => {
+  it("expires the confirmation deadline on monotonic time when the wall clock rewinds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      const started = Date.now();
+      setTimeout(() => vi.setSystemTime(started - 60_000), 1);
+      const completion = waitForCommandProcessGroupExit(4242, () => true);
+      let settled = false;
+      void completion.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+      await Promise.resolve();
+      expect(settled).toBe(true);
+      await expect(completion).resolves.toBe("alive");
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
     }
   });
 });
