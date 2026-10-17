@@ -95,17 +95,17 @@ function recordFixture(
   overrides: Partial<ManagedWorktreeRecord> = {},
 ): ManagedWorktreeRecord {
   return {
-    id,
-    name: id,
     repoFingerprint: "0123456789abcdef",
     repoRoot: path.join(root, "repo"),
-    path: path.join(root, id),
     branch: `openclaw/${id}`,
     baseRef: "HEAD",
     ownerKind: "manual",
     createdAt: 1,
     lastActiveAt: 1,
     ...overrides,
+    id,
+    name: id,
+    path: path.join(root, id),
   };
 }
 function expectRecent(value: number | undefined, since: number) {
@@ -160,6 +160,30 @@ function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCom
   };
 }
 
+async function withPublication(
+  existing: ManagedWorktreeRecord | undefined,
+  service: ManagedWorktreeService,
+  pending: Promise<ManagedWorktreeRecord>,
+  publication: ReturnType<typeof holdPublication>,
+  verify: () => Promise<void>,
+) {
+  try {
+    await awaitGateBeforeSettlement(
+      publication.entered,
+      pending,
+      "Registry publication never queued",
+    );
+    await verify();
+  } finally {
+    publication.release();
+    await pending.catch(() => {});
+    publication.restore();
+    if (existing) {
+      await service.release(existing.id);
+    }
+  }
+}
+
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -190,13 +214,12 @@ it("serves committed worktree rows while a background write is blocked", async (
       ),
       signal,
     );
-    expect(await withinTest(readRegistryWorktree(context, record.id), signal)).toEqual(record);
-    expect(
-      await withinTest(
-        readLiveRegistryWorktreeByOwner(context, "session", record.ownerId!),
-        signal,
-      ),
-    ).toEqual(record);
+    for (const read of [
+      () => readRegistryWorktree(context, record.id),
+      () => readLiveRegistryWorktreeByOwner(context, "session", record.ownerId!),
+    ]) {
+      expect(await withinTest(read(), signal)).toEqual(record);
+    }
     expect(await withinTest(readRegistryWorktrees(env), signal)).toEqual([record]);
   } finally {
     Atomics.store(gate, 0, 0);
@@ -269,17 +292,12 @@ it("creates, resolves, lists, and publishes activity without caller-thread regis
     expect(registryQueries().length).toBeGreaterThan(0);
     sql.queries.length = 0;
     const record = await service.create(params);
-    const bound = await resolveWorktreeForPath({
-      env,
-      sessionEntry: { worktree: { id: record.id } },
-      candidatePaths: [],
-    });
-    expect(bound?.record).toEqual(record);
-    const selected = await resolveWorktreeForPath({
-      env,
-      candidatePaths: [path.join(record.path, "README.md")],
-    });
-    expect(selected?.record).toEqual(record);
+    for (const selection of [
+      { sessionEntry: { worktree: { id: record.id } }, candidatePaths: [] },
+      { candidatePaths: [path.join(record.path, "README.md")] },
+    ]) {
+      expect((await resolveWorktreeForPath({ env, ...selection }))?.record).toEqual(record);
+    }
     expect(await service.list()).toEqual([record]);
     expect(registryQueries()).toEqual([]);
     await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - 60_000 });
@@ -314,29 +332,15 @@ it.each(["create", "activity"] as const)(
         settled = true;
       },
     );
-    try {
-      await awaitGateBeforeSettlement(
-        publication.entered,
-        pending,
-        "Registry publication never reached the worker",
-      );
-      const id = listRegistryWorktrees(env)[0]!.id;
+    await withPublication(existing, service, pending, publication, async () => {
       expect(settled).toBe(false);
-      const published = getRegistryWorktree(env, id)!;
-      expect(published.id).toBe(id);
+      const published = listRegistryWorktrees(env)[0]!;
       expectRecent(published.lastActiveAt, publicationStarted);
       publication.release();
       expect(await pending).toEqual(published);
       expect(publication.writes()).toBe(1);
       expect(await service.listRegistryRecords()).toHaveLength(1);
-    } finally {
-      publication.release();
-      await pending.catch(() => {});
-      publication.restore();
-      if (existing) {
-        await service.release(existing.id);
-      }
-    }
+    });
   },
 );
 
@@ -361,12 +365,7 @@ it.each(["replacement", "retained lock", "checkout lease", "caller"] as const)(
             }
           },
         });
-    try {
-      await awaitGateBeforeSettlement(
-        publication.entered,
-        pending,
-        "Registry publication never queued",
-      );
+    await withPublication(existing, service, pending, publication, async () => {
       const { db } = openOpenClawStateDatabase({ env });
       if (existing) {
         db.prepare("UPDATE worktrees SET branch = ? WHERE id = ?").run(
@@ -395,14 +394,7 @@ it.each(["replacement", "retained lock", "checkout lease", "caller"] as const)(
       } else {
         expect(await service.listRegistryRecords()).toEqual([]);
       }
-    } finally {
-      publication.release();
-      await pending.catch(() => {});
-      publication.restore();
-      if (existing) {
-        await service.release(existing.id);
-      }
-    }
+    });
   },
 );
 
@@ -420,6 +412,14 @@ it("reads captured registry records and provisioned snapshots without host SQL o
   requireNodeSqlite();
   const sql = observeMainThreadSql();
   sql.calibrate();
+  const unusedState = path.join(stateDir, "unused-state");
+  async function expectCaptured(pending: Promise<unknown>, expected: unknown, mutate = () => {}) {
+    mutate();
+    env.OPENCLAW_STATE_DIR = unusedState;
+    expect(await pending).toEqual(expected);
+    sql.expectIdle();
+    env.OPENCLAW_STATE_DIR = stateDir;
+  }
 
   expect(await snapshot("missing")).toEqual([undefined, undefined]);
   expect(await chunk("missing", 0)).toBeUndefined();
@@ -437,22 +437,18 @@ it("reads captured registry records and provisioned snapshots without host SQL o
     lastActiveAt: 30,
     runEndCleanup: { outcome: "retained-dirty", at: 30 },
   });
-  const removed: ManagedWorktreeRecord = {
+  const removed = recordFixture(stateDir, "a-removed", {
     ...older,
-    id: "a-removed",
-    path: path.join(stateDir, "a-removed"),
     createdAt: 20,
     removedAt: 40,
     snapshotRef: "refs/openclaw/snapshots/a-removed",
     runEndCleanup: { outcome: "removed-lossless", at: 40 },
-  };
-  const newer: ManagedWorktreeRecord = {
+  });
+  const newer = recordFixture(stateDir, "z-newer", {
     ...older,
-    id: "z-newer",
-    path: path.join(stateDir, "z-newer"),
     createdAt: 20,
     runEndCleanup: { outcome: "failed", at: 30, reason: "synthetic cleanup failure" },
-  };
+  });
   await insertRegistryWorktree(env, newer, { provisionedPaths: ["legacy.local"] });
   await insertRegistryWorktree(env, older);
   await insertRegistryWorktree(env, removed);
@@ -473,52 +469,37 @@ it("reads captured registry records and provisioned snapshots without host SQL o
   await closeOpenClawStateDatabaseAsync();
   sql.clear();
 
-  const pending = service.listRegistryRecords();
-  env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
-  expect(await pending).toEqual([removed, newer, older]);
+  await expectCaptured(service.listRegistryRecords(), [removed, newer, older]);
   await closeOpenClawStateDatabaseAsync();
   sql.expectIdle();
-
-  env.OPENCLAW_STATE_DIR = stateDir;
   const listOptions = { liveOnly: true };
-  const liveRecords = readRegistryWorktrees(env, listOptions);
-  listOptions.liveOnly = false;
-  env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
-  expect(await liveRecords).toEqual([newer, older]);
-  sql.expectIdle();
-
-  env.OPENCLAW_STATE_DIR = stateDir;
-  const snapshotReads = snapshot(older.id);
-  env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
-  expect(await snapshotReads).toEqual([["synthetic.bin"], provisionedState]);
-  env.OPENCLAW_STATE_DIR = stateDir;
+  await expectCaptured(readRegistryWorktrees(env, listOptions), [newer, older], () => {
+    listOptions.liveOnly = false;
+  });
+  await expectCaptured(snapshot(older.id), [["synthetic.bin"], provisionedState]);
   const selectedChunk = { worktreeId: older.id, path: "synthetic.bin", chunkIndex: 0 };
-  const firstChunk = getRegistryWorktreeProvisionedChunk(env, selectedChunk);
-  selectedChunk.path = "different.bin";
-  selectedChunk.chunkIndex = 1;
-  env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
-  expect(Array.from((await firstChunk)!)).toEqual(Array.from(chunks[0]!));
-  env.OPENCLAW_STATE_DIR = stateDir;
+  await expectCaptured(
+    getRegistryWorktreeProvisionedChunk(env, selectedChunk).then((data) => Array.from(data!)),
+    Array.from(chunks[0]!),
+    () => {
+      selectedChunk.path = "different.bin";
+      selectedChunk.chunkIndex = 1;
+    },
+  );
   expect(Array.from((await chunk(older.id, 1))!)).toEqual(Array.from(chunks[1]!));
   expect(await chunk(older.id, 2)).toBeUndefined();
   expect(await snapshot(newer.id)).toEqual([["legacy.local"], undefined]);
   expect(await snapshot(removed.id)).toEqual([undefined, undefined]);
   await closeOpenClawStateDatabaseAsync();
   sql.expectIdle();
-  await expect(fs.stat(path.join(stateDir, "unused-state"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-
-  const liveIds = readLiveRegistryWorktreeIds(env);
-  env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
-  expect((await liveIds).toSorted()).toEqual([older.id, newer.id]);
-  sql.expectIdle();
-
-  env.OPENCLAW_STATE_DIR = stateDir;
+  await expect(fs.stat(unusedState)).rejects.toMatchObject({ code: "ENOENT" });
+  await expectCaptured(
+    readLiveRegistryWorktreeIds(env).then((ids) => ids.toSorted()),
+    [older.id, newer.id],
+  );
   const context = captureOpenClawStateWorkerContext({ env });
-  const owned = readLiveRegistryWorktreeByOwner(context, "session", older.ownerId!);
-  env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
-  expect(await owned).toEqual(newer);
+  await expectCaptured(readLiveRegistryWorktreeByOwner(context, "session", older.ownerId!), newer);
+  env.OPENCLAW_STATE_DIR = unusedState;
   expect(await readLiveRegistryWorktreeByOwner(context, "manual", older.ownerId!)).toBeUndefined();
   for (const [boundId, expected] of [
     [older.id, older],
