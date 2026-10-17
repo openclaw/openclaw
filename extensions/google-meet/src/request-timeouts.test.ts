@@ -32,6 +32,10 @@ const requests = [
         refreshToken: "refresh-token",
       }),
   },
+  {
+    name: "Calendar events.list",
+    run: () => listGoogleMeetCalendarEvents({ accessToken: "test-token" }),
+  },
 ] as const;
 
 describe("Google API request timeouts", () => {
