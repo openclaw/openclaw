@@ -1094,6 +1094,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/models-config.runtime-source-snapshot.test.ts",
   "src/agents/models-config.write-serialization.test.ts",
   "src/agents/plugin-model-catalog-auth.test.ts",
+  "src/agents/plugin-model-catalog-read.test.ts",
   "src/agents/plugin-model-catalog.test.ts",
   "src/agents/context.opencode-go.test.ts",
   "src/agents/simple-completion-runtime.selected-model.test.ts",

@@ -3,6 +3,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
+import { createSidebarTestRouter } from "../app-sidebar-router.ts";
 import {
   agentIds,
   mountRoster,
@@ -57,15 +58,12 @@ describe("AppSidebar agent roster", () => {
       onTestFinished(store.subscribe(() => {}));
       const renderedRow = sidebar.querySelector<HTMLElement>('[data-agent-group="main"]')!;
       const initial = renderedRow.textContent;
+      const router = createSidebarTestRouter();
       if (surface === "navigation") {
         sidebar.navigationVisible = false;
       } else {
-        sidebar.contextualSidebar = {
-          key: "sessions",
-          data: null,
-          loaderPending: false,
-          render: () => null,
-        };
+        sidebar.router = router;
+        await router.navigate("systems", {});
       }
       await settleRoster(sidebar);
       const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
@@ -89,7 +87,7 @@ describe("AppSidebar agent roster", () => {
       if (surface === "navigation") {
         sidebar.navigationVisible = true;
       } else {
-        sidebar.contextualSidebar = undefined;
+        await router.navigate("cron", {});
       }
       await settleRoster(sidebar);
       expect(

@@ -67,6 +67,64 @@ describe("system-presence", () => {
     expect(entry?.scopes).toEqual(["operator.admin", "system.run"]);
   });
 
+  it("keeps live operator tabs and only the last offline row per identity until expiry", () => {
+    vi.useFakeTimers();
+    for (const identity of [
+      { deviceId: "DEVICE", instanceId: "tab" },
+      { instanceId: "INSTANCE" },
+    ]) {
+      const rows = () => listSystemPresence().filter((entry) => entry.roles?.includes("operator"));
+      const connect = (connectionId: string, watchedSessions: string[]) =>
+        upsertPresence(connectionId, {
+          deviceId: connectionId === "first" ? identity.deviceId : identity.deviceId?.toLowerCase(),
+          instanceId: identity.deviceId ? connectionId : identity.instanceId.toLowerCase(),
+          connectionId,
+          roles: ["operator"],
+          reason: "connect",
+          watchedSessions,
+        });
+      const disconnect = (connectionId: string) =>
+        upsertPresence(connectionId, { reason: "disconnect", watchedSessions: undefined });
+
+      upsertPresence("node", { ...identity, roles: ["node"], reason: "connect" });
+
+      connect("first", ["one"]);
+      disconnect("first");
+      expect(rows()).toMatchObject([{ connectionId: "first", reason: "disconnect" }]);
+      connect("second", ["two"]);
+      expect(rows()).toMatchObject([{ connectionId: "second", reason: "connect" }]);
+      connect("third", ["three"]);
+      expect(rows()).toEqual([
+        expect.objectContaining({ connectionId: "second", watchedSessions: ["two"] }),
+        expect.objectContaining({ connectionId: "third", watchedSessions: ["three"] }),
+      ]);
+      disconnect("second");
+      expect(rows()).toMatchObject([{ connectionId: "third", watchedSessions: ["three"] }]);
+      disconnect("third");
+      expect(rows()).toMatchObject([
+        { connectionId: "third", reason: "disconnect", watchedSessions: undefined },
+      ]);
+      expect(listSystemPresence().find((entry) => entry.roles?.includes("node"))).toMatchObject({
+        reason: "connect",
+      });
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      expect(rows()).toEqual([]);
+    }
+    upsertPresence("anonymous-first", {
+      connectionId: "anonymous-first",
+      roles: ["operator"],
+      reason: "disconnect",
+    });
+    upsertPresence("anonymous-second", {
+      connectionId: "anonymous-second",
+      roles: ["operator"],
+      reason: "connect",
+    });
+    expect(listSystemPresence().filter((entry) => entry.roles?.includes("operator"))).toHaveLength(
+      2,
+    );
+  });
+
   it("clears retained input activity on explicit null", () => {
     const instanceId = `presence-clear-${randomUUID()}`;
     updateSystemPresence({

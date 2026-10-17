@@ -431,10 +431,14 @@ export function createAgentDatabaseNativeGeneration(
             {
               stateContext: context,
               stateDatabasePath: context.admission.databasePath,
-              assertCurrent: assertOpening,
-              signal,
+              assertCurrent: preparingShared ? assertCurrent : assertOpening,
+              signal: preparingShared ? undefined : signal,
               createAdmission: (operation) => {
-                const captured = admission(source, registration, assertCallerCurrent)(operation);
+                const captured = admission(
+                  preparingShared ? sharedPreparation.source : source,
+                  registration,
+                  preparingShared ? undefined : assertCallerCurrent,
+                )(operation);
                 openingAdmission = { admission: captured.admission, settled: operation.settled };
                 return captured;
               },

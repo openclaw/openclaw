@@ -221,8 +221,8 @@ runtime proof. A later last writer can certify that verification after a complet
 checkpoint and native close; failed close or uncertain storage errors revoke both.
 The first open in a new process still requires matching clean-close metadata or
 the admission gate. Idle close within the same process preserves admitted facts.
-After native admission of an existing agent file, its initial integrity and schema
-preparation belong to the physical owner. Concurrent callers join that preparation;
+Opening an existing agent file and its initial integrity and schema preparation
+belong to the physical owner. Concurrent callers join that preparation;
 cancelling one caller ends only its wait. Each caller must still pass its own
 authority checks before using the prepared database. First-use creation retains
 its caller's creation claim, and native worker loss still invalidates the old

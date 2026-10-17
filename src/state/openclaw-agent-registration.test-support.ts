@@ -82,27 +82,3 @@ export function useRegistrationFixture(beforeCleanup = () => {}) {
   }
   return { createFixture, observeStores };
 }
-
-export function observeRegistrationCommits() {
-  const receipts: OpenClawAgentDatabaseRegistrationCommit[] = [];
-  const errors: unknown[] = [];
-  const capture = registryListing.captureOpenClawAgentDatabaseRegistration;
-  const spy = vi
-    .spyOn(registryListing, "captureOpenClawAgentDatabaseRegistration")
-    .mockImplementation((params) => {
-      const owned = capture(params);
-      return {
-        ...owned,
-        recordCommitted(receipt) {
-          receipts.push(receipt);
-          try {
-            owned.recordCommitted(receipt);
-          } catch (error) {
-            errors.push(error);
-            throw error;
-          }
-        },
-      };
-    });
-  return { receipts, errors, spy };
-}

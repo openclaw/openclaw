@@ -273,7 +273,7 @@ host reader retry and repair; SQLite workers never schedule that maintenance.
 Transcript bytes, session recovery rows, schemas, and update behavior are unchanged.
 
 Global projection preflight and search readiness use the projection maintenance
-owner's connection-local facts. Transactional TEMP triggers queue affected sessions
+owner's published readiness. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
 local SQL. A sibling-writer receipt or schema change restarts bounded admission;
 local changes consume only the queued sessions. A bounded recursive key query
@@ -300,9 +300,12 @@ the workers serving committed history, reactions, and progress-card reads.
 A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
-Clean status reads reuse these facts without entering a write transaction or
-requesting write grants until a mutation invalidates them; connection close
-discards them. No durable tables or migration are added. Shipped synchronous
+After clean traversal commits, the owner publishes readiness with the physical
+database's committed write token. Search consumes that fact before borrowing a
+writer, without a TEMP-status query or write grants. Committed writes invalidate
+readiness; idle writer retirement preserves it while another native reader retains
+the database admission. Physical admission retirement discards it. No durable tables
+or migration are added. Shipped synchronous
 durable SDK callbacks and operator maintenance retain their native reconciliation
 adapter; moving those callbacks to another thread requires a separate SDK cutover.
 Their one-shot orphan cleanup retains ordered, indexed owner-set differences

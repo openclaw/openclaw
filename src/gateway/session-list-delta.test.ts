@@ -174,11 +174,9 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
     updatedAt: 1,
   };
   const b: GatewaySessionRow = {
-    key: "global",
+    ...a,
     agentId: "other",
-    kind: "global",
     label: "B",
-    updatedAt: 1,
   };
   const c: GatewaySessionRow = { key: "c", kind: "direct", label: "C", updatedAt: 1 };
   const previous = [a, b, c];
@@ -275,6 +273,15 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
       });
     const changedKeys = (result: SessionsListResult) =>
       expandSessionRowFacts(result.sessions, result.sharedFacts).map((row) => row.key);
+    const expectDelta = (
+      result: SessionsListResult,
+      base: SessionsListResult,
+      order: number[],
+      keys: string[],
+    ) => {
+      expect(result.rowsDelta).toEqual({ baseRevision: base.rowsRevision, order });
+      expect(changedKeys(result)).toEqual(keys.map(key));
+    };
     const release = retainSessionListForegroundWork();
     try {
       const initial = await read(primary);
@@ -307,19 +314,14 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
       });
       expect(changedKeys(inserted)).toEqual([key("f")]);
       const involved = await read(personal, initialPersonal);
-      expect(involved.rowsDelta).toEqual({
-        baseRevision: initialPersonal.rowsRevision,
-        order: [2, 0],
-      });
-      expect(changedKeys(involved)).toEqual([key("f")]);
+      expectDelta(involved, initialPersonal, [2, 0], ["f"]);
       const shifted = await read(page, initialPage);
       expect(shifted).toMatchObject({ count: 2, nextOffset: 4, rowsDelta: { order: [2, 0] } });
       expect(changedKeys(shifted)).toEqual([key("b")]);
 
       write("f", now + 2, { archivedAt: now + 2 });
       const removed = await read(primary, inserted);
-      expect(removed.rowsDelta).toEqual({ baseRevision: inserted.rowsRevision, order: [0, 2, 3] });
-      expect(changedKeys(removed)).toEqual([key("b")]);
+      expectDelta(removed, inserted, [0, 2, 3], ["b"]);
       const refilled = await read(personal, involved);
       expect(refilled.rowsDelta).toEqual({ baseRevision: involved.rowsRevision, order: [1, 2] });
       expect(changedKeys(refilled)).toEqual([key("c")]);
@@ -344,20 +346,12 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
 
       assignSessionOwner(scope("a"), { owner: { type: "human", id: viewer }, assignedBy: creator });
       const ownerChanged = await read(owned, initialOwned);
-      expect(ownerChanged.rowsDelta).toEqual({
-        baseRevision: initialOwned.rowsRevision,
-        order: [1, 0],
-      });
-      expect(changedKeys(ownerChanged)).toEqual([key("a")]);
+      expectDelta(ownerChanged, initialOwned, [1, 0], ["a"]);
       // Revoke a formerly visible row; current selection must omit it before encoding a delta.
       const beforeRevocation = await read({ ...primary, ownerFirst: false });
       write("b", now - 1, { visibility: "draft" });
       const revoked = await read({ ...primary, ownerFirst: false }, beforeRevocation);
-      expect(revoked.rowsDelta).toEqual({
-        baseRevision: beforeRevocation.rowsRevision,
-        order: [0, 2],
-      });
-      expect(changedKeys(revoked)).toEqual([key("c")]);
+      expectDelta(revoked, beforeRevocation, [0, 2], ["c"]);
       replaceSessionEntrySync(scope("a"), {
         ...loadSessionEntry(scope("a"))!,
         profileInvolvement: {
@@ -366,8 +360,7 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
         },
       });
       const hidden = await read(personal, refilled);
-      expect(hidden.rowsDelta).toEqual({ baseRevision: refilled.rowsRevision, order: [1, 2] });
-      expect(changedKeys(hidden)).toEqual([key("e")]);
+      expectDelta(hidden, refilled, [1, 2], ["e"]);
       sessionChanges.emit({ all: true, scope: "config-profiles" });
       const reset = await read(personal, hidden);
       expect(reset.rowsDelta).toBeUndefined();

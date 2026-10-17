@@ -19,7 +19,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
-import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
@@ -48,7 +47,6 @@ import {
 import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
 import type { createSidebarScroll } from "./sidebar-context-controller.ts";
-import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
@@ -211,34 +209,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     ...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>
   ) {
     super(...args);
-    new SubscriptionsController(this)
-      .watch(
-        () => this.router,
-        (router, notify) => {
-          const stop = router.subscribeSelector(selectSidebarContext, notify, equalSidebarContext);
-          return () => {
-            stop();
-            this.contextualSidebar = undefined;
-          };
-        },
-        (router) => {
-          this.contextualSidebar = selectSidebarContext(router.getState());
-        },
-      )
-      .effect(
-        () => this.context?.chatSubmissions,
-        (submissions) => submissions.subscribeCreate(() => this.requestUpdate()),
-      )
-      .effect(
-        () => this.context?.agentIdentity,
-        (identity) => identity.subscribe(this.sessionData.requestSessionDataUpdate),
-      )
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.config)
-      .effect(
-        () => this.context?.plugins,
-        (plugins) => plugins.subscribe(this.sessionData.requestSessionDataUpdate),
-      );
   }
   get nativeGatewaySnapshot(): NativeGatewaysSnapshot | null {
     // SAFETY: The macOS dashboard injects its encoded gateway snapshot at this key; browsers leave it unset.
