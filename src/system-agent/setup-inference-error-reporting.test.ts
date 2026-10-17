@@ -61,13 +61,16 @@ async function observeScenario(scenario: Scenario, json: boolean) {
   const exits: number[] = [];
   const phases: string[] = [];
   const tempDirs: string[] = [];
-  let callbackAttempts = 0;
-  let managedDispatches = 0;
-  let onboardingDispatches = 0;
-  let faultReached = 0;
   const marker = `dependency-${scenario}-reason-140392`;
   const cause = `${marker}; OPENAI_API_KEY=${syntheticToken}; {"access_token":"${syntheticStructuredValue}"}; ${syntheticCustomValue}`;
   const fault = json ? new Error(cause) : cause;
+  const enter = (phase: FailurePhase) => {
+    phases.push(phase === "revalidate" ? "runtime-load" : phase);
+    if (scenario === phase) {
+      // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
+      throw fault;
+    }
+  };
   const renderedRuntime: RuntimeEnv = {
     log: (...args) => stdout.push(args.map(String).join(" ")),
     error: (...args) => stderr.push(args.map(String).join(" ")),
@@ -76,7 +79,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     },
   };
   const policy = { redactSensitive: "off", redactPatterns: ["PR140392_PRIVATE_[A-Z]+"] };
-  const policySpy = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(policy);
+  vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(policy);
   try {
     await withEnvAsync(
       {
@@ -101,17 +104,12 @@ async function observeScenario(scenario: Scenario, json: boolean) {
         await metadata.run(async () => {
           const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
           let changedArtifact = false;
-          const originalFingerprint = fixture.deps.fingerprintPluginRuntimeArtifact;
-          if (!originalFingerprint) {
-            throw new Error("fixture has no artifact fingerprint dependency");
-          }
+          const originalFingerprint = expectDefined(
+            fixture.deps.fingerprintPluginRuntimeArtifact,
+            "fixture artifact fingerprint",
+          );
           runtimeLoader.mockReset().mockImplementation(() => {
-            phases.push("runtime-load");
-            if (scenario === "revalidate") {
-              faultReached += 1;
-              // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-              throw fault;
-            }
+            enter("revalidate");
             return createEmptyPluginRegistry();
           });
           vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockImplementation(
@@ -120,8 +118,10 @@ async function observeScenario(scenario: Scenario, json: boolean) {
           vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
             tempDirs.push(params.workspaceDir);
             phases.push("probe");
-            expect(params.agentHarnessRuntimeOverride).toBe("openclaw");
-            expect(params.authProfileId).toBe("openai:proof");
+            expect(params).toMatchObject({
+              agentHarnessRuntimeOverride: "openclaw",
+              authProfileId: "openai:proof",
+            });
             params.onSuccessfulAuthBinding?.(fixture.binding.auth);
             if (scenario === "drift") {
               changedArtifact = true;
@@ -139,12 +139,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
             fingerprintPluginRuntimeArtifact: (input) =>
               `${originalFingerprint(input)}${changedArtifact ? "-changed" : ""}`,
             captureSystemAgentOwnerPluginArtifacts: (input) => {
-              phases.push("capture");
-              if (scenario === "capture") {
-                faultReached += 1;
-                // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-                throw fault;
-              }
+              enter("capture");
               return captureSystemAgentOwnerPluginArtifacts(input);
             },
           };
@@ -158,13 +153,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
                 requireExecutionOwner: true,
                 deps,
                 onVerifiedExecution: (verified) => {
-                  phases.push("callback");
-                  callbackAttempts += 1;
-                  if (scenario === "callback") {
-                    faultReached += 1;
-                    // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-                    throw fault;
-                  }
+                  enter("callback");
                   binding = verified;
                 },
               });
@@ -177,12 +166,8 @@ async function observeScenario(scenario: Scenario, json: boolean) {
               return { ...result, binding };
             },
           );
-          inferenceMocks.runSystemAgent.mockImplementation(async () => {
-            managedDispatches += 1;
-          });
-          inferenceMocks.runGuidedOnboarding.mockImplementation(async () => {
-            onboardingDispatches += 1;
-          });
+          inferenceMocks.runSystemAgent.mockReset().mockResolvedValue(undefined);
+          inferenceMocks.runGuidedOnboarding.mockReset().mockResolvedValue(undefined);
           await runSystemAgentWithInference(
             json ? { json: true } : { message: "status", interactive: false },
             renderedRuntime,
@@ -190,30 +175,21 @@ async function observeScenario(scenario: Scenario, json: boolean) {
         });
       },
     );
-    expect(onboardingDispatches).toBe(0);
+    expect(inferenceMocks.runGuidedOnboarding).not.toHaveBeenCalled();
     expect(tempDirs).toHaveLength(scenario === "capture" ? 0 : 1);
     for (const dir of tempDirs) {
       await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
     }
+    const success = scenario === "success";
+    expect(inferenceMocks.runSystemAgent).toHaveBeenCalledTimes(success ? 1 : 0);
+    expect(exits).toEqual(success ? [] : [1]);
+    const phaseCount = scenario === "capture" ? 1 : success || scenario === "callback" ? 4 : 3;
+    expect(phases).toEqual(["capture", "probe", "runtime-load", "callback"].slice(0, phaseCount));
     if (scenario === "success") {
-      expect(phases).toEqual(["capture", "probe", "runtime-load", "callback"]);
-      expect(callbackAttempts).toBe(1);
-      expect(managedDispatches).toBe(1);
-      expect(exits).toEqual([]);
       expect(stdout).toEqual([]);
       expect(stderr).toEqual([]);
       return;
     }
-    expect(managedDispatches).toBe(0);
-    expect(exits).toEqual([1]);
-    expect(callbackAttempts).toBe(scenario === "callback" ? 1 : 0);
-    expect(phases).toEqual(
-      scenario === "capture"
-        ? ["capture"]
-        : scenario === "callback"
-          ? ["capture", "probe", "runtime-load", "callback"]
-          : ["capture", "probe", "runtime-load"],
-    );
     let message: string;
     if (json) {
       expect(stdout).toHaveLength(1);
@@ -238,11 +214,9 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     expect(message).not.toContain(syntheticStructuredValue);
     expect(message).not.toContain(syntheticCustomValue);
     if (scenario === "drift") {
-      expect(faultReached).toBe(0);
       expect(message).toContain("verified inference owner changed");
       return;
     }
-    expect(faultReached).toBe(1);
     if (scenario === "capture") {
       expect(message).toContain("Refresh or reinstall the plugin and retry.");
     }
@@ -252,13 +226,9 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     expect(message).toContain("access_token");
     expect(message).toContain("***");
   } finally {
-    try {
-      runtimeLoader.mockReset();
-      policySpy.mockRestore();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-      await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
-    }
+    runtimeLoader.mockReset();
+    await fs.rm(root, { recursive: true, force: true });
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
   }
 }
 

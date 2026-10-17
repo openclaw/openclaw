@@ -81,6 +81,34 @@ function embeddedRoute(
   };
 }
 
+const runProbe = (route: SystemAgentConfiguredRoute) =>
+  runSetupInferenceTurn({ route, requireExecutionOwner: false, deps: {} });
+
+function probeReply(route: SystemAgentConfiguredRoute, text?: string) {
+  return {
+    ...(text ? {} : { payloads: [{ text: "OK" }] }),
+    meta: {
+      durationMs: 1,
+      ...(text ? { finalAssistantVisibleText: text } : {}),
+      executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
+    },
+  };
+}
+
+function revalidateOwner(
+  binding: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>["binding"],
+  createBinding = vi.fn(async () => binding),
+  route = binding.execution,
+  auth = binding.auth,
+) {
+  return revalidateStableSetupInferenceOwner({
+    route,
+    auth,
+    stagedOwnerPluginArtifacts: binding,
+    deps: { createSystemAgentVerifiedInferenceBinding: createBinding },
+  });
+}
+
 describe("setup inference plugin ownership", () => {
   it.each([
     ["ECONNREFUSED", "Nothing is listening at http://127.0.0.1:43210", "Start the server"],
@@ -103,11 +131,7 @@ describe("setup inference plugin ownership", () => {
         retryConnectionErrors = params.retryConnectionErrors;
         throw new FailoverError("Connection error.", { reason: "timeout", code });
       });
-      const result = await runSetupInferenceTurn({
-        route,
-        requireExecutionOwner: false,
-        deps: {},
-      });
+      const result = await runProbe(route);
       expect(result).toMatchObject({
         ok: false,
         status: "unavailable",
@@ -127,31 +151,16 @@ describe("setup inference plugin ownership", () => {
     const cleanupStarted = createDeferred();
     const releaseCleanup = createDeferred();
     const removeTempDir = vi.spyOn(fs, "rm");
-    const runEmbeddedAgent = vi.fn(async () => {
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
       const trackOwner = captureAsyncWorkTracker();
       void trackOwner(async () => {
         cleanupStarted.resolve();
         await releaseCleanup.promise;
       });
-      return {
-        payloads: [{ text: "OK" }],
-        meta: {
-          durationMs: 1,
-          executionTrace: {
-            winnerProvider: route.provider,
-            winnerModel: route.model,
-          },
-        },
-      };
+      return probeReply(route);
     });
-
-    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
     let settled = false;
-    const turn = runSetupInferenceTurn({
-      route,
-      deps: {},
-      requireExecutionOwner: false,
-    }).finally(() => {
+    const turn = runProbe(route).finally(() => {
       settled = true;
     });
 
@@ -259,16 +268,9 @@ describe("setup inference plugin ownership", () => {
 
     await withPluginRuntimeRegistryScope(probingRegistry, async () => {
       await expect(
-        revalidateStableSetupInferenceOwner({
-          route,
-          auth: {
-            agentHarnessId: "codex",
-            runtimeOwnerKind: "plugin-harness",
-          },
-          stagedOwnerPluginArtifacts: binding,
-          deps: {
-            createSystemAgentVerifiedInferenceBinding,
-          },
+        revalidateOwner(binding, createSystemAgentVerifiedInferenceBinding, route, {
+          agentHarnessId: "codex",
+          runtimeOwnerKind: "plugin-harness",
         }),
       ).resolves.toBe(binding);
     });
@@ -307,16 +309,7 @@ describe("setup inference plugin ownership", () => {
     expect(binding.ownerPluginIds).toEqual([]);
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
 
-    await expect(
-      revalidateStableSetupInferenceOwner({
-        route: binding.execution,
-        auth: binding.auth,
-        stagedOwnerPluginArtifacts: binding,
-        deps: {
-          createSystemAgentVerifiedInferenceBinding: vi.fn(async () => binding),
-        },
-      }),
-    ).resolves.toBe(binding);
+    await expect(revalidateOwner(binding)).resolves.toBe(binding);
 
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   });
@@ -328,9 +321,11 @@ describe("setup probe projection", () => {
     async (phase) => {
       const route = embeddedRoute("openclaw");
       const events: AgentEventRuntimePayload[] = [];
-      const broadcast = vi.fn();
-      const broadcastToConnIds = vi.fn();
-      const nodeSendToSession = vi.fn();
+      const [broadcast, broadcastToConnIds, nodeSendToSession] = [
+        vi.fn(),
+        vi.fn(),
+        vi.fn(),
+      ] as const;
       const persistLifecycle = vi.fn(async () => undefined);
       const chatRunState = createChatRunState();
       const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
@@ -375,19 +370,9 @@ describe("setup probe projection", () => {
           if (phase === "error") {
             throw new Error("provider refused probe");
           }
-          return {
-            meta: {
-              durationMs: 1,
-              finalAssistantVisibleText: "Internal setup response",
-              executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
-            },
-          };
+          return probeReply(route, "Internal setup response");
         });
-        const result = await runSetupInferenceTurn({
-          route,
-          requireExecutionOwner: false,
-          deps: {},
-        });
+        const result = await runProbe(route);
         expect(result).toMatchObject(
           phase === "end"
             ? { ok: true, text: "Internal setup response" }
@@ -400,10 +385,9 @@ describe("setup probe projection", () => {
         for (const event of events) {
           await handler(event);
         }
-        expect(broadcast).not.toHaveBeenCalled();
-        expect(broadcastToConnIds).not.toHaveBeenCalled();
-        expect(nodeSendToSession).not.toHaveBeenCalled();
-        expect(persistLifecycle).not.toHaveBeenCalled();
+        [broadcast, broadcastToConnIds, nodeSendToSession, persistLifecycle].forEach((delivery) =>
+          expect(delivery).not.toHaveBeenCalled(),
+        );
       } finally {
         unsubscribe();
         await handler.dispose();

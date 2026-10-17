@@ -42,7 +42,7 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
 const overview: SystemAgentOverview = {
   defaultAgentId: "main",
   defaultModel: "openai/gpt-5.5",
-  agents: [{ id: "main", isDefault: true, model: "openai/gpt-5.5" }],
+  agents: [],
   config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
   tools: {
     codex: { command: "codex", found: false, error: "not found" },
@@ -50,16 +50,8 @@ const overview: SystemAgentOverview = {
     gemini: { command: "gemini", found: false, error: "not found" },
     apiKeys: { openai: true, anthropic: false },
   },
-  gateway: {
-    url: "ws://127.0.0.1:18789",
-    source: "local loopback",
-    reachable: false,
-    error: "offline",
-  },
-  references: {
-    docsUrl: "https://docs.openclaw.ai",
-    sourceUrl: "https://github.com/openclaw/openclaw",
-  },
+  gateway: { url: "ws://fixture", source: "test", reachable: false },
+  references: { docsUrl: "https://docs.example", sourceUrl: "https://source.example" },
 };
 
 const systemAgentOverviewDeps = {
@@ -74,17 +66,10 @@ const verifiedConfig = {
       models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
     },
   },
-  models: {
-    providers: {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        apiKey: "test-key",
-        auth: "api-key",
-        models: [],
-      },
-    },
-  },
 } satisfies OpenClawConfig;
+const changedConfig: OpenClawConfig = {
+  agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+};
 
 function configSnapshot(config: OpenClawConfig) {
   return {
@@ -99,22 +84,17 @@ function configSnapshot(config: OpenClawConfig) {
   };
 }
 
-let sharedVerifiedFixture: Awaited<
-  ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>
->;
+let sharedFixture: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>;
 
 beforeAll(async () => {
-  sharedVerifiedFixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
-  inferenceMocks.sharedVerifiedInference = sharedVerifiedFixture.binding;
+  sharedFixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+  inferenceMocks.sharedVerifiedInference = sharedFixture.binding;
 });
 
-function createVerifiedRunOptions(
-  deps: SystemAgentCommandDeps = {},
-  options: { revalidate?: boolean } = {},
-) {
-  const fixture = sharedVerifiedFixture;
+function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}, revalidate = false) {
+  const fixture = sharedFixture;
   return {
-    verifiedInference: options.revalidate ? { ...fixture.binding } : fixture.binding,
+    verifiedInference: revalidate ? { ...fixture.binding } : fixture.binding,
     deps: {
       ...fixture.deps,
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(verifiedConfig)) as never,
@@ -123,12 +103,12 @@ function createVerifiedRunOptions(
   };
 }
 
-function runVerified(
-  runtime: RuntimeEnv,
-  options: Omit<RunSystemAgentOptions, "verifiedInference">,
-  verified = createVerifiedRunOptions(),
-) {
-  return runSystemAgent({ ...verified, ...systemAgentOverviewDeps, ...options }, runtime);
+function runner(runtime: RuntimeEnv, verified = createVerifiedRunOptions()) {
+  return (options: Omit<RunSystemAgentOptions, "verifiedInference">, includeOverview = true) =>
+    runSystemAgent(
+      { ...verified, ...(includeOverview ? systemAgentOverviewDeps : {}), ...options },
+      runtime,
+    );
 }
 
 describe("runSystemAgent", () => {
@@ -150,18 +130,16 @@ describe("runSystemAgent", () => {
     const withoutBinding = (opts: Omit<RunSystemAgentOptions, "verifiedInference">) =>
       opts as RunSystemAgentOptions;
 
-    await expect(
-      runSystemAgent(withoutBinding({ ...common, json: true }), runtime),
-    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
-    await expect(
-      runSystemAgent(withoutBinding({ ...common, message: "please make things nicer" }), runtime),
-    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
-    await expect(
-      runSystemAgent(withoutBinding({ ...common, message: "restart gateway", yes: true }), runtime),
-    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
-    await expect(runSystemAgent(withoutBinding(common), runtime)).rejects.toMatchObject({
-      message: expect.stringContaining("openclaw onboard"),
-    });
+    for (const options of [
+      { json: true },
+      { message: "please make things nicer" },
+      { message: "restart gateway", yes: true },
+      {},
+    ]) {
+      await expect(
+        runSystemAgent(withoutBinding({ ...common, ...options }), runtime),
+      ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
+    }
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(planWithAssistant).not.toHaveBeenCalled();
@@ -172,7 +150,7 @@ describe("runSystemAgent", () => {
   it("uses the assistant planner only to choose typed operations", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const onReady = vi.fn();
-    await runVerified(runtime, {
+    await runner(runtime)({
       message: "the local bridge looks sleepy, poke it",
       onReady,
       planWithAssistant: async () => ({
@@ -203,7 +181,7 @@ describe("runSystemAgent", () => {
       const { runtime, lines } = createSystemAgentTestRuntime();
       const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
 
-      await runVerified(runtime, {
+      await runner(runtime)({
         message,
         planWithAssistant,
       });
@@ -217,9 +195,6 @@ describe("runSystemAgent", () => {
 
   it("rechecks one-shot authority at the persistent apply boundary", async () => {
     const { runtime } = createSystemAgentTestRuntime();
-    const changedConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
-    } satisfies OpenClawConfig;
     const readConfigFileSnapshot = vi
       .fn()
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
@@ -230,19 +205,18 @@ describe("runSystemAgent", () => {
       {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
       },
-      { revalidate: true },
+      true,
     );
 
     await expect(
-      runVerified(
+      runner(
         runtime,
-        {
-          message: "the bridge looks sleepy, restart it",
-          yes: true,
-          planWithAssistant: async () => ({ command: "restart gateway" }),
-        },
         verified,
-      ),
+      )({
+        message: "the bridge looks sleepy, restart it",
+        yes: true,
+        planWithAssistant: async () => ({ command: "restart gateway" }),
+      }),
     ).rejects.toMatchObject({
       message: expect.stringContaining("verified inference route changed"),
     });
@@ -255,7 +229,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
     const onReady = vi.fn();
-    await runVerified(runtime, {
+    await runner(runtime)({
       message: "models",
       planWithAssistant,
       onReady,
@@ -266,23 +240,13 @@ describe("runSystemAgent", () => {
     expect(lines.join("\n")).toContain("Default model:");
   });
 
-  it("prints an explicit one-shot overview exactly once", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    await runVerified(runtime, {
-      message: "overview",
-      formatOverview: () => "formatted overview",
-    });
-
-    expect(lines).toEqual(["formatted overview"]);
-  });
-
   it.each([
     { name: "no plan", plan: null },
     { name: "invalid command", plan: { command: "invent a new operation" } },
   ])("fails a fuzzy one-shot when inference returns $name", async ({ plan }) => {
     const { runtime } = createSystemAgentTestRuntime();
     await expect(
-      runVerified(runtime, {
+      runner(runtime)({
         message: "please make things nicer",
         planWithAssistant: async () => plan,
       }),
@@ -291,7 +255,7 @@ describe("runSystemAgent", () => {
 
   it("prints a valid reply-only one-shot plan", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    await runVerified(runtime, {
+    await runner(runtime)({
       message: "explain the current setup",
       planWithAssistant: async () => ({ reply: "The current setup is healthy." }),
     });
@@ -301,92 +265,75 @@ describe("runSystemAgent", () => {
 
   it("does not print a reply-only plan after its inference owner drifts", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const changedConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
-    } satisfies OpenClawConfig;
     let currentConfig: OpenClawConfig = verifiedConfig;
     const verified = createVerifiedRunOptions(
       {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
       },
-      { revalidate: true },
+      true,
     );
 
     await expect(
-      runVerified(
+      runner(
         runtime,
-        {
-          message: "explain the current setup",
-          planWithAssistant: async () => {
-            currentConfig = changedConfig;
-            return { reply: "stale reply" };
-          },
-        },
         verified,
-      ),
+      )({
+        message: "explain the current setup",
+        planWithAssistant: async () => {
+          currentConfig = changedConfig;
+          return { reply: "stale reply" };
+        },
+      }),
     ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
     expect(lines).not.toContain("stale reply");
   });
 
-  it("starts interactive OpenClaw in the TUI shell", async () => {
+  it.each([true, false])("admits the TUI only with stdout TTY=%s", async (isTTY) => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runInteractiveTui = vi.fn(async () => {});
     const onReady = vi.fn();
-    await runSystemAgent(
+    const run = runner(runtime)(
       {
-        ...createVerifiedRunOptions(),
         input: { isTTY: true } as unknown as NodeJS.ReadableStream,
-        output: { isTTY: true } as unknown as NodeJS.WritableStream,
+        output: { isTTY } as unknown as NodeJS.WritableStream,
+        ...(isTTY ? {} : { interactive: true }),
         runInteractiveTui,
         onReady,
       },
-      runtime,
+      false,
     );
-
-    expect(runInteractiveTui).toHaveBeenCalledOnce();
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(lines.join("\n")).not.toContain("Say: status");
+    if (isTTY) {
+      await run;
+      expect(lines.join("\n")).not.toContain("Say: status");
+    } else {
+      await expect(run).rejects.toThrow("exit 1");
+      expect(lines.join("\n")).toContain(
+        "OpenClaw needs an interactive TTY. Use --message for one command.",
+      );
+    }
+    expect(runInteractiveTui).toHaveBeenCalledTimes(isTTY ? 1 : 0);
+    expect(onReady).toHaveBeenCalledTimes(isTTY ? 1 : 0);
   });
 
-  it("prints the formatted overview exactly once when interactive mode is disabled", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const loadOverview = vi.fn(async () => overview);
-    const runInteractiveTui = vi.fn(async () => {});
-    await runSystemAgent(
-      {
-        ...createVerifiedRunOptions(),
-        interactive: false,
-        loadOverview,
-        formatOverview: () => "formatted overview",
-        runInteractiveTui,
-      },
-      runtime,
-    );
-
-    expect(loadOverview).toHaveBeenCalledOnce();
-    expect(runInteractiveTui).not.toHaveBeenCalled();
-    expect(lines).toEqual(["formatted overview"]);
-  });
-
-  it("exits non-zero when stdout is not a TTY", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runInteractiveTui = vi.fn(async () => {});
-    await expect(
-      runSystemAgent(
+  it.each([{ message: "overview" }, { interactive: false }])(
+    "prints the formatted overview exactly once for %j",
+    async (options) => {
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const loadOverview = vi.fn(async () => overview);
+      const runInteractiveTui = vi.fn(async () => {});
+      await runner(runtime)(
         {
-          ...createVerifiedRunOptions(),
-          input: { isTTY: true } as unknown as NodeJS.ReadableStream,
-          output: { isTTY: false } as unknown as NodeJS.WritableStream,
-          interactive: true,
+          ...options,
+          loadOverview,
+          formatOverview: () => "formatted overview",
           runInteractiveTui,
         },
-        runtime,
-      ),
-    ).rejects.toThrow("exit 1");
+        false,
+      );
 
-    expect(runInteractiveTui).not.toHaveBeenCalled();
-    expect(lines.join("\n")).toContain(
-      "OpenClaw needs an interactive TTY. Use --message for one command.",
-    );
-  });
+      expect(loadOverview).toHaveBeenCalledOnce();
+      expect(runInteractiveTui).not.toHaveBeenCalled();
+      expect(lines).toEqual(["formatted overview"]);
+    },
+  );
 });

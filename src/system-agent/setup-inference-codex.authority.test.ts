@@ -23,6 +23,11 @@ import { pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+const isolatedPlugins = {
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+};
+
 function stageContext(
   state: { workspaceDir: string; agentDir: () => string },
   cfg: OpenClawConfig,
@@ -52,10 +57,7 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
   await withOpenClawTestState(
     {
       label: "codex-bundled-path-trust",
-      env: {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
-      },
+      env: isolatedPlugins,
     },
     async (state) => {
       const rootDir = state.statePath("bundled", "codex");
@@ -118,28 +120,25 @@ it.each([
       {
         label: "codex-repair-authority",
         env: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+          ...isolatedPlugins,
           OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.10.2",
         },
       },
       async (state) => {
         const installPath = state.statePath("npm", "node_modules", "@openclaw", "codex");
         await fs.mkdir(installPath, { recursive: true });
-        await fs.writeFile(
-          path.join(installPath, "package.json"),
-          JSON.stringify({
+        for (const [name, content] of Object.entries({
+          "package.json": JSON.stringify({
             name: "@openclaw/codex",
             version: "2026.10.2",
             dependencies: { "@fixture/missing-dependency": "1.0.0" },
             openclaw: { extensions: ["./index.js"] },
           }),
-        );
-        await fs.writeFile(path.join(installPath, "index.js"), "export {};");
-        await fs.writeFile(
-          path.join(installPath, "openclaw.plugin.json"),
-          JSON.stringify({ id: "codex", configSchema: { type: "object" } }),
-        );
+          "index.js": "export {};",
+          "openclaw.plugin.json": JSON.stringify({ id: "codex", configSchema: { type: "object" } }),
+        })) {
+          await fs.writeFile(path.join(installPath, name), content);
+        }
         const cfg: OpenClawConfig = {
           agents: { defaults: { models: { "openai/fixture": { agentRuntime: { id: "codex" } } } } },
           plugins: { entries: { codex: { enabled: true } } },
@@ -231,16 +230,11 @@ it.each([
           expect(persisted?.codex?.integrity).toBe(
             revoke ? "sha512-before-repair" : "sha512-after-repair",
           );
-          if (revoke) {
-            expect(outcome).toMatchObject({
-              ok: false,
-              error: expect.any(SetupInferenceCancelledError),
-            });
-          } else {
-            expect(outcome).toMatchObject({ ok: true });
-            if (outcome.ok) {
-              expect(outcome.value).not.toHaveProperty("error");
-            }
+          expect(outcome).toMatchObject(
+            revoke ? { ok: false, error: expect.any(SetupInferenceCancelledError) } : { ok: true },
+          );
+          if (outcome.ok) {
+            expect(outcome.value).not.toHaveProperty("error");
           }
         } finally {
           release.resolve();
