@@ -13,11 +13,17 @@ import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
+import {
+  root as fsRoot,
+  FsSafeError,
+  openLocalFileSafely,
+  readLocalFileSafely,
+} from "../../infra/fs-safe.js";
 import { retryAsync } from "../../infra/retry.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
+import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import {
   buildInboundMediaUriFromPath,
@@ -37,7 +43,18 @@ import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
 export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
+const TELEGRAM_MANAGED_INBOUND_MAX_BYTES = 4096 * 1024 * 1024;
 const SCP_STDERR_TAIL_CHARS = 16_384;
+
+function resolveTelegramManagedInboundMaxBytes(cfg: OpenClawConfig, accountId?: string): number {
+  const configuredMb = resolveChannelAccountMediaMaxMb({ cfg, channel: "telegram", accountId });
+  return typeof configuredMb === "number" && Number.isFinite(configuredMb) && configuredMb > 0
+    ? Math.min(
+        Math.max(1, Math.floor(configuredMb * 1024 * 1024)),
+        TELEGRAM_MANAGED_INBOUND_MAX_BYTES,
+      )
+    : SANDBOX_MEDIA_MAX_BYTES;
+}
 
 // Attachment indexes are the staging identity. Callers use this map to detect
 // partial failures without matching rewritten strings back to source paths.
@@ -164,6 +181,9 @@ export async function stageSandboxMedia(params: {
 
   for (const entry of pathEntries) {
     abortSignal?.throwIfAborted();
+    const managedInbound = !ctx.MediaRemoteHost
+      ? await resolveInboundMediaReference(entry.path).catch(() => null)
+      : null;
     const source = await resolveStageableMediaSource(entry.path);
     if (!source) {
       console.warn(`Staging skipped for ${entry.path}: unable to resolve a stageable source`);
@@ -233,7 +253,21 @@ export async function stageSandboxMedia(params: {
         });
       } else {
         const copySource = await fs.realpath(source).catch(() => source);
-        await stageSource(copySource);
+        if (remoteBridge) {
+          await stageSource(copySource);
+        } else {
+          await stageLocalFileIntoRoot({
+            sourcePath: copySource,
+            rootDir: effectiveWorkspaceDir,
+            relativeDestPath: relativeDest,
+            maxBytes:
+              managedInbound && ctx.Provider === "telegram"
+                ? resolveTelegramManagedInboundMaxBytes(cfg, ctx.AccountId)
+                : SANDBOX_MEDIA_MAX_BYTES,
+            abortSignal,
+            prepareDestination,
+          });
+        }
       }
     } catch (err) {
       if (abortSignal?.aborted && Object.is(err, abortSignal.reason)) {
@@ -342,6 +376,40 @@ async function resolveStageableMediaSource(value: string): Promise<string | null
   }
   const inboundReference = await resolveInboundMediaReference(raw).catch(() => null);
   return inboundReference?.physicalPath ?? resolveAbsolutePath(raw);
+}
+
+async function stageLocalFileIntoRoot(params: {
+  sourcePath: string;
+  rootDir: string;
+  relativeDestPath: string;
+  maxBytes: number;
+  abortSignal?: AbortSignal;
+  prepareDestination: () => Promise<void>;
+}): Promise<void> {
+  params.abortSignal?.throwIfAborted();
+  let sourceSize: number;
+  {
+    // Reject an unreadable or non-file source before creating the private marker.
+    // copyIn opens and verifies it again while streaming the bytes.
+    await using opened = await openLocalFileSafely({ filePath: params.sourcePath });
+    sourceSize = opened.stat.size;
+  }
+  if (sourceSize > params.maxBytes) {
+    throw new FsSafeError(
+      "too-large",
+      `file exceeds limit of ${params.maxBytes} bytes (got ${sourceSize})`,
+    );
+  }
+  const root = await fsRoot(params.rootDir);
+  params.abortSignal?.throwIfAborted();
+  await params.prepareDestination();
+  params.abortSignal?.throwIfAborted();
+  await root.copyIn(params.relativeDestPath, params.sourcePath, {
+    maxBytes: params.maxBytes,
+    mkdir: false,
+    overwrite: false,
+    signal: params.abortSignal,
+  });
 }
 
 async function stageRemoteFileIntoRoot(params: {
