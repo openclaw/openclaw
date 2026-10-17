@@ -47,12 +47,10 @@ function writeCase(id: string, overrides: Partial<Parameters<typeof testing.writ
   return { root, benchCase: selected, config };
 }
 
-function summarizeSample(overrides: Partial<GatewaySample>, id = "demo", name = id) {
-  return testing.summarizeCase({ config: {}, id, name }, [gatewaySample(overrides)]);
-}
-
-function expectOptionsError(args: string[], message: string | RegExp) {
-  expect(() => testing.parseOptions(args)).toThrow(message);
+function expectOptionsErrors(cases: Record<string, string>) {
+  for (const [args, message] of Object.entries(cases)) {
+    expect(() => testing.parseOptions(args.split(" "))).toThrow(message);
+  }
 }
 
 function optionArgs(options: Record<string, string | number | true>) {
@@ -87,8 +85,8 @@ function startupProbe(
   };
 }
 
-function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
-  return {
+function summarizeSample(overrides: Partial<GatewaySample>, id = "demo", name = id) {
+  const sample: GatewaySample = {
     completionMs: 20,
     cpuCoreRatio: 0.5,
     cpuMs: 100,
@@ -106,6 +104,7 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     startupTrace: {},
     ...overrides,
   };
+  return testing.summarizeCase({ config: {}, id, name }, [sample]);
 }
 
 async function listenOnLoopback(handler: RequestListener) {
@@ -142,8 +141,7 @@ it.skipIf(process.platform === "win32")(
     };
     const readEvents = (): FixtureEvent[] =>
       fs.existsSync(eventsPath)
-        ? fs
-            .readFileSync(eventsPath, "utf8")
+        ? readText(eventsPath)
             .trim()
             .split("\n")
             .map((line) => JSON.parse(line))
@@ -215,14 +213,15 @@ server.listen(port, "127.0.0.1", () => {
       const report = JSON.parse(readText(reportPath));
       expect(report.results).toHaveLength(1);
       expect(report.results[0].samples).toHaveLength(2);
+      const stats = (min: number, max: number) => ({
+        min,
+        max,
+        p50: (min + max) / 2,
+        avg: (min + max) / 2,
+      });
       expect(report.results[0].summary.startupTrace).toMatchObject({
-        "sidecars.model-runtime-build.agentCount": { p50: 11.5, avg: 11.5, min: 11, max: 12 },
-        "sidecars.model-runtime-build.workspaceGroupCount": {
-          p50: 1.5,
-          avg: 1.5,
-          min: 1,
-          max: 2,
-        },
+        "sidecars.model-runtime-build.agentCount": stats(11, 12),
+        "sidecars.model-runtime-build.workspaceGroupCount": stats(1, 2),
         "sidecars.model-runtime-build.workspaceFactsMs": { p50: 2.5, avg: 2.5 },
       });
       expect(result.stdout).toContain("workspaceFacts=p50=2.5ms");
@@ -256,16 +255,19 @@ server.listen(port, "127.0.0.1", () => {
 );
 
 it("rejects ambiguous benchmark CLI values before spawning Node", () => {
-  expectOptionsError(["--wat"], "Unknown argument: --wat");
-  expectOptionsError(
-    ["--installed-cpu-diagnostic"],
-    "--installed-cpu-diagnostic requires --installed-cohort",
-  );
+  expectOptionsErrors({
+    "--wat": "Unknown argument: --wat",
+    "--installed-cpu-diagnostic": "--installed-cpu-diagnostic requires --installed-cohort",
+    "--output --case default": "--output requires a value",
+    "--case": "--case requires a value",
+    "--runs --warmup 0": "--runs requires a value",
+    "--case default --case default": 'Duplicate --case "default"',
+    "--output first.json --output second.json": "--output was provided more than once",
+  });
   for (const flag of ["--cpu-prof-dir", "--heap-prof-dir", "--gateway-runtime", "--gateway-cpus"]) {
-    expectOptionsError(
-      ["--installed-cohort", "input.json", "--output", "result.json", flag, "profiles"],
-      `${flag} is not supported with --installed-cohort`,
-    );
+    expectOptionsErrors({
+      [`--installed-cohort input.json --output result.json ${flag} profiles`]: `${flag} is not supported with --installed-cohort`,
+    });
   }
   expect(
     testing.parseOptions(
@@ -284,14 +286,6 @@ it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     output: "startup.json",
     runs: 2,
   });
-  expectOptionsError(["--output", "--case", "default"], "--output requires a value");
-  expectOptionsError(["--case"], "--case requires a value");
-  expectOptionsError(["--runs", "--warmup", "0"], "--runs requires a value");
-  expectOptionsError(["--case", "default", "--case", "default"], 'Duplicate --case "default"');
-  expectOptionsError(
-    ["--output", "first.json", "--output", "second.json"],
-    "--output was provided more than once",
-  );
 });
 
 it("selects the Gateway runtime and affinity independently of the controller", () => {
@@ -299,12 +293,11 @@ it("selects the Gateway runtime and affinity independently of the controller", (
   expect(
     testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
   ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
-  expectOptionsError(["--gateway-cpus", "0-1"], "--gateway-cpus");
-  expectOptionsError(["--gateway-runtime", "bun\0"], "--gateway-runtime");
-  expectOptionsError(
-    ["--gateway-runtime", "bun", "--gateway-runtime", "node"],
-    "--gateway-runtime was provided more than once",
-  );
+  expectOptionsErrors({
+    "--gateway-cpus 0-1": "--gateway-cpus",
+    "--gateway-runtime bun\0": "--gateway-runtime",
+    "--gateway-runtime bun --gateway-runtime node": "--gateway-runtime was provided more than once",
+  });
 });
 
 it("forces incident packaged-plugin cases to load built plugin entries", () => {
@@ -546,10 +539,9 @@ it("builds a deterministic prepared-runtime catalog stall case", () => {
   const { root, config } = writeCase("preparedRuntimeCatalogStall");
   expect(config.agents?.defaults?.modelPolicy?.allow).toEqual(["bench-catalog-stall/bench-model"]);
   expect(validateConfigObject(config)).toMatchObject({ ok: true });
-  const pluginId = config.plugins?.allow?.[0];
-  expect(pluginId).toBe("bench-plugin-01");
-  const source = readText(root, "plugins", pluginId ?? "missing", "index.cjs");
-  expect(readManifest(root, pluginId ?? "missing").providers).toEqual(["bench-catalog-stall"]);
+  expect(config.plugins?.allow?.[0]).toBe("bench-plugin-01");
+  const source = readText(root, "plugins", "bench-plugin-01", "index.cjs");
+  expect(readManifest(root).providers).toEqual(["bench-catalog-stall"]);
   expect(source).toContain("api.registerProvider");
   expect(source).toContain("Date.now() + 2000");
 });
@@ -579,12 +571,9 @@ it.each([
     expect(validateConfigObject(config)).toMatchObject({ ok: true });
     expect(config.agents?.ownership).toBe("explicit");
     expect(config.agents?.defaults?.systemAgent?.agentId).toBe(owner);
-    expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
-      "bench-catalog-stall/bench-model",
-    ]);
-    expect(
-      config.agents?.defaults?.models?.["bench-catalog-stall/bench-model"]?.agentRuntime,
-    ).toEqual({
+    const defaults = config.agents?.defaults;
+    expect(defaults?.modelPolicy?.allow).toEqual(["bench-catalog-stall/bench-model"]);
+    expect(defaults?.models?.["bench-catalog-stall/bench-model"]?.agentRuntime).toEqual({
       id: "openclaw",
     });
     const agents = Object.values(config.agents?.entries ?? {});
