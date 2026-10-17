@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
@@ -11,6 +12,12 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const visiblePane = ".chat-pane-cache__pane--visible";
+const skeletonSelector = `${visiblePane} .chat-thread openclaw-panel-loading-skeleton`;
+const textInThread = (page: Page, text: string, root = ".chat-thread") =>
+  page.locator(root).getByText(text);
+const sessionLink = (page: Page, session: string) =>
+  page.locator(`[data-session-key="agent:main:session-${session}"] a.sidebar-recent-session__link`);
 
 suite.define(() => {
   it("switches immediately but shows a skeleton only for slow history", async () => {
@@ -18,22 +25,22 @@ suite.define(() => {
       ...createControlUiE2eContextOptions(),
       reducedMotion: "no-preference",
     });
+    const previousText = "Previous conversation.";
+    const destinationText = "Destination conversation.";
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup", "chat.history"],
       sessionKey: "agent:main:session-a",
-      historyMessages: [{ role: "assistant", content: "Previous conversation." }],
+      historyMessages: [{ role: "assistant", content: previousText }],
       sessionTranscripts: {
         "agent:main:session-b": {
-          messages: [{ role: "assistant", content: "Destination conversation." }],
+          messages: [{ role: "assistant", content: destinationText }],
         },
       },
       methodResponses: { "sessions.list": chatSessionListResponse() },
     });
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
     await gateway.waitForRequest("chat.startup");
-    const loader = page.locator(
-      ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
-    );
+    const loader = page.locator(skeletonSelector);
     await loader.waitFor({ state: "attached" });
     const frames = await loader.evaluate(async (node) => {
       // Restart the CSS animation for clock samples even if CI reached this node after completion.
@@ -62,7 +69,7 @@ suite.define(() => {
     expect(frames[1]?.opacity).toBeLessThan(1);
     expect(frames[2]).toEqual({ opacity: 1, visibility: "visible" });
     await gateway.resolveDeferred("chat.startup");
-    const previous = page.locator(".chat-thread").getByText("Previous conversation.");
+    const previous = textInThread(page, previousText);
     await previous.waitFor({ state: "visible" });
     expect(await loader.count()).toBe(0);
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -70,7 +77,7 @@ suite.define(() => {
     await gateway.deferNext("chat.startup");
     const [revealDelay] = await Promise.all([
       page.evaluate(
-        () =>
+        ({ selector, oldText }) =>
           new Promise<{ delay: number; previousVisible: boolean }>((resolve) => {
             const started = performance.now();
             let revealAnimation: Animation | undefined;
@@ -85,9 +92,7 @@ suite.define(() => {
             // A concurrent reduced-motion transition can precede the reveal.
             // Retain the reveal clock before getAnimations() drops its finished effect.
             const observer = new MutationObserver(() => {
-              const skeleton = document.querySelector(
-                ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
-              );
+              const skeleton = document.querySelector(selector);
               revealAnimation ??= findRevealAnimation(skeleton);
               if (revealAnimation) {
                 observer.disconnect();
@@ -100,16 +105,14 @@ suite.define(() => {
               attributeFilter: ["class"],
             });
             const sample = () => {
-              const skeleton = document.querySelector(
-                ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
-              );
+              const skeleton = document.querySelector(selector);
               if (skeleton) {
                 revealAnimation ??= findRevealAnimation(skeleton);
                 previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
                   (pane) =>
                     getComputedStyle(pane).opacity !== "0" &&
                     pane.getAttribute("aria-hidden") === "false" &&
-                    pane.textContent.includes("Previous conversation."),
+                    pane.textContent.includes(oldText),
                 );
                 const currentTime = revealAnimation?.currentTime;
                 if (
@@ -117,10 +120,7 @@ suite.define(() => {
                   typeof currentTime === "number"
                 ) {
                   observer.disconnect();
-                  resolve({
-                    delay: currentTime,
-                    previousVisible,
-                  });
+                  resolve({ delay: currentTime, previousVisible });
                   return;
                 }
               }
@@ -133,10 +133,9 @@ suite.define(() => {
             };
             sample();
           }),
+        { selector: skeletonSelector, oldText: previousText },
       ),
-      page
-        .locator('[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link')
-        .click(),
+      sessionLink(page, "b").click(),
     ]);
     expect(revealDelay.delay).toBeGreaterThanOrEqual(480);
     expect(revealDelay.previousVisible).toBe(false);
@@ -150,24 +149,12 @@ suite.define(() => {
         })),
       )
       .toEqual({ opacity: "1", duration: "1e-05s", reduced: true });
-    expect(
-      await page
-        .locator(".chat-pane-cache__pane--visible")
-        .getByText("Previous conversation.")
-        .count(),
-    ).toBe(0);
+    expect(await textInThread(page, previousText, visiblePane).count()).toBe(0);
     await gateway.resolveDeferred("chat.startup");
-    await page
-      .locator(".chat-thread")
-      .getByText("Destination conversation.")
-      .waitFor({ state: "visible" });
-    await page
-      .locator('[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link')
-      .click();
+    await textInThread(page, destinationText).waitFor({ state: "visible" });
+    await sessionLink(page, "a").click();
     await previous.waitFor({ state: "visible" });
-    expect(
-      await page.locator(".chat-pane-cache__pane--visible openclaw-panel-loading-skeleton").count(),
-    ).toBe(0);
+    expect(await page.locator(`${visiblePane} openclaw-panel-loading-skeleton`).count()).toBe(0);
   });
 
   it.each(["named", "short"] as const)(
@@ -207,10 +194,7 @@ suite.define(() => {
         suite.server.baseUrl,
       ).pathname;
       await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
-      await page
-        .locator(".chat-thread")
-        .getByText("Initial conversation.")
-        .waitFor({ state: "visible" });
+      await textInThread(page, "Initial conversation.").waitFor({ state: "visible" });
       const initialStartups = (await gateway.getRequests("chat.startup")).length;
       await gateway.deferNext("chat.startup");
       await evaluateControlUiContext(
@@ -231,10 +215,9 @@ suite.define(() => {
       await page.waitForURL((url) => url.pathname === canonicalPath, {
         waitUntil: "domcontentloaded",
       });
-      await page
-        .locator(".chat-pane-cache__pane--active .chat-thread")
-        .getByText(marker)
-        .waitFor({ state: "visible" });
+      await textInThread(page, marker, ".chat-pane-cache__pane--active .chat-thread").waitFor({
+        state: "visible",
+      });
       await page.waitForFunction(
         (key) =>
           [...document.querySelectorAll<HTMLElement>("openclaw-chat-pane")].some(
@@ -289,25 +272,20 @@ suite.define(() => {
       await gateway.setOnline(true);
       await gateway.waitForRequest("chat.startup", { after: 1 });
     }
-    await page.locator(".chat-thread").getByText(marker).waitFor({ state: "visible" });
+    await textInThread(page, marker).waitFor({ state: "visible" });
 
     expect(await gateway.getRequests("chat.startup")).toHaveLength(2);
     expect(await page.locator(".chat-history-error").count()).toBe(0);
   });
   it("keeps cached history visible and actionable when a refresh fails", async () => {
     const page = await newChatPage(suite);
+    const marker = "Cached transcript stays visible.";
     const gateway = await installMockGateway(page, {
-      historyMessages: [
-        chatMessage("assistant", "Cached transcript stays visible.", {
-          timestamp: Date.now(),
-        }),
-      ],
+      historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    const cachedMessage = page
-      .locator(".chat-thread")
-      .getByText("Cached transcript stays visible.");
+    const cachedMessage = textInThread(page, marker);
     await cachedMessage.waitFor({ state: "visible" });
 
     await gateway.deferNext("chat.startup");

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
@@ -122,6 +123,14 @@ const suite = createControlUiE2eSuite({
   },
 });
 const requireRecord = createRequireRecord("record", "expected-object-value");
+const modelPicker = (page: Page) =>
+  page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
+async function revealModel(row: Locator) {
+  await revealChatModelOption(row);
+  await expect.poll(() => row.isVisible()).toBe(true);
+}
+const waitFor = <T>(promise: Promise<T>, message: string) =>
+  withTestTimeout(promise, 10_000, message);
 
 suite.define(() => {
   it.each([
@@ -161,6 +170,7 @@ suite.define(() => {
       };
       const older = { ...current, id: "older", name: "Older model" };
       const foreign = { ...current, id: "foreign", name: "Another context's model" };
+      const sessionModel = { model: current.id, modelProvider: current.provider };
       const scope = { agentId: "alpha", sessionKey };
       const gateway = await installMockGateway(page, {
         connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
@@ -169,7 +179,7 @@ suite.define(() => {
         sessionScope,
         mainSessionKey: sessionScope === "global" ? "global" : "agent:alpha:main",
         agentModel: "fixture/session-current",
-        sessionInfo: { model: current.id, modelProvider: current.provider },
+        sessionInfo: sessionModel,
         models: [older],
         heldMethods: ["models.list"],
         presenceUsers: [{ id: "fixture-person", name: "Fixture Person", self: true }],
@@ -184,11 +194,10 @@ suite.define(() => {
                 sessionId: "fixture-session",
                 kind: "direct",
                 updatedAt: 1,
-                model: current.id,
-                modelProvider: current.provider,
+                ...sessionModel,
               },
             ],
-            defaults: { model: current.id, modelProvider: current.provider, contextTokens: null },
+            defaults: { ...sessionModel, contextTokens: null },
           },
           "models.list": {
             models: [older],
@@ -230,16 +239,13 @@ suite.define(() => {
           },
         },
       });
-      const picker = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-      );
+      const picker = modelPicker(page);
       const trigger = picker.locator("[data-chat-model-select]");
       const currentRow = picker.locator('[data-chat-model-option="fixture/session-current"]');
       const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
       const sessionRequestsBeforeOpen = (await gateway.getRequests("sessions.list")).length;
       await trigger.click();
-      await revealChatModelOption(currentRow);
-      await expect.poll(() => currentRow.isVisible()).toBe(true);
+      await revealModel(currentRow);
       expect(await picker.textContent()).toContain("Pinned session account");
       expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
         "Refreshing models for Fixture…",
@@ -259,8 +265,7 @@ suite.define(() => {
       expect(await picker.textContent()).toContain("Pinned session account");
       await trigger.click();
       await trigger.click();
-      await revealChatModelOption(currentRow);
-      await expect.poll(() => currentRow.isVisible()).toBe(true);
+      await revealModel(currentRow);
       expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
       expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
     },
@@ -349,9 +354,8 @@ suite.define(() => {
           .locator("openclaw-gateway-url-confirmation")
           .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
           .click();
-        const initial = await withTestTimeout(
+        const initial = await waitFor(
           initialSnapshot.promise,
-          10_000,
           "Initial account A snapshot did not arrive",
         );
         expect(
@@ -359,9 +363,7 @@ suite.define(() => {
         ).toMatchObject({
           authProfileId: "fixture:account-a",
         });
-        const picker = page.locator(
-          'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-        );
+        const picker = modelPicker(page);
         const trigger = picker.locator('[data-chat-model-select][aria-disabled="false"]');
         const account = picker.locator("[data-chat-account-group-toggle]");
         await trigger.click();
@@ -376,9 +378,8 @@ suite.define(() => {
           await (
             await disconnect.promise
           )();
-          const reconnected = await withTestTimeout(
+          const reconnected = await waitFor(
             initialSnapshot.promise,
-            10_000,
             "Reconnected catalog snapshot did not arrive",
           );
           await expect.poll(() => heldReplies.length).toBeGreaterThan(0);
@@ -394,8 +395,7 @@ suite.define(() => {
           await expect.poll(() => account.isVisible()).toBe(true);
           await expect.poll(() => account.textContent()).toContain("Account A");
           const row = picker.locator('[data-chat-model-option="fixture/first"]');
-          await revealChatModelOption(row);
-          await expect.poll(() => row.isVisible()).toBe(true);
+          await revealModel(row);
           expect(await row.isEnabled()).toBe(true);
           expect(catalogRequests.size).toBe(requestsBeforeOpen);
 
@@ -403,8 +403,7 @@ suite.define(() => {
           heldReplies.splice(0).forEach((send) => send());
           await trigger.click();
           await trigger.click();
-          await revealChatModelOption(row);
-          await expect.poll(() => row.isVisible()).toBe(true);
+          await revealModel(row);
           expect(catalogRequests.size).toBe(requestsBeforeOpen);
           return;
         }
@@ -413,16 +412,11 @@ suite.define(() => {
           agentId: "alpha",
           model: "fixture/second@fixture:account-b",
         });
-        await withTestTimeout(
+        await waitFor(
           invalidation.promise,
-          10_000,
           "The registered session patch did not invalidate the browser",
         );
-        await withTestTimeout(
-          replacementRead.promise,
-          10_000,
-          "Account B replacement catalog did not arrive",
-        );
+        await waitFor(replacementRead.promise, "Account B replacement catalog did not arrive");
         const deliverReplacement = () => {
           holdReplacement = false;
           heldReplies.splice(0).forEach((send) => send());
@@ -450,8 +444,7 @@ suite.define(() => {
         await trigger.click();
         await expect.poll(() => account.textContent()).toContain("Account B");
         const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
-        await revealChatModelOption(selectedRow);
-        await expect.poll(() => selectedRow.isVisible()).toBe(true);
+        await revealModel(selectedRow);
         expect(await selectedRow.isEnabled()).toBe(true);
         expect(await account.textContent()).not.toContain("Account A");
         const readsBeforeReopen = catalogRequests.size;
