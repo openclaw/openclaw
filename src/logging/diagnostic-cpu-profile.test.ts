@@ -420,7 +420,7 @@ describe("diagnostic CPU profile owner", () => {
       returnProfile(value);
       const outcome = await capture();
       expect(outcome.status).toBe("complete");
-      if (outcome.status === "complete") {
+      if (outcome.status === "complete" && outcome.result.profile) {
         expect(outcome.result.profile.nodes[1]?.callFrame).toEqual({
           ...value.nodes[1].callFrame,
           functionName: "[redacted]",
@@ -452,7 +452,7 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it("rejects a complete result larger than 1 MiB without truncation", async () => {
+  it("summarizes an oversized profile without losing zero-hit samples or exposing labels", async () => {
     const template = profile().nodes[1];
     const root: Profiler.ProfileNode = {
       ...template,
@@ -460,16 +460,101 @@ describe("diagnostic CPU profile owner", () => {
       callFrame: { ...template.callFrame, functionName: "x".repeat(256) },
     };
     const children = Array.from({ length: 2_999 }, (_, index) => ({ ...root, id: index + 2 }));
+    children[1] = {
+      ...children[1]!,
+      hitCount: 0,
+      callFrame: { ...template.callFrame, functionName: "private payload" },
+    };
     root.children = children.map((node) => node.id);
     const value: Profiler.Profile = { ...profile(), nodes: [root, ...children] };
     returnProfile(value);
-    expect(await capture()).toEqual({
-      status: "unavailable",
-      reason: "profile-too-large",
-      cleanupFailed: false,
+    const outcome = await capture();
+    expect(outcome).toMatchObject({
+      status: "complete",
+      result: {
+        truncated: true,
+        originalNodeCount: 3_000,
+        sampleCount: 3,
+        omittedSampleCount: 0,
+        summary: [
+          {
+            sampleCount: 2,
+            stack: [expect.objectContaining({ functionName: "x".repeat(256) }), expect.any(Object)],
+          },
+          {
+            sampleCount: 1,
+            stack: [expect.objectContaining({ functionName: "[redacted]" }), expect.any(Object)],
+          },
+        ],
+      },
     });
+    expect(JSON.stringify(outcome)).not.toContain("private payload");
+    expect(Buffer.byteLength(JSON.stringify(outcome))).toBeLessThan(1024 * 1024);
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { pathLength: 120, stackDepth: 30 },
+    { pathLength: 1_100, stackDepth: 8 },
+  ])(
+    "bounds ranked summaries with $pathLength-character code paths",
+    async ({ pathLength, stackDepth }) => {
+      const value = profile();
+      const nodes: Profiler.ProfileNode[] = [{ ...value.nodes[0], children: [] }];
+      const samples: number[] = [];
+      for (let branch = 0; branch < 200; branch++) {
+        let parent = nodes[0]!;
+        for (let depth = 0; depth < stackDepth; depth++) {
+          const node: Profiler.ProfileNode = {
+            id: nodes.length + 1,
+            callFrame: {
+              ...value.nodes[1].callFrame,
+              scriptId: String(branch + 1),
+              url: `/fixture/openclaw/src/${"x".repeat(pathLength)}.js`,
+            },
+          };
+          (parent.children ??= []).push(node.id);
+          nodes.push(node);
+          parent = node;
+        }
+        samples.push(parent.id);
+      }
+      // The hottest stack is last in native order; ranking must retain it first.
+      samples.push(...Array<number>(20).fill(samples.at(-1)!));
+      returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
+      const outcome = await capture();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
+        throw new Error("expected a bounded summary");
+      }
+      const result = outcome.result;
+      expect(result.profile).toBeUndefined();
+      expect(result.summary[0]).toMatchObject({ sampleCount: 21 });
+      expect(result.summary.every((row) => row.stack.length === 8)).toBe(true);
+      expect(result.summary.length).toBeLessThanOrEqual(128);
+      expect(result.summary.length).toBeGreaterThan(0);
+      expect(result.omittedSampleCount).toBeGreaterThan(0);
+      expect(
+        result.summary.reduce((sum, row) => sum + row.sampleCount, result.omittedSampleCount),
+      ).toBe(220);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(1024 * 1024);
+    },
+  );
+
+  it.each(["nodes", "samples"] as const)(
+    "retains the native %s processing limit",
+    async (limit) => {
+      const value: Profiler.Profile = profile();
+      if (limit === "nodes") {
+        value.nodes = Array<Profiler.ProfileNode>(16_385).fill(value.nodes[0]!);
+      } else {
+        value.samples = Array<number>(65_537).fill(2);
+        value.timeDeltas = value.samples.map(() => 10_000);
+      }
+      returnProfile(value);
+      expect(await capture()).toMatchObject({ status: "unavailable", reason: "profile-too-large" });
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "captures a real profile with the current runtime without opening a listener",

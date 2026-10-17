@@ -101,6 +101,12 @@ export function prepareSessionRunTargetAbort(params: {
       selectedSessionIds.add(selectedSessionId);
     }
     let active = selectedOperations.some((operation) => !operation.result);
+    // The first cancellation signal clears the provider's live wait.
+    const hadLocalModelWait = runs.some(
+      (run) =>
+        (!selectedSessionId || run.sessionId === selectedSessionId) &&
+        run.abort.isWaitingForLocalModel(),
+    );
     const failures: unknown[] = [];
     let aborted =
       commands?.cancel(
@@ -158,7 +164,12 @@ export function prepareSessionRunTargetAbort(params: {
             }
           })
         : undefined;
-    return { active, aborted, retirement };
+    return {
+      active,
+      aborted,
+      retirement,
+      ...(aborted && hadLocalModelWait ? { localModelMayStillBeFinishing: true as const } : {}),
+    };
   };
   return Object.assign(abort, { requestRunIds });
 }
@@ -337,6 +348,7 @@ export async function executeFastAbortRequest(
     let authorized = false;
     let aborted = false;
     let activeAbortRejected = false;
+    let localModelMayStillBeFinishing = false;
     const acpCancellations: Promise<void>[] = [];
     try {
       const { stopped, failed, execAborted } = await stopSubagentsForRequester({
@@ -427,6 +439,7 @@ export async function executeFastAbortRequest(
               }
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
+              localModelMayStillBeFinishing ||= outcome.localModelMayStillBeFinishing === true;
             }
           } finally {
             // The tree already holds queued reservations. Initiate ACP without awaiting
@@ -500,6 +513,7 @@ export async function executeFastAbortRequest(
         handled: true,
         aborted,
         ...(rejectionReason ? { rejectionReason } : {}),
+        ...(localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
         stoppedSubagents: stopped,
         failedSubagents: failed,
       };

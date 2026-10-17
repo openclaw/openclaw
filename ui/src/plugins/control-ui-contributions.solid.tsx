@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
-import type { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
+import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -19,7 +19,7 @@ type ContributionsProps = {
   agentId: string | undefined;
   navigationKey: string;
   navigationChildren: boolean;
-  navigationMenus: SidebarMenusController | undefined;
+  navigationMenus: SidebarMenus | undefined;
   presented: boolean;
 };
 export type ContributionsElement = SolidBridgeElement<ContributionsProps>;

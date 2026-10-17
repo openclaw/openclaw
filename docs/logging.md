@@ -1142,6 +1142,13 @@ the same turn. It clears on the first stream event, cancellation, failure, or
 completion. Fast requests do not flash a waiting status, and no server polling
 or user configuration is required.
 
+If you cancel while this local-model wait is visible, the terminal acknowledgment
+adds “Cancellation requested; the local model may still be finishing.” Control UI
+and TUI show the caveat for five seconds; channels append it to their existing stop
+reply. The run ends immediately. This is not evidence that the backend is still
+busy or has released its slot, and fast cancels or cancels after output begins do
+not add the caveat.
+
 “Waiting for a free model slot” is reserved for request-correlated backend
 evidence. The pinned llama.cpp server and Ollama do not expose that evidence for
 queued requests: occupied slots, model residency, and silence alone cannot

@@ -261,12 +261,11 @@ export function prepareSessionRowPublication(
       });
       projection.onFactsChange((change) => {
         retained.factsRevision++;
-        // Retire wire snapshots even when no reader returns after a publication or disposal.
+        // Facts can change without retiring the view (for example, broad run activity).
+        // Keep its comparison history; selection/config/identity resets still retire the view.
         for (const list of retained.lists.values()) {
-          if (change.kind === "reset") {
-            list.rowHistory = list.rows = undefined;
-          } else if (list.rows?.some((row) => row.key === change.key)) {
-            if (list.rows[0]?.rowMode === "sidebar") {
+          if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
+            if (list.rows?.[0]?.rowMode === "sidebar") {
               list.rowHistory = retainSidebarRows(list.rows, list.rowHistory);
             }
             list.rows = undefined;

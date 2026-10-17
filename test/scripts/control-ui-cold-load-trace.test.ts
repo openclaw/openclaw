@@ -1,7 +1,12 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { build, transform } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  compareCpuTables,
+  formatCpuTables,
+  medianCpuTables,
+  readCpuProfileReport,
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
@@ -168,7 +173,162 @@ describe("cold-load CPU accounting", () => {
     },
   );
 
-  it("retains an unmapped bundler runtime without inventing its source", async () => {
+  it("maps a real emitted minified map using zero-based generated positions", async () => {
+    const directory = tempDirs.make("openclaw-cold-load-emitted-map-");
+    const { code, map } = await transform(
+      "export function prepareTimestamp(value: number) {\n  return value + 1;\n}\n",
+      {
+        loader: "ts",
+        sourcefile: "../../src/timestamp.ts",
+        sourcemap: "external",
+        minify: true,
+        footer: "\nfunction runtime() {}",
+      },
+    );
+    await writeFile(path.join(directory, "app.js.map"), map);
+    const generatedColumn = code.indexOf("+1");
+    expect(generatedColumn).toBeGreaterThan(0);
+    const mapped = await mapColdLoadCpuProfile(
+      {
+        nodes: [
+          {
+            id: 1,
+            callFrame: {
+              functionName: "t",
+              url: "http://localhost/assets/app.js",
+              lineNumber: 0,
+              columnNumber: generatedColumn,
+            },
+          },
+          {
+            id: 2,
+            callFrame: {
+              functionName: "t",
+              url: "http://localhost/assets/app.js",
+              lineNumber: 0,
+              columnNumber: 1,
+            },
+          },
+          {
+            id: 3,
+            callFrame: frame("runtime", "http://localhost/assets/app.js", 2),
+          },
+        ],
+      },
+      { assetBaseUrl: "http://localhost/assets/", assetDirectory: directory },
+    );
+    expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
+      url: expect.stringMatching(/(?:^|\/)src\/timestamp\.ts$/u),
+      lineNumber: 1,
+      columnNumber: 9,
+    });
+    expect(mapped.profile.nodes[1]?.callFrame).toMatchObject({
+      url: expect.stringMatching(/(?:^|\/)src\/timestamp\.ts$/u),
+      lineNumber: 0,
+      columnNumber: 7,
+    });
+    expect(code.split("\n")[2]).toBe("function runtime() {}");
+    expect(mapped).toMatchObject({ mappedFrames: 2, unmappedFrames: 1 });
+    expect(mapped.profile.nodes[2]?.callFrame).toEqual(
+      frame("runtime", "http://localhost/assets/app.js", 2),
+    );
+  });
+
+  it("compares the same emitted function across output directories", async () => {
+    const directory = tempDirs.make("openclaw-cold-load-output-paths-");
+    const source = path.join(directory, "source.ts");
+    await writeFile(source, "export function sample(value: number) { return value + 1; }");
+    const profile: ColdLoadCpuProfile = {
+      nodes: [{ id: 1, callFrame: frame("sample", "http://localhost/assets/app.js") }],
+      samples: [1],
+      timeDeltas: [1_000],
+    };
+    async function capture(assetDirectory: string) {
+      await build({
+        entryPoints: [source],
+        outfile: path.join(assetDirectory, "app.js"),
+        format: "esm",
+        minify: true,
+        sourcemap: "external",
+      });
+      const mapped = await mapColdLoadCpuProfile(profile, {
+        assetBaseUrl: "http://localhost/assets/",
+        assetDirectory,
+      });
+      expect(mapped.mappedFrames).toBe(1);
+      return summarizeCpuProfile(mapped.profile, { includeTables: true }).tables!;
+    }
+    const baseline = await capture(path.join(directory, "one"));
+    const candidate = await capture(path.join(directory, "nested", "two"));
+    expect(compareCpuTables(baseline, candidate)).toEqual([
+      expect.objectContaining({ selfMs: 0, inclusiveMs: 0 }),
+    ]);
+  });
+
+  it("counts recursive functions and same-file ancestors once per inclusive sample", () => {
+    const outer = { ...frame("reconcile"), scriptId: "1" };
+    const inner = { ...frame("reconcile"), scriptId: "2" };
+    const profile: ColdLoadCpuProfile = {
+      nodes: [
+        { id: 1, callFrame: frame("(root)", ""), children: [2] },
+        { id: 2, callFrame: outer, children: [3] },
+        { id: 3, callFrame: inner, children: [4] },
+        { id: 4, callFrame: frame("render", "view.ts") },
+      ],
+      samples: [3, 4],
+      timeDeltas: [2000, 3000],
+    };
+    const tables = summarizeCpuProfile(profile, { includeTables: true }).tables!;
+    expect(tables.functions).toEqual([
+      { ...frame("reconcile"), selfMs: 2, inclusiveMs: 5 },
+      { ...frame("render", "view.ts"), selfMs: 3, inclusiveMs: 3 },
+    ]);
+    expect(tables.files).toEqual([
+      { url: "app.ts", inclusiveMs: 5 },
+      { url: "view.ts", inclusiveMs: 3 },
+    ]);
+    const median = medianCpuTables([tables, { functions: [], files: [] }]);
+    expect(median.functions[0]).toMatchObject({ selfMs: 1, inclusiveMs: 2.5 });
+    expect(median.files[0]?.inclusiveMs).toBe(2.5);
+    expect(compareCpuTables(tables, median)[0]).toMatchObject({
+      baselineSelfMs: 2,
+      selfMs: -1,
+      inclusiveMs: -2.5,
+    });
+    expect(compareCpuTables(median, { functions: [], files: [] })[0]).toMatchObject({
+      selfMs: -1,
+      inclusiveMs: -2.5,
+    });
+    expect(formatCpuTables("Median", median)).toContain("app.ts:1:1 reconcile");
+    expect(readCpuProfileReport({ reload: median }, ["reload"])).toEqual({ reload: median });
+    expect(() =>
+      readCpuProfileReport({ reload: { functions: [{ selfMs: "2" }], files: [] } }, ["reload"]),
+    ).toThrow();
+  });
+
+  it.each(["live", "streaming"])("rejects comparisons that omit the %s phase", (phase) => {
+    const tables = { functions: [], files: [] };
+    const report = { reload: tables, [phase]: tables };
+    expect(() => readCpuProfileReport(report, ["reload"])).toThrow("CPU profile phases differ");
+    expect(() => readCpuProfileReport({ reload: tables }, ["reload", phase])).toThrow(
+      "CPU profile phases differ",
+    );
+    expect(readCpuProfileReport(report, [phase, "reload"])).toEqual(report);
+  });
+
+  it.each(["missing map", "unmapped segment"])("retains a frame with %s", async (kind) => {
+    const directory = tempDirs.make("openclaw-cold-load-unmapped-");
+    if (kind === "unmapped segment") {
+      await writeFile(
+        path.join(directory, "runtime.js.map"),
+        JSON.stringify({
+          version: 3,
+          sources: ["app.ts"],
+          names: [],
+          mappings: "A,KAAA",
+        }),
+      );
+    }
     const profile: ColdLoadCpuProfile = {
       nodes: [{ id: 1, callFrame: frame("runtime", "http://localhost/assets/runtime.js") }],
       samples: [1],
@@ -176,7 +336,7 @@ describe("cold-load CPU accounting", () => {
     };
     const mapped = await mapColdLoadCpuProfile(profile, {
       assetBaseUrl: "http://localhost/assets/",
-      assetDirectory: tempDirs.make("openclaw-cold-load-unmapped-"),
+      assetDirectory: directory,
     });
     expect(mapped).toMatchObject({ mappedFrames: 0, unmappedFrames: 1 });
     expect(mapped.profile.nodes[0]).toBe(profile.nodes[0]);

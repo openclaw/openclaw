@@ -126,7 +126,11 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
           assertCurrent,
         })
       : undefined;
-    let abortOutcome = { active: false, aborted: false };
+    let abortOutcome: ReturnType<ReturnType<typeof prepareSessionRunTargetAbort>> = {
+      active: false,
+      aborted: false,
+      retirement: undefined,
+    };
     const acceptedRetirements: Promise<void>[] = [];
     const failures: unknown[] = [];
     // Capture child generations before signalling the parent; cleanup must not discover
@@ -191,7 +195,14 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
       abortOutcome.active && !abortOutcome.aborted && !execAborted
         ? ("finalizing" as const)
         : undefined;
-    return commandReply(formatAbortReplyText(stopped, rejectionReason, failed));
+    return commandReply(
+      formatAbortReplyText(
+        stopped,
+        rejectionReason,
+        failed,
+        abortOutcome.localModelMayStillBeFinishing,
+      ),
+    );
   },
 );
 
@@ -213,6 +224,13 @@ export const handleAbortTrigger: CommandHandler = defineAuthorizedTextCommand(
     );
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
-    return commandReply(formatAbortReplyText(undefined, rejectionReason));
+    return commandReply(
+      formatAbortReplyText(
+        undefined,
+        rejectionReason,
+        undefined,
+        abortOutcome.localModelMayStillBeFinishing,
+      ),
+    );
   },
 );

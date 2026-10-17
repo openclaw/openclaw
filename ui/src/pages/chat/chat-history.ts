@@ -232,5 +232,6 @@ export type ChatEventPayload = {
   errorKind?: Extract<ChatEvent, { state: "error" }>["errorKind"];
   errorDetail?: ChatErrorDetail;
   stopReason?: string;
+  localModelMayStillBeFinishing?: boolean;
   yielded?: true;
 };
