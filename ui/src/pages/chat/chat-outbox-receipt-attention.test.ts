@@ -14,7 +14,10 @@ useChatSendBrowserFixture();
 
 const sessionKey = "agent:main:attention";
 const sessionId = "attention-session";
-function attentionHost(ids: string[], requestHandlers: Record<string, unknown>) {
+function attentionHost(
+  ids: string[],
+  history: (params: { inputRunIds?: string[]; cursor?: string }) => unknown,
+) {
   const host = makeChatHost({
     sessionKey: "agent:main:visible",
     chatQueue: ids.map((id) => ({
@@ -27,31 +30,33 @@ function attentionHost(ids: string[], requestHandlers: Record<string, unknown>) 
       sessionKey,
       sessionId,
     })),
-    requestHandlers,
+    requestHandlers: { "chat.history": history },
   });
   admitHostQueueItems(host);
   onTestFinished(chatOutboxOwner(host).subscribe(host));
   return host;
 }
 
+function deliveredMessage(id: string, nativeId = "stored-" + id) {
+  return {
+    role: "user",
+    content: id,
+    __openclaw: { id: nativeId, idempotencyKey: `run-${id}:user` },
+  };
+}
+
 describe("outbox receipt attention", () => {
   it.each(["receipt", "legacy"] as const)(
     "retires delivered attention behind an uncertain FIFO head using %s proof",
     async (proof) => {
-      const host = attentionHost(["uncertain", "delivered-1", "delivered-2", "delivered-3"], {
-        "chat.history": (params: { inputRunIds?: string[] }) => ({
+      const host = attentionHost(
+        ["uncertain", "delivered-1", "delivered-2", "delivered-3"],
+        (params) => ({
           sessionId,
           sessionInfo: row(sessionKey, { sessionId, status: "done", hasActiveRun: false }),
           messages:
             proof === "legacy"
-              ? [1, 2, 3].map((id) => ({
-                  role: "user",
-                  content: "delivered-" + id,
-                  __openclaw: {
-                    id: "stored-" + id,
-                    idempotencyKey: "run-delivered-" + id + ":user",
-                  },
-                }))
+              ? [1, 2, 3].map((id) => deliveredMessage("delivered-" + id, "stored-" + id))
               : [],
           inputReceipts:
             proof === "receipt"
@@ -64,7 +69,7 @@ describe("outbox receipt attention", () => {
                   }))
               : [],
         }),
-      });
+      );
       const reader = createStoredChatOutboxReader();
       let summary = reader.read(host);
       onTestFinished(
@@ -93,39 +98,26 @@ describe("outbox receipt attention", () => {
   ] as const)("preserves delivery authority for a later %s submission", async (condition) => {
     const started = createDeferred();
     const release = createDeferred();
-    const host = attentionHost(["uncertain", "later"], {
-      "chat.history": async () => {
-        started.resolve();
-        await release.promise;
-        const observedSessionId = condition === "replacement-session" ? "replacement" : sessionId;
-        return {
+    const host = attentionHost(["uncertain", "later"], async () => {
+      started.resolve();
+      await release.promise;
+      const observedSessionId = condition === "replacement-session" ? "replacement" : sessionId;
+      return {
+        sessionId: observedSessionId,
+        sessionInfo: row(sessionKey, {
           sessionId: observedSessionId,
-          sessionInfo: row(sessionKey, {
-            sessionId: observedSessionId,
-            status: "done",
-            hasActiveRun: false,
-            lastRunId: "run-later",
-          }),
-          messages:
-            condition === "pending-with-transcript"
-              ? [
-                  {
-                    role: "user",
-                    content: "later",
-                    __openclaw: { id: "stored-later", idempotencyKey: "run-later:user" },
-                  },
-                ]
-              : [],
-          inputReceipts:
-            condition === "run-only"
-              ? []
-              : condition === "pending" ||
-                  condition === "pending-with-transcript" ||
-                  condition === "cancelled"
-                ? [{ runId: "run-later", state: "pending", cancelled: condition === "cancelled" }]
-                : [{ runId: "run-later", state: "consumed", consumedByEventId: "stored-later" }],
-        };
-      },
+          status: "done",
+          hasActiveRun: false,
+          lastRunId: "run-later",
+        }),
+        messages: condition === "pending-with-transcript" ? [deliveredMessage("later")] : [],
+        inputReceipts:
+          condition === "run-only"
+            ? []
+            : ["pending", "pending-with-transcript", "cancelled"].includes(condition)
+              ? [{ runId: "run-later", state: "pending", cancelled: condition === "cancelled" }]
+              : [{ runId: "run-later", state: "consumed", consumedByEventId: "stored-later" }],
+      };
     });
     const reader = createStoredChatOutboxReader();
     const recovering = resumeStoredChatOutboxes(host);
@@ -149,24 +141,14 @@ describe("outbox receipt attention", () => {
 
   it("retains legacy delivery proof when a sibling's storage retirement fails", async () => {
     const cursors: Array<string | undefined> = [];
-    const host = attentionHost(["uncertain", "delivered"], {
-      "chat.history": (params: { cursor?: string }) => {
-        cursors.push(params.cursor);
-        return {
-          sessionId,
-          sessionInfo: row(sessionKey, { sessionId, status: "done", hasActiveRun: false }),
-          deltaCursor: "after-delivery",
-          messages: params.cursor
-            ? []
-            : [
-                {
-                  role: "user",
-                  content: "delivered",
-                  __openclaw: { id: "stored-user", idempotencyKey: "run-delivered:user" },
-                },
-              ],
-        };
-      },
+    const host = attentionHost(["uncertain", "delivered"], (params) => {
+      cursors.push(params.cursor);
+      return {
+        sessionId,
+        sessionInfo: row(sessionKey, { sessionId, status: "done", hasActiveRun: false }),
+        deltaCursor: "after-delivery",
+        messages: params.cursor ? [] : [deliveredMessage("delivered", "stored-user")],
+      };
     });
     const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
       throw new Error("Synthetic storage write failure");

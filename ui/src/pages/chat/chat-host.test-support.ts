@@ -1,6 +1,5 @@
 import { onTestFinished, vi } from "vitest";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -81,11 +80,29 @@ export function createBrowserAnnotationAttachment(
 export function findChatSendPayload(host: {
   request: { mock: { calls: ReadonlyArray<Readonly<Parameters<GatewayRequestHandler>>> } };
 }): Record<string, unknown> {
-  const call = host.request.mock.calls.find(([method]) => method === "chat.send");
-  if (!call?.[1] || typeof call[1] !== "object") {
-    throw new Error("Expected chat.send payload");
-  }
-  return call[1] as Record<string, unknown>;
+  return findRequestPayload(host.request, "chat.send", "chat.send payload");
+}
+
+function composerDefaults(chatMessage = "", chatAttachments: ChatAttachment[] = []) {
+  return {
+    connected: true,
+    sessionKey: "agent:main",
+    chatLoading: false,
+    chatMessage,
+    chatMessages: [],
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    chatAttachments,
+    chatQueue: [],
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
+    chatModelCatalog: [],
+    refreshSessionsAfterChat: new Map(),
+  };
 }
 
 export function createImmediateCommandHost(
@@ -94,51 +111,31 @@ export function createImmediateCommandHost(
   overrides: Partial<ChatHost> = {},
 ): ChatHost {
   const host = {
+    ...composerDefaults(command, [attachment]),
     sessions: createTestSessionCapability({
       snapshot: { client: null, phase: "reconnecting", hello: null },
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
     }),
     client: null,
-    connected: true,
-    sessionKey: "agent:main",
-    chatLoading: false,
-    chatMessage: command,
-    chatMessages: [],
-    chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
-    chatAttachments: [attachment],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatModelCatalog: [],
     hello: null,
-    refreshSessionsAfterChat: new Map(),
     ...overrides,
   } satisfies Partial<ChatHost>;
   return host as ChatHost;
 }
 
-type TestChatHost = Omit<ChatHost, "settings"> & {
-  applySettings: (patch: Partial<UiSettings>) => void;
+type TestChatHost = ChatHost & {
   basePath: string;
   resourceBasePath: string;
   chatAvatarUrl: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
-  chatModelCatalog: ModelCatalogEntry[];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   sessionsError?: string | null;
-  sessionsResultAgentId?: string | null;
   sessionsArchivedFilter?: "active" | "archived" | "all";
   password?: string;
   pendingSettingsPatches?: Record<string, Promise<boolean>>;
-  settings: Pick<UiSettings, "lastActiveSessionKey"> & Partial<UiSettings>;
 };
 
 function createPendingSettingsSessionCapability(
@@ -190,36 +187,28 @@ export function makeChatHost(
         onCancel?.();
         return () => undefined;
       }
-      let active = true;
-      let committed = false;
-      let cleanup: (() => void) | undefined;
+      let cleanup = onCancel;
       const complete = () => {
-        active = false;
         cleanup = undefined;
         pendingEffects.delete(cancel);
       };
       const cancel = () => {
-        if (!active) {
-          return;
-        }
-        const release = cleanup;
-        complete();
-        if (committed) {
+        if (pendingEffects.delete(cancel)) {
+          const release = cleanup;
+          cleanup = undefined;
           release?.();
-        } else {
-          onCancel?.();
         }
       };
       pendingEffects.add(cancel);
       queueMicrotask(() => {
-        if (!active) {
+        if (!pendingEffects.has(cancel)) {
           return;
         }
-        committed = true;
+        cleanup = undefined;
         try {
           const nextCleanup = effect(complete);
           if (typeof nextCleanup === "function") {
-            if (active) {
+            if (pendingEffects.has(cancel)) {
               cleanup = nextCleanup;
             } else {
               nextCleanup();
@@ -236,33 +225,19 @@ export function makeChatHost(
     },
   };
   const host = {
+    ...composerDefaults(),
     chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
-    chatMessages: [],
     chatDisplayedLeafEntryId: undefined,
-    chatStream: null,
     chatStreamSegments: [],
     chatToolMessages: [],
-    connected: true,
     connectionEpoch: 0,
-    chatLoading: false,
-    chatMessage: "",
     canRestoreComposer: () => true,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
-    chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
-    chatAttachments: [],
     chatComposerFallbackByScope: {},
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
     chatStreamStartedAt: null,
     lastError: null,
-    sessionKey: "agent:main",
     sidebarLayout: { columns: [] },
     basePath: "",
     resourceBasePath: "",
@@ -276,9 +251,7 @@ export function makeChatHost(
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
-    chatModelCatalog: [],
     chatModelCatalogError: null,
-    refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,

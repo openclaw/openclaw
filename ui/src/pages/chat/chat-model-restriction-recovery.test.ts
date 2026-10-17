@@ -77,7 +77,6 @@ function fixture(
   result.sessions[0] = {
     ...result.sessions[0],
     key: sessionKey,
-    kind: "direct",
     updatedAt: 1,
     sessionId: options.materializedSessionId ?? recovery.sessionId,
     permissionMode: "guarded",
@@ -162,8 +161,43 @@ function fixture(
       host.sessions.dispose();
     }
   });
-  return { host, receipt };
+  return {
+    host,
+    receipt,
+    select: () => switchChatModel(host, "fixture/selected", sessionKey, "opencode"),
+  };
 }
+
+type RecoveryHost = ReturnType<typeof fixture>["host"];
+async function selecting(options: Parameters<typeof fixture>[0] = {}) {
+  const f = fixture(options);
+  const selection = f.select();
+  return { ...f, selection, modal: await dialog() };
+}
+
+const selectionChanges = {
+  cancel: () => {},
+  connection(host) {
+    host.client = createTestGatewayClient(host.request);
+  },
+  epoch(host) {
+    host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
+  },
+  session(host) {
+    host.sessionKey = "agent:main:other";
+  },
+  agent(host) {
+    host.assistantAgentId = "other-agent";
+  },
+  reset(host) {
+    host.sessionsResult!.sessions[0]!.sessionId = "replacement";
+  },
+  authority(host) {
+    host.hello = sessionMutationGatewayHello(["operator.write"]);
+  },
+  retired: retireChatModelSelectionOwnership,
+  "newer-selection": (host) => switchChatModel(host, "fixture/newer", "global", "openclaw"),
+} satisfies Record<string, (host: RecoveryHost) => void | Promise<unknown>>;
 
 async function dialog() {
   await waitForConfirmDialogActions();
@@ -195,12 +229,10 @@ function expectNoPatchFields(host: ReturnType<typeof fixture>["host"], ...fields
 it.each([false, true])(
   "requires explicit consent and handles a rejected recovery=%s without replay",
   async (rejectRecovery) => {
-    const { host } = fixture({ rejectRecovery });
-    const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
-    const modal = await dialog();
-    expect(modal.textContent).toContain("own permissions");
-    expect(modal.textContent).toContain("Gateway host");
-    expect(modal.textContent).toContain("Only this chat");
+    const { host, selection, modal } = await selecting({ rejectRecovery });
+    for (const phrase of ["own permissions", "Gateway host", "Only this chat"]) {
+      expect(modal.textContent).toContain(phrase);
+    }
     expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
     click(modal, "Continue for this chat");
     await expect(selection).resolves.toBe(!rejectRecovery);
@@ -239,10 +271,8 @@ it.each([
 ])(
   "uses the owning agent's remembered permissions for $sessionKey without prompting",
   async ({ sessionKey, rememberedAgentId }) => {
-    const { host } = fixture({ remembered: true, sessionKey, rememberedAgentId });
-    await expect(switchChatModel(host, "fixture/selected", sessionKey, "opencode")).resolves.toBe(
-      true,
-    );
+    const { host, select } = fixture({ remembered: true, sessionKey, rememberedAgentId });
+    await expect(select()).resolves.toBe(true);
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
     const patches = requestCalls(host.request, "sessions.patch");
     expect(patches[1]?.[1]).toMatchObject({
@@ -258,13 +288,11 @@ it.each([
 
 it("requires confirmation when only the UI-selected agent remembers consent", async () => {
   const sessionKey = "agent:other-agent:chat";
-  const { host } = fixture({
+  const { host, selection, modal } = await selecting({
     remembered: true,
     sessionKey,
     rememberedAgentId: "selected-agent",
   });
-  const selection = switchChatModel(host, "fixture/selected", sessionKey, "opencode");
-  const modal = await dialog();
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
   click(modal, "Cancel");
   await expect(selection).resolves.toBe(false);
@@ -283,10 +311,8 @@ it.each([
     details: { recovery: { ...recovery, sessionId: "replacement" } },
   },
 ])("does not offer a bypass for $name", async (options) => {
-  const { host } = fixture(options);
-  await expect(switchChatModel(host, "fixture/selected", "global", "opencode")).resolves.toBe(
-    false,
-  );
+  const { host, select } = fixture(options);
+  await expect(select()).resolves.toBe(false);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError).toContain("Choose another model");
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
@@ -303,37 +329,8 @@ it.each([
   "retired",
   "newer-selection",
 ] as const)("does not apply confirmation after %s", async (change) => {
-  const { host } = fixture();
-  const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
-  const modal = await dialog();
-  switch (change) {
-    case "cancel":
-      break;
-    case "connection":
-      host.client = createTestGatewayClient(host.request);
-      break;
-    case "epoch":
-      host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
-      break;
-    case "session":
-      host.sessionKey = "agent:main:other";
-      break;
-    case "agent":
-      host.assistantAgentId = "other-agent";
-      break;
-    case "reset":
-      host.sessionsResult!.sessions[0]!.sessionId = "replacement";
-      break;
-    case "authority":
-      host.hello = sessionMutationGatewayHello(["operator.write"]);
-      break;
-    case "retired":
-      retireChatModelSelectionOwnership(host);
-      break;
-    case "newer-selection":
-      await switchChatModel(host, "fixture/newer", "global", "openclaw");
-      break;
-  }
+  const { host, selection, modal } = await selecting();
+  await selectionChanges[change](host);
   if (change === "newer-selection" || change === "retired") {
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   } else {
@@ -347,9 +344,7 @@ it.each([
 });
 
 it("rechecks a confirmed recovery after the shared settings tail, before dispatch", async () => {
-  const { host, receipt } = fixture();
-  const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
-  const modal = await dialog();
+  const { host, receipt, selection, modal } = await selecting();
   const held = createDeferred<SessionsPatchResult>();
   onTestFinished(() => held.resolve(receipt));
   host.request.mockImplementationOnce(async () => held.promise);
@@ -443,16 +438,10 @@ it.each(["newer-selection", "server-selection", "session"] as const)(
     const { host } = fixture({ send: true, details: { reason: "workspace-only" } });
     const sending = handleSendChat(host);
     const modal = await dialog();
-    switch (change) {
-      case "newer-selection":
-        await switchChatModel(host, "fixture/newer", "global", "openclaw");
-        break;
-      case "server-selection":
-        host.sessionsResult!.sessions[0]!.model = "newer";
-        break;
-      case "session":
-        host.sessionKey = "agent:main:other";
-        break;
+    if (change === "server-selection") {
+      host.sessionsResult!.sessions[0]!.model = "newer";
+    } else {
+      await selectionChanges[change](host);
     }
     if (change !== "newer-selection") {
       click(modal, "Continue for this chat");

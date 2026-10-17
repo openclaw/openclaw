@@ -10,16 +10,19 @@ import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
 
+const codexChoice = {
+  agentRuntime: { id: "codex", source: "model" },
+  available: true,
+} satisfies NonNullable<ModelCatalogEntry["runtimeChoices"]>[number];
+const codexSelector = '[data-chat-model-runtime="codex"]';
+const solSelector = '[data-chat-model-option="openai/gpt-5.6-sol"]';
 const model: ModelCatalogEntry = {
   id: "gpt-5.6-sol",
   name: "GPT-5.6 Sol",
   provider: "openai",
   available: true,
-  contextWindow: 1_000_000,
   agentRuntime: { id: "openclaw", source: "model" },
-  runtimeChoices: [
-    { agentRuntime: { id: "codex", source: "model" }, available: true, contextWindow: 200_000 },
-  ],
+  runtimeChoices: [codexChoice],
 };
 
 type ModelControlsProps = Parameters<typeof ChatModelControls>[0];
@@ -132,6 +135,12 @@ const triggerLabel = (container: HTMLElement) =>
   container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim();
 const optionName = (row: Element) =>
   row.querySelector(".chat-controls__model-option-name")?.textContent;
+function expectPatch(
+  host: ReturnType<typeof selectionControls>["host"],
+  patch: Record<string, unknown>,
+) {
+  expect(host.request).toHaveBeenCalledWith("sessions.patch", { key: "main", ...patch });
+}
 
 describe("chat model runtime choices", () => {
   it("keeps an automatic-only model's name on a runtime reset", () => {
@@ -168,12 +177,9 @@ describe("chat model runtime choices", () => {
       result.sessions[0]!.runtimeSelectionLocked = runtimeLocked || undefined;
       const { host, container, draw, row, select, patches } = selectionControls(result, models);
       draw();
-      const rows = container.querySelectorAll<HTMLButtonElement>(
-        '[data-chat-model-option="openai/gpt-5.6-sol"]',
-      );
+      const rows = container.querySelectorAll<HTMLButtonElement>(solSelector);
       await select(rows[0]!);
-      expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-        key: "main",
+      expectPatch(host, {
         model: "openai/gpt-5.6-sol",
         ...(runtimeLocked ? {} : { agentRuntime: null }),
       });
@@ -191,23 +197,19 @@ describe("chat model runtime choices", () => {
         : customModel.agentRuntime;
       draw();
       if (runtimeLocked) {
-        expect(container.querySelector('[data-chat-model-runtime="codex"]')).toBeNull();
+        expect(container.querySelector(codexSelector)).toBeNull();
         await select(row('[data-chat-model-default="true"]'));
-        expect(host.request).toHaveBeenCalledWith("sessions.patch", { key: "main", model: null });
+        expectPatch(host, { model: null });
         return;
       }
-      await select(row('[data-chat-model-runtime="codex"]'));
-      expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-        key: "main",
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
-      });
+      await select(row(codexSelector));
+      expectPatch(host, { model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
       result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
       customModel.runtimeChoices = undefined;
       draw();
       expect(triggerLabel(container)).toBe("GPT-5.6 Sol");
       const patchesBeforeReset = patches().length;
-      await select(row('[data-chat-model-option="openai/gpt-5.6-sol"]'));
+      await select(row(solSelector));
       expect(patches()).toHaveLength(patchesBeforeReset);
     },
   );
@@ -217,7 +219,7 @@ describe("chat model runtime choices", () => {
     const container = renderRuntimeModel({
       ...unknownRuntimeModel,
       runtimeChoices: [
-        { agentRuntime: { id: "codex", source: "model" }, available: true },
+        codexChoice,
         { agentRuntime: { id: "openclaw", source: "model" }, available: true },
       ],
     });
@@ -235,7 +237,7 @@ describe("chat model runtime choices", () => {
       {
         ...model,
         supportsTools: true,
-        runtimeChoices: [{ ...model.runtimeChoices![0]!, supportsTools: false }],
+        runtimeChoices: [{ ...codexChoice, supportsTools: false }],
       },
       "codex",
     );
@@ -275,7 +277,7 @@ describe("chat model runtime choices", () => {
         thinkingDefault: "medium",
         runtimeChoices: [
           {
-            ...model.runtimeChoices![0]!,
+            ...codexChoice,
             thinkingLevels: [{ id: "high", label: "High" }],
             thinkingDefault: "high",
           },
@@ -298,7 +300,7 @@ describe("chat model runtime choices", () => {
     result.sessions[0]!.agentRuntime = { id: "openclaw", source: "provider" };
     const { host, container, draw, row, select, patches } = selectionControls(result, [model]);
     draw();
-    const runtimeRow = () => row('[data-chat-model-runtime="codex"]');
+    const runtimeRow = () => row(codexSelector);
     const defaultRow = () => row("[data-chat-model-default]");
     expect([defaultRow(), runtimeRow()].map(optionName)).toEqual([
       "GPT-5.6 Sol",
@@ -310,11 +312,7 @@ describe("chat model runtime choices", () => {
     expect(runtimeRow().getAttribute("aria-selected")).toBe("false");
     expect(defaultRow().getAttribute("aria-selected")).toBe("true");
     await select(runtimeRow());
-    expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-      key: "main",
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
-    });
+    expectPatch(host, { model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
     result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
     draw();
     expect(triggerLabel(container)).toBe("GPT-5.6 Sol codex");
@@ -324,11 +322,7 @@ describe("chat model runtime choices", () => {
     await select(runtimeRow());
     expect(patches()).toHaveLength(1);
     await select(defaultRow());
-    expect(host.request).toHaveBeenCalledWith("sessions.patch", {
-      key: "main",
-      model: null,
-      agentRuntime: null,
-    });
+    expectPatch(host, { model: null, agentRuntime: null });
   });
 
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
@@ -345,7 +339,7 @@ describe("chat model runtime choices", () => {
             ...model,
             runtimeChoices: [
               {
-                ...model.runtimeChoices![0]!,
+                ...codexChoice,
                 available: false,
                 ...(guard === "locked" ? {} : { unavailableReason: guard }),
               },
@@ -358,13 +352,11 @@ describe("chat model runtime choices", () => {
           onModelSetup: onSetup,
         },
       );
-      const row = container.querySelector<HTMLButtonElement>('[data-chat-model-runtime="codex"]');
+      const row = container.querySelector<HTMLButtonElement>(codexSelector);
       if (guard === "locked") {
         expect(row).toBeNull();
       } else {
-        expect(row?.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
-          "GPT-5.6 Sol codex",
-        );
+        expect(row && optionName(row)).toBe("GPT-5.6 Sol codex");
         expect(row?.disabled).toBe(guard === "unsupported-runtime");
         if (guard === "unsupported-runtime") {
           expect(row?.title).toBe("This harness is unavailable for this model.");
