@@ -132,7 +132,6 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
       expect(effects).toHaveBeenCalledTimes(1);
       calls.expectIdle();
     } finally {
-      calls.restore();
       admission.close();
     }
   });
@@ -198,12 +197,9 @@ it.each(["main", "policy", "borrowed"] as const)(
         });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
-          // The borrowed admission read already warmed the entry facts.
           expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
-          for (const read of initialReads) {
-            read.mockRestore();
-          }
+          initialReads.forEach((read) => read.mockRestore());
         }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
         await upsertSessionEntryCore(
@@ -211,37 +207,32 @@ it.each(["main", "policy", "borrowed"] as const)(
           { sandboxMode: undefined },
         );
         const calls = observeMainThreadSql();
-        try {
-          discovery.mockClear();
-          expect(() => snapshot.fingerprint(run.run)).toThrow(
-            "Tool authority classification session changed",
-          );
-          expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
-          if (reader) {
-            expect(discovery).not.toHaveBeenCalled();
-          }
-          discovery.mockClear();
-          await expect(
-            operation.projectToolAuthorityFingerprintAsync({
-              senderIsOwner: run.run.senderIsOwner === true,
-              disableTools: false,
-              traceAuthorized: false,
-            }),
-          ).resolves.toBeUndefined();
-          calls.expectIdle();
+        discovery.mockClear();
+        expect(() => snapshot.fingerprint(run.run)).toThrow(
+          "Tool authority classification session changed",
+        );
+        expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
+        if (reader) {
           expect(discovery).not.toHaveBeenCalled();
-          if (admission) {
-            await admission.databaseClaim.release();
-            discovery.mockClear();
-            await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
-            expect(discovery).not.toHaveBeenCalled();
-          }
-        } finally {
-          calls.restore();
+        }
+        discovery.mockClear();
+        await expect(
+          operation.projectToolAuthorityFingerprintAsync({
+            senderIsOwner: run.run.senderIsOwner === true,
+            disableTools: false,
+            traceAuthorized: false,
+          }),
+        ).resolves.toBeUndefined();
+        calls.expectIdle();
+        expect(discovery).not.toHaveBeenCalled();
+        if (admission) {
+          await admission.databaseClaim.release();
+          discovery.mockClear();
+          await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
+          expect(discovery).not.toHaveBeenCalled();
         }
       } finally {
         snapshot.close();
-        discovery.mockRestore();
         await admission?.databaseClaim.release();
       }
     });
@@ -296,7 +287,6 @@ it.each(["execution", "separate"] as const)(
         undefined,
         captureReplyOperationSessionReader(admitted.operation),
       );
-      // Main's independent policy lookup already refuses a changed classification identity.
       const independent = prepareReplyToolAuthority(run);
       const discovery = vi.spyOn(sessionReaders, "prepareGatewaySessionEntryReadOnlyInWorker");
       try {
@@ -339,7 +329,6 @@ it.each(["execution", "separate"] as const)(
         expect(discovery).not.toHaveBeenCalled();
       } finally {
         independent.close();
-        discovery.mockRestore();
         admitted.operation.complete();
         await waitForReplyRunSuccessorAdmission(executionKey, null);
       }

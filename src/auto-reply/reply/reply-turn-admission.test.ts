@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
@@ -34,12 +34,9 @@ const releaseMocks = vi.hoisted(() => ({
   schedule: vi.fn(),
 }));
 vi.mock(
-  "../../agents/main-session-recovery/main-session-recovery-store.js",
+  import("../../agents/main-session-recovery/main-session-recovery-store.js"),
   async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../agents/main-session-recovery/main-session-recovery-store.js")
-      >();
+    const actual = await importOriginal();
     return {
       ...actual,
       releaseMainSessionRecoveryOwner: async (
@@ -52,11 +49,9 @@ vi.mock(
   },
 );
 vi.mock(
-  "../../agents/main-session-recovery/main-session-recovery-owner-release.js",
+  import("../../agents/main-session-recovery/main-session-recovery-owner-release.js"),
   async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../../agents/main-session-recovery/main-session-recovery-owner-release.js")
-    >()),
+    ...(await importOriginal()),
     scheduleMainSessionRecoveryPendingTarget: releaseMocks.schedule,
   }),
 );
@@ -94,14 +89,17 @@ function observe<T>(promise: Promise<T>) {
   };
   return pending;
 }
+function abortableAdmission(overrides: Parameters<typeof admit>[0]) {
+  const controller = new AbortController();
+  return Object.assign(observe(admit({ ...overrides, upstreamAbortSignal: controller.signal })), {
+    abort: () => controller.abort(),
+  });
+}
 function operation(overrides: Partial<Parameters<typeof createReplyOperation>[0]> = {}) {
   return createReplyOperation({ ...scope, resetTriggered: false, ...overrides });
 }
 function owned(result: Awaited<ReturnType<typeof admit>>) {
-  expect(result.status).toBe("owned");
-  if (result.status !== "owned") {
-    throw new Error("Expected reply ownership");
-  }
+  assert(result.status === "owned", "Expected reply ownership");
   return result.operation;
 }
 function store(state: Partial<SessionEntry> = {}) {
@@ -332,11 +330,10 @@ it("excludes the initiating reply admission from an in-band lifecycle mutation",
 it("skips an aborted reply waiting behind a lifecycle mutation", async () => {
   const storePath = store();
   const release = await holdMutation(storePath);
-  const controller = new AbortController();
-  const admission = admit({ storePath, upstreamAbortSignal: controller.signal });
-  controller.abort();
+  const admission = abortableAdmission({ storePath });
+  admission.abort();
   await release();
-  await expect(admission).resolves.toEqual({ status: "skipped", reason: "aborted" });
+  await expect(admission.promise).resolves.toEqual({ status: "skipped", reason: "aborted" });
 });
 it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
   vi.useFakeTimers();
@@ -380,14 +377,11 @@ it("keeps visible turns waiting while an active operation is still fresh", async
   const active = operation();
   active.setPhase("running");
   active.recordActivity();
-  const controller = new AbortController();
-  const admission = observe(
-    admit({ sessionId: "waiting-session", upstreamAbortSignal: controller.signal }),
-  );
+  const admission = abortableAdmission({ sessionId: "waiting-session" });
   await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
   expect(admission.settled).toBe(false);
   expect(replyRunRegistry.get(sessionKey)).toBe(active);
-  controller.abort();
+  admission.abort();
   await expect(admission.promise).resolves.toMatchObject({
     status: "skipped",
     reason: "aborted",
@@ -403,10 +397,7 @@ it("defers takeover to the blocked-tool floor while a quiet tool is active", asy
   active.setPhase("running");
   markDiagnosticToolStartedForTest({ ...scope, toolName: "exec", toolCallId: "tool-quiet-1" });
   vi.setSystemTime(startedAt + 12 * 60_000);
-  const controller = new AbortController();
-  const admission = observe(
-    admit({ sessionId: "replacement", upstreamAbortSignal: controller.signal }),
-  );
+  const admission = abortableAdmission({ sessionId: "replacement" });
   await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
   expect(admission.settled).toBe(false);
   expect(cancel).not.toHaveBeenCalled();
@@ -415,7 +406,7 @@ it("defers takeover to the blocked-tool floor while a quiet tool is active", asy
   const result = owned(await admission.promise);
   expect(active.result).toEqual({ kind: "failed", code: "run_stalled" });
   result.complete();
-  controller.abort();
+  admission.abort();
 });
 it("does not let queued followups reclaim a stale active operation", async () => {
   vi.useFakeTimers();

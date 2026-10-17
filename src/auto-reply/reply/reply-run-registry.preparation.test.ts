@@ -71,17 +71,15 @@ async function createPolicyOperation(
   const { mainAlias } = options;
   const policyKey = `agent:main:${name}-policy`;
   const config: OpenClawConfig = {
-    ...(mainAlias || options.store
-      ? {
-          session: {
-            ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
-            ...(options.store ? { store: options.store } : {}),
-          },
-        }
-      : {}),
     agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
     tools: { sandbox: { tools: { deny: ["exec"] } } },
   };
+  if (mainAlias || options.store) {
+    config.session = {
+      ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
+      ...(options.store ? { store: options.store } : {}),
+    };
+  }
   setRuntimeConfigSnapshot(config);
   const policyEntry = await upsertSessionEntryCore(
     { agentId: "main", sessionKey: policyKey, storePath: options.policyStorePath },
@@ -229,18 +227,15 @@ it.each([
           { sessionId: "unrelated-policy", updatedAt: 1 },
         );
       }
+      const options = multipleStores
+        ? {
+            store,
+            policyStorePath: change === "missing-store" ? defaultStorePath : configuredStorePath,
+          }
+        : {};
       const { operation, fingerprint, policyKey, policyEntry } = await createPolicyOperation(
         "retained-policy",
-        {
-          mainAlias: true,
-          ...(multipleStores
-            ? {
-                store,
-                policyStorePath:
-                  change === "missing-store" ? defaultStorePath : configuredStorePath,
-              }
-            : {}),
-        },
+        { mainAlias: true, ...options },
       );
       let atBackend = false;
       const effect = attachPreparedNativeBackend(operation, fingerprint, () => {

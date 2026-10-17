@@ -12,6 +12,7 @@ const advance = (ms: number) => {
   nowMs += ms;
 };
 const span = (name: string, ms: number) => ({ name, durationMs: ms, elapsedMs: ms });
+const summary = (details: object, totalMs = 1_500) => ({ ...details, totalMs, spans: [] });
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: subsystemWarn, info: subsystemInfo }),
 }));
@@ -19,50 +20,47 @@ vi.mock("../../logging/subsystem.js", () => ({
 beforeEach(() => {
   nowMs = 0;
   vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-  subsystemWarn.mockReset();
-  subsystemInfo.mockReset();
-  warn.mockReset();
+  [subsystemWarn, subsystemInfo, warn].forEach((mock) => mock.mockReset());
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("reports slow preparation without profiling while keeping fast replies quiet", async () => {
-  const tracker = createReplyTimingTracker({ log: { warn }, enabled: false });
-
-  expect(tracker.measureSync("sync", () => 42)).toBe(42);
-  await expect(tracker.measure("async", async () => "ok")).resolves.toBe("ok");
-  tracker.logIfSlow({ message: "reply timings" });
-  expect(warn).not.toHaveBeenCalled();
-
-  await tracker.measure("prepare", () => advance(5_000));
-  tracker.logIfSlow({ message: "reply timings", details: { runId: "run-1" } });
-  expect(warn).toHaveBeenCalledOnce();
-  expect(warn.mock.calls[0]?.[1]).toMatchObject({
-    runId: "run-1",
-    spans: expect.arrayContaining([span("prepare", 5_000)]),
-  });
-});
-
-it("records and logs spans when the profiler flag is enabled", () => {
+it.each([false, true])("logs once at the profiling=%s threshold", async (enabled) => {
   const tracker = createReplyTimingTracker({
     log: { warn },
-    enabled: isReplyProfilerEnabled({ env: { OPENCLAW_DIAGNOSTICS: "reply.profiler" } }),
+    enabled: isReplyProfilerEnabled({
+      env: { OPENCLAW_DIAGNOSTICS: enabled ? "reply.profiler" : "" },
+    }),
   });
-
   expect(
     tracker.measureSync("sync", () => {
-      nowMs += 500;
-      return 7;
+      advance(enabled ? 500 : 0);
+      return enabled ? 7 : 42;
     }),
-  ).toBe(7);
-  tracker.logIfSlow({ message: "reply timings", outcome: "completed" });
-  tracker.logIfSlow({ message: "reply timings", outcome: "completed" });
-
-  expect(warn).toHaveBeenCalledOnce();
-  expect(warn.mock.calls[0]?.[0]).toContain("stages=sync:");
-  expect(warn.mock.calls[0]?.[1]).toMatchObject({
-    outcome: "completed",
-    spans: [expect.objectContaining({ name: "sync" })],
-  });
+  ).toBe(enabled ? 7 : 42);
+  if (!enabled) {
+    await expect(tracker.measure("async", async () => "ok")).resolves.toBe("ok");
+  }
+  const log = () =>
+    tracker.logIfSlow({
+      message: "reply timings",
+      ...(enabled ? { outcome: "completed" } : { details: { runId: "run-1" } }),
+    });
+  log();
+  expect(warn).toHaveBeenCalledTimes(Number(enabled));
+  if (!enabled) {
+    await tracker.measure("prepare", () => advance(5_000));
+  }
+  log();
+  log();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    enabled ? expect.stringContaining("stages=sync:") : expect.any(String),
+    expect.objectContaining({
+      ...(enabled ? { outcome: "completed" } : { runId: "run-1" }),
+      spans: enabled
+        ? [expect.objectContaining({ name: "sync" })]
+        : expect.arrayContaining([span("prepare", 5_000)]),
+    }),
+  );
 });
 
 it("keeps agent milestones repeatable without reopening the terminal log", () => {
@@ -87,45 +85,38 @@ it("keeps agent milestones repeatable without reopening the terminal log", () =>
   );
   expect(subsystemWarn.mock.calls[1]?.[0]).toContain(" milestone= totalMs=1500 ");
   expect(subsystemWarn.mock.calls[2]?.[0]).toContain("agent turn timings runId=run-1");
-  expect(subsystemWarn.mock.calls[2]?.[1]).toEqual({
-    runId: "run-1",
-    sessionId: undefined,
-    sessionKey: undefined,
-    outcome: "error",
-    error: "failed",
-    totalMs: 1_500,
-    spans: [],
-  });
+  expect(subsystemWarn.mock.calls[2]?.[1]).toEqual(
+    summary({
+      runId: "run-1",
+      sessionId: undefined,
+      sessionKey: undefined,
+      outcome: "error",
+      error: "failed",
+    }),
+  );
 });
 
 it("preserves dispatch timing messages and structured details", () => {
   vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1_500);
   const tracker = createReplyHotPathTimingTracker({ profilerEnabled: true });
-  const details = {
+  const context = {
     channel: "telegram",
     runId: "run-1",
     sessionId: "session-1",
     outcome: "skipped" as const,
-    token: "secret",
   };
-
+  const details = { ...context, token: "secret" };
   tracker.logIfSlow(details);
   tracker.logIfSlow(details);
 
-  expect(subsystemWarn).toHaveBeenCalledOnce();
-  expect(subsystemWarn).toHaveBeenCalledWith(
+  expect(subsystemWarn).toHaveBeenCalledExactlyOnceWith(
     "reply hot path timings channel=telegram messageId=unknown runId=run-1 sessionId=session-1 sessionKey=unknown outcome=skipped totalMs=1500 stages=none",
-    {
-      channel: "telegram",
+    summary({
+      ...context,
       messageId: undefined,
-      runId: "run-1",
-      sessionId: "session-1",
       sessionKey: undefined,
-      outcome: "skipped",
       reason: undefined,
-      totalMs: 1_500,
-      spans: [],
-    },
+    }),
   );
 });
 
@@ -159,20 +150,17 @@ it("reports slow dispatch preparation and early cancellation without profiling",
     { beforeReplyResolver: true },
   );
 
-  expect(subsystemWarn).toHaveBeenCalledTimes(2);
-  expect(subsystemWarn.mock.calls[0]?.[1]).toMatchObject({
-    channel: "webchat",
-    sessionKey: "agent:main",
-    outcome: "milestone",
-    reason: "before_reply_resolver",
-    totalMs: 5_000,
-    spans: [span("reply.load_reply_resolver", 5_000)],
-  });
-  expect(subsystemWarn.mock.calls[1]?.[1]).toMatchObject({
-    outcome: "skipped",
-    reason: "reply_operation_aborted",
-    totalMs: 5_000,
-  });
+  expect(subsystemWarn.mock.calls.map((call) => call[1])).toMatchObject([
+    {
+      channel: "webchat",
+      sessionKey: "agent:main",
+      outcome: "milestone",
+      reason: "before_reply_resolver",
+      totalMs: 5_000,
+      spans: [span("reply.load_reply_resolver", 5_000)],
+    },
+    { outcome: "skipped", reason: "reply_operation_aborted", totalMs: 5_000 },
+  ]);
 });
 
 it("records the first slow execution phases without profiling or repeated tool logs", () => {
@@ -189,10 +177,10 @@ it("records the first slow execution phases without profiling or repeated tool l
   tracker.logExecutionPhaseIfSlow({ ...identity, phase: "tool_execution_started" });
 
   expect(subsystemWarn.mock.calls.map((call) => call[1])).toEqual([
-    { ...identity, milestone: "turn_accepted", totalMs: 21_000, spans: [] },
+    summary({ ...identity, milestone: "turn_accepted" }, 21_000),
   ]);
   expect(subsystemInfo.mock.calls.map((call) => call[1])).toEqual([
-    { ...identity, milestone: "assistant_output_started", totalMs: 24_000, spans: [] },
-    { ...identity, milestone: "tool_execution_started", totalMs: 24_000, spans: [] },
+    summary({ ...identity, milestone: "assistant_output_started" }, 24_000),
+    summary({ ...identity, milestone: "tool_execution_started" }, 24_000),
   ]);
 });

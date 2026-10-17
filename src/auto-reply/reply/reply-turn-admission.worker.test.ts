@@ -60,19 +60,13 @@ function makeTarget(
   seed = true,
   options: { sessionId?: string } = {},
 ) {
-  const value = {
-    ...(agentId === "main" ? {} : { agentId }),
-    storePath: path.join(state.sessionsDir(agentId), "agent.sqlite"),
-    sessionKey: `agent:${agentId}:${name}`,
-    sessionId: options.sessionId ?? `${name}-session`,
-  };
+  const storePath = path.join(state.sessionsDir(agentId), "agent.sqlite");
+  const sessionKey = `agent:${agentId}:${name}`;
+  const sessionId = options.sessionId ?? `${name}-session`;
   if (seed) {
-    replaceSessionEntrySync(
-      { storePath: value.storePath, sessionKey: value.sessionKey },
-      { sessionId: value.sessionId, updatedAt: 1 },
-    );
+    replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
   }
-  return value;
+  return { ...(agentId === "main" ? {} : { agentId }), storePath, sessionKey, sessionId };
 }
 
 function trackSettlement<T>(pending: Promise<T>) {
@@ -170,14 +164,10 @@ it("creates a missing persistent store through reply admission without main-thre
     const sql = observeSql();
     let result: Admission | undefined;
     try {
-      const pending = admit({
+      result = await admit({
         ...request,
         onDatabaseRegistration: sharing.followRegistration,
-      }).then((admitted) => {
-        result = admitted;
-        return admitted;
       });
-      result = await pending;
       const owned = requireOwned(result);
       expect(owned.sessionEntry).toBeUndefined();
       expect(owned.databaseClaim.isCurrent()).toBe(true);
@@ -337,11 +327,11 @@ it("cancels a contended persistent admission without claiming the reply or poiso
         return pendingWrite;
       });
     const controller = new AbortController();
-    const request = {
+    const pending = admit({
       ...initial,
       expectedSessionId: sessionId,
-    };
-    const pending = admit({ ...request, upstreamAbortSignal: controller.signal });
+      upstreamAbortSignal: controller.signal,
+    });
     void pending.catch(() => undefined);
     const followerController = new AbortController();
     let follower: Promise<Admission> | undefined;
@@ -374,10 +364,10 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
       expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
       result = await follower;
-      expect(result.status).toBe("owned");
-      if (result.status === "owned") {
-        expect(result.sessionEntry?.sessionId).toBe(followerSessionId);
-      }
+      expect(result).toMatchObject({
+        status: "owned",
+        sessionEntry: { sessionId: followerSessionId },
+      });
       await completeAdmission(result, followerKey);
       expect(replyRunRegistry.get(followerKey)).toBeUndefined();
     } finally {
@@ -469,14 +459,11 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
           }
           operation.complete();
           expect(databaseClaim.isCurrent()).toBe(false);
-          let settled = false;
-          successor = waitForReplyRunSuccessorAdmission(activeKey, null).then((result) => {
-            settled = true;
-            return result;
-          });
+          const settlement = trackSettlement(waitForReplyRunSuccessorAdmission(activeKey, null));
+          successor = settlement.pending;
           await setImmediate();
           expect(Atomics.load(holder.released, 0)).toBe(0);
-          expect(settled).toBe(false);
+          expect(settlement.isSettled()).toBe(false);
           await holder.release();
           expect(await successor).toMatchObject({ settled: true });
           expect(replyRunRegistry.get(activeKey)).toBeUndefined();

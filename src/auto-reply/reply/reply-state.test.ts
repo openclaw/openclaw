@@ -44,15 +44,6 @@ const loadStoredEntry = (storePath: string, sessionKey: string) =>
     `expected persisted session entry for ${sessionKey}`,
   );
 
-async function createCompactionSessionFixture(entry: SessionEntry) {
-  const tmp = sessionDirs.make();
-  const storePath = path.join(tmp, "sessions.json");
-  const sessionKey = "main";
-  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-  await seedSessionStore(storePath, sessionKey, entry);
-  return { storePath, sessionKey, sessionStore };
-}
-
 describe("history helpers", () => {
   const entries = [
     { sender: "A", body: "one" },
@@ -262,7 +253,10 @@ describe("incrementCompactionCount", () => {
       inputTokens: 170_000,
       outputTokens: 10_000,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "main";
+    const sessionStore = { [sessionKey]: entry };
+    await seedSessionStore(storePath, sessionKey, entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
