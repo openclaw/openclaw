@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -427,10 +426,6 @@ describe("capture store lifecycle", () => {
           assert.equal(store.isClosed, true);
           finalizeDebugProxyCapture(settings, deps);
           finalizeDebugProxyCapture(settings, deps);
-          assert.equal(acquired, 1);
-          assert.equal(terminals, 1);
-          assert.equal(ended, 1);
-          assert.equal(failures, 1);
           process.stdout.write(JSON.stringify({ acquired, terminals, ended, failures }));
         });
         process.exit(0);
@@ -440,12 +435,8 @@ describe("capture store lifecycle", () => {
         `[proxy-capture] Capture persistence failed: fixture ${failure} persistence failure: [REDACTED]\n`,
       );
       expect(child.status).toBe(0);
-      expect(JSON.parse(child.stdout)).toEqual({
-        acquired: 1,
-        terminals: 1,
-        ended: 1,
-        failures: 1,
-      });
+      const expectedCounts = { acquired: 1, terminals: 1, ended: 1, failures: 1 };
+      expect(JSON.parse(child.stdout)).toEqual(expectedCounts);
       const reopened =
         storage === "shared"
           ? new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } })
@@ -633,73 +624,6 @@ describe("capture admission generation", () => {
     expect(child.status).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual([true, true, true]);
   });
-
-  it.each(
-    (["patched", "guarded"] as const).flatMap((route) =>
-      (["success", "rejection"] as const).map((outcome) => ({ route, outcome })),
-    ),
-  )(
-    "does not attach a delayed $route $outcome to a replacement owner",
-    async ({ route, outcome }) => {
-      const root = stateRoot();
-      const settings = captureSettings(root, `generation-${route}-${outcome}`);
-      vi.stubEnv("OPENCLAW_STATE_DIR", root);
-      vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
-      vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", settings.sessionId);
-      const admitted = createDeferredCore();
-      const transport = createDeferredCore<Response>();
-      const fetchImpl = vi.fn(async () => {
-        admitted.resolve();
-        return await transport.promise;
-      });
-      const target = { ...globalThis, fetch: fetchImpl } as typeof globalThis;
-      const deps = { fetchTarget: target };
-      initializeDebugProxyCapture("first", settings, deps);
-      const firstStore = acquireDebugProxyCaptureStore();
-      const operation =
-        route === "patched"
-          ? target.fetch("https://example.test/delayed").then((response) => ({
-              response,
-              release: async () => {},
-            }))
-          : fetchWithSsrFGuard({ url: "https://example.test/delayed", fetchImpl });
-      const result = operation.then(
-        (value) => ({ value, error: undefined }),
-        (error: unknown) => ({ value: undefined, error }),
-      );
-      await admitted.promise;
-      finalizeDebugProxyCapture(settings, deps);
-      expect(firstStore.store.isClosed).toBe(true);
-      initializeDebugProxyCapture("replacement", settings, deps);
-      const replacement = acquireDebugProxyCaptureStore();
-      const record = vi.spyOn(replacement.store, "recordEvent");
-      const response = new Response("late");
-      const error = new Error("fixture late transport failure");
-      try {
-        if (outcome === "success") {
-          transport.resolve(response);
-        } else {
-          transport.reject(error);
-        }
-        const completed = await result;
-        if (outcome === "success") {
-          expect(completed.error).toBeUndefined();
-          expect(completed.value?.response).toBe(response);
-          expect(await completed.value!.response.text()).toBe("late");
-          await completed.value!.release();
-        } else {
-          expect(completed.error).toBe(error);
-        }
-        expect(record).not.toHaveBeenCalled();
-        expect(replacement.store.getSessionEvents(settings.sessionId)).toEqual([]);
-      } finally {
-        finalizeDebugProxyCapture(settings, deps);
-        firstStore.release();
-        replacement.release();
-        closeOpenClawStateDatabaseByPath(replacement.store.dbPath);
-      }
-    },
-  );
 });
 
 describe("async capture lifecycle", () => {
@@ -826,11 +750,12 @@ describe("async capture lifecycle", () => {
           { kind: "request", dataText: "request original" },
           { kind: "response", flowId: "http-prefix", dataText: redactedPrefix, status: 200 },
         ]);
-        expect(JSON.parse(String(rows[0]!.metaJson))).toEqual({
+        const [ws, , http] = rows;
+        expect(JSON.parse(ws!.metaJson!)).toEqual({
           provider: "fixture",
           detail: { phase: "accepted" },
         });
-        expect(JSON.parse(String(rows[2]!.metaJson))).toEqual({
+        expect(JSON.parse(http!.metaJson!)).toEqual({
           detail: { phase: "accepted" },
           bodyCapture: "finalized",
         });

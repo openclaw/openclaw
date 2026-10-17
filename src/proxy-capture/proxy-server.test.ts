@@ -42,14 +42,13 @@ async function cleanupTestRoot(): Promise<void> {
 
 async function makeSettings(): Promise<DebugProxySettings> {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-server-"));
-  const certDir = join(testRoot, "certs");
   vi.stubEnv("OPENCLAW_STATE_DIR", testRoot);
   return {
     enabled: true,
     required: false,
     dbPath: join(testRoot, "capture.sqlite"),
     blobDir: join(testRoot, "blobs"),
-    certDir,
+    certDir: join(testRoot, "certs"),
     sessionId: "debug-proxy-server-test",
     sourceProcess: "test",
   };
@@ -76,7 +75,6 @@ async function listenOrigin(server: Server, path = "") {
     });
   cleanup.push(stop);
   return {
-    stop,
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`,
   };
 }

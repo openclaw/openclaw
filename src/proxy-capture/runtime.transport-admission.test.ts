@@ -22,6 +22,7 @@ import {
 const control = vi.hoisted(() => ({
   scope: undefined as OpenClawDatabaseMaintenanceScope | undefined,
 }));
+const captureUrl = "https://synthetic.invalid/capture";
 
 const createWorkerLease = vi.hoisted(() =>
   vi.fn<typeof import("../state/openclaw-state-worker-store.js").createOpenClawStateWorkerLease>(),
@@ -117,7 +118,7 @@ it.each([
     });
     const own = vi.spyOn(control.scope, "own");
     try {
-      const result = target.fetch("https://synthetic.invalid/capture");
+      const result = target.fetch(captureUrl);
       if (outcome === "success") {
         expect(await (await result).text()).toBe("transport succeeded");
       } else {
@@ -194,11 +195,7 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
       persistEventPayload: () => ({}),
       fetchTarget: target,
     };
-    const params = {
-      url: "https://synthetic.invalid/deferred-capture",
-      method: "GET",
-      error: new Error("synthetic transport diagnostic"),
-    };
+    const params = { url: captureUrl, method: "GET", error: new Error("transport diagnostic") };
     let exercise: () => Promise<void>;
     if (mode === "saved-fetch") {
       initializeDebugProxyCapture("fixture", settings, deps);
@@ -232,10 +229,8 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
       await exercise();
       (released ? expectWrites : expectNoWrites)();
     };
-    const continueAfterClose = createDeferredCore();
-    const continueWithoutCapture = createDeferredCore();
+    let continueAfterClose = createDeferredCore();
     let late: Promise<void> | undefined;
-    let uncapturedLate: Promise<void> | undefined;
     clearWrites();
     try {
       await withDeferredDebugProxyCapture(async (resume) => {
@@ -257,9 +252,10 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
       await late;
       expectWrites();
       clearWrites();
+      continueAfterClose = createDeferredCore();
       await withDeferredDebugProxyCapture(async (resume) => {
         await check();
-        uncapturedLate = continueWithoutCapture.promise.then(async () => {
+        late = continueAfterClose.promise.then(async () => {
           resume();
           await withDeferredDebugProxyCapture(async (resumeNested) => {
             resumeNested();
@@ -267,14 +263,12 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
           });
         });
       });
-      continueWithoutCapture.resolve();
-      await uncapturedLate;
+      continueAfterClose.resolve();
+      await late;
       expectNoWrites();
     } finally {
       continueAfterClose.resolve();
-      continueWithoutCapture.resolve();
       await late;
-      await uncapturedLate;
       await finalizeDebugProxyCaptureAsync(settings, { fetchTarget: target });
       finalizeDebugProxyCapture(settings, deps);
     }
@@ -315,10 +309,7 @@ it.each([
       transport.mockRejectedValue(transportFailure);
     }
     try {
-      const pending = fetchWithSsrFGuard({
-        url: "https://synthetic.invalid/capture-preparation",
-        fetchImpl: transport,
-      });
+      const pending = fetchWithSsrFGuard({ url: captureUrl, fetchImpl: transport });
       if (outcome === "success") {
         const result = await pending;
         try {
@@ -358,7 +349,7 @@ it.each(["success", "failure"] as const)(
     const succeeded = vi.fn<(value: GuardedFetchResult) => void>();
     const failed = vi.fn<(error: unknown) => void>();
     const operation = fetchWithSsrFGuard({
-      url: "https://synthetic.invalid/cold-capture",
+      url: captureUrl,
       fetchImpl: transport,
       init: { method: "POST", body: Buffer.from("cold request") },
       capture: { flowId: "cold-flow" },

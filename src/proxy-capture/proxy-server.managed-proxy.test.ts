@@ -13,15 +13,10 @@ vi.mock("./ca.js", () => ({
 }));
 
 let testRoot: string | undefined;
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function cleanupTestDirs(): Promise<void> {
   await closeOpenClawStateDatabaseAsync();
-  if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
-  }
+  vi.unstubAllEnvs();
   if (!testRoot) {
     return;
   }
@@ -32,14 +27,13 @@ async function cleanupTestDirs(): Promise<void> {
 
 async function makeSettings(): Promise<DebugProxySettings> {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
-  const certDir = join(testRoot, "certs");
-  process.env.OPENCLAW_STATE_DIR = testRoot;
+  vi.stubEnv("OPENCLAW_STATE_DIR", testRoot);
   return {
     enabled: true,
     required: false,
     dbPath: join(testRoot, "capture.sqlite"),
     blobDir: join(testRoot, "blobs"),
-    certDir,
+    certDir: join(testRoot, "certs"),
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",
   };
@@ -124,7 +118,6 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     await origin?.stop();
     activeServer = undefined;
     origin = undefined;
-    vi.unstubAllEnvs();
     await cleanupTestDirs();
   });
 
