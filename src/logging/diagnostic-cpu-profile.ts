@@ -89,6 +89,7 @@ export function sanitizeDiagnosticCpuProfile(
       groups.set(key, { stack, sampleCount });
     }
   }
+  const summaryRows: SummaryRow[] = [];
   const summary = {
     ...result,
     profile: undefined,
@@ -96,7 +97,7 @@ export function sanitizeDiagnosticCpuProfile(
     originalNodeCount: nodes.length,
     sampleCount: profile.samples.length,
     omittedSampleCount: profile.samples.length,
-    summary: [] as SummaryRow[],
+    summary: summaryRows,
   };
   let bytes = Buffer.byteLength(JSON.stringify(summary));
   for (const row of [...groups.values()].toSorted((a, b) => b.sampleCount - a.sampleCount)) {

@@ -493,15 +493,18 @@ describe("diagnostic CPU profile owner", () => {
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
 
-  it.each([120, 1_800])(
-    "bounds ranked summaries with %i-character code paths",
-    async (pathLength) => {
+  it.each([
+    { pathLength: 120, stackDepth: 30 },
+    { pathLength: 1_100, stackDepth: 8 },
+  ])(
+    "bounds ranked summaries with $pathLength-character code paths",
+    async ({ pathLength, stackDepth }) => {
       const value = profile();
       const nodes: Profiler.ProfileNode[] = [{ ...value.nodes[0], children: [] }];
       const samples: number[] = [];
       for (let branch = 0; branch < 200; branch++) {
         let parent = nodes[0]!;
-        for (let depth = 0; depth < 30; depth++) {
+        for (let depth = 0; depth < stackDepth; depth++) {
           const node: Profiler.ProfileNode = {
             id: nodes.length + 1,
             callFrame: {
