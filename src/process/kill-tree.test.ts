@@ -41,6 +41,10 @@ function signalCalls(spy: MockInstance<typeof process.kill>) {
   return spy.mock.calls.filter(([, signal]) => signal !== 0);
 }
 
+function replacedIdentity(initial: string, replacement: string) {
+  return vi.fn<() => string>().mockReturnValueOnce(initial).mockReturnValue(replacement);
+}
+
 function expectTaskkillCall(index: number, args: string[]) {
   expect(spawnMock.mock.calls[index]).toStrictEqual([
     "taskkill",
@@ -189,8 +193,7 @@ describe("killProcessTree", () => {
     platform.mockReturnValue("darwin");
     killProcessTree(5253, { graceMs: 10, detached: false });
     await vi.advanceTimersByTimeAsync(10);
-    expect(killSpy).toHaveBeenCalledWith(5253, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(5253, "SIGKILL");
+    expectSignals([5253], ["SIGTERM", "SIGKILL"]);
   });
 
   it("on Windows does not force-kill a disappeared or reused PID after taskkill fails", async () => {
@@ -263,8 +266,7 @@ describe("killProcessTree", () => {
     mockProcessGroup(4444);
     killProcessTree(4444, { graceMs: 5 });
     await vi.advanceTimersByTimeAsync(5);
-    expect(killSpy).toHaveBeenCalledWith(-4444, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(-4444, "SIGKILL");
+    expectSignals([-4444], ["SIGTERM", "SIGKILL"]);
     expect(killSpy.mock.calls.every((call: unknown[]) => call[0] === -4444)).toBe(true);
   });
 
@@ -272,9 +274,7 @@ describe("killProcessTree", () => {
     failProbe(4545);
     killProcessTree(4545, { graceMs: 5, detached: true });
     await vi.advanceTimersByTimeAsync(5);
-    expect(killSpy).toHaveBeenCalledWith(-4545, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(-4545, "SIGKILL");
-    expect(killSpy).not.toHaveBeenCalledWith(4545, "SIGKILL");
+    expectSignals([-4545], ["SIGTERM", "SIGKILL"]);
     expect(spawnSyncMock).not.toHaveBeenCalled();
     expect(readFileSyncMock).not.toHaveBeenCalledWith("/proc/-4545/status", "utf8");
   });
@@ -372,17 +372,11 @@ describe("killProcessTree", () => {
 
   it("on Linux revalidates a non-root parent before reading its children", async () => {
     killSpy.mockReturnValue(true);
-    let childStarttime = "200";
     attachedTree({
       [childPid]: {
         ppid: rootPid,
         children: [grandchildPid],
-        starttime: () => {
-          // Capture sees the original process; revalidation sees its replacement.
-          const captured = childStarttime;
-          childStarttime = "777";
-          return captured;
-        },
+        starttime: replacedIdentity("200", "777"),
       },
       [grandchildPid]: { starttime: "778", ppid: childPid },
     });
@@ -392,15 +386,10 @@ describe("killProcessTree", () => {
 
   it("on Linux revalidates the root identity before reading its children", async () => {
     killSpy.mockReturnValue(true);
-    let rootStarttime = "300";
     mockProcTree({
       [rootPid]: {
         children: [childPid],
-        starttime: () => {
-          const captured = rootStarttime;
-          rootStarttime = "666";
-          return captured;
-        },
+        starttime: replacedIdentity("300", "666"),
       },
       [childPid]: { starttime: "667", ppid: rootPid },
     });
@@ -541,12 +530,7 @@ describe("killProcessTree", () => {
     async (mode) => {
       let rootAlive = true;
       let childIdentityChanged = false;
-      killSpy.mockImplementation((pid, signal) => {
-        if (signal === 0 && pid === rootPid && !rootAlive) {
-          throw new Error("ESRCH");
-        }
-        return true;
-      });
+      failProbe(rootPid, () => !rootAlive);
       mockProcTree({
         [rootPid]: { starttime: "100", children: [childPid] },
         [childPid]: {
@@ -580,8 +564,7 @@ describe("killProcessTree", () => {
     });
     killProcessTree(5555, { graceMs: 10, detached: false });
     await vi.advanceTimersByTimeAsync(10);
-    expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(5555, "SIGKILL");
+    expectSignals([5555], ["SIGTERM", "SIGKILL"]);
     expect(killSpy.mock.calls.some(([pid]) => pid < 0)).toBe(false);
   });
 
@@ -603,10 +586,7 @@ describe("killProcessTree", () => {
     mockProcessGroup(9999, 12345);
     killProcessTree(9999, { graceMs: 10 });
     await vi.advanceTimersByTimeAsync(10);
-    expect(killSpy).toHaveBeenCalledWith(9999, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(9999, "SIGKILL");
-    expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGTERM");
-    expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGKILL");
+    expectSignals([9999], ["SIGTERM", "SIGKILL"]);
   });
 
   it("rescans a PTY session for job-control groups created after the first snapshot", async () => {

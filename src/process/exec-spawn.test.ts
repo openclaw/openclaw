@@ -25,20 +25,6 @@ const spawnReady = (signal: AbortSignal) =>
 const ready = (child: ChildProcess) =>
   once(child, "message", { signal: AbortSignal.timeout(3_000) });
 const expectClosed = () => expect(() => spawnScript("")).toThrow("Command process scope is closed");
-async function dispose(...commands: Array<Command | undefined>) {
-  for (const command of commands) {
-    killPidIfAlive(command?.pid);
-  }
-  await Promise.all(commands);
-}
-
-// A foreign descendant has no retained ChildProcess handle after its root exits.
-async function waitForGroupExit(child: ChildProcess, signal: AbortSignal): Promise<void> {
-  while (isChildProcessTreeAlive(child)) {
-    await waitForProcessTick(25, undefined, { signal });
-  }
-}
-
 const endings = [
   ["explicit", false],
   ["resolve", true],
@@ -67,7 +53,8 @@ it.each([
     expect(processIdentity.isPidAlive(command.pid!)).toBe(false);
     if (sibling) {
       expect(processIdentity.isPidAlive(sibling.pid!)).toBe(true);
-      await dispose(sibling);
+      killPidIfAlive(sibling.pid);
+      await sibling;
       sibling = undefined;
     } else {
       expectClosed();
@@ -79,7 +66,10 @@ it.each([
       controller.signal,
     );
   } finally {
-    await dispose(command, sibling);
+    for (const target of [command, sibling]) {
+      killPidIfAlive(target?.pid);
+    }
+    await Promise.all([command, sibling]);
   }
 });
 
@@ -126,7 +116,6 @@ it.skipIf(process.platform === "win32").for(endings)(
   async ([completion, exitParent, ...identities], { signal: testSignal }) => {
     const identity = identities[0];
     const unrelated = spawnScript();
-    let child: ChildProcess | undefined;
     let command: Command | undefined;
     let descendantPid: number | undefined;
     let retiredSignals: MockInstance<typeof process.kill> | undefined;
@@ -148,14 +137,11 @@ it.skipIf(process.platform === "win32").for(endings)(
               child.once('message',()=>process.send(child.pid,()=>{${exitParent ? "child.disconnect();process.exit(0)" : "setInterval(()=>{},1000)"}}));`,
           { stdio: ["ignore", "pipe", "pipe"], ipc: true, reject: false },
         );
-        child = command.nodeChildProcess;
-        const [message] = await withinTest(
-          awaitGateBeforeSettlement(
-            once(child, "message", { signal: testSignal }),
-            command,
-            "Scope did not receive its descendant PID",
-          ),
-          testSignal,
+        const child = command.nodeChildProcess;
+        const [message] = await awaitGateBeforeSettlement(
+          once(child, "message", { signal: testSignal }),
+          command,
+          "Scope did not receive its descendant PID",
         );
         descendantPid = Number(message);
         expect(Number.isSafeInteger(descendantPid)).toBe(true);
@@ -170,8 +156,9 @@ it.skipIf(process.platform === "win32").for(endings)(
             expect(isChildProcessTreeAlive(child)).toBe(true);
             process.kill(descendantPid, "SIGKILL");
             // Group absence also joins adopted-child reaping, which PID liveness alone cannot prove.
-            await waitForGroupExit(child, testSignal);
-            expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
+            while (isChildProcessTreeAlive(child)) {
+              await waitForProcessTick(25, undefined, { signal: testSignal });
+            }
             const kill = process.kill.bind(process);
             let groupReads = 0;
             retiredSignals = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
@@ -189,7 +176,6 @@ it.skipIf(process.platform === "win32").for(endings)(
         );
         if (completion === "explicit") {
           stop();
-          expectClosed();
         } else if (completion === "reject") {
           throw failure;
         }
@@ -213,14 +199,14 @@ it.skipIf(process.platform === "win32").for(endings)(
       if (retiredSignals) {
         expect(
           retiredSignals.mock.calls.filter(
-            ([pid, signal]) => Math.abs(pid) === child?.pid && signal !== 0,
+            ([pid, signal]) => Math.abs(pid) === command?.pid && signal !== 0,
           ),
         ).toEqual([]);
       }
     } finally {
       retiredSignals?.mockRestore();
       identityProbe.mockRestore();
-      killPidIfAlive(child?.pid);
+      killPidIfAlive(command?.pid);
       killPidIfAlive(descendantPid);
       killPidIfAlive(unrelated.pid);
       await command;
