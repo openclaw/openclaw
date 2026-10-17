@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { withTimeout } from "../../../infra/fs-safe.js";
 import type { Model } from "../../../llm/types.js";
 import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
 import {
@@ -37,6 +38,7 @@ import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 import {
+  RUNTIME_AUTH_HARD_TIMEOUT_MS,
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
   RUNTIME_AUTH_REFRESH_RETRY_MS,
@@ -203,24 +205,30 @@ export function createEmbeddedRunAuthController(params: {
     // It catches another process replacing a profile that retained the same ID.
     await params.authProfileBinding?.revalidate();
     params.authProfileBinding?.assertCurrent();
-    const preparedAuth = await prepareProviderRuntimeAuth({
-      provider: prepareParams.runtimeModel.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      context: {
+    // A hook that never settles would hold this run and every refresh waiter.
+    // A result that arrives after the deadline is dropped before any state write.
+    const preparedAuth = await withTimeout(
+      prepareProviderRuntimeAuth({
+        provider: prepareParams.runtimeModel.provider,
         config: params.config,
-        agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         env: process.env,
-        provider: prepareParams.runtimeModel.provider,
-        modelId: params.modelId,
-        model: prepareParams.runtimeModel,
-        apiKey: prepareParams.apiKey,
-        authMode: prepareParams.authMode,
-        profileId: prepareParams.profileId,
-      },
-    });
+        context: {
+          config: params.config,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+          provider: prepareParams.runtimeModel.provider,
+          modelId: params.modelId,
+          model: prepareParams.runtimeModel,
+          apiKey: prepareParams.apiKey,
+          authMode: prepareParams.authMode,
+          profileId: prepareParams.profileId,
+        },
+      }),
+      RUNTIME_AUTH_HARD_TIMEOUT_MS,
+      `Runtime auth exchange for ${prepareParams.runtimeModel.provider}`,
+    );
     return protectPreparedProviderRuntimeAuth({
       provider: prepareParams.runtimeModel.provider,
       preparedAuth,
@@ -469,18 +477,24 @@ export function createEmbeddedRunAuthController(params: {
     forceRefresh = false,
   ): Promise<void> => {
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
-    const apiKeyInfo = await getApiKeyForModelCore({
-      model: preparedModel?.runtimeModel ?? state.models.runtime,
-      cfg: params.config,
-      profileId: candidate,
-      store: params.authStore,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      lockedProfile: forceRefresh || (candidate != null && candidate === params.lockedProfileId),
-      forceRefresh,
-      allowAuthProfileFallback: preparedModel?.allowAuthProfileFallback,
-      secretSentinels: true,
-    });
+    const credentialModel = preparedModel?.runtimeModel ?? state.models.runtime;
+    // Stops this caller waiting; an OAuth refresh owner still settles durably.
+    const apiKeyInfo = await withTimeout(
+      getApiKeyForModelCore({
+        model: credentialModel,
+        cfg: params.config,
+        profileId: candidate,
+        store: params.authStore,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        lockedProfile: forceRefresh || (candidate != null && candidate === params.lockedProfileId),
+        forceRefresh,
+        allowAuthProfileFallback: preparedModel?.allowAuthProfileFallback,
+        secretSentinels: true,
+      }),
+      RUNTIME_AUTH_HARD_TIMEOUT_MS,
+      `Credential resolution for ${credentialModel.provider}`,
+    );
     if (
       preparedModel?.authRequirement &&
       !providerModelRouteAcceptsAuthMode({
