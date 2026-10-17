@@ -33,6 +33,35 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(listEnabledSlackAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
   });
 
+  it("merges account action gates over top-level defaults field-by-field", () => {
+    const cfg = slackConfig({
+      botToken: "xoxb-root",
+      actions: {
+        messages: false,
+        pins: false,
+      },
+      accounts: {
+        default: { botToken: "xoxb-default" },
+        work: {
+          botToken: "xoxb-work",
+          actions: {
+            reactions: true,
+          },
+        },
+      },
+    });
+
+    expect(resolveSlackAccount({ cfg, accountId: "work" }).actions).toEqual({
+      messages: false,
+      pins: false,
+      reactions: true,
+    });
+    expect(resolveSlackAccount({ cfg, accountId: "default" }).actions).toEqual({
+      messages: false,
+      pins: false,
+    });
+  });
+
   it("merges canonical account streaming over top-level defaults field-by-field", () => {
     const resolved = resolveSlackAccount({
       cfg: slackConfig({
