@@ -6,8 +6,12 @@ import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
 
 const servers = new Set<Server>();
 
-function createTool(baseUrl: string, cacheTtlMinutes = 15) {
-  const searchConfig = { cacheTtlMinutes };
+function createTool(
+  baseUrl: string,
+  cacheTtlMinutes = 15,
+  defaults: { maxResults?: number; timeoutSeconds?: number } = {},
+) {
+  const searchConfig = { cacheTtlMinutes, ...defaults };
   return expectDefined(
     createSearxngWebSearchProvider().createTool({
       config: {
@@ -120,5 +124,105 @@ describe("searxng real transport", () => {
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await expect(clientClosed.promise).resolves.toBeUndefined();
+  });
+
+  it("uses configured result counts without sharing cached results across counts", async () => {
+    let requests = 0;
+    const baseUrl = await listen(
+      createServer((_request, response) => {
+        requests += 1;
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            results: Array.from({ length: 4 }, (_, index) => ({
+              title: `Result ${index + 1}`,
+              url: `https://example.com/${index + 1}`,
+            })),
+          }),
+        );
+      }),
+    );
+    const args = { query: "configured result counts" };
+    const one = await createTool(baseUrl, 15, { maxResults: 1 }).execute(args);
+    expect(one).toMatchObject({ count: 1, results: [{ url: "https://example.com/1" }] });
+    expect(requests).toBe(1);
+    expect(await createTool(baseUrl, 15, { maxResults: 1 }).execute(args)).toEqual({
+      ...one,
+      cached: true,
+    });
+    expect(requests).toBe(1);
+
+    const three = await createTool(baseUrl, 15, { maxResults: 3 }).execute(args);
+    expect(three).toMatchObject({
+      count: 3,
+      results: [
+        { url: "https://example.com/1" },
+        { url: "https://example.com/2" },
+        { url: "https://example.com/3" },
+      ],
+    });
+    expect(three.cached).toBeUndefined();
+    expect(requests).toBe(2);
+
+    const explicit = await createTool(baseUrl, 15, { maxResults: 1 }).execute({
+      ...args,
+      count: 2,
+    });
+    expect(explicit).toMatchObject({
+      count: 2,
+      results: [{ url: "https://example.com/1" }, { url: "https://example.com/2" }],
+    });
+    expect(requests).toBe(3);
+
+    const unset = await createTool(baseUrl).execute(args);
+    expect(unset).toMatchObject({ count: 4 });
+    expect(unset.results).toHaveLength(4);
+    expect(requests).toBe(4);
+  });
+
+  it("applies the configured timeout to the real request while allowing a longer budget", async () => {
+    const timedOutRequestClosed = Promise.withResolvers<{ responseSent: boolean }>();
+    let requests = 0;
+    const baseUrl = await listen(
+      createServer((_request, response) => {
+        requests += 1;
+        const isShortBudget = requests === 1;
+        let responseSent = false;
+        const timer = setTimeout(() => {
+          responseSent = true;
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(
+            JSON.stringify({
+              results: Array.from({ length: 4 }, (_, index) => ({
+                title: `Result ${index + 1}`,
+                url: `https://example.com/${index + 1}`,
+              })),
+            }),
+          );
+        }, 2_000);
+        response.once("close", () => {
+          clearTimeout(timer);
+          if (isShortBudget) {
+            timedOutRequestClosed.resolve({ responseSent });
+          }
+        });
+      }),
+    );
+    const pending = createTool(baseUrl, 0, { timeoutSeconds: 1 }).execute({
+      query: "configured short timeout",
+    });
+    await expect(pending).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    expect(requests).toBe(1);
+    await expect(timedOutRequestClosed.promise).resolves.toEqual({ responseSent: false });
+
+    const allowed = await createTool(baseUrl, 0, { timeoutSeconds: 3 }).execute({
+      query: "configured longer timeout",
+    });
+    expect(allowed).toMatchObject({ count: 4 });
+    expect(allowed.results).toHaveLength(4);
+    expect(requests).toBe(2);
   });
 });
