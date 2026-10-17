@@ -6,13 +6,15 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { closeOwnedStdioProcess } from "../owned-stdio.js";
 import * as childAdapter from "./adapters/child.js";
-import { firstMockArg } from "./adapters/child.test-support.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { runWithProcessCleanupBudget } from "./cleanup-budget.js";
 import {
-  encodeServiceChildMessage,
-  type ServiceChildAnchorPayload,
-} from "./service-child-protocol.js";
+  closeStub,
+  mockWritableRelay as buildRelay,
+  observeSettlement,
+  relayDefaults,
+  relayPeer,
+} from "./service-child-relay-host.fixture.test-support.js";
 import {
   createRelayFixture,
   createServiceChildRelayAdapter,
@@ -26,7 +28,6 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: mocks.spawn,
 }));
 
-let platformMock: ReturnType<typeof mockProcessPlatform> | undefined;
 const cleanups: Array<() => void> = [];
 afterEach(async () => {
   vi.useRealTimers();
@@ -34,15 +35,13 @@ afterEach(async () => {
     cleanup();
   }
   await nextTurn();
-  platformMock?.mockRestore();
-  platformMock = undefined;
   mocks.spawn.mockReset();
   vi.restoreAllMocks();
 });
 
 // These fixtures model POSIX process-group receipts, not Linux subreaper certificates.
 async function createRelay(platform: "darwin" | "win32", retainLineage = false) {
-  platformMock = mockProcessPlatform(platform);
+  mockProcessPlatform(platform);
   return createRelayFixture(
     platform,
     retainLineage,
@@ -51,48 +50,9 @@ async function createRelay(platform: "darwin" | "win32", retainLineage = false) 
   );
 }
 
-function mockWritableRelay() {
-  platformMock = mockProcessPlatform("darwin");
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
-  return stub;
-}
-
-function startRelay(params: Partial<Parameters<typeof createServiceChildRelayAdapter>[0]> = {}) {
-  return createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
-    stdinMode: "pipe-closed",
-    oomScoreWrapperSelected: false,
-    ...params,
-  });
-}
-
-function relayPeer(stub: ReturnType<typeof createWritableRelayChild>) {
-  const start = firstMockArg(stub.sendMock, "service start");
-  if (!isRecord(start) || typeof start.generation !== "string") {
-    throw new Error("Expected an admitted service generation");
-  }
-  const generation = start.generation;
-  let sequence = 0;
-  return (payload: ServiceChildAnchorPayload) =>
-    stub.control.push(
-      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
-    );
-}
-
-function closeStub(stub: ReturnType<typeof createWritableRelayChild>) {
-  stub.control.destroy();
-  stub.lineage.destroy();
-  stub.disconnectMock();
-  stub.emitExit(0);
-}
-
-function observeSettlement<T>(promise: Promise<T>) {
-  const settled = vi.fn();
-  void promise.then(settled, settled);
-  return [promise, settled] as const;
-}
+const mockWritableRelay = () => buildRelay((child) => mocks.spawn.mockReturnValue(child));
+const startRelay = (params: Partial<Parameters<typeof createServiceChildRelayAdapter>[0]> = {}) =>
+  createServiceChildRelayAdapter({ ...relayDefaults, ...params });
 
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
@@ -117,7 +77,7 @@ it.each(["before", "after"] as const)(
         await expect(starting).rejects.toThrow("relay launch policy revoked");
         expect(stub.sendMock.mock.calls.length).toBe(0);
       } else {
-        const emit = relayPeer(stub);
+        const { emit } = relayPeer(stub);
         allowed = false;
         emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
         const adapter = await starting;
@@ -155,7 +115,7 @@ it.each(["current", "revoked"] as const)(
         return launch();
       },
     });
-    const emit = relayPeer(stub);
+    const { emit } = relayPeer(stub);
     const rejected =
       authority === "current" ? undefined : expect(starting).rejects.toThrow("launch revoked");
     current = authority !== "revoked";
@@ -209,7 +169,7 @@ it("checks input authority after readiness before writing private stdin", async 
     (error: unknown) => error,
   );
   try {
-    const emit = relayPeer(stub);
+    const { emit } = relayPeer(stub);
     expect(prepareInput).not.toHaveBeenCalled();
     emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
     await Promise.race([preparing.promise, outcome]);
@@ -259,7 +219,7 @@ it("reports cleanup uncertainty when deferred start delivery fails after abort",
 });
 
 it("keeps rejected Windows construction ownership failures visible to supervisor joins", async () => {
-  platformMock = mockProcessPlatform("win32");
+  mockProcessPlatform("win32");
   const stub = createWritableRelayChild();
   mocks.spawn.mockReturnValue(stub.child);
   const supervisor = createProcessSupervisor();
@@ -428,7 +388,7 @@ it("keeps cleanup authority when a root-exit consumer ends already-closed stdin"
     stdinMode: "pipe-open",
     terminateOnHostLoss: true,
   });
-  const emit = relayPeer(stub);
+  const { emit } = relayPeer(stub);
   emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
   const adapter = await starting;
   adapter.onExit(() => adapter.stdin!.end());

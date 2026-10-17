@@ -6,12 +6,8 @@ import { Duplex } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as relaySpawn from "../spawn-broker/relay-integration.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { readLines } from "./service-child-group-anchor.preparation.test-support.js";
 import type {
@@ -20,25 +16,8 @@ import type {
 } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 
-const hooks = vi.hoisted(() => ({
-  spawned: undefined as ((child: ChildProcess, args?: readonly string[]) => void) | undefined,
-}));
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: (...args: Parameters<typeof actual.spawn>) => {
-      const child = actual.spawn(...args);
-      hooks.spawned?.(child, args[1]);
-      return child;
-    },
-  };
-});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  hooks.spawned = undefined;
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "confirms process-group retirement completed before the deadline while the Node host was blocked",
@@ -55,8 +34,8 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         `
       const fs = require("node:fs");
       const [input, receipt] = process.argv.slice(1);
-      const stop = setTimeout(() => process.exit(2), ${GRACEFUL_CANCEL_TIMEOUT_MS * 3});
-      const poll = setInterval(() => {
+      setTimeout(() => process.exit(2), ${GRACEFUL_CANCEL_TIMEOUT_MS * 3});
+      setInterval(() => {
         if (!fs.existsSync(input)) {
           return;
         }
@@ -71,8 +50,6 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
             throw error;
           }
           fs.writeFileSync(receipt, JSON.stringify({ ackAt, retiredAt: Date.now() }));
-          clearTimeout(stop);
-          clearInterval(poll);
           process.exit(0);
         }
       }, 10);
@@ -92,9 +69,6 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
     let ackAt: number | undefined;
     let resumedAt = 0;
     const delivered: string[] = [];
-    const relayArgv = resolveRuntimeWorkerArgv(
-      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildRelay),
-    );
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -104,17 +78,12 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         ),
         signal,
       );
-      hooks.spawned = (child, args) => {
-        if (
-          !args ||
-          args.length !== relayArgv.length ||
-          args.some((arg, i) => arg !== relayArgv[i])
-        ) {
-          return;
-        }
-        relay = child;
-        relayExit = once(child, "exit").then(() => delivered.push("relay-exit"));
-        const control = child.stdio[3];
+      const spawnRelay = relaySpawn.spawnServiceChildRelay;
+      vi.spyOn(relaySpawn, "spawnServiceChildRelay").mockImplementation((params) => {
+        const result = spawnRelay(params);
+        relay = result.child;
+        relayExit = once(relay, "exit").then(() => delivered.push("relay-exit"));
+        const control = relay.stdio[3];
         if (!(control instanceof Duplex)) {
           throw new Error("Expected the private control pipe");
         }
@@ -152,7 +121,8 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
             delivered.push("resumed");
           });
         }) as typeof control.write;
-      };
+        return result;
+      });
       const startup = await createServiceChildRelayAdapter({
         command: process.execPath,
         args: ["-e", "process.stdout.write('finished\\n')"],
@@ -163,25 +133,21 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       });
       adapter = startup.adapter;
       await startup.ready;
-      const results = await Promise.allSettled([adapter.wait(), adapter.waitForExtinction()]);
+      const results = await Promise.all([adapter.wait(), adapter.waitForExtinction()]);
       await Promise.all([relayExit, controlClose]);
       expect((await observerExit)[0]).toBe(0);
-      const observed = JSON.parse(readFileSync(receipt, "utf8")) as {
-        ackAt: number;
-        retiredAt: number;
-      };
+      const observed = JSON.parse(readFileSync(receipt, "utf8")) as Record<
+        "ackAt" | "retiredAt",
+        number
+      >;
       expect(observed.ackAt).toBe(ackAt);
       expect(observed.retiredAt - observed.ackAt).toBeLessThan(GRACEFUL_CANCEL_TIMEOUT_MS);
       expect(resumedAt - observed.ackAt).toBeGreaterThanOrEqual(GRACEFUL_CANCEL_TIMEOUT_MS);
       expect(delivered.slice(0, 2)).toEqual(["ack-flushed", "resumed"]);
       expect(delivered.indexOf("relay-exit")).toBeGreaterThan(delivered.indexOf("resumed"));
       expect(delivered.indexOf("control-close")).toBeGreaterThan(delivered.indexOf("resumed"));
-      expect(results).toEqual([
-        { status: "fulfilled", value: { code: 0, signal: null } },
-        { status: "fulfilled", value: undefined },
-      ]);
+      expect(results).toEqual([{ code: 0, signal: null }, undefined]);
     } finally {
-      hooks.spawned = undefined;
       observer.kill("SIGKILL");
       await observerExit;
       if (relay) {

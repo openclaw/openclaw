@@ -51,6 +51,23 @@ function owned() {
   );
   return { adapter, extinction };
 }
+async function expectRejectedReplacement(input: SpawnInput, error: string, cancelRunId?: string) {
+  const { adapter, run } = await start({ scopeKey: "scope" });
+  try {
+    const pending = supervisor.spawn({ ...input, scopeKey: "scope", replaceExistingScope: true });
+    if (cancelRunId) {
+      supervisor.cancel(cancelRunId);
+    }
+    await expect(pending).rejects.toThrow(error);
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    expect(child).toHaveBeenCalledOnce();
+    expect(pty).not.toHaveBeenCalled();
+  } finally {
+    adapter.settle(0);
+    await run.wait();
+    await supervisor.shutdown();
+  }
+}
 
 beforeEach(() => {
   child.mockReset();
@@ -304,22 +321,18 @@ describe("process supervisor", () => {
   });
 
   it("leaves the active scope intact when replacement arguments fail", async () => {
-    const { adapter, run } = await start({ scopeKey: "scope" });
-    const pending = spawn({
-      runId: "failed",
-      scopeKey: "scope",
-      replaceExistingScope: true,
-      resolveArgs: () => {
-        throw new Error("arguments failed");
+    await expectRejectedReplacement(
+      {
+        mode: "child",
+        argv: ["fixture"],
+        runId: "failed",
+        resolveArgs: () => {
+          throw new Error("arguments failed");
+        },
       },
-    });
-    supervisor.cancel("failed");
-    await expect(pending).rejects.toThrow("arguments failed");
-    expect(adapter.killMock).not.toHaveBeenCalled();
-    expect(child).toHaveBeenCalledOnce();
-    adapter.settle(0);
-    await run.wait();
-    await supervisor.shutdown();
+      "arguments failed",
+      "failed",
+    );
   });
 
   it.each(["ready", "revoked", "cancelled"] as const)(
@@ -371,21 +384,7 @@ describe("process supervisor", () => {
   ] satisfies SpawnInput[])(
     "rejects NUL-containing $mode input before construction or scope replacement (%#)",
     async (input) => {
-      const { adapter, run } = await start({ scopeKey: "scope" });
-      child.mockResolvedValue(terminating());
-      pty.mockResolvedValue(terminating());
-      try {
-        await expect(
-          supervisor.spawn({ ...input, scopeKey: "scope", replaceExistingScope: true }),
-        ).rejects.toThrow("must not contain NUL bytes");
-        expect(adapter.killMock).not.toHaveBeenCalled();
-        expect(child).toHaveBeenCalledOnce();
-        expect(pty).not.toHaveBeenCalled();
-      } finally {
-        adapter.settle(0);
-        await run.wait();
-        await supervisor.shutdown();
-      }
+      await expectRejectedReplacement(input, "must not contain NUL bytes");
     },
   );
 

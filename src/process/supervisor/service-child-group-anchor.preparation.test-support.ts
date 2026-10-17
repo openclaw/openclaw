@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { Duplex } from "node:stream";
@@ -44,25 +45,22 @@ function observeMessages<Message extends { type: string }>(
   receive?: (message: Message) => void,
 ) {
   const messages: Message[] = [];
-  const waiting: { types: string[]; resolve: (message: Message) => void }[] = [];
+  const events = new EventEmitter();
   const waitFor = (...types: string[]) => {
     const received = messages.find((message) => types.includes(message.type));
-    if (received) {
-      return Promise.resolve(received);
-    }
-    const deferred = createDeferred<Message>();
-    waiting.push({ types, resolve: deferred.resolve });
-    return deferred.promise;
+    return received
+      ? Promise.resolve(received)
+      : new Promise<Message>((resolve) => {
+          for (const type of types) {
+            events.once(type, resolve);
+          }
+        });
   };
   readLines(stream, (line) => {
     const message = JSON.parse(line) as Message;
     messages.push(message);
     receive?.(message);
-    for (const waiter of waiting) {
-      if (waiter.types.includes(message.type)) {
-        waiter.resolve(message);
-      }
-    }
+    events.emit(message.type, message);
   });
   return { messages, waitFor };
 }
@@ -73,12 +71,7 @@ export function createHeldAnchorPreparation(
 ) {
   const generation = "held-lineage-preparation";
   const commandSource = `
-    process.on("message", message => {
-      if (message.type === "openclaw-worker-start-v1") {
-        process.send({ type: "synthetic-worker-started" });
-        process.disconnect();
-      }
-    });
+    process.on("message", () => process.disconnect());
     process.once("disconnect", () => process.exit(0));
   `;
   const preload = path.join(root, "held-lineage-loader.mjs");
@@ -149,15 +142,14 @@ export function createHeldAnchorPreparation(
   child.once("exit", (code, signal) => exited.resolve({ code, signal }));
   child.once("error", exited.reject);
   child.once("disconnect", () => disconnected.resolve());
-  const pipesClosed = child.stdio.flatMap((stream) =>
-    stream
-      ? [
-          new Promise<void>((resolve) => {
-            stream.once("close", () => resolve());
-          }),
-        ]
-      : [],
-  );
+  const pipesClosed = child.stdio
+    .filter((stream) => stream !== null)
+    .map(
+      (stream) =>
+        new Promise<void>((resolve) => {
+          stream.once("close", () => resolve());
+        }),
+    );
   // Native Node can omit aggregate close after explicit IPC disconnect with extra pipes.
   const closed = Promise.all([exited.promise, disconnected.promise, Promise.all(pipesClosed)]).then(
     ([result]) => result,
