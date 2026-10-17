@@ -42,6 +42,13 @@ fi
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
   exit 0
 fi
+if [[ "\${1:-}" == "info" ]]; then
+  if [[ -n "\${DOCKER_STUB_INFO_FAIL:-}" ]]; then
+    exit 1
+  fi
+  printf '%s\\n' "\${DOCKER_STUB_SECURITY_OPTIONS:-[]}"
+  exit 0
+fi
 if [[ "\${1:-}" == "image" && "\${2:-}" == "inspect" ]]; then
   format=""
   if [[ "\${3:-}" == "-f" || "\${3:-}" == "--format" ]]; then
@@ -73,6 +80,10 @@ if [[ "\${1:-}" == "build" ]]; then
   exit 0
 fi
 if [[ "\${1:-}" == "run" ]]; then
+  if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
+    echo "run-fail $*" >>"$log"
+    exit 1
+  fi
   echo "run $*" >>"$log"
   args=("$@")
   for ((i = 0; i + 3 < \${#args[@]}; i++)); do
@@ -120,6 +131,12 @@ if [[ "\${1:-}" == "compose" ]]; then
   args=("$@")
   for ((i = 0; i + 4 < \${#args[@]}; i++)); do
     if [[ "\${args[$i]}" == "--entrypoint" &&
+      "\${args[$((i + 1))]}" == "sh" &&
+      "\${args[$((i + 3))]}" == "-c" &&
+      -n "\${DOCKER_STUB_REPAIR_SCRIPT:-}" ]]; then
+      printf '%s' "\${args[$((i + 4))]}" >"$DOCKER_STUB_REPAIR_SCRIPT"
+    fi
+    if [[ "\${args[$i]}" == "--entrypoint" &&
       "\${args[$((i + 1))]}" == "node" &&
       "\${args[$((i + 2))]}" == "openclaw-gateway" &&
       "\${args[$((i + 3))]}" == "-e" ]]; then
@@ -148,6 +165,16 @@ exec "$@"
 
   await mkdir(binDir, { recursive: true });
   await writeFile(join(binDir, "docker"), stub, { mode: 0o755 });
+  await writeFile(
+    join(binDir, "id"),
+    '#!/usr/bin/env bash\ncase "$1" in -u) echo "${DOCKER_STUB_HOST_UID:-1000}" ;; -g) echo "${DOCKER_STUB_HOST_GID:-1000}" ;; *) exit 1 ;; esac\n',
+    { mode: 0o755 },
+  );
+  await writeFile(
+    join(binDir, "uname"),
+    '#!/usr/bin/env bash\necho "${DOCKER_STUB_HOST_OS:-Linux}"\n',
+    { mode: 0o755 },
+  );
   await writeFile(join(binDir, "timeout"), timeoutStub, { mode: 0o755 });
   await writeFile(logPath, "");
 }
@@ -197,10 +224,6 @@ export const prestartContainerEnvFlags = [
   "-e OPENCLAW_CONFIG_DIR=/home/node/.openclaw",
   "-e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace",
 ].join(" ");
-
-export const noFollowOwnershipRepair = (root: string) =>
-  `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
-export const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 export async function resetDockerLog(sandbox: DockerSetupSandbox) {
   await writeFile(sandbox.logPath, "");

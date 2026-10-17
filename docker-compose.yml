@@ -1,6 +1,7 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: "${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}"
     build: .
     env_file:
       - path: .env
@@ -95,6 +96,7 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: "${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}"
     network_mode: "service:openclaw-gateway"
     env_file:
       - path: .env

@@ -30,6 +30,23 @@ Hosting mutually untrusted users? Run a separate Gateway for each trust boundary
     ./scripts/docker/setup.sh
     ```
 
+    On Linux Docker Engine without user namespace remapping, setup runs both
+    services with your host UID/GID and saves them as `OPENCLAW_UID` and
+    `OPENCLAW_GID` in `.env`. To override them, export both values before running
+    setup. Saved values are reused on subsequent runs.
+
+    When the selected IDs differ from `1000:1000`, setup also provisions a
+    persistent home volume for caches and tool installs. Its name is derived
+    from the checkout path; `OPENCLAW_HOME_VOLUME` overrides it. Setup repairs
+    retained OpenClaw directory ownership before reading configuration, so
+    private directories from an earlier UID 1000 setup can be reused.
+    Use the Compose commands printed by setup for later operations; their file
+    arguments include the home-volume overlay.
+
+    Docker Desktop on macOS/Windows, root invocation, and rootless or
+    user-remapped Docker retain the `1000:1000` default. Direct Compose use
+    without setup also defaults to `1000:1000` unless configured otherwise.
+
     This builds the Gateway image locally as `openclaw:local`. To use a pre-built image instead:
 
     ```bash

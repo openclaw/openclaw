@@ -120,21 +120,22 @@ NODE
   fi
 }
 
-read_env_gateway_token() {
+read_env_value() {
   local env_path="$1"
+  local key="$2"
   local line=""
-  local token=""
+  local value=""
   if [[ ! -f "$env_path" ]]; then
     return 0
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
-    if [[ "$line" == OPENCLAW_GATEWAY_TOKEN=* ]]; then
-      token="${line#OPENCLAW_GATEWAY_TOKEN=}"
+    if [[ "$line" == "$key="* ]]; then
+      value="${line#*=}"
     fi
   done <"$env_path"
-  if [[ -n "$token" ]]; then
-    printf '%s' "$token"
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
   fi
 }
 
@@ -464,10 +465,134 @@ quote_yaml_string() {
   printf '"%s"' "$value"
 }
 
+# Used both before host-side reads of retained state and after Compose mounts
+# are ready. Pass IDs and excluded extra mounts as arguments, never shell code.
+OWNERSHIP_REPAIR='
+set -eu
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+owner=$1
+repair_home=$2
+shift 2
+repair_tree() {
+  tree=$1
+  policy=$2
+  shift 2
+  [ -d "$tree" ] && [ ! -L "$tree" ] || return 0
+  # Same-device bind mounts need explicit pruning. Also skip direct repairs of
+  # metadata below an extra mount, rather than entering it through another root.
+  for excluded in "$@"; do
+    excluded="$(/usr/bin/realpath -m -s -- "$excluded")"
+    [ "$excluded" != / ] || return 0
+    case "$tree/" in "$excluded/"*) return 0 ;; esac
+    excluded_pattern="$(printf "%s" "$excluded" | /usr/bin/sed "s/[][?*\\\\]/\\\\&/g")"
+    set -- "$@" -path "$excluded_pattern" -prune -o
+    shift
+  done
+  case "$policy" in
+    point) set -- -maxdepth 0 "$@" ;;
+    home) set -- "$@" -path /home/node/.openclaw -prune -o -path /home/node/.config/openclaw -prune -o ;;
+    state) set -- "$@" \( ! -path /home/node/.openclaw/workspace -o -prune \) ;;
+  esac
+  /usr/bin/find -P "$tree" -xdev "$@" -execdir /usr/bin/chown -h "$owner" {} +
+}
+if [ "$repair_home" = home ]; then
+  repair_tree /home/node point "$@"
+  for home_tree in /home/node/.cache /home/node/.config /home/node/.local /home/node/.npm /home/node/.bun /home/node/.pnpm-store; do
+    repair_tree "$home_tree" home "$@"
+  done
+fi
+# Select the workspace mount point itself, but leave project descendants alone.
+repair_tree /home/node/.openclaw state "$@"
+repair_tree /home/node/.config/openclaw tree "$@"
+repair_tree /home/node/.openclaw/workspace/.openclaw tree "$@"
+'
+
+resolve_container_identity() {
+  local default_uid=1000 default_gid=1000 security_options
+  HOST_UID="$(id -u)"
+  HOST_GID="$(id -g)"
+  HOST_IDENTITY_MAPPING=""
+  if [[ "$(uname -s)" == Linux && "$HOST_UID" != 0 ]]; then
+    # An unreadable daemon must not silently select a potentially unsafe mapping.
+    security_options="$(docker info --format '{{json .SecurityOptions}}')" || fail "Cannot inspect Docker user namespace settings. Check access to the Docker daemon."
+    if [[ "$security_options" != *rootless* && "$security_options" != *userns* ]]; then
+      default_uid="$HOST_UID"
+      default_gid="$HOST_GID"
+      HOST_IDENTITY_MAPPING=1
+    fi
+  fi
+  OPENCLAW_UID="${OPENCLAW_UID:-$(read_env_value "$ROOT_DIR/.env" OPENCLAW_UID)}"
+  OPENCLAW_GID="${OPENCLAW_GID:-$(read_env_value "$ROOT_DIR/.env" OPENCLAW_GID)}"
+  OPENCLAW_UID="${OPENCLAW_UID:-$default_uid}"
+  OPENCLAW_GID="${OPENCLAW_GID:-$default_gid}"
+  local key value
+  for key in OPENCLAW_UID OPENCLAW_GID; do
+    value="${!key}"
+    if [[ ! "$value" =~ ^(0|[1-9][0-9]{0,9})$ ]] || ((value > 4294967294)); then
+      fail "$key must be a decimal ID between 0 and 4294967294."
+    fi
+  done
+  export OPENCLAW_UID OPENCLAW_GID
+  if [[ -z "${OPENCLAW_HOME_VOLUME+x}" ]]; then
+    HOME_VOLUME_NAME="$(read_env_value "$ROOT_DIR/.env" OPENCLAW_HOME_VOLUME)"
+  fi
+  if [[ -z "$HOME_VOLUME_NAME" && "$OPENCLAW_UID:$OPENCLAW_GID" != 1000:1000 ]]; then
+    local checkout_checksum
+    checkout_checksum="$(printf '%s' "$ROOT_DIR" | cksum)"
+    HOME_VOLUME_NAME="openclaw-home-${checkout_checksum%% *}"
+  fi
+  echo "==> Container identity: $OPENCLAW_UID:$OPENCLAW_GID"
+}
+
+recover_host_directories() {
+  # Docker namespace remapping does not expose host IDs directly. Keep its
+  # existing ownership policy instead of chowning to unmapped host IDs.
+  [[ -n "$HOST_IDENTITY_MAPPING" ]] || return 0
+  local source destination
+  local -a mounts=()
+  for destination in /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.config/openclaw; do
+    case "$destination" in
+      /home/node/.openclaw) source="$OPENCLAW_CONFIG_DIR" ;;
+      /home/node/.openclaw/workspace) source="$OPENCLAW_WORKSPACE_DIR" ;;
+      *) source="$OPENCLAW_AUTH_PROFILE_SECRET_DIR" ;;
+    esac
+    if [[ -d "$source" ]]; then
+      mounts+=(--mount "type=bind,\"source=${source//\"/\"\"}\",target=$destination")
+    fi
+  done
+  [[ ${#mounts[@]} -gt 0 ]] || return 0
+  echo "==> Restoring host access to retained OpenClaw data"
+  if ! docker run --rm --pull never --network none --user root \
+    "${mounts[@]}" --entrypoint sh "$IMAGE_NAME" -c "$OWNERSHIP_REPAIR" \
+    ownership-repair "$HOST_UID:$HOST_GID" "" ${OWNERSHIP_EXCLUSIONS[@]+"${OWNERSHIP_EXCLUSIONS[@]}"}; then
+    fail "Cannot restore host access to $OPENCLAW_CONFIG_DIR, $OPENCLAW_WORKSPACE_DIR, or $OPENCLAW_AUTH_PROFILE_SECRET_DIR. Check bind-mount access and Docker permissions, then rerun setup."
+  fi
+}
+
 require_cmd docker
 if ! docker compose version >/dev/null 2>&1; then
   echo "Docker Compose not available (try: docker compose version)" >&2
   exit 1
+fi
+
+resolve_container_identity
+
+OWNERSHIP_EXCLUSIONS=()
+VALID_MOUNTS=()
+if contains_disallowed_chars "$EXTRA_MOUNTS"; then
+  fail "OPENCLAW_EXTRA_MOUNTS cannot contain control characters."
+fi
+if [[ -n "$EXTRA_MOUNTS" ]]; then
+  IFS=',' read -r -a identity_mounts <<<"$EXTRA_MOUNTS"
+  for identity_mount in "${identity_mounts[@]}"; do
+    identity_mount="${identity_mount#"${identity_mount%%[![:space:]]*}"}"
+    identity_mount="${identity_mount%"${identity_mount##*[![:space:]]}"}"
+    [[ -n "$identity_mount" ]] || continue
+    validate_mount_spec "$identity_mount"
+    VALID_MOUNTS+=("$identity_mount")
+    identity_destination="${identity_mount#*:}"
+    OWNERSHIP_EXCLUSIONS+=("${identity_destination%%:*}")
+  done
 fi
 
 if [[ -z "$DOCKER_SOCKET_PATH" && "${DOCKER_HOST:-}" == unix://* ]]; then
@@ -490,15 +615,17 @@ OPENCLAW_AUTH_PROFILE_SECRET_DIR="${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-$HOME/.ope
 validate_mount_path_value "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
 validate_mount_path_value "OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR"
 validate_mount_path_value "OPENCLAW_AUTH_PROFILE_SECRET_DIR" "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
+# A custom workspace nested in config is also visible at its original path,
+# in addition to the canonical workspace bind mount. Protect that alias too.
+if [[ "$OPENCLAW_WORKSPACE_DIR" == "$OPENCLAW_CONFIG_DIR/"* && "$OPENCLAW_WORKSPACE_DIR" != "$OPENCLAW_CONFIG_DIR/workspace" ]]; then
+  OWNERSHIP_EXCLUSIONS+=("/home/node/.openclaw/${OPENCLAW_WORKSPACE_DIR#"$OPENCLAW_CONFIG_DIR/"}")
+fi
 if [[ -n "$HOME_VOLUME_NAME" ]]; then
   if [[ "$HOME_VOLUME_NAME" == *"/"* ]]; then
     validate_mount_path_value "OPENCLAW_HOME_VOLUME" "$HOME_VOLUME_NAME"
   else
     validate_named_volume "$HOME_VOLUME_NAME"
   fi
-fi
-if contains_disallowed_chars "$EXTRA_MOUNTS"; then
-  fail "OPENCLAW_EXTRA_MOUNTS cannot contain control characters."
 fi
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   validate_mount_path_value "OPENCLAW_DOCKER_SOCKET" "$DOCKER_SOCKET_PATH"
@@ -511,15 +638,6 @@ if [[ -n "$TIMEZONE" ]]; then
     fail "OPENCLAW_TZ must be a valid IANA timezone string (e.g. Asia/Shanghai)."
   fi
 fi
-
-mkdir -p "$OPENCLAW_CONFIG_DIR"
-mkdir -p "$OPENCLAW_WORKSPACE_DIR"
-mkdir -p "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
-# Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
-# where the container (even as root) cannot create new host subdirectories.
-mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
-mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/agent"
-mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
@@ -562,13 +680,68 @@ if [[ -n "$SANDBOX_ENABLED" && -S "$DOCKER_SOCKET_PATH" ]]; then
 fi
 export DOCKER_GID
 
+# When sandbox is requested, ensure Docker CLI build arg is set for local builds.
+# Docker socket mount is deferred until sandbox prerequisites are verified.
+if [[ -n "$SANDBOX_ENABLED" ]]; then
+  if [[ -z "${OPENCLAW_INSTALL_DOCKER_CLI:-}" ]]; then
+    export OPENCLAW_INSTALL_DOCKER_CLI=1
+  fi
+fi
+
+if [[ -n "$OFFLINE_MODE" ]]; then
+  require_local_docker_image "$IMAGE_NAME"
+  echo "==> Using preloaded Docker image: $IMAGE_NAME"
+elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
+  echo "==> Building Docker image: $IMAGE_NAME"
+  BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+  BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
+  PROVENANCE_BUILD_ARGS=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
+  if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    PROVENANCE_BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
+  fi
+  docker_build_exec \
+    "${PROVENANCE_BUILD_ARGS[@]}" \
+    --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
+    --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=${OPENCLAW_DOCKER_BUILD_NODE_OPTIONS}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=${OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_SKIP_DTS=${OPENCLAW_DOCKER_BUILD_SKIP_DTS}" \
+    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
+    --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
+    -t "$IMAGE_NAME" \
+    -f "$ROOT_DIR/Dockerfile" \
+    "$ROOT_DIR"
+else
+  echo "==> Pulling Docker image: $IMAGE_NAME"
+  if ! run_docker_pull "$IMAGE_NAME"; then
+    echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
+    exit 1
+  fi
+fi
+
+if [[ -n "$TIMEZONE" ]] && ! is_valid_timezone_in_image "$TIMEZONE"; then
+  fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."
+fi
+
+recover_host_directories
+
+mkdir -p "$OPENCLAW_CONFIG_DIR"
+mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+mkdir -p "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
+# Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
+# where the container (even as root) cannot create new host subdirectories.
+mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/agent"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
+
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   EXISTING_CONFIG_TOKEN="$(read_config_gateway_token || true)"
   if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
     OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
     echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
   else
-    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$ROOT_DIR/.env" || true)"
+    DOTENV_GATEWAY_TOKEN="$(read_env_value "$ROOT_DIR/.env" OPENCLAW_GATEWAY_TOKEN || true)"
     if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
       OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
       echo "Reusing gateway token from $ROOT_DIR/.env"
@@ -631,26 +804,6 @@ YAML
   fi
 }
 
-# When sandbox is requested, ensure Docker CLI build arg is set for local builds.
-# Docker socket mount is deferred until sandbox prerequisites are verified.
-if [[ -n "$SANDBOX_ENABLED" ]]; then
-  if [[ -z "${OPENCLAW_INSTALL_DOCKER_CLI:-}" ]]; then
-    export OPENCLAW_INSTALL_DOCKER_CLI=1
-  fi
-fi
-
-VALID_MOUNTS=()
-if [[ -n "$EXTRA_MOUNTS" ]]; then
-  IFS=',' read -r -a mounts <<<"$EXTRA_MOUNTS"
-  for mount in "${mounts[@]}"; do
-    mount="${mount#"${mount%%[![:space:]]*}"}"
-    mount="${mount%"${mount##*[![:space:]]}"}"
-    if [[ -n "$mount" ]]; then
-      VALID_MOUNTS+=("$mount")
-    fi
-  done
-fi
-
 if [[ -n "$HOME_VOLUME_NAME" || ${#VALID_MOUNTS[@]} -gt 0 ]]; then
   # Bash 3.2 + nounset treats "${array[@]}" on an empty array as unbound.
   if [[ ${#VALID_MOUNTS[@]} -gt 0 ]]; then
@@ -710,6 +863,8 @@ upsert_env() {
 }
 
 upsert_env "$ENV_FILE" \
+  OPENCLAW_UID \
+  OPENCLAW_GID \
   OPENCLAW_CONFIG_DIR \
   OPENCLAW_WORKSPACE_DIR \
   OPENCLAW_AUTH_PROFILE_SECRET_DIR \
@@ -747,65 +902,12 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_OTEL_PRELOADED \
   OPENCLAW_SKIP_ONBOARDING
 
-if [[ -n "$OFFLINE_MODE" ]]; then
-  require_local_docker_image "$IMAGE_NAME"
-  echo "==> Using preloaded Docker image: $IMAGE_NAME"
-elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
-  echo "==> Building Docker image: $IMAGE_NAME"
-  BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
-  BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
-  PROVENANCE_BUILD_ARGS=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
-  if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    PROVENANCE_BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
-  fi
-  docker_build_exec \
-    "${PROVENANCE_BUILD_ARGS[@]}" \
-    --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
-    --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
-    --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
-    --build-arg "OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=${OPENCLAW_DOCKER_BUILD_NODE_OPTIONS}" \
-    --build-arg "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=${OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB}" \
-    --build-arg "OPENCLAW_DOCKER_BUILD_SKIP_DTS=${OPENCLAW_DOCKER_BUILD_SKIP_DTS}" \
-    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
-    --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
-    -t "$IMAGE_NAME" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
-else
-  echo "==> Pulling Docker image: $IMAGE_NAME"
-  if ! run_docker_pull "$IMAGE_NAME"; then
-    echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
-    exit 1
-  fi
-fi
-
-if [[ -n "$TIMEZONE" ]] && ! is_valid_timezone_in_image "$TIMEZONE"; then
-  fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."
-fi
-
-# Ensure bind-mounted data directories are writable by the container's `node`
-# user (uid 1000). Host-created dirs inherit the host user's uid which may
-# differ, causing EACCES when the container tries to mkdir/write.
-# Running a brief root container to chown is the portable Docker idiom --
-# it works regardless of the host uid and doesn't require host-side root.
 echo ""
 echo "==> Fixing data-directory permissions"
-# Prune workspace descendants explicitly: -xdev still crosses bind mounts on
-# the same filesystem. Repair the mount point itself so node can write there,
-# but leave user project file ownership unchanged.
-# Run a no-dereference chown from each entry's directory. This keeps ownership
-# repair for sockets/FIFOs while preventing a swapped symlink leaf from
-# redirecting the root operation outside the mounted tree.
-# After fixing the config dir, only the OpenClaw metadata subdirectory
-# (.openclaw/) inside the workspace gets chowned, not the user's project files.
-run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH; \
-   /usr/bin/find -P /home/node/.openclaw -xdev \( ! -path /home/node/.openclaw/workspace -o -prune \) -execdir /usr/bin/chown -h node:node {} +; \
-   /usr/bin/chown -h node:node /home/node/.config; \
-   /usr/bin/find -P /home/node/.config/openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
-   if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
-     /usr/bin/find -P /home/node/.openclaw/workspace/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
-   fi || true'
+if ! run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c "$OWNERSHIP_REPAIR" \
+  ownership-repair "$OPENCLAW_UID:$OPENCLAW_GID" "${HOME_VOLUME_NAME:+home}" ${OWNERSHIP_EXCLUSIONS[@]+"${OWNERSHIP_EXCLUSIONS[@]}"}; then
+  fail "Cannot repair OpenClaw data-directory permissions for $OPENCLAW_UID:$OPENCLAW_GID. Check bind mounts and Docker permissions, then rerun setup."
+fi
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then

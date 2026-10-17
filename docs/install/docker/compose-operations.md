@@ -130,13 +130,39 @@ does not reveal the full token.
   </Accordion>
 
   <Accordion title="Permissions and EACCES">
-    The image runs as `node` (uid 1000). If you see permission errors on `/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000:
+    The standalone image runs as `node` (UID/GID `1000:1000`). On Linux Docker
+    Engine without user namespace remapping, `scripts/docker/setup.sh` instead
+    selects your host UID/GID for both Compose services. Setup persists the IDs
+    in `.env` and repairs retained OpenClaw state before reading configuration.
+    Stop the Gateway with your existing Compose file arguments before rerunning
+    setup to recover private directories left owned by UID 1000. Setup writes
+    configuration from a one-off container, which cannot take ownership while
+    the Gateway is running.
+
+    To select IDs explicitly:
 
     ```bash
-    sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+    OPENCLAW_UID="$(id -u)" OPENCLAW_GID="$(id -g)" ./scripts/docker/setup.sh
     ```
 
-    The same mismatch can show up as `blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)` followed by `plugin present but blocked` — the process uid and the mounted plugin directory owner disagree. Prefer running as the default uid 1000 and fixing the bind mount ownership. Only chown `/path/to/openclaw-config/npm` to `root:root` if you intentionally run OpenClaw as root long term.
+    For IDs other than `1000:1000`, setup supplies a managed home volume so
+    `/home/node` and its tool caches remain writable with prebuilt images.
+    `OPENCLAW_HOME_VOLUME` can select an existing volume or home bind mount.
+    Keep the file arguments from setup's printed Compose commands when running
+    later operations so the home-volume overlay stays active.
+    Ownership repair covers OpenClaw state, secrets, the home mount point, and
+    common tool caches. It leaves workspace project descendants and extra mount
+    destinations unchanged. Configuration and secret permissions are not widened.
+
+    Direct Compose use defaults to `1000:1000`; configure both IDs and a writable
+    home when changing that default. On rootless or user-remapped Docker, host
+    IDs do not map directly to container IDs; setup retains `1000:1000` and does
+    not attempt host-ID recovery. Use IDs and mount permissions appropriate to
+    your daemon's mapping.
+
+    A mismatch can also appear as `blocked plugin candidate: suspicious
+    ownership` followed by `plugin present but blocked` for mounted plugins.
+    Their owner must match the configured process UID or root.
 
   </Accordion>
 

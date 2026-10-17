@@ -1,6 +1,6 @@
 // Shell contract tests for Docker setup behavior and generated commands.
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -12,9 +12,7 @@ import {
   expectOfflineComposePolicy,
   findGatewayStartLineIndex,
   isGatewayStartLine,
-  noFollowOwnershipRepair,
   prestartContainerEnvFlags,
-  prestartSafePath,
   readDockerLog,
   readDockerLogLines,
   repoRoot,
@@ -40,6 +38,7 @@ function createEnv(
     OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config"),
     OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "openclaw"),
     OPENCLAW_AUTH_PROFILE_SECRET_DIR: join(sandbox.rootDir, "auth-profile-secrets"),
+    OPENCLAW_HOME_VOLUME: "",
   };
 
   for (const [key, value] of Object.entries(overrides)) {
@@ -101,6 +100,111 @@ describe("scripts/docker/setup.sh", () => {
     }
     await rm(sandbox.rootDir, { recursive: true, force: true });
     await cleanupDockerSetupSandboxRoot();
+  });
+
+  it("maps host IDs, provisions a writable home, and reuses saved settings on rerun", async () => {
+    const isolated = await createDockerSetupSandbox();
+    const overrides = {
+      OPENCLAW_HOME_VOLUME: undefined,
+      DOCKER_STUB_HOST_UID: "1006",
+      DOCKER_STUB_HOST_GID: "1007",
+    };
+    const first = runDockerSetup(isolated, overrides);
+    expect(first.status, first.stderr).toBe(0);
+    const envPath = join(isolated.rootDir, ".env");
+    const firstEnv = await readFile(envPath, "utf8");
+    expect(firstEnv).toContain("OPENCLAW_UID=1006\n");
+    expect(firstEnv).toContain("OPENCLAW_GID=1007\n");
+    const homeVolume = firstEnv.match(/^OPENCLAW_HOME_VOLUME=(openclaw-home-\d+)$/m)?.[1];
+    expect(homeVolume).toBeDefined();
+    const overlay = parse(
+      await readFile(join(isolated.rootDir, "docker-compose.extra.yml"), "utf8"),
+    );
+    for (const service of ["openclaw-gateway", "openclaw-cli"]) {
+      expect(overlay.services[service].volumes).toContain(`${homeVolume}:/home/node`);
+    }
+    expect(await readDockerLog(isolated)).toContain("ownership-repair 1006:1007 home");
+
+    await resetDockerLog(isolated);
+    const rerun = runDockerSetup(isolated, {
+      ...overrides,
+      DOCKER_STUB_HOST_UID: "2000",
+      DOCKER_STUB_HOST_GID: "2001",
+    });
+    expect(rerun.status, rerun.stderr).toBe(0);
+    const saved = await readFile(envPath, "utf8");
+    expect(saved).toContain("OPENCLAW_UID=1006\n");
+    expect(saved).toContain("OPENCLAW_GID=1007\n");
+    expect(saved).toContain(`OPENCLAW_HOME_VOLUME=${homeVolume}\n`);
+
+    const explicit = runDockerSetup(isolated, {
+      ...overrides,
+      OPENCLAW_UID: "3000",
+      OPENCLAW_GID: "3001",
+      OPENCLAW_HOME_VOLUME: "chosen-home",
+    });
+    expect(explicit.status, explicit.stderr).toBe(0);
+    expect(await readFile(envPath, "utf8")).toContain("OPENCLAW_UID=3000\n");
+    expect(await readDockerLog(isolated)).toContain("ownership-repair 3000:3001 home");
+    expect(await readFile(join(isolated.rootDir, "docker-compose.extra.yml"), "utf8")).toContain(
+      "chosen-home:/home/node",
+    );
+  });
+
+  it.each([
+    ["Linux", "1000", "[]"],
+    ["Linux", "0", "[]"],
+    ["Darwin", "501", "[]"],
+    ["MINGW64_NT", "1006", "[]"],
+    ["Linux", "1006", '["name=rootless"]'],
+    ["Linux", "1006", '["name=userns"]'],
+  ])("retains default IDs for %s uid=%s security=%s", async (os, uid, security) => {
+    const isolated = await createDockerSetupSandbox();
+    const result = runDockerSetup(isolated, {
+      DOCKER_STUB_HOST_OS: os,
+      DOCKER_STUB_HOST_UID: uid,
+      DOCKER_STUB_HOST_GID: "1000",
+      DOCKER_STUB_SECURITY_OPTIONS: security,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const env = await readFile(join(isolated.rootDir, ".env"), "utf8");
+    expect(env).toContain("OPENCLAW_UID=1000\n");
+    expect(env).toContain("OPENCLAW_GID=1000\n");
+    expect(env).toContain("OPENCLAW_HOME_VOLUME=\n");
+  });
+
+  it("stops before reading or seeding retained state when host-access recovery fails", async () => {
+    const isolated = await createDockerSetupSandbox();
+    const configDir = join(isolated.rootDir, "config");
+    await mkdir(configDir);
+    const result = runDockerSetup(isolated, {
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      DOCKER_STUB_FAIL_MATCH: "--network none --user root",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Cannot restore host access to ${configDir}`);
+    await expectMissingPath(join(configDir, "identity"));
+    await expectMissingPath(join(isolated.rootDir, ".env"));
+    const log = await readDockerLog(isolated);
+    expect(log).toContain('--mount type=bind,"source=');
+    expect(log).not.toContain("onboard");
+  });
+
+  it.each([
+    {
+      overrides: { DOCKER_STUB_INFO_FAIL: "1" },
+      error: "Cannot inspect Docker user namespace settings",
+    },
+    {
+      overrides: { DOCKER_STUB_FAIL_MATCH: "--user root --entrypoint sh" },
+      error: "Cannot repair OpenClaw data-directory permissions",
+    },
+  ])("stops setup on $error", async ({ overrides, error }) => {
+    const isolated = await createDockerSetupSandbox();
+    const result = runDockerSetup(isolated, overrides);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(error);
+    expect(await readDockerLog(isolated)).not.toContain("onboard");
   });
 
   it("handles env defaults, home-volume mounts, and Docker build args", async () => {
@@ -510,8 +614,10 @@ describe("scripts/docker/setup.sh", () => {
     const configDir = join(sandbox.rootDir, "config-agent-dirs");
     const workspaceDir = join(configDir, "workspace");
     const secretDir = join(sandbox.rootDir, "auth-profile-secret-key");
+    const repairScriptPath = join(sandbox.rootDir, "ownership-repair.sh");
     const stateFiles = [
       "identity/owned.txt",
+      "workspace/.openclaw/metadata.txt",
       "agents/workspace/owned.txt",
       "workspace-archive/owned.txt",
     ];
@@ -522,11 +628,20 @@ describe("scripts/docker/setup.sh", () => {
       await writeFile(path, "fixture");
     }
     expect((await stat(workspaceDir)).dev).toBe((await stat(configDir)).dev);
+    const externalDir = join(sandbox.rootDir, "external-project");
+    await mkdir(externalDir, { recursive: true });
+    await writeFile(join(externalDir, "untouched.txt"), "project");
+    await symlink(
+      externalDir,
+      join(configDir, "identity", "external-link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     const result = runDockerSetup(sandbox, {
       OPENCLAW_CONFIG_DIR: configDir,
       OPENCLAW_WORKSPACE_DIR: workspaceDir,
       OPENCLAW_AUTH_PROFILE_SECRET_DIR: secretDir,
+      DOCKER_STUB_REPAIR_SCRIPT: repairScriptPath,
     });
 
     expect(result.status).toBe(0);
@@ -537,52 +652,47 @@ describe("scripts/docker/setup.sh", () => {
     const sessionsDirStat = await stat(join(configDir, "agents", "main", "sessions"));
     expect(sessionsDirStat.isDirectory()).toBe(true);
 
-    // Verify that a root-user chown step runs before setup.
+    // Capture the production repair program, then exercise its traversal locally.
     const log = await readDockerLog(sandbox);
-    const chownIdx = log.indexOf("--user root");
-    const safePathIdx = log.indexOf(`${prestartSafePath}; export PATH`);
-    const stateRepair = log.match(/\/usr\/bin\/find -P \/home\/node\/\.openclaw [^;]+/u)?.[0];
-    if (!stateRepair) {
-      throw new Error("Missing generated state ownership repair");
-    }
-    const stateRepairIdx = log.indexOf(stateRepair);
-    const onboardIdx = log.indexOf("onboard");
-    expect(chownIdx).toBeGreaterThanOrEqual(0);
-    expect(safePathIdx).toBeGreaterThan(chownIdx);
-    expect(stateRepairIdx).toBeGreaterThan(safePathIdx);
-    expect(onboardIdx).toBeGreaterThan(chownIdx);
-    expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
-    expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
-    expect(stateRepair).toContain("-execdir /usr/bin/chown -h node:node {} +");
-    expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
-    expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
-    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
-    expect(log).toContain("fi || true");
-    expect(log).not.toContain("-type d -o -type f");
-    expect(log).not.toContain("-exec chown");
-    expect(log).not.toContain(" chown node:node");
-    expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
-
-    // Execute the generated traversal, replacing only the ownership side effect.
-    // Same-device workspace mounts are not excluded by find's -xdev option.
-    const selection = stateRepair
-      .replaceAll("/home/node/.openclaw", '"$repair_root"')
-      .replace(/-execdir \/usr\/bin\/chown -h node:node \{\} \+$/u, "-print");
-    expect(selection).not.toContain("chown");
-    const traversal = spawnSync(
-      "bash",
-      ["-c", 'repair_root="$(cd "$1" && pwd)"; ' + selection, "ownership-repair", configDir],
-      { encoding: "utf8" },
-    );
+    expect(log.indexOf("--user root")).toBeLessThan(log.indexOf("onboard"));
+    const repair = await readFile(repairScriptPath, "utf8");
+    // Selecting paths instead of changing owners lets this run without root.
+    const selection = repair
+      .replaceAll("/home/node/.openclaw", configDir)
+      .replaceAll("/home/node/.config/openclaw", secretDir)
+      .replace('-execdir /usr/bin/chown -h "$owner" {} +', "-print");
+    const traversal = spawnSync("sh", ["-c", selection, "ownership-repair", "1006:1007", ""], {
+      encoding: "utf8",
+    });
     expect(traversal.status, traversal.stderr).toBe(0);
     const selected = traversal.stdout.trim().split(/\r?\n/u);
-    const selectedRoot = selected[0];
-    expect(selectedRoot).toMatch(/\/config-agent-dirs$/u);
     for (const relative of stateFiles) {
-      expect(selected).toContain(`${selectedRoot}/${relative}`);
+      expect(selected).toContain(`${configDir}/${relative}`);
     }
-    expect(selected).toContain(`${selectedRoot}/workspace`);
-    expect(selected).not.toContain(`${selectedRoot}/${workspaceFile}`);
+    expect(selected).toContain(workspaceDir);
+    expect(selected).not.toContain(`${configDir}/${workspaceFile}`);
+    expect(selected).toContain(`${workspaceDir}/.openclaw/metadata.txt`);
+    expect(selected).toContain(`${configDir}/identity/external-link`);
+    expect(selected).not.toContain(`${configDir}/identity/external-link/untouched.txt`);
+    expect(selected).toContain(secretDir);
+
+    const homeDir = join(sandbox.rootDir, "container-home");
+    const cacheDir = join(homeDir, ".cache");
+    const extraDir = join(cacheDir, "extra [cache]");
+    await mkdir(extraDir, { recursive: true });
+    await writeFile(join(cacheDir, "managed.txt"), "cache");
+    await writeFile(join(extraDir, "project.txt"), "project");
+    const homeSelection = selection.replaceAll("/home/node", homeDir);
+    const homeTraversal = spawnSync(
+      "sh",
+      ["-c", homeSelection, "ownership-repair", "1006:1007", "home", `${extraDir}/`, workspaceDir],
+      { encoding: "utf8" },
+    );
+    expect(homeTraversal.status, homeTraversal.stderr).toBe(0);
+    const homeSelected = homeTraversal.stdout.trim().split(/\r?\n/u);
+    expect(homeSelected).toContain(join(cacheDir, "managed.txt"));
+    expect(homeSelected).not.toContain(join(extraDir, "project.txt"));
+    expect(homeSelected).not.toContain(`${workspaceDir}/.openclaw/metadata.txt`);
   });
 
   it.each(["config", "dotenv"])(
@@ -713,6 +823,10 @@ describe("scripts/docker/setup.sh", () => {
       "OPENCLAW_EXTRA_MOUNTS cannot contain control characters",
     ],
     ["OPENCLAW_EXTRA_MOUNTS", "bad mount spec", "Invalid mount format"],
+    ["OPENCLAW_UID", "-1", "OPENCLAW_UID must be a decimal ID"],
+    ["OPENCLAW_GID", "01", "OPENCLAW_GID must be a decimal ID"],
+    ["OPENCLAW_UID", "1:2", "OPENCLAW_UID must be a decimal ID"],
+    ["OPENCLAW_GID", "4294967295", "OPENCLAW_GID must be a decimal ID"],
     ["OPENCLAW_HOME_VOLUME", "bad name", "OPENCLAW_HOME_VOLUME must match"],
     ["OPENCLAW_TZ", "Nope/Bad", "OPENCLAW_TZ must be supported by openclaw:local"],
   ])("rejects invalid %s=%j", (key, value, diagnostic) => {
@@ -797,6 +911,7 @@ describe("scripts/docker/setup.sh", () => {
           environment: Record<string, string>;
           command: string[];
           ports: string[];
+          user: string;
         }
       >;
     };
@@ -805,6 +920,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(listenerPort).toBe("18789");
     expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
     for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
+      expect(services[name].user).toBe("${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}");
       expect(services[name].environment, name).toMatchObject({
         OPENCLAW_HOME: "/home/node",
         OPENCLAW_STATE_DIR: "/home/node/.openclaw",
