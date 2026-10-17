@@ -26,7 +26,12 @@ const dispatch = vi.hoisted(() => ({
 }));
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
-// Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
+// Bootstrap/dispatch and process identity are replaced; entry, registry scopes and cleanup are real.
+// mock-isolation: One Vitest process simulates both CLI and Gateway entries; subprocess tests own role immutability.
+vi.mock("../infra/database-engine/admission-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/database-engine/admission-scope.js")>()),
+  installDatabaseProcessRole: vi.fn(),
+}));
 vi.mock("./route.js", () => ({
   tryRouteCli: async () => {
     await dispatch.run();
