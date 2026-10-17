@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -266,4 +267,3 @@ describe("managed credential isolation", () => {
     },
   );
 });
-import assert from "node:assert/strict";

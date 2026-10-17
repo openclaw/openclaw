@@ -350,7 +350,7 @@ describe("GitHub tool identity", () => {
       env: identity.env,
     });
 
-    expect(identity.env).toMatchObject({
+    const expectedEnv = {
       GIT_EDITOR: "synthetic-before-preparation",
       GH_CONFIG_DIR: profileDir,
       GH_TOKEN: "managed-publication-token",
@@ -358,16 +358,11 @@ describe("GitHub tool identity", () => {
       GITHUB_TOKEN: undefined,
       GITHUB_ENTERPRISE_TOKEN: undefined,
       PREVIEW_SERVICE_TOKEN: undefined,
-    });
-    expect(identity.accessExpiresAtMs).toBe(accessExpiresAtMs);
+    };
+    expect(identity).toMatchObject({ env: expectedEnv, accessExpiresAtMs });
     expect(Object.isFrozen(identity)).toBe(true);
     expect(Object.isFrozen(identity.env)).toBe(true);
-    expect(childEnv.GH_TOKEN).toBe("managed-publication-token");
-    expect(childEnv.GH_ENTERPRISE_TOKEN).toBe("managed-publication-token");
-    expect(childEnv.GH_CONFIG_DIR).toBe(profileDir);
-    for (const name of ["GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "PREVIEW_SERVICE_TOKEN"]) {
-      expect(childEnv[name]).toBeUndefined();
-    }
+    expect(childEnv).toMatchObject(expectedEnv);
     const matches = (id: string) =>
       matchesPreparedGitHubPublicationIdentity({
         config: { tools: { github: { profileId: id } } },

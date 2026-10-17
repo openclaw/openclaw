@@ -24,7 +24,7 @@ import {
 } from "./github-read-identity.js";
 import {
   prepareGitHubPublicationIdentity,
-  prepareGitHubReadIdentity,
+  prepareGitHubReadIdentity as prepareRead,
   resolveManagedGitHubProfileDir,
 } from "./github-tool-identity.js";
 
@@ -86,6 +86,14 @@ function startAdmitted(state: { admitted: boolean }, assertCurrent = () => {}) {
     return await result;
   };
 }
+
+const assertActive =
+  (state: { active: boolean }, reason = "caller closed") =>
+  () => {
+    if (!state.active) {
+      throw new Error(reason);
+    }
+  };
 
 describe("native GitHub identity absence", () => {
   const launchFailure = (code = "ENOENT") => ({
@@ -158,7 +166,7 @@ describe("native GitHub identity absence", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("does not pass public ambient credentials to a ghe.com tenant profile lookup", async () => {
+  it("scrubs public ambient credentials for a ghe.com lookup", async () => {
     setRuntimeConfigSnapshot(enterprise("tenant.ghe.com"));
     run.mockImplementation(async (_argv, options) =>
       commandResult(options.env.GH_TOKEN || options.env.GITHUB_TOKEN || "stored-tenant-token"),
@@ -171,7 +179,7 @@ describe("native GitHub identity absence", () => {
     ).resolves.toBe("stored-tenant-token");
   });
 
-  it("does not reuse a cached native token after the selected Enterprise host changes", async () => {
+  it("separates cached native tokens by Enterprise host", async () => {
     const env = {
       GH_CONFIG_DIR: tempDirs.make("github-native-host-cache-"),
       GH_TOKEN: undefined,
@@ -283,14 +291,17 @@ describe("prepared GitHub read authority", () => {
     });
   });
 
-  const readOptions = (env: NodeJS.ProcessEnv = {}, config: OpenClawConfig = {}) => ({
+  type ReadOptions = Parameters<typeof prepareRead>[0];
+  const readOptions = ({ config = {}, ...options }: Partial<ReadOptions> = {}): ReadOptions => ({
     config,
     agentId: "main",
-    env,
+    env: {},
     getCurrentConfig: () => config,
     assertActive: () => {},
     refresh: async () => {},
+    ...options,
   });
+  const read = (options: Partial<ReadOptions> = {}) => prepareRead(readOptions(options));
 
   it("keeps default read preparation bound to the configured Enterprise issuer", async () => {
     const config = {
@@ -304,7 +315,7 @@ describe("prepared GitHub read authority", () => {
       GH_ENTERPRISE_TOKEN: "native-enterprise-only",
     };
     setRuntimeConfigSnapshot(config);
-    const identity = await prepareGitHubReadIdentity(readOptions(env, config));
+    const identity = await read({ env, config });
     expect(identity.token).toBe(env.GH_ENTERPRISE_TOKEN);
     expect(fetch).toHaveBeenCalledWith(
       "https://ghe.example.test/api/v3/user",
@@ -317,28 +328,27 @@ describe("prepared GitHub read authority", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("observes host token rotation after 60 seconds while publication always reads it live", async () => {
+  it("caches native reads for 60 seconds but reads publication tokens live", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
     let token = "native-before-ttl";
     run.mockImplementation(async () => commandResult(token));
     const options = readOptions();
-    const identity = await prepareGitHubReadIdentity(options);
+    const identity = await prepareRead(options);
     token = "native-after-ttl";
     now += 59_999;
     await expect(identity.revalidate()).resolves.toBeUndefined();
     expect(run).toHaveBeenCalledOnce();
     const publication = await prepareGitHubPublicationIdentity(options);
-    expect(publication.env.GH_TOKEN).toBe(token);
-    expect(publication.env.GH_ENTERPRISE_TOKEN).toBe(token);
+    expect(publication.env).toMatchObject({ GH_TOKEN: token, GH_ENTERPRISE_TOKEN: token });
     expect(run).toHaveBeenCalledTimes(2);
     now += 1;
     await expect(identity.revalidate()).rejects.toMatchObject({ reason: "changed" });
     expect(run).toHaveBeenCalledTimes(3);
-    expect((await prepareGitHubReadIdentity(options)).token).toBe(token);
+    expect((await prepareRead(options)).token).toBe(token);
   });
 
-  it("shares concurrent native reads without letting an invalidated in-flight read refill the cache", async () => {
+  it("shares concurrent native reads without caching an invalidated generation", async () => {
     const pending = createDeferredCore<ReturnType<typeof commandResult>>();
     const entered = createDeferredCore();
     run
@@ -348,29 +358,29 @@ describe("prepared GitHub read authority", () => {
       })
       .mockImplementation(async () => commandResult("native-new-generation"));
     const options = readOptions();
-    const readers = Array.from({ length: 15 }, () => prepareGitHubReadIdentity(options));
+    const readers = Array.from({ length: 15 }, () => prepareRead(options));
     await entered.promise;
     // Let all admitted callers reach the shared pending native read.
     await Promise.resolve();
     expect(run).toHaveBeenCalledOnce();
     clearGitHubCredentialVerificationCache();
-    expect((await prepareGitHubReadIdentity(options)).token).toBe("native-new-generation");
+    expect((await prepareRead(options)).token).toBe("native-new-generation");
     pending.resolve(commandResult("native-old-generation"));
     await Promise.all(readers);
-    expect((await prepareGitHubReadIdentity(options)).token).toBe("native-new-generation");
+    expect((await prepareRead(options)).token).toBe("native-new-generation");
     expect(run).toHaveBeenCalledTimes(2);
   });
 
-  it("separates native command environments and immediately observes environment token changes", async () => {
+  it("separates native environments and observes ambient token changes immediately", async () => {
     run.mockImplementation(async (_argv, { env }) => commandResult(`native-${env.GH_CONFIG_DIR}`));
     const env: NodeJS.ProcessEnv = { GH_CONFIG_DIR: "first-profile", GH_TOKEN: undefined };
-    const first = await prepareGitHubReadIdentity(readOptions(env));
-    const other = await prepareGitHubReadIdentity(readOptions({ GH_CONFIG_DIR: "second-profile" }));
+    const first = await read({ env });
+    const other = await read({ env: { GH_CONFIG_DIR: "second-profile" } });
     expect(other.token).not.toBe(first.token);
     expect(run).toHaveBeenCalledTimes(2);
     env.GH_TOKEN = "native-from-environment";
     await expect(first.revalidate()).rejects.toMatchObject({ reason: "changed" });
-    expect((await prepareGitHubReadIdentity(readOptions(env))).token).toBe(env.GH_TOKEN);
+    expect((await read({ env })).token).toBe(env.GH_TOKEN);
     expect(run).toHaveBeenCalledTimes(2);
   });
 
@@ -391,8 +401,7 @@ describe("prepared GitHub read authority", () => {
         phase = "delivery";
         return account();
       });
-      const options = {
-        ...readOptions(),
+      const preparing = read({
         startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
           if (phase === stage) {
             await pause.wait();
@@ -403,8 +412,7 @@ describe("prepared GitHub read authority", () => {
           return await start();
         },
         refresh,
-      };
-      const preparing = prepareGitHubReadIdentity(options);
+      });
       await pause.reject(preparing, "grant revoked", () => {
         expect(refresh).toHaveBeenCalledTimes(stage === "refresh" ? 0 : 1);
         expect(run).toHaveBeenCalledTimes(stage === "refresh" || stage === "credential" ? 0 : 1);
@@ -415,25 +423,19 @@ describe("prepared GitHub read authority", () => {
   );
 
   it.each(["before", "after"] as const)(
-    "rechecks live selection after delayed caller authority %s a retained credential read",
+    "rechecks selection after delayed authority %s a retained read",
     async (stage) => {
       const pause = pausedAuthority();
       let phase = "preparing";
-      let active = true;
-      const config = {};
+      const caller = { active: true };
       run.mockImplementation(async () => {
         if (phase === "before") {
           phase = "after";
         }
         return commandResult(`native-retained-${stage}`);
       });
-      const identity = await prepareGitHubReadIdentity({
-        ...readOptions({}, config),
-        assertActive: () => {
-          if (!active) {
-            throw new Error("caller closed");
-          }
-        },
+      const identity = await read({
+        assertActive: assertActive(caller),
         startActive: async <T>(start: () => T): Promise<Awaited<T>> => {
           if (phase === stage) {
             await pause.wait();
@@ -446,7 +448,7 @@ describe("prepared GitHub read authority", () => {
       phase = "before";
       await pause.reject(identity.revalidate(), "caller closed", () => {
         expect(run).toHaveBeenCalledTimes(stage === "before" ? 0 : 1);
-        active = false;
+        caller.active = false;
       });
     },
   );
@@ -463,8 +465,7 @@ describe("prepared GitHub read authority", () => {
       assertAdmitted();
       return account();
     });
-    const identity = await prepareGitHubReadIdentity({
-      ...readOptions(),
+    const identity = await read({
       startActive: startAdmitted(state),
       refresh: async () => {
         assertAdmitted();
@@ -479,7 +480,7 @@ describe("prepared GitHub read authority", () => {
     expect(state.admitted).toBe(false);
   });
 
-  it("releases admission during shared transport and authorizes each caller's final delivery", async () => {
+  it("releases shared transport admission and authorizes each caller's delivery", async () => {
     const transport = createDeferredCore<string>();
     const pending = new Map<string, Promise<string>>();
     const fetchShared = vi.fn(() => transport.promise);
@@ -490,11 +491,7 @@ describe("prepared GitHub read authority", () => {
         selection: { source: "system-detected", accountId: 101 },
         assertSelected: () => {},
         readToken: async () => "synthetic-shared-token",
-        startActive: startAdmitted(state, () => {
-          if (!state.active) {
-            throw new Error("grant revoked");
-          }
-        }),
+        startActive: startAdmitted(state, assertActive(state, "grant revoked")),
       });
       const started = createDeferredCore();
       const result = identity.start(() => {
@@ -513,9 +510,8 @@ describe("prepared GitHub read authority", () => {
     transport.resolve("shared result");
     const [leaderResult, followerResult] = await Promise.all([leader.result, follower.result]);
     const publish = vi.fn((value: string) => value);
-    await expect(leader.identity.start(() => publish(leaderResult))).rejects.toThrow(
-      "grant revoked",
-    );
+    const rejected = leader.identity.start(() => publish(leaderResult));
+    await expect(rejected).rejects.toThrow("grant revoked");
     expect(publish).not.toHaveBeenCalled();
     await expect(follower.identity.start(() => publish(followerResult))).resolves.toBe(
       "shared result",
@@ -524,17 +520,12 @@ describe("prepared GitHub read authority", () => {
   });
 
   it("does not verify credentials after read authority closes during refresh", async () => {
-    let active = true;
+    const caller = { active: true };
     await expect(
-      prepareGitHubReadIdentity({
-        ...readOptions(),
-        assertActive: () => {
-          if (!active) {
-            throw new Error("closed");
-          }
-        },
+      read({
+        assertActive: assertActive(caller, "closed"),
         refresh: async () => {
-          active = false;
+          caller.active = false;
         },
       }),
     ).rejects.toThrow("closed");
@@ -561,17 +552,9 @@ describe("prepared GitHub read authority", () => {
     await fs.writeFile(hosts, "github.com:\n  oauth_token: read-system-before\n", {
       mode: 0o600,
     });
-    const prepare = () =>
-      prepareGitHubReadIdentity({
-        ...readOptions(env, config),
-        getCurrentConfig: () => config,
-      });
+    const prepare = () => read({ env, config, getCurrentConfig: () => config });
     const identity = await prepare();
-    expect(identity.selection).toEqual({
-      source: "system-configured",
-      profileId,
-      accountId: 202,
-    });
+    expect(identity.selection).toEqual({ source: "system-configured", profileId, accountId: 202 });
     await fs.writeFile(hosts, "github.com:\n  oauth_token: read-system-rotated\n");
     await expect(identity.revalidate()).rejects.toThrow("identity changed");
     const rotated = await prepare();
@@ -582,13 +565,13 @@ describe("prepared GitHub read authority", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("admits explicit anonymous source reads only while native credentials remain absent", async () => {
+  it("admits explicit anonymous reads only while native credentials remain absent", async () => {
     run.mockImplementation(async (argv: string[]) =>
       argv[2] === "status" ? commandResult('{"hosts":{}}') : commandResult("", 1),
     );
     const options = readOptions();
-    await expect(prepareGitHubReadIdentity(options)).rejects.toThrow("credential is unavailable");
-    const identity = await prepareGitHubReadIdentity({ ...options, allowAnonymous: true });
+    await expect(prepareRead(options)).rejects.toThrow("credential is unavailable");
+    const identity = await prepareRead({ ...options, allowAnonymous: true });
     expect(identity.selection).toEqual({ source: "anonymous" });
     expect(identity.token).toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
@@ -597,27 +580,24 @@ describe("prepared GitHub read authority", () => {
     await expect(identity.revalidate()).rejects.toThrow("identity changed");
   });
 
-  it("closes anonymous read authority when native account configuration becomes unreadable", async () => {
+  it("closes anonymous authority when native account configuration becomes unreadable", async () => {
     let hosts = {};
     run.mockImplementation(async (argv: string[]) =>
       argv[2] === "status" ? commandResult(JSON.stringify({ hosts })) : commandResult("", 1),
     );
-    const identity = await prepareGitHubReadIdentity({
-      ...readOptions(),
-      allowAnonymous: true,
-    });
+    const identity = await prepareRead({ ...readOptions(), allowAnonymous: true });
     hosts = { "github.com": [{ state: "error" }] };
     await expect(identity.revalidate()).rejects.toThrow("credential is unavailable");
   });
 
-  it("never substitutes anonymous access for a configured or rejected source credential", async () => {
+  it("refuses anonymous fallback from a configured or rejected credential", async () => {
     const options = {
-      ...readOptions({ OPENCLAW_STATE_DIR: tempDirs.make("openclaw-github-source-") }),
+      ...readOptions({ env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-github-source-") } }),
       allowAnonymous: true as const,
     };
     const configured = { tools: { github: { profileId: `ghp_${"1".repeat(32)}` } } };
     await expect(
-      prepareGitHubReadIdentity({
+      prepareRead({
         ...options,
         config: configured,
         getCurrentConfig: () => configured,
@@ -626,7 +606,7 @@ describe("prepared GitHub read authority", () => {
     expect(run).not.toHaveBeenCalled();
     run.mockResolvedValue(commandResult("native-rejected-source-token"));
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 401 }));
-    await expect(prepareGitHubReadIdentity(options)).rejects.toThrow("credential is unavailable");
+    await expect(prepareRead(options)).rejects.toThrow("credential is unavailable");
     expect(fetch).toHaveBeenCalledOnce();
   });
 });
