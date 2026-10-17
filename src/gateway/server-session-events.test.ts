@@ -53,16 +53,47 @@ function expectAbsent(payload: unknown, ...fields: string[]) {
 }
 
 const defaultEntry = { sessionId: "sess-main", updatedAt: 1 };
+const runningSnapshot = {
+  sessionKey: "agent:main:main",
+  status: "running",
+  hasActiveRun: true,
+  session: expect.objectContaining({
+    key: "agent:main:main",
+    status: "running",
+    hasActiveRun: true,
+  }),
+};
 function entryWithRevision(lifecycleRevision: string) {
   return { ...defaultEntry, lifecycleRevision };
 }
 
-function expectMessage(broadcast: ReturnType<typeof vi.fn>, messageId: string, messageSeq: number) {
+type TranscriptUpdate = Parameters<ReturnType<typeof createHandler>["handler"]>[0];
+function fileUpdate(message: unknown, overrides: Partial<TranscriptUpdate> = {}): TranscriptUpdate {
+  return {
+    sessionFile: "/tmp/sess-main.jsonl",
+    sessionKey: "agent:main:main",
+    messageId: "message-1",
+    messageSeq: 1,
+    message,
+    ...overrides,
+  };
+}
+async function publishMessage(
+  update: TranscriptUpdate,
+  expected: Record<string, unknown> = {},
+  active = false,
+) {
+  const { messageId, messageSeq } = update;
+  const { broadcastToConnIds: broadcast, handler } = createHandler(active);
+  await handler(update);
+  expect(broadcast).toHaveBeenCalledOnce();
   expectBroadcast(broadcast, "session.message", {
     sessionKey: "agent:main:main",
     messageId,
-    messageSeq,
+    ...(messageSeq === undefined ? {} : { messageSeq }),
+    ...expected,
   });
+  return broadcast;
 }
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
@@ -94,36 +125,29 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         __openclaw: { id: "same-id", transcriptPosition },
       },
     });
-    const { broadcastToConnIds, handler } = createHandler(false);
-    await handler({
-      target: transcriptTarget("/tmp/canonical-update.sqlite"),
-      messageId: "same-id",
-      messageSeq: 1,
-      message: { role: "assistant", content: "stale queued content" },
-    });
-    expectBroadcast(broadcastToConnIds, "session.message", {
-      messageId: "same-id",
-      messageSeq: 7,
-      message: expect.objectContaining({
-        content: "replacement",
-        __openclaw: expect.objectContaining({ transcriptPosition }),
-      }),
-    });
+    await publishMessage(
+      {
+        target: transcriptTarget("/tmp/canonical-update.sqlite"),
+        messageId: "same-id",
+        messageSeq: 1,
+        message: { role: "assistant", content: "stale queued content" },
+      },
+      {
+        messageSeq: 7,
+        message: expect.objectContaining({
+          content: "replacement",
+          __openclaw: expect.objectContaining({ transcriptPosition }),
+        }),
+      },
+    );
   });
 
   it("never silently drops an authoritative session message for a slow subscriber", async () => {
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
-      sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
-      message: textMessage("user", "shared durable prompt"),
-      messageId: "durable-user-1",
-      messageSeq: 1,
-    });
-
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expectMessage(broadcastToConnIds, "durable-user-1", 1);
+    await publishMessage(
+      fileUpdate(textMessage("user", "shared durable prompt"), {
+        messageId: "durable-user-1",
+      }),
+    );
   });
 
   it("invalidates broad and targeted subscribers once for an identity-only commit", async () => {
@@ -206,7 +230,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
 
   it("rejects an identity-only invalidation when its custom-store owner was deleted", async () => {
     const { broadcastToConnIds, handler } = createHandler(false);
-
     await handler({
       target: transcriptTarget("/tmp/deleted-identity-only-sessions.json"),
       lifecycleRevision: "deleted-revision",
@@ -267,9 +290,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       entry: entryWithRevision("unrelated-default-revision"),
       storePath: "/tmp/default-lifecycle-sessions.json",
     });
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
+    const broadcast = await publishMessage({
       target: transcriptTarget("/tmp/current-lifecycle-sessions.json"),
       lifecycleRevision: "current-revision",
       message: textMessage("user", "current prompt"),
@@ -277,87 +298,61 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       messageSeq: 1,
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledOnce();
     expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:main",
       storePath: "/tmp/current-lifecycle-sessions.json",
     });
     expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
-    expectMessage(broadcastToConnIds, "message-current-lifecycle", 1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1];
+    const payload = broadcast.mock.calls[0]?.[1];
     expectAbsent(payload, "lifecycleRevision", "storePath", "target.storePath");
   });
 
   it("keeps committed messages visible when the current owner has no legacy revision", async () => {
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ ...defaultEntry });
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
+    await publishMessage({
       target: transcriptTarget("/tmp/revisionless-owner-sessions.json"),
       lifecycleRevision: "committed-revision",
       message: textMessage("user", "revisionless owner"),
       messageId: "revisionless-owner-message",
       messageSeq: 1,
     });
-
-    expect(broadcastToConnIds).toHaveBeenCalledOnce();
-    expectMessage(broadcastToConnIds, "revisionless-owner-message", 1);
   });
 
   it("preserves revisionless transcript updates when ownership is unavailable", async () => {
     readSessionMessageByIdAsyncMock.mockResolvedValueOnce(
       storedMessage("legacy-lifecycle-message", 3),
     );
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
-      target: transcriptTarget("/tmp/legacy-lifecycle-sessions.json"),
-      message: textMessage("user", "legacy prompt"),
-      messageId: "legacy-lifecycle-message",
-    });
-
-    expect(broadcastToConnIds).toHaveBeenCalledOnce();
-    expectMessage(broadcastToConnIds, "legacy-lifecycle-message", 3);
+    await publishMessage(
+      {
+        target: transcriptTarget("/tmp/legacy-lifecycle-sessions.json"),
+        message: textMessage("user", "legacy prompt"),
+        messageId: "legacy-lifecycle-message",
+      },
+      { messageSeq: 3 },
+    );
   });
 
   it("carries terminal assistant run ownership while plugin finalization keeps the run active", async () => {
     // before_agent_finalize hooks run after the assistant transcript write but
     // before terminal delivery. The active-run registry remains authoritative
     // during that interval even when the persisted session row says done.
-    const { broadcastToConnIds, handler } = createHandler(true);
-
-    await handler({
-      sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
-      runId: "run-before-finalize",
-      message: textMessage("assistant", "Final answer"),
-      messageId: "message-1",
-      messageSeq: 1,
-    });
-
-    expectBroadcast(broadcastToConnIds, "session.message", {
-      sessionKey: "agent:main:main",
-      runId: "run-before-finalize",
-      messageId: "message-1",
-      messageSeq: 1,
-      status: "running",
-      hasActiveRun: true,
-      session: expect.objectContaining({
-        key: "agent:main:main",
-        status: "running",
-        hasActiveRun: true,
+    await publishMessage(
+      fileUpdate(textMessage("assistant", "Final answer"), {
+        runId: "run-before-finalize",
       }),
-    });
+      {
+        ...runningSnapshot,
+        runId: "run-before-finalize",
+      },
+      true,
+    );
   });
 
   it("projects running status into ordinary startup transcript snapshots", async () => {
-    await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject({
-      sessionKey: "agent:main:main",
-      status: "running",
-      hasActiveRun: true,
-      session: { key: "agent:main:main", status: "running", hasActiveRun: true },
-    });
+    await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject(
+      runningSnapshot,
+    );
   });
 
   it("keeps stable thinking state without catalog-derived picker metadata", async () => {
@@ -532,13 +527,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
 
     try {
-      await handler({
-        sessionFile: "/tmp/sess-main.jsonl",
-        sessionKey: "agent:main:main",
-        message: { role: "toolResult", content: [] },
-        messageId: "message-1",
-        messageSeq: 1,
-      });
+      await handler(fileUpdate({ role: "toolResult", content: [] }));
       expect(received).toHaveBeenCalledOnce();
       expect(received).toHaveBeenCalledWith({
         sessionKey: "agent:main:main",
@@ -610,14 +599,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       });
       await vi.waitFor(() => expect(readSequence).toHaveBeenCalledOnce());
 
-      const fastTask = handler({
-        sessionFile: "/tmp/sess-main.jsonl",
-        agentId: fastAgentId,
-        sessionKey: fastSessionKey,
-        message: textMessage("assistant", "fast"),
-        messageId: "fast-1",
-        messageSeq: 1,
-      });
+      const fastTask = handler(
+        fileUpdate(textMessage("assistant", "fast"), {
+          agentId: fastAgentId,
+          sessionKey: fastSessionKey,
+          messageId: "fast-1",
+        }),
+      );
 
       try {
         // The independent lane must publish while the other transcript remains parked.
@@ -697,13 +685,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
             readSessionMessageByIdAsyncMock.mock.calls.length,
         ).toBe(1),
       );
-      const secondTask = handler({
-        sessionFile: "/tmp/sess-main.jsonl",
-        sessionKey: secondSessionKey,
-        message: textMessage("assistant", "second"),
-        messageId: "ordered-2",
-        messageSeq: 2,
-      });
+      const secondTask = handler(
+        fileUpdate(textMessage("assistant", "second"), {
+          sessionKey: secondSessionKey,
+          messageId: "ordered-2",
+          messageSeq: 2,
+        }),
+      );
 
       await Promise.resolve();
       await Promise.resolve();

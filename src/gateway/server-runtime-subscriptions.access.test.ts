@@ -20,10 +20,8 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { forgetActiveSessionForShutdown } from "./active-sessions-shutdown-tracker.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -49,6 +47,10 @@ vi.mock("../audit/audit-recorder.js", () => ({
 
 const initialEntry = { sessionId: "same-session", lifecycleRevision: "before", updatedAt: 1 };
 const resetEntry = { ...initialEntry, lifecycleRevision: "after", updatedAt: 2 };
+type Mutation = Omit<
+  Parameters<typeof applySessionEntryLifecycleMutation>[0],
+  "agentId" | "storePath"
+>;
 
 function createAccessFixture(state: OpenClawTestState) {
   setRuntimeConfigSnapshot({});
@@ -64,12 +66,8 @@ function createAccessFixture(state: OpenClawTestState) {
     params,
     store,
     workspaceDir: state.workspaceDir,
-    mutate: (
-      mutation: Omit<
-        Parameters<typeof applySessionEntryLifecycleMutation>[0],
-        "agentId" | "storePath"
-      >,
-    ) => applySessionEntryLifecycleMutation({ ...store, skipMaintenance: true, ...mutation }),
+    mutate: (mutation: Mutation) =>
+      applySessionEntryLifecycleMutation({ ...store, skipMaintenance: true, ...mutation }),
     start() {
       const subscription = startGatewayEventSubscriptions(params);
       subscriptions.push(subscription);
@@ -305,11 +303,9 @@ it("invalidates committed compaction access after the run is aborted and removed
           result: { tokensBefore: 4_096, sessionId: "successor" },
         },
       });
-      expect({
-        sessionId: committed.entry.sessionId,
-        aborted: run.entry.controller.signal.aborted,
-        registered: params.chatAbortControllers.has(runId),
-      }).toEqual({ sessionId: "successor", aborted: true, registered: false });
+      expect(committed.entry.sessionId).toBe("successor");
+      expect(run.entry.controller.signal.aborted).toBe(true);
+      expect(params.chatAbortControllers.has(runId)).toBe(false);
       expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
       expect((await readSessionMembersInWorker(scope)).members).toEqual([]);

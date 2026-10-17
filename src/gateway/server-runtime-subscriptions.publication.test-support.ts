@@ -1,5 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi, type Mock } from "vitest";
+import { assert, expect, it, vi, type Mock } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -436,13 +436,12 @@ export function registerSessionPublicationTests(fixture: {
               { trackOwner: true, ownsContext: true },
             );
             errorClaim = claim;
-            if (!claim) {
-              throw new Error("Expected a claimed error lifecycle");
-            }
+            assert(claim, "Expected a claimed error lifecycle");
             const lifecycleGeneration = getAgentRunContext(runId)?.lifecycleGeneration;
-            if (!directHandler || !lifecycleGeneration) {
-              throw new Error("Expected the loaded chat handler and its run generation");
-            }
+            assert(
+              directHandler && lifecycleGeneration,
+              "Expected the loaded chat handler and its run generation",
+            );
             // Invoke the finalizer after its write is admitted; the subscription's
             // captured-write queue is not part of this publication-barrier ordering.
             const terminalEvent: AgentEventRuntimePayload = {
@@ -541,9 +540,7 @@ export function registerSessionPublicationTests(fixture: {
     const params = publicationParams(published);
     const unsubs = start(params);
     const admission = tryBeginGatewayRootWorkAdmission("test:committed-transcript-publisher");
-    if (!admission) {
-      throw new Error("Transcript publisher admission was closed");
-    }
+    assert(admission, "Transcript publisher admission was closed");
     let shutdown: Promise<void> | undefined;
     try {
       await admission.run(async () =>
@@ -616,7 +613,7 @@ export function registerSessionPublicationTests(fixture: {
       emitSessionTranscriptUpdate({
         sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
         sessionKey: "agent:main:main",
-        message: { role: "assistant", content: [{ type: "text", text: "stale queued answer" }] },
+        message: { role: "assistant", content: textContent("stale queued answer") },
         messageId,
         target: {
           agentId: "main",
@@ -627,9 +624,7 @@ export function registerSessionPublicationTests(fixture: {
       });
 
     const admission = tryBeginGatewayRootWorkAdmission("test:transcript-publisher");
-    if (!admission) {
-      throw new Error("Transcript publisher admission was closed");
-    }
+    assert(admission, "Transcript publisher admission was closed");
     let shutdown: Promise<void> | undefined;
     try {
       await admission.run(async () => emitMessage("failed-message"));

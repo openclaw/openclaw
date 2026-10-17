@@ -34,14 +34,9 @@ export function registerActivitySummaryPublicationTests(
   getOnChanged: () => ((target: ActivitySummaryTarget & { storePath: string }) => void) | undefined,
 ): void {
   const config = () => ({ agents: { entries: { main: {} } } });
-  const recapTarget = (storePath: string) => ({
-    key: "agent:main:recap",
-    agentId: "main",
-    storePath,
-  });
   it("delivers a coalesced recap after producer closure and joins it during shutdown", async () => {
     vi.useFakeTimers();
-    const target = recapTarget("/recap/agent.sqlite");
+    const target = { key: "agent:main:recap", agentId: "main", storePath: "/recap/agent.sqlite" };
     const entry = { sessionId: "recap", lifecycleRevision: "original", updatedAt: 1 };
     const projection = createSessionRowProjectionFixture({
       cfg: config(),
@@ -116,7 +111,11 @@ export function registerActivitySummaryPublicationTests(
 
   it("publishes a prepared recap while the real projection retains an unrelated dirty row", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const target = recapTarget(resolveSessionStorePathCore(undefined, { agentId: "main" }));
+      const target = {
+        key: "agent:main:recap",
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      };
       const parent = { ...target, key: "agent:main:recap-parent" };
       for (const [key, sessionId, parentSessionKey, archivedAt] of [
         [parent.key, "recap-parent", undefined, 1],

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
@@ -91,40 +91,34 @@ export function registerSubscriptionChatRun(
     chatAbortControllers: params.chatAbortControllers,
     timeoutMs: 60_000,
   });
-  if (!registration.entry) {
-    throw new Error("expected registered chat abort controller");
-  }
+  assert(registration.entry, "expected registered chat abort controller");
   return { ...registration, entry: registration.entry };
 }
 
-export function readLifecycleState(entry: ChatAbortControllerEntry) {
-  return {
-    projectSessionActive: entry.projectSessionActive,
-    projectSessionTerminalPending: entry.projectSessionTerminalPending,
-    projectSessionTerminalObservedAt: entry.projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence: entry.projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted: entry.projectSessionTerminalPersisted,
-    registrationCleanupRequested: entry.registrationCleanupRequested,
-  };
-}
+export const readLifecycleState = (entry: ChatAbortControllerEntry) => ({
+  projectSessionActive: entry.projectSessionActive,
+  projectSessionTerminalPending: entry.projectSessionTerminalPending,
+  projectSessionTerminalObservedAt: entry.projectSessionTerminalObservedAt,
+  projectSessionTerminalPersistence: entry.projectSessionTerminalPersistence,
+  projectSessionTerminalPersisted: entry.projectSessionTerminalPersisted,
+  registrationCleanupRequested: entry.registrationCleanupRequested,
+});
 
-export function lifecycleState(
+export const lifecycleState = (
   projectSessionActive: boolean | undefined,
   projectSessionTerminalPending?: boolean,
   projectSessionTerminalObservedAt?: number,
   projectSessionTerminalPersistence?: Promise<void>,
   projectSessionTerminalPersisted?: boolean,
   registrationCleanupRequested?: boolean,
-): ReturnType<typeof readLifecycleState> {
-  return {
-    projectSessionActive,
-    projectSessionTerminalPending,
-    projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted,
-    registrationCleanupRequested,
-  };
-}
+): ReturnType<typeof readLifecycleState> => ({
+  projectSessionActive,
+  projectSessionTerminalPending,
+  projectSessionTerminalObservedAt,
+  projectSessionTerminalPersistence,
+  projectSessionTerminalPersisted,
+  registrationCleanupRequested,
+});
 
 export function registerAuditSubscriptionTests(params: {
   start: () => ReturnType<typeof startGatewayEventSubscriptions>;
@@ -146,31 +140,6 @@ export function registerAuditSubscriptionTests(params: {
   };
   const emitAudit = (runId: string, startedAt = 1_000) =>
     emitAgentAuditEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt } });
-  it("records audit events by default and stops the recorder on unsubscribe", async () => {
-    setAudit({ executionIdentity: true });
-    const unsubs = start();
-
-    expect(auditTestState.created).toBe(1);
-    emitAudit("enabled-audit");
-    expect(auditTestState.recorded).toBe(1);
-    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
-    expect(
-      enqueueExecutionIdentityContextAtAdmission(
-        {
-          runId: "gateway-admission",
-          agentId: "main",
-          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-          runtime: { kind: "embedded" },
-        },
-        { enabled: true, runtimeInstanceId: "runtime-1" },
-      )?.accepted,
-    ).toBe(true);
-    expect(auditTestState.identityRecorded).toBe(1);
-    await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(1);
-    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
-  });
-
   it("owns channel evidence collection without retiring host routing on audit changes", async () => {
     const unsubs = start();
     const participant = { channelId: "test", participantId: "person-1" };
@@ -250,6 +219,7 @@ export function registerAuditSubscriptionTests(params: {
   it("applies audit policy changes through the existing event subscriptions", async () => {
     setAudit({ enabled: false });
     const unsubs = start();
+    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
     const steps: Array<[AuditConfig, number, number, number]> = [
       [{ enabled: false, messages: "all", executionIdentity: true }, 0, 0, 0],
       [{}, 1, 0, 0],
@@ -275,15 +245,18 @@ export function registerAuditSubscriptionTests(params: {
           outcome: "completed",
         });
       }
-      enqueueExecutionIdentityContextAtAdmission(
+      const admission = enqueueExecutionIdentityContextAtAdmission(
         {
           runId,
           agentId: "main",
-          ingress: { kind: "system", boundary: "test" },
-          runtime: { kind: "gateway" },
+          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+          runtime: { kind: "embedded" },
         },
-        { enabled: true },
+        { enabled: true, runtimeInstanceId: "runtime-1" },
       );
+      if (audit.executionIdentity && audit.enabled !== false) {
+        expect(admission?.accepted).toBe(true);
+      }
       expect(auditTestState).toMatchObject({
         created: 1,
         stopped: 0,
@@ -294,6 +267,7 @@ export function registerAuditSubscriptionTests(params: {
     }
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
+    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
   });
 
   it("keeps retention maintenance and applies audit enablement to subsequent events", async () => {
@@ -337,9 +311,7 @@ export function registerSubscriptionRegistrationTests(
     let registration = registerSubscriptionChatRun(params, { runId, ...identity });
     const ownership = { exclusive: true, ownsContext: true, trackOwner: true };
     const originalClaim = claimAgentRunContext(runId, identity, ownership);
-    if (!originalClaim) {
-      throw new Error("Missing original claim");
-    }
+    assert(originalClaim, "Missing original claim");
     let replacementClaim: string | undefined;
     const removeListener = onAgentRuntimeEvent((event) => {
       if (event.runId !== runId) {
