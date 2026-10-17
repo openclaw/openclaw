@@ -6,6 +6,7 @@ import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onbo
 import { describe, expect, it } from "vitest";
 import qianfanPlugin from "./index.js";
 import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function expectRecord<T>(value: T | null | undefined, label: string): NonNullable<T> {
   if (!value) {
@@ -34,6 +35,14 @@ describe("qianfan provider plugin", () => {
     }).toEqual({
       providerId: "qianfan",
       methodId: "api-key",
+    });
+  });
+
+  it("declares OpenAI-compatible streaming usage support in the manifest", () => {
+    expect(manifest.providerRequest.providers).toMatchObject({
+      qianfan: {
+        openAICompletions: { supportsStreamingUsage: true },
+      },
     });
   });
 
