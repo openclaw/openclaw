@@ -247,9 +247,7 @@ export function createChatDirectiveSuiteResources() {
             sessionId: state.sessionIdsByKey.get(rawKey) ?? state.sessionId,
             updatedAt: typeof sessionEntry.updatedAt === "number" ? sessionEntry.updatedAt : 1,
           };
-      const entry = persistedEntry
-        ? { ...persistedEntry, sessionFile: state.transcriptPath }
-        : undefined;
+      const entry = persistedEntry && { ...persistedEntry, sessionFile: state.transcriptPath };
       const cfg = readChatDirectiveConfig(state);
       let captured: CapturedSessionEntryReadSource | undefined;
       loadExactSessionEntryCandidates({
@@ -281,8 +279,7 @@ export function createChatDirectiveSuiteResources() {
     },
     async close() {
       try {
-        const metadataCleanup = await metadataOwner?.close();
-        expect(metadataCleanup?.failures ?? []).toEqual([]);
+        expect((await metadataOwner?.close())?.failures ?? []).toEqual([]);
         for (const [storePath, agentId] of databaseOwners) {
           await closeDatabase(storePath, agentId);
         }
@@ -300,17 +297,14 @@ export async function seedChatDirectiveFileTranscript(
   sessionId: string,
   sessionFile: string,
 ) {
-  fs.writeFileSync(
-    sessionFile,
-    `${JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: sessionId,
-      timestamp: new Date(0).toISOString(),
-      cwd: "/tmp",
-    })}\n`,
-    "utf-8",
-  );
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: sessionId,
+    timestamp: new Date(0).toISOString(),
+    cwd: "/tmp",
+  };
+  fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
   // The accessor resolves transcript targets from the persisted store, not the mocked Gateway.
   await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
 }

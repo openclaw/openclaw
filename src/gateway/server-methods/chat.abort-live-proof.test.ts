@@ -1,8 +1,10 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core";
 import { afterAll, expect, it } from "vitest";
+import { writeOpenAiResponsesSse } from "../../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -11,6 +13,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { closeProvider, listenProvider } from "../gateway-provider-fixture.test-support.js";
 import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -31,14 +34,10 @@ const CONTEXT_ENGINE_ID = "pr132123-after-turn-gate";
 function assistantRows(events: readonly unknown[]): Array<Record<string, unknown>> {
   return events.flatMap((event) => {
     const message = asOptionalRecord(asOptionalRecord(event)?.message);
-    const text = Array.isArray(message?.content)
-      ? message.content
-          .flatMap((block) => {
-            const value = asOptionalRecord(block)?.text;
-            return typeof value === "string" ? [value] : [];
-          })
-          .join("")
-      : "";
+    const text = (Array.isArray(message?.content) ? message.content : [])
+      .map((block) => asOptionalRecord(block)?.text)
+      .filter((value): value is string => typeof value === "string")
+      .join("");
     return message?.role === "assistant" && text === REPLY_TEXT ? [message] : [];
   });
 }
@@ -66,7 +65,7 @@ it(
     const envSnapshot = captureEnv(Object.keys(env));
     const afterTurnStarted = createDeferred();
     const releaseAfterTurn = createDeferred();
-    const replyVisible = createDeferred<Record<string, unknown>>();
+    const replyVisible = createDeferred();
     const replyEvents: Record<string, unknown>[] = [];
     let providerServer: ReturnType<typeof createServer> | undefined;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
@@ -89,7 +88,6 @@ it(
             response.writeHead(204).end();
             return;
           }
-          response.writeHead(200, { "content-type": "text/event-stream" });
           const message = {
             type: "message",
             id: "pr132123-proof-reply",
@@ -97,44 +95,30 @@ it(
             status: "completed",
             content: [{ type: "output_text", text: REPLY_TEXT, annotations: [] }],
           };
-          response.end(
-            [
-              {
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { ...message, status: "in_progress", content: [] },
+          writeOpenAiResponsesSse(response, [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...message, status: "in_progress", content: [] },
+            },
+            { type: "response.output_item.done", output_index: 0, item: message },
+            {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
               },
-              { type: "response.output_item.done", output_index: 0, item: message },
-              {
-                type: "response.completed",
-                response: {
-                  status: "completed",
-                  usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-                },
-              },
-            ]
-              .map((event) => `data: ${JSON.stringify(event)}\n\n`)
-              .concat("data: [DONE]\n\n")
-              .join(""),
-          );
+            },
+          ]);
         })().catch((error: unknown) => response.destroy(error as Error));
       });
-      await new Promise<void>((resolve, reject) => {
-        providerServer?.once("error", reject);
-        providerServer?.listen(0, "127.0.0.1", resolve);
-      });
-      const providerAddress = providerServer.address();
-      if (!providerAddress || typeof providerAddress === "string") {
-        throw new Error("proof provider did not bind a loopback port");
-      }
-      const providerBaseUrl = `http://127.0.0.1:${providerAddress.port}`;
-      const provider = buildMockOpenAiResponsesProvider(`${providerBaseUrl}/v1`);
+      const providerUrl = await listenProvider(providerServer);
+      const provider = buildMockOpenAiResponsesProvider(providerUrl);
       await Promise.all([
         fs.writeFile(
           path.join(pluginDir, "openclaw.plugin.json"),
           `${JSON.stringify({
             id: CONTEXT_ENGINE_ID,
-            name: "PR 132123 After-Turn Gate",
             activation: { onStartup: true },
             configSchema: { type: "object", additionalProperties: false, properties: {} },
           })}\n`,
@@ -150,7 +134,7 @@ it(
             "      async ingest() { return { ingested: false }; },",
             "      async assemble({ messages }) { return { messages, estimatedTokens: 0 }; },",
             "      async compact() { return { ok: true, compacted: false }; },",
-            `      async commitTurn() { const response = await fetch(${JSON.stringify(`${providerBaseUrl}/after-turn`)}, { method: "POST" }); if (!response.ok) throw new Error(`,
+            `      async commitTurn() { const response = await fetch(${JSON.stringify(new URL("/after-turn", providerUrl).href)}, { method: "POST" }); if (!response.ok) throw new Error(`,
             "        `after-turn gate failed: ${response.status}`); },",
             "    }));",
             "  },",
@@ -162,7 +146,6 @@ it(
 
       const cfg = {
         plugins: {
-          enabled: true,
           allow: [CONTEXT_ENGINE_ID],
           load: { paths: [pluginDir] },
           entries: { [CONTEXT_ENGINE_ID]: { enabled: true } },
@@ -187,12 +170,11 @@ it(
         cfg,
         configPath,
         token: "pr132123-proof-token",
-        clientDisplayName: "pr132123-proof-gateway",
         onEvent: (event) => {
           if (event.event === "chat" && JSON.stringify(event.payload ?? {}).includes(REPLY_TEXT)) {
             const payload = (event.payload ?? {}) as Record<string, unknown>;
             replyEvents.push(payload);
-            replyVisible.resolve(payload);
+            replyVisible.resolve();
           }
         },
       });
@@ -206,7 +188,7 @@ it(
       });
       expect(started.status).toBe("started");
       expect(started.runId).toBeTruthy();
-      const visibleEvent = await replyVisible.promise;
+      await replyVisible.promise;
       await afterTurnStarted.promise;
 
       const waitForRun = (timeoutMs: number, rpcTimeout: number) =>
@@ -215,12 +197,9 @@ it(
           { runId: started.runId, timeoutMs },
           { timeoutMs: rpcTimeout },
         );
-      const waiting = await waitForRun(100, 5_000);
-      expect(waiting.status).toBe("timeout");
+      expect(await waitForRun(100, 5_000)).toMatchObject({ status: "timeout" });
       const loaded = await loadSessionEntryAsync(sessionKey);
-      if (!loaded.entry?.sessionId) {
-        throw new Error("proof session did not persist its transcript identity");
-      }
+      assert(loaded.entry?.sessionId, "proof session did not persist its transcript identity");
       const transcriptScope = {
         agentId: loaded.agentId,
         sessionId: loaded.entry.sessionId,
@@ -228,9 +207,7 @@ it(
         storePath: loaded.storePath,
       };
       const readReplies = async () => assistantRows(await loadTranscriptEvents(transcriptScope));
-      const beforeRows = await readReplies();
-      expect(beforeRows).toHaveLength(1);
-      expect(beforeRows[0]).toMatchObject({ __openclaw: { runId: started.runId } });
+      expect(await readReplies()).toMatchObject([{ __openclaw: { runId: started.runId } }]);
 
       const abort = await client.request<{ aborted?: boolean; runIds?: string[] }>(
         "chat.abort",
@@ -239,8 +216,7 @@ it(
       );
       const expectCommittedReply = async () => {
         const rows = await readReplies();
-        expect(rows).toHaveLength(1);
-        expect(rows.filter((message) => message.openclawAbort)).toHaveLength(0);
+        expect(rows.map((message) => Boolean(message.openclawAbort))).toEqual([false]);
       };
       await expectCommittedReply();
 
@@ -253,7 +229,6 @@ it(
       closeOpenClawStateDatabaseForTest();
       clearSessionStoreCacheForTest();
       const replyEventStates = replyEvents.map((event) => event.state);
-      expect(JSON.stringify(visibleEvent)).toContain(REPLY_TEXT);
       expect(abort).toMatchObject({ aborted: false, runIds: [] });
       expect(terminal.status).toBe("ok");
       expect(replyEventStates.filter((state) => state === "aborted")).toHaveLength(0);
@@ -266,10 +241,7 @@ it(
         await gateway.server.close().catch(() => undefined);
       }
       if (providerServer?.listening) {
-        await new Promise<void>((resolve) => {
-          providerServer?.close(() => resolve());
-          providerServer?.closeAllConnections();
-        });
+        await closeProvider(providerServer);
       }
       envSnapshot.restore();
       clearRuntimeConfigSnapshot();

@@ -32,26 +32,32 @@ function appendMessage(
   return appendTranscriptMessage(scope, { message, eventId });
 }
 
+function toolResult(toolCallId: string, toolName: string, text: string, isError = false) {
+  return {
+    toolCallId,
+    toolName,
+    isError,
+    content: [{ type: "text", text }],
+  };
+}
 function processResult(
-  toolCallId: string,
+  id: string,
   details: Record<string, unknown>,
   isError = false,
   text = "Result",
 ) {
-  return {
-    role: "toolResult",
-    toolCallId,
-    toolName: "process",
-    isError,
-    details,
-    content: [{ type: "text", text }],
-  };
+  return { role: "toolResult", ...toolResult(id, "process", text, isError), details };
 }
-
+const toolCall = (id: string, name: string, args: Record<string, unknown>) => ({
+  type: "toolCall",
+  id,
+  name,
+  arguments: args,
+});
 function processCall(id: string, args: Record<string, unknown> = {}) {
   return {
     role: "assistant",
-    content: [{ type: "toolCall", id, name: "process", arguments: args }],
+    content: [toolCall(id, "process", args)],
   };
 }
 
@@ -184,7 +190,7 @@ async function readContents(contents: string[], requestedMaxBytes?: number) {
   });
 }
 
-it("keeps a result-only poll delta quiet without dropping failed or mutating results", async () => {
+it("keeps quiet poll results while retaining failures and mutations", async () => {
   const { scope, cursor } = await createTranscript();
   for (const [id, details] of [
     ["poll", processDetails("completed", "private output", 0)],
@@ -195,7 +201,6 @@ it("keeps a result-only poll delta quiet without dropping failed or mutating res
     await appendMessage(scope, processResult(id, details), id);
   }
   const result = await readDelta(scope, cursor);
-  assert(result.kind === "delta", "Expected a result delta");
   expect(result.activity).toMatchObject([
     activity("poll"),
     activity("stopped"),
@@ -206,73 +211,45 @@ it("keeps a result-only poll delta quiet without dropping failed or mutating res
   expect(JSON.stringify(result.messages)).not.toContain("private output");
 });
 
-it("projects a poll call and its result together before producing a delta", async () => {
+it("projects a poll call and nested result together", async () => {
   const { scope, cursor } = await createTranscript();
   await appendMessage(scope, processCall("poll", { action: "kill" }), "call");
+  const nested = {
+    type: "toolResult",
+    ...toolResult("poll", "process", "Done"),
+  };
   await appendMessage(
     scope,
     {
       ...processResult("poll", processDetails("completed", "done")),
-      content: [
-        {
-          type: "toolResult",
-          toolCallId: "poll",
-          toolName: "process",
-          content: [{ type: "text", text: "Done" }],
-          isError: false,
-        },
-      ],
+      content: [nested],
     },
     "result",
   );
   expect(await readDelta(scope, cursor)).toMatchObject({
-    kind: "delta",
     activity: [activity("call"), activity("result")],
   });
 });
 
-it.each([false, true])(
-  "keeps missing-result placeholders visible until a real result arrives (%s)",
-  async (resolved) => {
-    const { scope, cursor } = await createTranscript();
-    await appendMessage(scope, processCall("poll"), "call");
-    await appendMessage(
-      scope,
-      processResult(
-        "poll",
-        {
-          openclawSyntheticMissingToolResult: true,
-          reason: "missing_tool_result",
-        },
-        true,
-        "aborted",
-      ),
-      "missing",
-    );
-    if (resolved) {
-      await appendMessage(scope, { role: "assistant", content: [] }, "empty");
-      await appendMessage(
-        scope,
-        processResult(
-          "poll",
-          { status: "running", sessionId: "job", aggregated: "working" },
-          false,
-          "working",
-        ),
-        "actual",
-      );
-    }
-    const items = resolved ? [] : [{ status: "failed" }];
-    expect(await readDelta(scope, cursor)).toMatchObject({
-      kind: "delta",
-      activity: [
-        activity("call", ...items),
-        activity("missing", ...items),
-        ...(resolved ? [activity("actual")] : []),
-      ],
-    });
-  },
-);
+it.each([false, true])("keeps placeholders until a real result arrives (%s)", async (resolved) => {
+  const { scope, cursor } = await createTranscript();
+  const missing = { openclawSyntheticMissingToolResult: true, reason: "missing_tool_result" };
+  await appendMessage(scope, processCall("poll"), "call");
+  await appendMessage(scope, processResult("poll", missing, true, "aborted"), "missing");
+  if (resolved) {
+    await appendMessage(scope, { role: "assistant", content: [] }, "empty");
+    const running = { status: "running", sessionId: "job", aggregated: "working" };
+    await appendMessage(scope, processResult("poll", running, false, "working"), "actual");
+  }
+  const items = resolved ? [] : [{ status: "failed" }];
+  expect(await readDelta(scope, cursor)).toMatchObject({
+    activity: [
+      activity("call", ...items),
+      activity("missing", ...items),
+      ...(resolved ? [activity("actual")] : []),
+    ],
+  });
+});
 
 it.each([true, false])("preserves reused call IDs (explicit run ownership: %s)", async (scoped) => {
   const { scope, cursor } = await createTranscript();
@@ -280,27 +257,18 @@ it.each([true, false])("preserves reused call IDs (explicit run ownership: %s)",
     ["failed-run", true],
     ["quiet-run", false],
   ] as const) {
-    await appendMessage(
-      scope,
-      {
-        ...processCall("same"),
-        ...(scoped ? { __openclaw: { runId } } : {}),
-      },
-      `${runId}-call`,
+    const ownership = scoped ? { __openclaw: { runId } } : {};
+    const result = processResult(
+      "same",
+      processDetails(failed ? "failed" : "completed", "output"),
+      failed,
     );
-    await appendMessage(
-      scope,
-      {
-        ...processResult("same", processDetails(failed ? "failed" : "completed", "output"), failed),
-        ...(scoped ? { __openclaw: { runId } } : {}),
-      },
-      `${runId}-result`,
-    );
+    await appendMessage(scope, { ...processCall("same"), ...ownership }, `${runId}-call`);
+    await appendMessage(scope, { ...result, ...ownership }, `${runId}-result`);
   }
   const delta = await readDelta(scope, cursor);
   const unknownOutcome = { phase: "end", summary: "Outcome unknown" };
   expect(delta).toMatchObject({
-    kind: "delta",
     activity: [
       activity("failed-run-call", scoped ? { status: "failed" } : unknownOutcome),
       activity("failed-run-result", { status: "failed" }),
@@ -308,7 +276,6 @@ it.each([true, false])("preserves reused call IDs (explicit run ownership: %s)",
       activity("quiet-run-result"),
     ],
   });
-  assert(delta.kind === "delta", "Expected the reused-call delta");
   if (!scoped) {
     for (const entry of delta.activity.filter((item) => item.messageId.endsWith("-call"))) {
       expect(entry.items).toHaveLength(1);
@@ -317,11 +284,11 @@ it.each([true, false])("preserves reused call IDs (explicit run ownership: %s)",
   }
 });
 
-it("keeps inactive stored calls unknown until their result is inside the history page", async () => {
+it("keeps stored calls unknown until the page includes their result", async () => {
   const { scope, cursor } = await createTranscript();
   const call = {
     role: "assistant",
-    content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "notes.txt" } }],
+    content: [toolCall("read-1", "read", { path: "notes.txt" })],
   };
   await appendMessage(scope, call, "stored-call");
   const savedCall = readTranscriptDisplayDelta(scope, { cursor });
@@ -329,10 +296,8 @@ it("keeps inactive stored calls unknown until their result is inside the history
   const pendingDelta = await readDelta(scope, cursor);
   expect(pending.messages).toMatchObject([call]);
   expect(pendingDelta).toMatchObject({
-    kind: "delta",
     messages: [{ messageId: "stored-call", message: call }],
   });
-  assert(pendingDelta.kind === "delta", "Expected the stored-call delta");
   for (const entries of [pending.activity, pendingDelta.activity]) {
     expectUnknownRead(entries);
   }
@@ -340,10 +305,7 @@ it("keeps inactive stored calls unknown until their result is inside the history
 
   const result = {
     role: "toolResult",
-    toolCallId: "read-1",
-    toolName: "read",
-    isError: false,
-    content: [{ type: "text", text: "Saved notes" }],
+    ...toolResult("read-1", "read", "Saved notes"),
   };
   await appendMessage(scope, result, "stored-result");
   const savedPair = readTranscriptDisplayDelta(scope, { cursor });
@@ -353,12 +315,10 @@ it("keeps inactive stored calls unknown until their result is inside the history
 
   const completed = { toolCallId: "read-1", phase: "end", status: "completed" };
   expect(await readDelta(scope, pendingDelta.deltaCursor)).toMatchObject({
-    kind: "delta",
     messages: [{ messageId: "stored-result", message: result }],
     activity: [activity("stored-result", completed)],
   });
   const refreshedDelta = await readDelta(scope, cursor);
-  assert(refreshedDelta.kind === "delta", "Expected the completed-call delta");
   for (const refreshed of [await readTail(scope), refreshedDelta]) {
     expect(refreshed.activity).toMatchObject([
       activity("stored-call", completed),
@@ -370,15 +330,16 @@ it("keeps inactive stored calls unknown until their result is inside the history
 });
 
 it.each([
-  [2, 0, undefined],
-  [2, 1, undefined],
-  [2, 0, 64 * 1024],
-  [2, 1, 64 * 1024],
-  [2, 0, 2 * maxBytes],
-  [2, 1, 2 * maxBytes],
+  [0, undefined],
+  [1, undefined],
+  [0, 64 * 1024],
+  [1, 64 * 1024],
+  [0, 2 * maxBytes],
+  [1, 2 * maxBytes],
 ] as const)(
-  "preserves the UTF-8 boundary with %i envelopes at limit + %i bytes (requested maxBytes: %s)",
-  async (count, extraBytes, requestedMaxBytes) => {
+  "enforces UTF-8 bytes (+%i bytes, maxBytes=%s)",
+  async (extraBytes, requestedMaxBytes) => {
+    const count = 2;
     const byteLimit = Math.min(requestedMaxBytes ?? maxBytes, maxBytes);
     const prefix = 'escaped: "\\\n🤖\ud800';
     const contents = Array.from({ length: count }, () => prefix);
@@ -433,15 +394,20 @@ const failedAssistant = {
 };
 const recoveredAssistant = {
   ...assistant,
+  ...textMessage("assistant", "Recovered answer"),
   model: "backup",
-  content: [{ type: "text", text: "Recovered answer" }],
   stopReason: "stop",
 };
 
 type TranscriptScope = Awaited<ReturnType<typeof createTranscript>>["scope"];
 
-function readDelta(scope: TranscriptScope, cursor: string) {
+function readResponse(scope: TranscriptScope, cursor: string) {
   return readChatHistoryDelta({ agentId: "main", cursor, scope, sessionKey, sessionSnapshot });
+}
+async function readDelta(scope: TranscriptScope, cursor: string) {
+  const result = await readResponse(scope, cursor);
+  assert(result.kind === "delta", "Expected an incremental history delta");
+  return result;
 }
 
 function readTail(scope: TranscriptScope, offset?: number, max = 20) {
@@ -461,7 +427,21 @@ function readTail(scope: TranscriptScope, offset?: number, max = 20) {
   });
 }
 
-it("delivers a committed failure notice once through the cursor and refreshed history", async () => {
+async function reconcile(
+  scope: TranscriptScope,
+  cursor: string,
+  expectedIds: readonly string[],
+  rawCursor = cursor,
+) {
+  const saved = readTranscriptDisplayDelta(scope, { cursor: rawCursor });
+  expect(await readResponse(scope, cursor)).toEqual({ kind: "reset" });
+  const page = await readTail(scope);
+  expect(page.messages).toMatchObject(historyIds(...expectedIds));
+  expect(readTranscriptDisplayDelta(scope, { cursor: rawCursor })).toEqual(saved);
+  return page;
+}
+
+it("delivers committed failure notices once across cursor refresh", async () => {
   const { scope } = await createTranscript();
   await appendMessage(scope, { role: "user", content: "Please help." }, "question");
   const before = await readTail(scope);
@@ -487,7 +467,6 @@ it("delivers a committed failure notice once through the cursor and refreshed hi
 
   const delta = await readDelta(scope, before.deltaCursor);
   expect(delta).toMatchObject({
-    kind: "delta",
     messages: [
       {
         messageSeq: 2,
@@ -502,7 +481,6 @@ it("delivers a committed failure notice once through the cursor and refreshed hi
       { messageId: "follow-up", messageSeq: 3 },
     ],
   });
-  assert(delta.kind === "delta", "Expected the committed report delta");
   const refreshed = await readTail(scope);
   expect(refreshed.pagination?.totalMessages).toBe(3);
   expect(refreshed.messages).toHaveLength(3);
@@ -510,59 +488,49 @@ it("delivers a committed failure notice once through the cursor and refreshed hi
   expect(JSON.stringify(delta)).not.toContain("PRIVATE_");
   expect(JSON.stringify(refreshed.messages)).not.toContain("PRIVATE_");
   expect(await readDelta(scope, delta.deltaCursor)).toMatchObject({
-    kind: "delta",
     messages: [],
     messagesBytes: 2,
     activityBytes: 0,
   });
 });
-it.each([false, true])(
-  "preserves keyed commentary and its tool sibling on cursor refresh (tool=%s)",
-  async (withTool) => {
-    const { scope, cursor } = await createTranscript();
-    const commentary = {
-      type: "text",
-      text: "First paragraph.\n\n- first file\n- second file",
-      textSignature: JSON.stringify({ v: 1, id: "commentary-1", phase: "commentary" }),
-    };
-    const toolCall = {
-      type: "toolCall",
-      id: "read-1",
-      name: "read",
-      arguments: { path: "workspace.txt" },
-    };
-    const savedMessage = {
-      role: "assistant",
-      content: [commentary, ...(withTool ? [toolCall] : [])],
-      stopReason: withTool ? "toolUse" : "stop",
-      __openclaw: { runId: "run-commentary" },
-    };
-    await appendMessage(scope, savedMessage, "commentary-and-tool");
+it.each([false, true])("reconciles keyed commentary (tool=%s)", async (withTool) => {
+  const { scope, cursor } = await createTranscript();
+  const commentary = {
+    type: "text",
+    text: "First paragraph.\n\n- first file\n- second file",
+    textSignature: JSON.stringify({ v: 1, id: "commentary-1", phase: "commentary" }),
+  };
+  const call = toolCall("read-1", "read", { path: "workspace.txt" });
+  const savedMessage = {
+    role: "assistant",
+    content: [commentary, ...(withTool ? [call] : [])],
+    stopReason: withTool ? "toolUse" : "stop",
+    __openclaw: { runId: "run-commentary" },
+  };
+  await appendMessage(scope, savedMessage, "commentary-and-tool");
 
-    // A saved cursor must not accept a partial envelope and permanently skip commentary.
-    expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
-    const refreshed = await readTail(scope);
-    expect(refreshed.messages).toMatchObject([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: commentary.text }],
-        openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
-      },
-      ...(withTool ? [{ role: "assistant", content: [toolCall] }] : []),
-    ]);
-    expect(readTranscriptDisplayDelta(scope, { cursor })).toMatchObject({
-      kind: "page",
-      events: [{ event: { message: savedMessage } }],
-    });
-    assert(refreshed.deltaCursor, "Reconciled commentary must resume incremental history");
-    await appendMessage(scope, textMessage("assistant", "Done."), "final-answer");
-    expect(await readDelta(scope, refreshed.deltaCursor)).toMatchObject({
-      kind: "delta",
-      messages: [{ messageId: "final-answer", message: { content: [{ text: "Done." }] } }],
-    });
-  },
-);
-it("refreshes one enriched page for reply-bearing deltas and then resumes the cursor", async () => {
+  // A saved cursor must not accept a partial envelope and permanently skip commentary.
+  expect(await readResponse(scope, cursor)).toEqual({ kind: "reset" });
+  const refreshed = await readTail(scope);
+  expect(refreshed.messages).toMatchObject([
+    {
+      role: "assistant",
+      content: [{ type: "text", text: commentary.text }],
+      openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+    },
+    ...(withTool ? [{ role: "assistant", content: [call] }] : []),
+  ]);
+  expect(readTranscriptDisplayDelta(scope, { cursor })).toMatchObject({
+    kind: "page",
+    events: [{ event: { message: savedMessage } }],
+  });
+  assert(refreshed.deltaCursor, "Reconciled commentary must resume incremental history");
+  await appendMessage(scope, textMessage("assistant", "Done."), "final-answer");
+  expect(await readDelta(scope, refreshed.deltaCursor)).toMatchObject({
+    messages: [{ messageId: "final-answer", message: { content: [{ text: "Done." }] } }],
+  });
+});
+it("enriches reply previews on refresh, then resumes the cursor", async () => {
   const { scope } = await createTranscript();
   const originalText = "original text ".repeat(60);
   await appendMessage(scope, { role: "user", content: originalText }, "original");
@@ -578,7 +546,7 @@ it("refreshes one enriched page for reply-bearing deltas and then resumes the cu
   ]) {
     await appendTranscriptMessage(scope, { message });
   }
-  expect(await readDelta(scope, initial.deltaCursor)).toEqual({ kind: "reset" });
+  expect(await readResponse(scope, initial.deltaCursor)).toEqual({ kind: "reset" });
   const page = await readTail(scope, undefined, 2);
   expect(page.messages).toHaveLength(2);
   for (const message of page.messages) {
@@ -591,53 +559,42 @@ it("refreshes one enriched page for reply-bearing deltas and then resumes the cu
     });
   }
   assert(page.deltaCursor, "Reply page must resume incremental history");
-  expect(await readDelta(scope, page.deltaCursor)).toMatchObject({ kind: "delta", messages: [] });
+  expect(await readDelta(scope, page.deltaCursor)).toMatchObject({ messages: [] });
 });
-it.each(["before the answer", "between answer and mirror"])(
-  "reconciles correlated replies with a cursor %s",
-  async (position) => {
-    const { scope, cursor } = await createTranscript();
-    const answer = {
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "Check the opening hours." },
-        { type: "text", text: mirrorText },
-      ],
-    };
-    await appendMessage(scope, answer, "answer-1");
-    const firstAnswer = await readDelta(scope, cursor);
-    assert(firstAnswer.kind === "delta", "The ordinary answer must support incremental history");
-    await appendMessage(scope, mirror("answer-1"), "mirror-1");
-    const saved = readTranscriptDisplayDelta(scope, { cursor });
+it.each([true, false])("reconciles mirrors (cursor before answer: %s)", async (beforeAnswer) => {
+  const { scope, cursor } = await createTranscript();
+  const answer = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "Check the opening hours." },
+      { type: "text", text: mirrorText },
+    ],
+  };
+  await appendMessage(scope, answer, "answer-1");
+  const firstAnswer = await readDelta(scope, cursor);
+  await appendMessage(scope, mirror("answer-1"), "mirror-1");
+  const refreshed = await reconcile(
+    scope,
+    beforeAnswer ? cursor : firstAnswer.deltaCursor,
+    ["answer-1"],
+    cursor,
+  );
+  assert(refreshed.deltaCursor, "Reconciled mirrors must resume incremental history");
 
-    expect(
-      await readDelta(scope, position === "before the answer" ? cursor : firstAnswer.deltaCursor),
-    ).toEqual({ kind: "reset" });
-    const refreshed = await readTail(scope);
-    expect(refreshed.messages).toMatchObject(historyIds("answer-1"));
-    expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
-    assert(refreshed.deltaCursor, "Reconciled mirrors must resume incremental history");
-
-    await appendMessage(scope, answer, "answer-2");
-    await appendMessage(scope, mirror("answer-2"), "mirror-2");
-    expect(await readDelta(scope, refreshed.deltaCursor)).toEqual({ kind: "reset" });
-    const reconciled = await readTail(scope);
-    expect(reconciled.messages).toMatchObject(historyIds("answer-1", "answer-2"));
-    expect(reconciled.deltaCursor).toEqual(expect.any(String));
-  },
-);
+  await appendMessage(scope, answer, "answer-2");
+  await appendMessage(scope, mirror("answer-2"), "mirror-2");
+  expect(await readResponse(scope, refreshed.deltaCursor)).toEqual({ kind: "reset" });
+  const reconciled = await readTail(scope);
+  expect(reconciled.messages).toMatchObject(historyIds("answer-1", "answer-2"));
+  expect(reconciled.deltaCursor).toEqual(expect.any(String));
+});
 it.each([
-  { name: "legacy identity", legacyIdentity: true, media: false, expectedIds: ["source"] },
-  {
-    name: "fieldless history",
-    legacyIdentity: false,
-    media: false,
-    expectedIds: ["source", "mirror"],
-  },
-  { name: "media reply", legacyIdentity: false, media: true, expectedIds: ["source", "mirror"] },
-])(
-  "preserves $name through full reconciliation",
-  async ({ legacyIdentity, media, expectedIds }) => {
+  ["legacy identity", true, false, ["source"]],
+  ["fieldless history", false, false, ["source", "mirror"]],
+  ["media reply", false, true, ["source", "mirror"]],
+] as const)(
+  "preserves %s through full reconciliation",
+  async (_name, legacyIdentity, media, expectedIds) => {
     const { scope, cursor } = await createTranscript();
     await appendMessage(
       scope,
@@ -654,44 +611,36 @@ it.each([
       "source",
     );
     await appendMessage(scope, mirror(media ? "source" : undefined), "mirror");
-    const saved = readTranscriptDisplayDelta(scope, { cursor });
-    expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
-    const refreshed = await readTail(scope);
-    expect(refreshed.messages).toMatchObject(historyIds(...expectedIds));
-    expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
+    await reconcile(scope, cursor, expectedIds);
   },
 );
-it.each([undefined, 0])(
-  "keeps refreshes authoritative while a tail error can recover (offset=%s)",
-  async (offset) => {
-    const { scope, cursor } = await createTranscript();
-    await appendMessage(scope, failedAssistant, "failed-attempt");
-    expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
+it.each([undefined, 0])("keeps recovery refreshes authoritative (offset=%s)", async (offset) => {
+  const { scope, cursor } = await createTranscript();
+  await appendMessage(scope, failedAssistant, "failed-attempt");
+  expect(await readResponse(scope, cursor)).toEqual({ kind: "reset" });
 
-    const pending = await readTail(scope, offset);
-    expect(pending.messages).toEqual([]);
-    expect(pending).not.toHaveProperty("deltaCursor");
+  const pending = await readTail(scope, offset);
+  expect(pending.messages).toEqual([]);
+  expect(pending).not.toHaveProperty("deltaCursor");
 
-    await appendMessage(scope, recoveredAssistant, "recovered-answer");
-    const recovered = await readTail(scope, offset);
-    expect(recovered.messages).toMatchObject(historyIds("recovered-answer"));
-    expect(recovered.deltaCursor).toEqual(expect.any(String));
-    assert(recovered.deltaCursor, "Recovered history must resume incremental updates");
+  await appendMessage(scope, recoveredAssistant, "recovered-answer");
+  const recovered = await readTail(scope, offset);
+  expect(recovered.messages).toMatchObject(historyIds("recovered-answer"));
+  expect(recovered.deltaCursor).toEqual(expect.any(String));
+  assert(recovered.deltaCursor, "Recovered history must resume incremental updates");
 
-    await appendMessage(scope, { role: "user", content: "next turn" }, "next-user");
-    await appendMessage(
-      scope,
-      { ...recoveredAssistant, __openclaw: { runId: "run-next" } },
-      "next-answer",
-    );
-    expect(await readDelta(scope, recovered.deltaCursor)).toMatchObject({
-      kind: "delta",
-      deltaCursor: expect.any(String),
-      messages: [{ messageId: "next-user" }, { messageId: "next-answer" }],
-    });
-  },
-);
-it("resets the cursor refresh so the supplement merges into the visible reply", async () => {
+  await appendMessage(scope, { role: "user", content: "next turn" }, "next-user");
+  await appendMessage(
+    scope,
+    { ...recoveredAssistant, __openclaw: { runId: "run-next" } },
+    "next-answer",
+  );
+  expect(await readDelta(scope, recovered.deltaCursor)).toMatchObject({
+    deltaCursor: expect.any(String),
+    messages: [{ messageId: "next-user" }, { messageId: "next-answer" }],
+  });
+});
+it("merges TTS supplements into visible replies on cursor refresh", async () => {
   const { scope, cursor } = await createTranscript();
   const visibleText = "Plain recon 4101 stays visible.";
   const attachment = {
@@ -700,7 +649,6 @@ it("resets the cursor refresh so the supplement merges into the visible reply", 
   };
   await appendMessage(scope, textMessage("assistant", visibleText), "answer");
   const answerDelta = await readDelta(scope, cursor);
-  assert(answerDelta.kind === "delta", "Expected the answer delta");
 
   const appended = await appendInjectedAssistantMessageToTranscript({
     ...scope,
@@ -712,7 +660,7 @@ it("resets the cursor refresh so the supplement merges into the visible reply", 
   });
   expect(appended.ok).toBe(true);
 
-  expect(await readDelta(scope, answerDelta.deltaCursor)).toEqual({ kind: "reset" });
+  expect(await readResponse(scope, answerDelta.deltaCursor)).toEqual({ kind: "reset" });
   const refreshed = await readTail(scope);
   expect(refreshed.messages).toMatchObject([
     {

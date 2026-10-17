@@ -4,6 +4,7 @@ import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptEvent,
@@ -25,24 +26,26 @@ import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 
-function appendMessage(
+function appendLocal(
   scope: Parameters<typeof appendTranscriptMessage>[0],
-  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
-  eventId?: string,
-) {
-  return appendTranscriptMessage(scope, { message, eventId });
-}
-
-function localMessage(
   role: string,
   content: unknown,
   timestamp?: number,
   extra: Record<string, unknown> = {},
+  eventId?: string,
 ) {
-  return { role, content, timestamp, ...extra };
+  return appendTranscriptMessage(scope, {
+    message: { role, content, timestamp, ...extra },
+    eventId,
+  });
 }
 
-async function seedCliHistory(state: OpenClawTestState, sessionKey: string, incognito = false) {
+async function seedCliHistory(
+  state: OpenClawTestState,
+  sessionKey: string,
+  incognito = false,
+  entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+) {
   await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionKey, sessionId: randomUUID() };
   const cliSessionId = randomUUID();
@@ -54,14 +57,19 @@ async function seedCliHistory(state: OpenClawTestState, sessionKey: string, inco
     providerOverride: "claude-cli",
     modelOverride: "claude-sonnet-4-6",
     cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+    ...entry,
   });
   const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
   await fs.mkdir(projectDir, { recursive: true });
+  const sourcePath = path.join(projectDir, `${cliSessionId}.jsonl`);
   return {
     scope,
     cliSessionId,
     timestamp,
-    sourcePath: path.join(projectDir, `${cliSessionId}.jsonl`),
+    sourcePath,
+    append: appendLocal.bind(null, scope),
+    native: cliMessage.bind(null, cliSessionId),
+    write: (rows: unknown[]) => writeCliRows(sourcePath, rows),
   };
 }
 
@@ -113,10 +121,11 @@ function transcriptMessage(
 }
 
 const ids = (page: HistoryPage) => page.messages.map(readChatHistoryMessageId);
+const messageWithId = (page: HistoryPage, id: string) =>
+  page.messages.find((message) => readChatHistoryMessageId(message) === id);
 
 type HistoryPage = {
   messages: unknown[];
-  completeSnapshot?: boolean;
   hasMore?: boolean;
   nextOffset?: number;
   offset?: number;
@@ -126,13 +135,7 @@ type HistoryPage = {
   windowReset?: boolean;
 };
 
-type HistoryRequest = {
-  cursor?: string;
-  limit?: number;
-  maxBytes?: number;
-  messageId?: string;
-  offset?: number;
-};
+type HistoryRequest = Omit<ChatHistoryParams, "sessionKey">;
 
 async function rpcReader(
   sessionKey: string,
@@ -152,8 +155,7 @@ async function rpcReader(
       client: null,
       isWebchatConnect: () => false,
       respond: (ok, payload, error) => {
-        expect(error).toBeUndefined();
-        expect(ok).toBe(true);
+        expect({ ok, error }).toEqual({ ok: true, error: undefined });
         result = payload;
       },
     });
@@ -175,32 +177,31 @@ async function messageReader(sessionKey: string) {
 }
 
 async function withImportedHistory(
-  method: "chat.history" | "chat.startup",
   importedCount: number,
   text: string,
-  run: (fixture: {
-    read: (params: HistoryRequest) => Promise<HistoryPage>;
-    importedIds: string[];
-    sourcePath: string;
-    sessionsDir: string;
-    scope: { agentId: string; sessionId: string; sessionKey: string };
-  }) => Promise<void>,
+  run: (
+    fixture: {
+      read: (params: HistoryRequest) => Promise<HistoryPage>;
+      importedIds: string[];
+      sessionsDir: string;
+    } & Awaited<ReturnType<typeof seedCliHistory>>,
+  ) => Promise<void>,
   incognito = false,
+  method: "chat.history" | "chat.startup" = "chat.history",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { scope, cliSessionId, timestamp, sourcePath } = await seedCliHistory(
+    const fixture = await seedCliHistory(
       state,
       incognito ? "agent:main:dashboard:incognito-cli-history" : "agent:main:cli-history-anchor",
       incognito,
     );
-    await appendMessage(scope, localMessage("user", "Local question", timestamp));
-    await appendMessage(scope, localMessage("assistant", "Local answer", timestamp + 1));
+    const { scope, timestamp, native, append, write } = fixture;
+    await append("user", "Local question", timestamp);
+    await append("assistant", "Local answer", timestamp + 1);
     const importedIds = Array.from({ length: importedCount }, () => randomUUID());
-    await writeCliRows(
-      sourcePath,
+    await write(
       importedIds.map((uuid, index) =>
-        cliMessage(
-          cliSessionId,
+        native(
           uuid,
           index % 2 === 0 ? "user" : "assistant",
           `Imported ${index}: ${text}`,
@@ -210,11 +211,10 @@ async function withImportedHistory(
       ),
     );
     await run({
+      ...fixture,
       read: await historyReader(scope.sessionKey, method),
       importedIds,
-      sourcePath,
       sessionsDir: state.sessionsDir(),
-      scope,
     });
   });
 }
@@ -226,208 +226,163 @@ function expectMissingAnchor(page: HistoryPage) {
   }
 }
 
-it.each([false, true])(
-  "opens imported-only full messages through the history index (incognito: %s)",
-  async (incognito) => {
-    const text = "Imported full-message content. ".repeat(350);
-    await withImportedHistory(
-      "chat.history",
-      1,
-      text,
-      async ({ read, importedIds, scope }) => {
-        const messageId = importedIds[0]!;
-        const page = await read({ limit: 10 });
-        expect(page.messages.map(readChatHistoryMessageId)).toContain(messageId);
-        expect(await readSessionMessageByIdAsync(scope, messageId)).toMatchObject({
-          found: false,
-        });
-        const getMessage = await messageReader(scope.sessionKey);
-        const payload = await getMessage(messageId);
-        expect(payload).toMatchObject({
-          ok: true,
-          message: {
-            role: "user",
-            content: `Imported 0: ${text}`,
-            __openclaw: { id: messageId, importedFrom: "claude-cli" },
-          },
-        });
-      },
-      incognito,
-    );
-  },
-);
-
-it("shares canonical archive and visibility outcomes between CLI reply previews and full messages", async () => {
+it.each([false, true])("reads imported full messages (incognito=%s)", async (incognito) => {
+  const text = "Imported full-message content. ".repeat(350);
   await withImportedHistory(
-    "chat.history",
     1,
-    "seed",
-    async ({ read, sourcePath, sessionsDir, scope }) => {
-      await upsertSessionEntryCore(scope, { sessionStartedAt: 2000 });
-      await replaceTranscriptEvents(scope, [
-        { type: "session", version: 3, id: scope.sessionId },
-        transcriptMessage("canonical-announce", null, "user", 1000, "Old canonical completion", {
-          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-        }),
-        transcriptMessage(
-          "reused-hidden",
-          "canonical-announce",
-          "assistant",
-          1100,
-          "Hidden canonical reply",
-        ),
-        ...["archived-original", "reused-hidden"].map((replyToId, index) =>
-          transcriptMessage(
-            `quote-${replyToId}`,
-            index === 0 ? "reused-hidden" : "quote-archived-original",
-            "user",
-            5000 + index,
-            `Quote ${replyToId}`,
-            { __openclaw: { replyToId } },
-          ),
-        ),
-      ]);
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await writeCliRows(
-        path.join(sessionsDir, `${scope.sessionId}.jsonl.reset.2026-09-30T00-00-00.000Z`),
-        [
-          { type: "session", version: 3, id: scope.sessionId },
-          transcriptMessage(
-            "archived-original",
-            null,
-            "assistant",
-            100,
-            "Retained archive original",
-          ),
-        ],
-      );
-      await writeCliRows(
-        sourcePath,
-        (
-          [
-            [
-              "native-announce",
-              "user",
-              500,
-              "[Inter-session message] sourceTool=subagent_announce\nOld native completion",
-            ],
-            ["native-pair", "assistant", 600, "Hidden native pair"],
-            ["native-visible", "assistant", 3000, "Visible native original"],
-            // Missing native announce context must not revive an ID rejected by canonical history.
-            ["reused-hidden", "assistant", 4000, "Native copy of hidden ID"],
-          ] as const
-        ).map(([uuid, role, timestamp, content]) => ({
-          type: role,
-          uuid,
-          timestamp: new Date(timestamp).toISOString(),
-          message: { role, content },
-        })),
-      );
+    text,
+    async ({ read, importedIds, scope }) => {
+      const messageId = importedIds[0]!;
       const page = await read({ limit: 10 });
-      expect(page.messages.map(readChatHistoryMessageId)).not.toContain("native-pair");
-      expect(
-        page.messages.find(
-          (message) => readChatHistoryMessageId(message) === "quote-archived-original",
-        ),
-      ).toHaveProperty("__openclaw.replyToMessage", {
-        ...foundMessage("Retained archive original"),
+      expect(ids(page)).toContain(messageId);
+      expect(await readSessionMessageByIdAsync(scope, messageId)).toMatchObject({
+        found: false,
       });
-      expect(
-        page.messages.find(
-          (message) => readChatHistoryMessageId(message) === "quote-reused-hidden",
-        ),
-      ).toHaveProperty("__openclaw.replyToMessage", notFound);
       const getMessage = await messageReader(scope.sessionKey);
-      const results: unknown[] = [];
-      for (const messageId of [
-        "archived-original",
-        "native-pair",
-        "reused-hidden",
-        "native-visible",
-      ]) {
-        results.push([messageId, await getMessage(messageId)]);
-      }
-      expect(results).toEqual([
-        ["archived-original", foundMessage("Retained archive original")],
-        ["native-pair", notFound],
-        ["reused-hidden", notFound],
-        ["native-visible", foundMessage("Visible native original")],
-      ]);
+      expect(await getMessage(messageId)).toMatchObject({
+        ok: true,
+        message: {
+          role: "user",
+          content: `Imported 0: ${text}`,
+          __openclaw: { id: messageId, importedFrom: "claude-cli" },
+        },
+      });
     },
+    incognito,
   );
 });
 
-it("retains metadata-only imports on anchored history reads", async () => {
-  await withCliHistory(async ({ scope, cliSessionId, timestamp, sourcePath }) => {
-    const importedId = randomUUID();
-    const local = await appendMessage(
-      scope,
-      localMessage("assistant", "Deduplicated answer", timestamp),
-    );
-    await writeCliRows(sourcePath, [
-      cliMessage(cliSessionId, importedId, "assistant", "Deduplicated answer", timestamp),
+it("shares archive visibility across CLI previews and full messages", async () => {
+  await withImportedHistory(1, "seed", async ({ read, sourcePath, sessionsDir, scope }) => {
+    await upsertSessionEntryCore(scope, { sessionStartedAt: 2000 });
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      transcriptMessage("canonical-announce", null, "user", 1000, "Old canonical completion", {
+        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      }),
+      transcriptMessage(
+        "reused-hidden",
+        "canonical-announce",
+        "assistant",
+        1100,
+        "Hidden canonical reply",
+      ),
+      ...["archived-original", "reused-hidden"].map((replyToId, index) =>
+        transcriptMessage(
+          `quote-${replyToId}`,
+          index === 0 ? "reused-hidden" : "quote-archived-original",
+          "user",
+          5000 + index,
+          `Quote ${replyToId}`,
+          { __openclaw: { replyToId } },
+        ),
+      ),
     ]);
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await writeCliRows(
+      path.join(sessionsDir, `${scope.sessionId}.jsonl.reset.2026-09-30T00-00-00.000Z`),
+      [
+        { type: "session", version: 3, id: scope.sessionId },
+        transcriptMessage("archived-original", null, "assistant", 100, "Retained archive original"),
+      ],
+    );
+    await writeCliRows(
+      sourcePath,
+      (
+        [
+          [
+            "native-announce",
+            "user",
+            500,
+            "[Inter-session message] sourceTool=subagent_announce\nOld native completion",
+          ],
+          ["native-pair", "assistant", 600, "Hidden native pair"],
+          ["native-visible", "assistant", 3000, "Visible native original"],
+          // Missing native announce context must not revive an ID rejected by canonical history.
+          ["reused-hidden", "assistant", 4000, "Native copy of hidden ID"],
+        ] as const
+      ).map(([uuid, role, timestamp, content]) => ({
+        type: role,
+        uuid,
+        timestamp: new Date(timestamp).toISOString(),
+        message: { role, content },
+      })),
+    );
+    const page = await read({ limit: 10 });
+    expect(ids(page)).not.toContain("native-pair");
+    expect(messageWithId(page, "quote-archived-original")).toHaveProperty(
+      "__openclaw.replyToMessage",
+      foundMessage("Retained archive original"),
+    );
+    expect(messageWithId(page, "quote-reused-hidden")).toHaveProperty(
+      "__openclaw.replyToMessage",
+      notFound,
+    );
+    const getMessage = await messageReader(scope.sessionKey);
+    const expected = [
+      ["archived-original", foundMessage("Retained archive original")],
+      ["native-pair", notFound],
+      ["reused-hidden", notFound],
+      ["native-visible", foundMessage("Visible native original")],
+    ] as const;
+    const results = [];
+    for (const [messageId] of expected) {
+      results.push([messageId, await getMessage(messageId)]);
+    }
+    expect(results).toEqual(expected);
+  });
+});
+
+it("retains metadata-only imports on anchored history reads", async () => {
+  await withCliHistory(async ({ scope, cliSessionId, timestamp, append, native, write }) => {
+    const importedId = randomUUID();
+    const local = await append("assistant", "Deduplicated answer", timestamp);
+    await write([native(importedId, "assistant", "Deduplicated answer", timestamp)]);
     const read = await historyReader(scope.sessionKey);
     const result = await read({ messageId: local.messageId, limit: 2 });
-    const anchored = result.messages.find(
-      (message) => readChatHistoryMessageId(message) === local.messageId,
-    );
-    expect(anchored).toMatchObject({
+    expect(messageWithId(result, local.messageId)).toMatchObject({
       __openclaw: { importedFrom: "claude-cli", externalId: importedId, cliSessionId },
     });
   });
 });
 
 it("advances offset pages when imports only add metadata", async () => {
-  await withCliHistory(async ({ scope, cliSessionId, timestamp, sourcePath }) => {
+  await withCliHistory(async ({ scope, timestamp, append, native, write }) => {
     const localIds: string[] = [];
     const importedRows: ReturnType<typeof cliMessage>[] = [];
     for (let index = 0; index < 6; index += 1) {
       const content = `Deduplicated answer ${index}`;
       const messageTimestamp = timestamp + index;
-      const local = await appendMessage(
-        scope,
-        localMessage("assistant", content, messageTimestamp),
-      );
+      const local = await append("assistant", content, messageTimestamp);
       localIds.push(local.messageId);
-      importedRows.push(
-        cliMessage(cliSessionId, randomUUID(), "assistant", content, messageTimestamp),
-      );
+      importedRows.push(native(randomUUID(), "assistant", content, messageTimestamp));
     }
-    await writeCliRows(sourcePath, importedRows);
+    await write(importedRows);
     const read = await historyReader(scope.sessionKey);
 
     const newest = await read({ limit: 2, offset: 0 });
-    expect(newest.messages.map(readChatHistoryMessageId)).toEqual(localIds.slice(-2));
+    expect(ids(newest)).toEqual(localIds.slice(-2));
     expect(newest.nextOffset).toBe(2);
     const older = await read({ limit: 2, offset: newest.nextOffset });
-    expect(older.messages.map(readChatHistoryMessageId)).toEqual(localIds.slice(2, 4));
+    expect(ids(older)).toEqual(localIds.slice(2, 4));
     expect(older.nextOffset).toBe(4);
   });
 });
 
-it("preserves recovered-failure filtering on metadata-only offset pages", async () => {
-  await withCliHistory(async ({ scope, cliSessionId, timestamp, sourcePath }) => {
+it("filters recovered failures on metadata-only pages", async () => {
+  await withCliHistory(async ({ scope, cliSessionId, timestamp, append, native, write }) => {
     const importedId = randomUUID();
-    const localUser = await appendMessage(scope, localMessage("user", "Question", timestamp));
-    await appendMessage(
-      scope,
-      localMessage("assistant", [], timestamp + 1, {
-        stopReason: "error",
-        errorMessage: "The selected model is unavailable.",
-        __openclaw: { runId: "recovered-run" },
-      }),
-    );
-    await appendMessage(
-      scope,
-      localMessage("assistant", [{ type: "text", text: "Recovered answer" }], timestamp + 2, {
-        stopReason: "stop",
-        __openclaw: { runId: "recovered-run" },
-      }),
-    );
-    await writeCliRows(sourcePath, [
-      cliMessage(cliSessionId, importedId, "user", "Question", timestamp),
-    ]);
+    const localUser = await append("user", "Question", timestamp);
+    await append("assistant", [], timestamp + 1, {
+      stopReason: "error",
+      errorMessage: "The selected model is unavailable.",
+      __openclaw: { runId: "recovered-run" },
+    });
+    await append("assistant", [{ type: "text", text: "Recovered answer" }], timestamp + 2, {
+      stopReason: "stop",
+      __openclaw: { runId: "recovered-run" },
+    });
+    await write([native(importedId, "user", "Question", timestamp)]);
     const read = await historyReader(scope.sessionKey);
     const { messages } = await read({ limit: 1, offset: 1 });
     expect(messages.map(readChatHistoryMessageId)).toEqual([localUser.messageId]);
@@ -440,41 +395,46 @@ it("preserves recovered-failure filtering on metadata-only offset pages", async 
 it.each(["chat.history", "chat.startup"] as const)(
   "%s pages local and external history within the requested limits",
   async (method) => {
-    await withImportedHistory(method, 6, "External conversation", async ({ read, importedIds }) => {
-      const newest = await read({ limit: 2, maxBytes: 1024 });
-      expect(newest.messages.length).toBeLessThanOrEqual(2);
-      expect(newest).toMatchObject({ hasMore: true, totalMessages: 8 });
-      expect(newest).not.toHaveProperty("completeSnapshot");
-      const restored = [...newest.messages];
-      let page = newest;
-      while (page.hasMore) {
-        expect(page.nextOffset).toBeGreaterThan(page.offset ?? 0);
-        page = await read({ offset: page.nextOffset, limit: 2, maxBytes: 1024 });
-        expect(page.messages.length).toBeLessThanOrEqual(2);
-        expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThanOrEqual(1024);
-        restored.unshift(...page.messages);
-      }
-      expect(restored).toHaveLength(8);
-      expect(restored.map(readChatHistoryMessageId).slice(2)).toEqual(importedIds);
-      expect(JSON.stringify(restored.slice(0, 2))).toContain("Local question");
-      expect(JSON.stringify(restored.slice(0, 2))).toContain("Local answer");
-      const anchored = await read({ messageId: importedIds[0], limit: 2 });
-      expect(anchored.messages.length).toBeLessThanOrEqual(2);
-      expect(anchored.messages.map(readChatHistoryMessageId)).toContain(importedIds[0]);
-      expectMissingAnchor(await read({ messageId: "nonexistent-anchor", limit: 2 }));
-      expect((await read({ offset: 9999, limit: 2 })).messages).toEqual([]);
-    });
+    await withImportedHistory(
+      6,
+      "External conversation",
+      async ({ read, importedIds }) => {
+        const newest = await read({ limit: 2, maxBytes: 1024 });
+        expect(newest.messages.length).toBeLessThanOrEqual(2);
+        expect(newest).toMatchObject({ hasMore: true, totalMessages: 8 });
+        expect(newest).not.toHaveProperty("completeSnapshot");
+        const restored = [...newest.messages];
+        let page = newest;
+        while (page.hasMore) {
+          expect(page.nextOffset).toBeGreaterThan(page.offset ?? 0);
+          page = await read({ offset: page.nextOffset, limit: 2, maxBytes: 1024 });
+          expect(page.messages.length).toBeLessThanOrEqual(2);
+          expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThanOrEqual(1024);
+          restored.unshift(...page.messages);
+        }
+        expect(restored).toHaveLength(8);
+        expect(restored.map(readChatHistoryMessageId).slice(2)).toEqual(importedIds);
+        expect(JSON.stringify(restored.slice(0, 2))).toContain("Local question");
+        expect(JSON.stringify(restored.slice(0, 2))).toContain("Local answer");
+        const anchored = await read({ messageId: importedIds[0], limit: 2 });
+        expect(anchored.messages.length).toBeLessThanOrEqual(2);
+        expect(ids(anchored)).toContain(importedIds[0]);
+        expectMissingAnchor(await read({ messageId: "nonexistent-anchor", limit: 2 }));
+        expect((await read({ offset: 9999, limit: 2 })).messages).toEqual([]);
+      },
+      false,
+      method,
+    );
   },
 );
 
-it("pages external and local rows from process-held incognito history", async () => {
+it("paginates process-held incognito imports", async () => {
   await withImportedHistory(
-    "chat.history",
     2,
     "Private native history",
     async ({ read, importedIds }) => {
       const newest = await read({ limit: 2 });
-      expect(newest.messages.map(readChatHistoryMessageId)).toEqual(importedIds);
+      expect(ids(newest)).toEqual(importedIds);
       expect(newest).toMatchObject({ totalMessages: 4, hasMore: true, nextOffset: 2 });
       const older = await read({ offset: newest.nextOffset, limit: 2 });
       expect(older).toMatchObject({ hasMore: false, totalMessages: 4 });
@@ -485,88 +445,70 @@ it("pages external and local rows from process-held incognito history", async ()
   );
 });
 
-it("deduplicates original native history independently of log redaction policy", async () => {
+it("deduplicates native history independently of log redaction", async () => {
+  const text = "opaqueSeedQ customMask7 laterRegV7 laterCfgV8";
+  await withImportedHistory(2, text, async ({ read, append, timestamp, importedIds }) => {
+    const previousLogging = readLoggingConfig();
+    try {
+      registerSecretValueForRedaction("opaqueSeedQ");
+      applyLoggingConfig({ redactPatterns: ["customMask7"] });
+      const local = await append("user", `Imported 0: ${text}`, timestamp + 2);
+      const initial = await read({ limit: 10 });
+      expect(initial.totalMessages).toBe(4);
+      expect(messageWithId(initial, local.messageId)).toMatchObject({
+        content: `Imported 0: ${text}`,
+        __openclaw: { id: local.messageId, externalId: importedIds[0] },
+      });
+      registerSecretValueForRedaction("laterRegV7");
+      applyLoggingConfig({ redactPatterns: ["customMask7", "laterCfgV8"] });
+      const refreshed = await read({ limit: 1 });
+      expect(refreshed.messages).toMatchObject([
+        {
+          content: `Imported 1: ${text}`,
+          __openclaw: { id: importedIds[1] },
+        },
+      ]);
+    } finally {
+      applyLoggingConfig(previousLogging);
+      resetSecretRedactionRegistryForTest();
+    }
+  });
+});
+
+it("invalidates imports on replacement, append, and deletion", async () => {
   await withImportedHistory(
-    "chat.history",
-    2,
-    "opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
-    async ({ read, scope, importedIds }) => {
-      const previousLogging = readLoggingConfig();
-      try {
-        registerSecretValueForRedaction("opaqueSeedQ");
-        applyLoggingConfig({ redactPatterns: ["customMask7"] });
-        const local = await appendMessage(
-          scope,
-          localMessage(
-            "user",
-            "Imported 0: opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
-            Date.parse("2026-09-01T10:00:00Z") + 2,
-          ),
-        );
-        const initial = await read({ limit: 10 });
-        expect(initial.totalMessages).toBe(4);
-        expect(initial.messages).toContainEqual(
-          expect.objectContaining({
-            content: "Imported 0: opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
-            __openclaw: expect.objectContaining({
-              id: local.messageId,
-              externalId: importedIds[0],
-            }),
-          }),
-        );
-        expect(JSON.stringify(initial.messages)).toContain("opaqueSeedQ");
-        expect(JSON.stringify(initial.messages)).toContain("customMask7");
-        registerSecretValueForRedaction("laterRegV7");
-        applyLoggingConfig({ redactPatterns: ["customMask7", "laterCfgV8"] });
-        const refreshed = await read({ limit: 1 });
-        expect(refreshed.messages).toEqual([
-          expect.objectContaining({
-            content: "Imported 1: opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
-            __openclaw: expect.objectContaining({ id: importedIds[1] }),
-          }),
-        ]);
-      } finally {
-        applyLoggingConfig(previousLogging);
-        resetSecretRedactionRegistryForTest();
-      }
+    6,
+    "Original",
+    async ({ read, sourcePath, append, write, timestamp }) => {
+      expect(await read({ limit: 2 })).toMatchObject({ totalMessages: 8, hasMore: true });
+      await write([
+        {
+          type: "assistant",
+          uuid: "replacement-native",
+          timestamp: "2026-09-01T10:00:01Z",
+          message: { role: "assistant", content: "Replacement native answer" },
+        },
+      ]);
+      const replaced = await read({ limit: 2 });
+      expect(replaced.totalMessages).toBe(3);
+      expect(ids(replaced)).toContain("replacement-native");
+      const appended = await append("assistant", "New local answer", timestamp + 2000);
+      const newest = await read({ limit: 2 });
+      expect(newest.totalMessages).toBe(4);
+      expect(readChatHistoryMessageId(newest.messages.at(-1))).toBe(appended.messageId);
+      await fs.rm(sourcePath);
+      const deleted = await read({ limit: 2 });
+      expect(deleted.totalMessages).toBe(3);
+      expect(ids(deleted)).not.toContain("replacement-native");
+      expect(readChatHistoryMessageId(deleted.messages.at(-1))).toBe(appended.messageId);
     },
   );
 });
 
-it("invalidates merged pages after native replacement, local append, and native deletion", async () => {
-  await withImportedHistory("chat.history", 6, "Original", async ({ read, sourcePath, scope }) => {
-    expect(await read({ limit: 2 })).toMatchObject({ totalMessages: 8, hasMore: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        type: "assistant",
-        uuid: "replacement-native",
-        timestamp: "2026-09-01T10:00:01Z",
-        message: { role: "assistant", content: "Replacement native answer" },
-      }) + "\n",
-    );
-    const replaced = await read({ limit: 2 });
-    expect(replaced.totalMessages).toBe(3);
-    expect(replaced.messages.map(readChatHistoryMessageId)).toContain("replacement-native");
-    const appended = await appendMessage(
-      scope,
-      localMessage("assistant", "New local answer", Date.parse("2026-09-01T10:00:02Z")),
-    );
+it("does not substitute byte-capped tails for missing imported anchors", async () => {
+  await withImportedHistory(40, "x".repeat(7900), async ({ read, importedIds }) => {
     const newest = await read({ limit: 2 });
-    expect(newest.totalMessages).toBe(4);
-    expect(readChatHistoryMessageId(newest.messages.at(-1))).toBe(appended.messageId);
-    await fs.rm(sourcePath);
-    const deleted = await read({ limit: 2 });
-    expect(deleted.totalMessages).toBe(3);
-    expect(deleted.messages.map(readChatHistoryMessageId)).not.toContain("replacement-native");
-    expect(readChatHistoryMessageId(deleted.messages.at(-1))).toBe(appended.messageId);
-  });
-});
-
-it("does not substitute the newest byte-capped suffix for a missing imported anchor", async () => {
-  await withImportedHistory("chat.history", 40, "x".repeat(7900), async ({ read, importedIds }) => {
-    const newest = await read({ limit: 2 });
-    const newestIds = newest.messages.map(readChatHistoryMessageId);
+    const newestIds = ids(newest);
     expect(newestIds.length).toBeGreaterThan(0);
     expect(newestIds.length).toBeLessThan(importedIds.length);
     expect(newestIds).not.toContain(importedIds[0]);
@@ -574,8 +516,8 @@ it("does not substitute the newest byte-capped suffix for a missing imported anc
     expect(newest).toMatchObject({ hasMore: true, totalMessages: 42 });
     expect(newest).not.toHaveProperty("completeSnapshot");
     const anchored = await read({ messageId: importedIds[0], limit: 2 });
-    expect(anchored.messages.map(readChatHistoryMessageId)).toContain(importedIds[0]);
-    expect(anchored.messages.map(readChatHistoryMessageId)).not.toContain(importedIds.at(-1));
+    expect(ids(anchored)).toContain(importedIds[0]);
+    expect(ids(anchored)).not.toContain(importedIds.at(-1));
     expectMissingAnchor(await read({ messageId: "nonexistent-anchor", limit: 2 }));
   });
 });
@@ -589,29 +531,21 @@ async function withPreResetCliHistory(
   run: (read: (params: HistoryRequest) => Promise<HistoryPage>) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = {
-      agentId: "main",
-      sessionKey: `agent:main:cli-history-pre-reset-${randomUUID()}`,
-      sessionId: randomUUID(),
-    };
-    const cliSessionId = randomUUID();
     const timestamp = Date.parse("2026-09-06T22:00:00Z");
     const resetAt = Date.parse("2026-10-06T20:29:44Z");
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: resetAt + 10,
-      sessionStartedAt: resetAt,
-      providerOverride: "claude-cli",
-      modelOverride: "claude-opus-5-5",
-      ...(bindCli ? { cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } } } : {}),
-    });
-    await appendMessage(scope, localMessage("user", "Old question", timestamp), "old-question");
-    await appendMessage(
-      scope,
-      localMessage("assistant", "Old answer", timestamp + 1),
-      "old-answer",
+    const { scope, append, native, write } = await seedCliHistory(
+      state,
+      `agent:main:cli-history-pre-reset-${randomUUID()}`,
+      false,
+      {
+        updatedAt: resetAt + 10,
+        sessionStartedAt: resetAt,
+        modelOverride: "claude-opus-5-5",
+        ...(!bindCli ? { cliSessionBindings: undefined } : {}),
+      },
     );
+    await append("user", "Old question", timestamp, {}, "old-question");
+    await append("assistant", "Old answer", timestamp + 1, {}, "old-answer");
     await appendTranscriptEvent(scope, {
       type: "reset",
       id: "reset",
@@ -620,24 +554,15 @@ async function withPreResetCliHistory(
       reason: "new",
       ...(keepOldAnswer ? { firstKeptEntryId: "old-answer" } : {}),
     });
-    await appendMessage(
-      scope,
-      localMessage("user", "Fresh question", resetAt + 1),
-      "fresh-question",
-    );
+    await append("user", "Fresh question", resetAt + 1, {}, "fresh-question");
     // Reset clears CLI bindings, so the bound Claude transcript only knows
     // post-reset rows; this CLI-only row makes the merge expand.
-    const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
-    await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, `${cliSessionId}.jsonl`),
-      `${JSON.stringify(cliMessage(cliSessionId, "cli-only-answer", "assistant", "CLI-only answer", resetAt + 2))}\n`,
-    );
+    await write([native("cli-only-answer", "assistant", "CLI-only answer", resetAt + 2)]);
     await run(await historyReader(scope.sessionKey));
   });
 }
 
-it("keeps reopened-interval cursors on the closed interval across its reset marker", async () => {
+it("keeps reopened cursors bound across reset markers", async () => {
   // Walk old-answer -> newer (closing reset marker) -> older. The marker is also
   // indexed in the current window; the bound walk must match the unbound one.
   const walk = async (bindCli: boolean) => {
@@ -664,7 +589,7 @@ it("keeps reopened-interval cursors on the closed interval across its reset mark
   expect(bound).toEqual(await walk(false));
 });
 
-it("pages a reopened interval into a message retained across the reset", async () => {
+it("paginates reopened intervals into retained messages", async () => {
   await withPreResetCliHistory(true, true, async (read) => {
     const reopened = await read({ messageId: "old-question", limit: 1 });
     expect(ids(reopened)).toEqual(["old-question"]);
@@ -676,34 +601,29 @@ it("pages a reopened interval into a message retained across the reset", async (
   });
 });
 
-it("keeps a current-window failure hidden when an imported answer recovers it", async () => {
-  await withCliHistory(async ({ scope, cliSessionId, timestamp, sourcePath }) => {
-    await appendMessage(scope, localMessage("user", "Question", timestamp));
-    const failed = await appendMessage(
-      scope,
-      localMessage(
-        "assistant",
-        [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
-        timestamp + 1,
-        {
-          stopReason: "error",
-        },
-      ),
+it("hides current failures recovered by imported answers", async () => {
+  await withCliHistory(async ({ scope, timestamp, append, native, write }) => {
+    await append("user", "Question", timestamp);
+    const failed = await append(
+      "assistant",
+      [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+      timestamp + 1,
+      { stopReason: "error" },
     );
-    await writeCliRows(sourcePath, [
-      cliMessage(cliSessionId, randomUUID(), "user", "Question", timestamp),
-      cliMessage(cliSessionId, "imported-answer", "assistant", "Recovered answer", timestamp + 2),
+    await write([
+      native(randomUUID(), "user", "Question", timestamp),
+      native("imported-answer", "assistant", "Recovered answer", timestamp + 2),
     ]);
     const read = await historyReader(scope.sessionKey);
     const newest = await read({ limit: 10 });
-    expect(newest.messages.map(readChatHistoryMessageId)).toContain("imported-answer");
-    expect(newest.messages.map(readChatHistoryMessageId)).not.toContain(failed.messageId);
+    expect(ids(newest)).toContain("imported-answer");
+    expect(ids(newest)).not.toContain(failed.messageId);
     const anchored = await read({ messageId: failed.messageId, limit: 2 });
-    expect(anchored.messages.map(readChatHistoryMessageId)).not.toContain(failed.messageId);
+    expect(ids(anchored)).not.toContain(failed.messageId);
   });
 });
 
-it("does not substitute nearby SQLite messages for a filtered anchor", async () => {
+it("does not substitute SQLite neighbors for filtered anchors", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     await captureRuntimeConfigAsyncReader()();
     const scope = {
@@ -712,13 +632,9 @@ it("does not substitute nearby SQLite messages for a filtered anchor", async () 
       sessionId: randomUUID(),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const hidden = await appendMessage(
-      scope,
-      localMessage("user", "Hidden input", undefined, { display: false }),
-    );
-    await appendMessage(scope, localMessage("assistant", "Visible answer"));
+    const hidden = await appendLocal(scope, "user", "Hidden input", undefined, { display: false });
+    await appendLocal(scope, "assistant", "Visible answer");
     const read = await historyReader(scope.sessionKey);
-    const page = await read({ messageId: hidden.messageId, limit: 2 });
-    expect(page.messages).toEqual([]);
+    expect((await read({ messageId: hidden.messageId, limit: 2 })).messages).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -100,12 +100,11 @@ it.for([false, true])(
         },
       });
       await racePromiseWithAbortSignal(
-        Promise.race([
+        awaitGateBeforeSettlement(
           entered.promise,
-          pending.then(() => {
-            throw new Error("Injection never accepted media completion");
-          }),
-        ]),
+          pending,
+          "Injection never accepted media completion",
+        ),
         test.signal,
       );
       expect(updates).toEqual([]);
