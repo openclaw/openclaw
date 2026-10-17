@@ -47,17 +47,11 @@ export async function resetCodeModeTestState(): Promise<void> {
 }
 
 export function fakeTool(name: string, description: string): AnyAgentTool {
-  // Minimal tool shape keeps Code Mode catalog tests runtime-free.
   return {
     name,
     label: name,
     description,
-    parameters: {
-      type: "object",
-      properties: {
-        value: { type: "string" },
-      },
-    },
+    parameters: { type: "object", properties: { value: { type: "string" } } },
     execute: vi.fn(async (_toolCallId, input) => jsonResult({ name, input })),
   };
 }
@@ -68,10 +62,7 @@ export function pluginTool(
   pluginId = "fake-code-mode",
 ): AnyAgentTool {
   const tool = fakeTool(name, description);
-  setPluginToolMeta(tool, {
-    pluginId,
-    optional: true,
-  });
+  setPluginToolMeta(tool, { pluginId, optional: true });
   return tool;
 }
 
@@ -85,6 +76,29 @@ export function pluginToolWithExecute(
   return tool;
 }
 
+export function jsonTool(name: string, value: unknown, description = name): AnyAgentTool {
+  return pluginToolWithExecute(name, description, async () => jsonResult(value));
+}
+
+export function expectCompleted(result: unknown, value: unknown): void {
+  expect(result).toMatchObject({ status: "completed", value });
+}
+
+export function expectFailure(
+  result: unknown,
+  phase: string,
+  code = "internal_error",
+  fields: Record<string, unknown> = {},
+): void {
+  expect(result).toMatchObject({ status: "failed", code, failurePhase: phase, ...fields });
+}
+
+export function expectToolCalls(count: number, ...tools: AnyAgentTool[]): void {
+  for (const tool of tools) {
+    expect(tool.execute).toHaveBeenCalledTimes(count);
+  }
+}
+
 export function mcpTool(params: {
   name: string;
   serverName: string;
@@ -95,23 +109,15 @@ export function mcpTool(params: {
   operation?: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
   execute?: AnyAgentTool["execute"];
 }): AnyAgentTool {
-  // MCP metadata drives Code Mode grouping and raw tool routing.
   const tool: AnyAgentTool = {
     name: params.name,
     label: params.toolName,
     description: params.description ?? `MCP ${params.toolName}`,
-    parameters: params.parameters ?? {
-      type: "object",
-      properties: {},
-    },
+    parameters: params.parameters ?? { type: "object", properties: {} },
     execute:
       params.execute ??
       vi.fn(async (_toolCallId, input) =>
-        jsonResult({
-          serverName: params.serverName,
-          toolName: params.toolName,
-          input,
-        }),
+        jsonResult({ serverName: params.serverName, toolName: params.toolName, input }),
       ),
   };
   setPluginToolMeta(tool, {
@@ -131,6 +137,15 @@ export function resultDetails(result: { details?: unknown }): Record<string, unk
   expect(result.details).toBeDefined();
   expect(typeof result.details).toBe("object");
   return result.details as Record<string, unknown>;
+}
+
+export function resultText(
+  result: Pick<Awaited<ReturnType<AnyAgentTool["execute"]>>, "content">,
+): string {
+  return result.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
 }
 
 /** Compare public summaries to independently constructed, normalized guest data. */
@@ -181,12 +196,7 @@ export function createHeadlessCodeModeHarness(
   } as never;
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
-  return {
-    config,
-    runtimeConfig: config,
-    agentId: "main",
-    catalogRef,
-  };
+  return { config, runtimeConfig: config, agentId: "main", catalogRef };
 }
 
 export function createCodeModeHarness(
@@ -196,6 +206,8 @@ export function createCodeModeHarness(
     codeModeSkills?: readonly CodeModeSkill[];
     codeMode?: CodeModeToolsConfig;
     forceRestartSafeTools?: boolean;
+    abortSignal?: AbortSignal;
+    modelContextWindowTokens?: number;
   } = {},
 ) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
@@ -217,6 +229,10 @@ export function createCodeModeHarness(
     catalogRef,
     forceRestartSafeTools: params.forceRestartSafeTools,
     codeModeSkills: params.codeModeSkills,
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    ...(params.modelContextWindowTokens === undefined
+      ? {}
+      : { modelContextWindowTokens: params.modelContextWindowTokens }),
   };
   const tools = createCodeModeTools(ctx);
   return { catalogRef, config, ctx, tools };
@@ -237,9 +253,12 @@ export function createCatalogCodeModeHarness(
 }
 
 export function codeModeRunner(tools: AnyAgentTool[]) {
+  const execute = (code: string, id = "cell", args: Record<string, unknown> = {}) =>
+    tools[0]!.execute(id, { code, ...args });
   return {
+    execute,
     run: async (code: string, id = "cell", args: Record<string, unknown> = {}) =>
-      resultDetails(await tools[0]!.execute(id, { code, ...args })),
+      resultDetails(await execute(code, id, args)),
     resume: async (details: Record<string, unknown>, id = "resume") =>
       resultDetails(await tools[1]!.execute(id, { runId: details.runId })),
   };

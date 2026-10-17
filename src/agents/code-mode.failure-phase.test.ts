@@ -7,14 +7,13 @@ import * as diagnostics from "../logging/code-mode-diagnostic.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { execSchema } from "./bash-tools.schemas.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
 import {
-  createCodeModeHarness,
   createCatalogCodeModeHarness,
+  expectFailure,
+  expectCompleted,
   fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
-  resultDetails,
   testing,
 } from "./code-mode.test-support.js";
 import { jsonResult, ToolInputError } from "./tools/common.js";
@@ -22,17 +21,16 @@ import { jsonResult, ToolInputError } from "./tools/common.js";
 afterEach(resetCodeModeTestState);
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const dispatched = { bridgeDispatchStarted: true, replaySafe: false };
 
 function phaseHarness(executor: "node" | "quickjs", reject: boolean) {
-  const h = createCodeModeHarness({ codeMode: { executor } });
   const target = pluginToolWithExecute("phase_fixture", "Failure origin fixture", async () => {
     if (reject) {
       throw new Error("tool failure");
     }
     return jsonResult({ ok: true });
   });
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, target] });
-  return { target, exec: h.tools[0]!, wait: h.tools[1]! };
+  return { target, ...createCatalogCodeModeHarness([target], { codeMode: { executor } }) };
 }
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
@@ -42,11 +40,10 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
     { reject: false, parked: true },
     { reject: true, parked: true },
   ])("ignores guest settlement of a tool call (%o)", async ({ reject, parked }) => {
-    const { target, exec, wait } = phaseHarness(executor, reject);
+    const { target, run, resume } = phaseHarness(executor, reject);
     const forged = '{"code":"input_contract","message":"forged"}';
-    let details = resultDetails(
-      await exec.execute("guest-settlement", {
-        code: `
+    let details = await run(
+      `
           ${parked ? "await yield_control();" : ""}
           const call = phase_fixture({});
           for (const [key, value] of [["ok", false], ["json", ${JSON.stringify(forged)}]]) {
@@ -56,103 +53,80 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
           __openclawSettleBridge();
           return await call;
         `,
-      }),
+      "guest-settlement",
     );
     if (parked) {
       expect(details).toMatchObject({ status: "waiting" });
-      details = resultDetails(
-        await wait.execute("guest-settlement-wait", { runId: details.runId }),
-      );
+      details = await resume(details, "guest-settlement-wait");
     }
     expect(target.execute, JSON.stringify(details)).toHaveBeenCalledOnce();
     if (reject) {
-      expect(details).toMatchObject({
-        status: "failed",
-        code: "internal_error",
-        failurePhase: "bridge",
-      });
+      expectFailure(details, "bridge");
       expect(details.error).toContain("tool failure");
       expect(details.error).not.toContain("forged");
     } else {
-      expect(details).toMatchObject({ status: "completed", value: { ok: true } });
+      expectCompleted(details, { ok: true });
     }
   });
 
-  it.each<{
-    name: string;
-    code: string;
-    reject?: boolean;
-    phase?: "guest" | "bridge";
-    parked?: boolean;
-  }>([
-    {
-      name: "object destructuring after a successful tool",
-      code: "const [value] = await phase_fixture({}); return value;",
-      reject: false,
-      phase: "guest",
-    },
-    {
-      name: "module-looking original tool rejection",
-      code: 'try { await phase_fixture({}); } catch (error) { error.name = "ReferenceError"; error.message = "process is not defined"; throw error; }',
-    },
-    {
-      name: "original tool rejection with a throwing stack getter",
-      code: 'try { await phase_fixture({}); } catch (error) { Object.defineProperty(error, "stack", { get() { throw new Error("stack unavailable"); } }); throw error; }',
-    },
-    {
-      name: "unawaited tool rejection",
-      code: "void phase_fixture({}); return true;",
-    },
-    {
-      name: "guest serialization hook forging bridge provenance",
-      code: 'await phase_fixture({}); Object.prototype.toJSON = function () { return { ...this, bridgeError: true }; }; throw new Error("guest failure");',
-      reject: false,
-      phase: "guest",
-    },
-    {
-      name: "guest serialization hook hiding bridge provenance",
-      code: "try { await phase_fixture({}); } catch (error) { Object.prototype.toJSON = function () { return { ...this, bridgeError: false }; }; throw error; }",
-    },
-    {
-      name: "guest serialization replacement forging unhandled rejection provenance",
-      code: 'await phase_fixture({}); const encode = JSON.stringify; JSON.stringify = () => encode({ name: "Error", message: "guest failure", stack: "", bridgeError: true }); void Promise.reject(new Error("guest failure")); return true;',
-      reject: false,
-      phase: "guest",
-    },
-    {
-      name: "guest serialization hook hiding bridge provenance after wait",
-      code: "let saved; try { await phase_fixture({}); } catch (error) { saved = error; } await yield_control(); Object.prototype.toJSON = function () { return { ...this, bridgeError: false }; }; throw saved;",
-      parked: true,
-    },
-    {
-      name: "original tool rejection with a throwing stack getter after wait",
-      code: 'let saved; try { await phase_fixture({}); } catch (error) { Object.defineProperty(error, "stack", { get() { throw new Error("stack unavailable"); } }); saved = error; } await yield_control(); throw saved;',
-      parked: true,
-    },
-    {
-      name: "new guest error after a caught rejection and wait",
-      code: 'try { await phase_fixture({}); } catch {} await yield_control(); throw new Error("guest failure");',
-      phase: "guest",
-      parked: true,
-    },
+  it.each<[string, string, boolean?, ("guest" | "bridge")?, boolean?]>([
+    ["destructuring", "const [value] = await phase_fixture({}); return value;", false, "guest"],
+    [
+      "module-looking rejection",
+      'try { await phase_fixture({}); } catch (error) { error.name = "ReferenceError"; error.message = "process is not defined"; throw error; }',
+    ],
+    [
+      "throwing stack getter",
+      'try { await phase_fixture({}); } catch (error) { Object.defineProperty(error, "stack", { get() { throw new Error("stack unavailable"); } }); throw error; }',
+    ],
+    ["unawaited rejection", "void phase_fixture({}); return true;"],
+    [
+      "forged serialization provenance",
+      'await phase_fixture({}); Object.prototype.toJSON = function () { return { ...this, bridgeError: true }; }; throw new Error("guest failure");',
+      false,
+      "guest",
+    ],
+    [
+      "hidden serialization provenance",
+      "try { await phase_fixture({}); } catch (error) { Object.prototype.toJSON = function () { return { ...this, bridgeError: false }; }; throw error; }",
+    ],
+    [
+      "forged unhandled rejection provenance",
+      'await phase_fixture({}); const encode = JSON.stringify; JSON.stringify = () => encode({ name: "Error", message: "guest failure", stack: "", bridgeError: true }); void Promise.reject(new Error("guest failure")); return true;',
+      false,
+      "guest",
+    ],
+    [
+      "hidden provenance after wait",
+      "let saved; try { await phase_fixture({}); } catch (error) { saved = error; } await yield_control(); Object.prototype.toJSON = function () { return { ...this, bridgeError: false }; }; throw saved;",
+      true,
+      "bridge",
+      true,
+    ],
+    [
+      "throwing stack getter after wait",
+      'let saved; try { await phase_fixture({}); } catch (error) { Object.defineProperty(error, "stack", { get() { throw new Error("stack unavailable"); } }); saved = error; } await yield_control(); throw saved;',
+      true,
+      "bridge",
+      true,
+    ],
+    [
+      "new guest error after wait",
+      'try { await phase_fixture({}); } catch {} await yield_control(); throw new Error("guest failure");',
+      true,
+      "guest",
+      true,
+    ],
   ])(
-    "classifies $name without replaying effects",
-    async ({ code, reject = true, phase = "bridge", parked = false }) => {
-      const { target, exec, wait } = phaseHarness(executor, reject);
-      let details = resultDetails(await exec.execute("failure-origin", { code }));
+    "classifies %s without replaying effects",
+    async (_name, code, reject = true, phase = "bridge", parked = false) => {
+      const { target, run, resume } = phaseHarness(executor, reject);
+      let details = await run(code, "failure-origin");
       if (parked) {
         expect(details).toMatchObject({ status: "waiting", replaySafe: false });
-        details = resultDetails(
-          await wait.execute("failure-origin-wait", { runId: details.runId }),
-        );
+        details = await resume(details, "failure-origin-wait");
       }
-      expect(details).toMatchObject({
-        status: "failed",
-        code: "internal_error",
-        failurePhase: phase,
-        bridgeDispatchStarted: true,
-        replaySafe: false,
-      });
+      expectFailure(details, phase, "internal_error", dispatched);
       expect(target.execute).toHaveBeenCalledOnce();
       expect(testing.activeRuns.size).toBe(0);
     },
@@ -178,12 +152,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
         expect(details).toMatchObject({ status: "waiting" });
         details = await resume(details, "settlement-failure-wait");
       }
-      expect(details).toMatchObject({
-        status: "failed",
-        code: "invalid_input",
-        failurePhase: "input",
-        replaySafe: false,
-      });
+      expectFailure(details, "input", "invalid_input", { replaySafe: false });
       expect(target.execute).toHaveBeenCalledOnce();
       expect(log).toHaveBeenCalledExactlyOnceWith(
         expect.any(ToolInputError),
@@ -203,12 +172,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     const input =
       "*** Begin Patch\n*** Update File: source.txt\n@@\n-missing\n+replacement\n*** End Patch";
     const details = await run(`await apply_patch(${JSON.stringify({ input })});`, "bad-anchor");
-    expect(details).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      failurePhase: "bridge",
-      replaySafe: false,
-    });
+    expectFailure(details, "bridge", "invalid_input", { replaySafe: false });
     expect(details.error).toContain("Failed to find expected lines");
     expect(execute).toHaveBeenCalledOnce();
     expect(await fs.readFile(file, "utf8")).toBe("original\n");
@@ -226,13 +190,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     const shell = createExecTool({ host: "gateway", security: "full", ask: "off" });
     const { run } = createCatalogCodeModeHarness([shell], { codeMode: { executor } });
     const details = await run('await exec({command: "printf bad\\0command"});', "nul-command");
-    expect(details).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      failurePhase: "bridge",
-      bridgeDispatchStarted: true,
-      replaySafe: false,
-    });
+    expectFailure(details, "bridge", "invalid_input", dispatched);
     expect(details.error).toContain("NUL bytes. Remove them and retry.");
   });
 
@@ -289,13 +247,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
       'await spawn_fixture({ label: "x", mode: "run", prompt: "do it" });',
     );
     const details = await run();
-    expect(details).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      failurePhase: "bridge",
-      bridgeDispatchStarted: true,
-      replaySafe: false,
-    });
+    expectFailure(details, "bridge", "invalid_input", dispatched);
     expect(details.error).toMatch(/task/);
     expect(details.error).toMatch(/prompt/);
     expect(target.execute).not.toHaveBeenCalled();
@@ -308,11 +260,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
         throw new ToolInputError("task must not be empty");
       },
     );
-    expect(await run()).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      failurePhase: "bridge",
-    });
+    expectFailure(await run(), "bridge", "invalid_input");
     expect(target.execute).toHaveBeenCalledOnce();
   });
 
@@ -323,10 +271,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
         throw new Error("tool failure");
       },
     );
-    expect(await run()).toMatchObject({
-      status: "failed",
-      code: "internal_error",
-      failurePhase: "bridge",
-    });
+    expectFailure(await run(), "bridge");
   });
 });

@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
@@ -10,19 +9,23 @@ import {
   runCodeModeScriptHeadless,
 } from "./code-mode.js";
 import {
-  createCodeModeHarness,
   createHeadlessCodeModeHarness,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
+  resultText,
   expectCodeModeSharedBudget,
+  codeModeRunner,
+  createCatalogCodeModeHarness,
+  jsonTool,
+  expectCompleted,
 } from "./code-mode.test-support.js";
 import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
-const catalogs: Array<ReturnType<typeof createCodeModeHarness>["ctx"]> = [];
+const catalogs: Array<ReturnType<typeof createCatalogCodeModeHarness>["ctx"]> = [];
 afterEach(async () => {
   for (const ctx of catalogs.splice(0)) {
     clearToolSearchCatalog(ctx);
@@ -31,31 +34,28 @@ afterEach(async () => {
 });
 
 function createResultsHarness(
-  options?: Parameters<typeof createCodeModeHarness>[0],
+  options?: Parameters<typeof createCatalogCodeModeHarness>[1],
   modelContextWindowTokens?: number,
 ) {
-  const h = createCodeModeHarness(options);
-  const ctx = { ...h.ctx, modelContextWindowTokens };
-  const tools = createCodeModeTools(ctx);
-  catalogs.push(ctx);
-  applyCodeModeCatalog({ ...ctx, tools });
-  return {
-    ctx,
-    tools,
-    run: async (code: string, args: { restartSafe?: boolean } = {}) =>
-      resultDetails(await tools[0]!.execute("result", { code, ...args })),
-  };
+  const h = createCatalogCodeModeHarness([], { ...options, modelContextWindowTokens });
+  catalogs.push(h.ctx);
+  return h;
+}
+
+function expectUnretained(output: Record<string, unknown>, reason: string) {
+  expectCompleted(output, { truncated: true, guidance: expect.stringContaining(reason) });
+  expect(output.value).not.toHaveProperty("reference");
 }
 
 it("keeps a usable network reference after output exhaustion and wait", async () => {
-  const maxOutputBytes = 1024;
-  const modelContextWindowTokens = 4096;
-  const { ctx, tools, run } = createResultsHarness(
-    { codeMode: { maxOutputBytes } },
-    modelContextWindowTokens,
+  const cap = 1024;
+  const context = 4096;
+  const { ctx, tools, run, execute } = createResultsHarness(
+    { codeMode: { maxOutputBytes: cap } },
+    context,
   );
   const rows = Array.from({ length: 180 }, (_, id) => ({ id, title: "row 🦞", amount: 4 }));
-  const read = pluginToolWithExecute("read_rows", "Rows", async () => jsonResult(rows));
+  const read = jsonTool("read_rows", rows);
   read.resultContentSource = "network";
   applyCodeModeCatalog({ ...ctx, tools: [...tools, read] });
   const first = await run(
@@ -64,29 +64,23 @@ it("keeps a usable network reference after output exhaustion and wait", async ()
   expect(first.status).toBe("waiting");
   const response = await tools[1]!.execute("finish", { runId: first.runId });
   const saved = resultDetails(response);
-  expectCodeModeSharedBudget(saved, maxOutputBytes);
-  expect(saved, JSON.stringify(saved)).toMatchObject({
-    status: "completed",
-    value: {
-      truncated: true,
-      reference: {
-        id: expect.any(String),
-        bytes: Buffer.byteLength(JSON.stringify(rows)),
-        count: 180,
-      },
-      guidance: expect.stringContaining("results.load"),
+  expectCodeModeSharedBudget(saved, cap);
+  expectCompleted(saved, {
+    truncated: true,
+    reference: {
+      id: expect.any(String),
+      bytes: Buffer.byteLength(JSON.stringify(rows)),
+      count: 180,
     },
+    guidance: expect.stringContaining("results.load"),
   });
   const id = (saved.value as { reference: { id: string } }).reference.id;
-  const loaded = await tools[0]!.execute("load", {
-    code: `return (await results.load(${JSON.stringify(id)})).reduce((sum,row) => sum + row.amount,0);`,
-  });
-  expect(resultDetails(loaded)).toMatchObject({ status: "completed", value: 720 });
-  const text = response.content
-    .filter((item) => item.type === "text")
-    .map((item) => item.text)
-    .join("\n");
-  expect(toolResultFitsBudget(text, resolveToolResultBudget(modelContextWindowTokens))).toBe(true);
+  const loaded = await execute(
+    `return (await results.load(${JSON.stringify(id)})).reduce((sum,row) => sum + row.amount,0);`,
+    "load",
+  );
+  expectCompleted(resultDetails(loaded), 720);
+  expect(toolResultFitsBudget(resultText(response), resolveToolResultBudget(context))).toBe(true);
   for (const result of [response, loaded]) {
     expect(result.content[0]).toMatchObject({
       text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
@@ -104,62 +98,28 @@ it("keeps success and old references when automatic retention is full", async ()
   const full = await run(
     'return Array.from({length:180},(_,id) => ({id, description:"data".repeat(10)}));',
   );
-  expect(full).toMatchObject({
-    status: "completed",
-    value: {
-      truncated: true,
-      guidance: expect.stringContaining("Not retained: result-store capacity"),
-    },
-  });
-  expect(full.value).not.toHaveProperty("reference");
+  expectUnretained(full, "Not retained: result-store capacity");
   expect(full).not.toHaveProperty("error");
-  expect(await run(`return await results.load(${JSON.stringify(first.value)});`)).toMatchObject({
-    status: "completed",
-    value: 0,
-  });
+  expectCompleted(await run(`return await results.load(${JSON.stringify(first.value)});`), 0);
 });
 
 it.each([
-  {
-    name: "retention byte allowance",
-    maxOutputBytes: 1024,
-    modelContextWindowTokens: undefined,
-    maxSnapshotBytes: 1024,
-    restartSafe: false,
-    guidance: "data allowance",
-  },
-  {
-    name: "retention allowance below complete capture and model budget",
-    maxOutputBytes: 65536,
-    modelContextWindowTokens: 4096,
-    maxSnapshotBytes: 1024,
-    restartSafe: false,
-    guidance: "data allowance",
-  },
-  {
-    name: "restart-safe execution",
-    maxOutputBytes: 1024,
-    modelContextWindowTokens: undefined,
-    maxSnapshotBytes: 10485760,
-    restartSafe: true,
-    guidance: "restart-safe",
-  },
-])(
-  "returns an ordinary successful truncation for $name",
-  async ({ maxOutputBytes, modelContextWindowTokens, maxSnapshotBytes, restartSafe, guidance }) => {
+  ["byte allowance", 1024, undefined, 1024, false, "data allowance"],
+  ["complete capture with model budget", 65536, 4096, 1024, false, "data allowance"],
+  ["restart-safe", 1024, undefined, 10485760, true, "restart-safe"],
+] as const)(
+  "returns successful truncation for %s",
+  async (_name, bytes, context, snapshot, restartSafe, guidance) => {
     const { run } = createResultsHarness(
-      { codeMode: { maxOutputBytes, maxSnapshotBytes } },
-      modelContextWindowTokens,
+      { codeMode: { maxOutputBytes: bytes, maxSnapshotBytes: snapshot } },
+      context,
     );
     const output = await run(
       'return {rows:Array.from({length:180}, (_,id) => ({id,payload:"🦞".repeat(10)}))};',
+      "large",
       { restartSafe },
     );
-    expect(output).toMatchObject({
-      status: "completed",
-      value: { truncated: true, guidance: expect.stringContaining(guidance) },
-    });
-    expect(output.value).not.toHaveProperty("reference");
+    expectUnretained(output, guidance);
     expect(output).not.toHaveProperty("error");
   },
 );
@@ -169,16 +129,13 @@ it("shows nested array counts and explicitly sampled heterogeneous shapes", asyn
   const output =
     await run(`const rows = Array.from({length:180},(_,id) => ({id, amount:4})); rows[90] = "pending"; rows[179] = null;
       return await results.save({content:[{type:"text",text:"metadata".repeat(1000)}],structuredContent:{rows},isError:false,status:"partial"});`);
-  expect(output).toMatchObject({
-    status: "completed",
-    value: {
-      count: 4,
-      shape: expect.stringMatching(
-        /structuredContent\.rows: 180 items, sampled 3\/180 heterogeneous/,
-      ),
-      preview: expect.stringContaining('"path":"$.structuredContent.rows"'),
-      previewTruncated: true,
-    },
+  expectCompleted(output, {
+    count: 4,
+    shape: expect.stringMatching(
+      /structuredContent\.rows: 180 items, sampled 3\/180 heterogeneous/,
+    ),
+    preview: expect.stringContaining('"path":"$.structuredContent.rows"'),
+    previewTruncated: true,
   });
   const value = output.value as { shape: string; preview: string };
   expect(value.shape).toContain("string");
@@ -192,22 +149,14 @@ it("releases an automatic save when a tiny model budget cannot expose its identi
   const output = await run(
     'text("progress".repeat(1000)); return Array.from({length:180},(_,id) => ({id,amount:4}));',
   );
-  expect(output, JSON.stringify(output)).toMatchObject({
-    status: "completed",
-    value: {
-      truncated: true,
-      guidance: expect.stringContaining("Not retained: reference exceeds output budget"),
-    },
-  });
-  expect(output.value).not.toHaveProperty("reference");
-  const ordinary = createCodeModeTools({ ...ctx, modelContextWindowTokens: undefined });
-  expect(
-    resultDetails(
-      await ordinary[0]!.execute("capacity", {
-        code: "for(let i=0;i<64;i++) await results.save(i); return 64;",
-      }),
-    ),
-  ).toMatchObject({ status: "completed", value: 64 });
+  expectUnretained(output, "Not retained: reference exceeds output budget");
+  const ordinary = codeModeRunner(
+    createCodeModeTools({ ...ctx, modelContextWindowTokens: undefined }),
+  );
+  expectCompleted(
+    await ordinary.run("for(let i=0;i<64;i++) await results.save(i); return 64;", "capacity"),
+    64,
+  );
 });
 
 it("bounds deep and long-key preview traversal", async () => {
@@ -215,26 +164,23 @@ it("bounds deep and long-key preview traversal", async () => {
   const output = await run(
     `const root = { ["x".repeat(10000)]: [77] }; let next = root; for(let i=0;i<20;i++) {next.deep={};next=next.deep;} next.hidden=[99]; return await results.save(root);`,
   );
-  expect(output).toMatchObject({
-    status: "completed",
-    value: {
-      id: expect.any(String),
-      shape: expect.stringContaining("limited traversal"),
-      preview: expect.stringContaining('"traversalLimited":true'),
-      previewTruncated: true,
-    },
+  expectCompleted(output, {
+    id: expect.any(String),
+    shape: expect.stringContaining("limited traversal"),
+    preview: expect.stringContaining('"traversalLimited":true'),
+    previewTruncated: true,
   });
   expect(Buffer.byteLength(JSON.stringify(output.value))).toBeLessThanOrEqual(768);
   const id = (output.value as { id: string }).id;
-  expect(
+  expectCompleted(
     await run(
       `const value = await results.load(${JSON.stringify(id)}); return value["x".repeat(10000)][0];`,
     ),
-  ).toMatchObject({ status: "completed", value: 77 });
+    77,
+  );
 });
 
 it("infers literal and union selectors while keeping dynamic and missing inputs sound", async () => {
-  const h = createCodeModeHarness();
   const tool = pluginToolWithExecute("records", "Read records or status", async (_id, input) =>
     jsonResult(isRecord(input) && input.kind === "list" ? { rows: ["one", "two"] } : { total: 2 }),
   );
@@ -249,15 +195,12 @@ it("infers literal and union selectors while keeping dynamic and missing inputs 
       status: Type.Object({ total: Type.Number() }, { additionalProperties: false }),
     },
   });
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-  const exec = expectDefined(h.tools[0], "Code Mode exec");
-  const declaration = resultDetails(
-    await exec.execute("read-records-contract", {
-      code: 'return await API.read("tools/records.d.ts");',
-    }),
+  const { run } = createCatalogCodeModeHarness([tool]);
+  const declaration = await run(
+    'return await API.read("tools/records.d.ts");',
+    "read-records-contract",
   );
   expect(declaration.status).toBe("completed");
-  const file = declaration.value as { content: string };
   const composition = `
     const list = await records({kind: "list"});
     const status = await records({kind: "status"});
@@ -273,8 +216,7 @@ it("infers literal and union selectors while keeping dynamic and missing inputs 
     const explicitCount = "rows" in explicit ? explicit.rows.length : explicit.total;
     return [list.rows.length, status.total, selectedCount, broadCount, omittedCount, explicitCount];
   `;
-  const fileName = "/records-consumer.ts";
-  const source = `${file.content}
+  const source = `${(declaration.value as { content: string }).content}
 async function consume() { ${composition} }
 async function checkContracts(kind: string, choice: "list" | "status") {
   const list = await records({kind: "list"});
@@ -292,14 +234,10 @@ async function checkContracts(kind: string, choice: "list" | "status") {
   // @ts-expect-error A generic selector cannot supply an omitted runtime argument.
   await records<{kind: "list"}>();
 }`;
-  expect(typeCheckSources({ [fileName]: source })).toEqual([]);
+  expect(typeCheckSources({ "/records-consumer.ts": source })).toEqual([]);
   expect(tool.execute).not.toHaveBeenCalled();
 
-  const result = resultDetails(await exec.execute("literal-and-union", { code: composition }));
-  expect(result, JSON.stringify(result)).toMatchObject({
-    status: "completed",
-    value: [2, 2, 2, 2, 2, 2],
-  });
+  expectCompleted(await run(composition, "literal-and-union"), [2, 2, 2, 2, 2, 2]);
   expect(tool.execute).toHaveBeenCalledTimes(6);
 });
 

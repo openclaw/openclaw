@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as worker from "./code-mode-executor.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
@@ -9,13 +8,14 @@ import {
   expectCodeModeSharedBudget,
   pluginTool,
   resultDetails,
-  createCodeModeHarness,
-  runUntilCompleted,
   testing,
   createCatalogCodeModeHarness as createGuestHarness,
+  expectCompleted,
+  expectFailure,
+  expectToolCalls,
+  jsonTool,
 } from "./code-mode.test-support.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
-import { jsonResult } from "./tools/common.js";
 
 describe("Code Mode guest execution", () => {
   afterEach(resetCodeModeTestState);
@@ -52,19 +52,20 @@ describe("Code Mode guest execution", () => {
   });
 
   it("keeps normalized, reserved, and colliding prompt names aligned with runtime", async () => {
-    const targets = [
-      pluginTool("llm-task", "Run an LLM task"),
-      pluginTool("llm_task", "Run the exact-name task"),
-      pluginTool("catalog", "Collide with discovery"),
-      pluginTool("store", "Collide with session store"),
-      pluginTool("load", "Collide with session load"),
-      pluginTool("TextEncoder", "Collide with text encoding"),
-      pluginTool("TextDecoder", "Collide with text decoding"),
-      pluginTool("class", "Use a reserved word"),
-      pluginTool("9patch", "Start with a digit"),
-      pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
-      pluginTool("tool___openclawResult", "Keep the exact safe lifecycle-shaped name"),
+    const names: Array<[string, string | RegExp]> = [
+      ["llm-task", /^llm_task_[a-f0-9]{8}$/u],
+      ["llm_task", "llm_task"],
+      ["catalog", /^catalog_[a-f0-9]{8}$/u],
+      ["store", /^store_[a-f0-9]{8}$/u],
+      ["load", /^load_[a-f0-9]{8}$/u],
+      ["TextEncoder", /^TextEncoder_[a-f0-9]{8}$/u],
+      ["TextDecoder", /^TextDecoder_[a-f0-9]{8}$/u],
+      ["class", /^class_[a-f0-9]{8}$/u],
+      ["9patch", "tool_9patch"],
+      ["__openclawResult", /^tool___openclawResult_[a-f0-9]{8}$/u],
+      ["tool___openclawResult", "tool___openclawResult"],
     ];
+    const targets = names.map(([name]) => pluginTool(name, name));
     const { complete, ctx, catalogRef } = createGuestHarness(targets);
     const details = await complete(
       `
@@ -74,7 +75,6 @@ describe("Code Mode guest execution", () => {
         return {
           names: handles.map((handle) => handle.callableName),
           results,
-          catalogSearch: typeof catalog.search,
           encoding: new TextDecoder().decode(new TextEncoder().encode("still works")),
         };
       `,
@@ -83,19 +83,9 @@ describe("Code Mode guest execution", () => {
     expect(details.status).toBe("completed");
     const value = details.value as { names: string[]; results: Record<string, unknown> };
     expect(value.names).toEqual(
-      expect.arrayContaining([
-        "llm_task",
-        "tool_9patch",
-        "tool___openclawResult",
-        expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^store_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^load_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^TextEncoder_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^TextDecoder_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^class_[a-f0-9]{8}$/u),
-        expect.stringMatching(/^tool___openclawResult_[a-f0-9]{8}$/u),
-      ]),
+      expect.arrayContaining(
+        names.map(([, name]) => (typeof name === "string" ? name : expect.stringMatching(name))),
+      ),
     );
     const catalogPrompt = buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []);
     for (const name of value.names) {
@@ -112,11 +102,7 @@ describe("Code Mode guest execution", () => {
     const plugin = pluginTool("shared_action", "Plugin action");
     const { ctx, complete } = createGuestHarness([plugin]);
     const client = pluginTool("shared_action", "Client action");
-    addClientToolsToToolCatalog({
-      enabled: true,
-      tools: [client as never],
-      ...ctx,
-    });
+    addClientToolsToToolCatalog({ enabled: true, tools: [client], ...ctx });
 
     const details = await complete(
       `
@@ -125,12 +111,9 @@ describe("Code Mode guest execution", () => {
       `,
     );
 
-    expect(details).toMatchObject({
-      status: "completed",
-      value: {
-        count: 1,
-        value: { name: "shared_action", input: { source: "guest" } },
-      },
+    expectCompleted(details, {
+      count: 1,
+      value: { name: "shared_action", input: { source: "guest" } },
     });
     expect(plugin.execute).not.toHaveBeenCalled();
     expect(client.execute).toHaveBeenCalledTimes(1);
@@ -189,10 +172,9 @@ describe("Code Mode guest execution", () => {
     "%s rejects malformed commands before dispatch and accepts a corrected follow-up",
     async (executor) => {
       const command = pluginTool("fake_command", "Run a synthetic command");
-      const { tools: codeModeTools, run: execute } = createGuestHarness([command], {
+      const { complete, run: execute } = createGuestHarness([command], {
         codeMode: { executor },
       });
-      const execTool = expectDefined(codeModeTools[0], "Code Mode exec");
       const malformed = [
         'await fake_command({ value: "first" });',
         String.raw`const patch = { 'newText:' const value = 1;\n };`,
@@ -200,10 +182,7 @@ describe("Code Mode guest execution", () => {
       ].join("\n");
       const details = await execute(malformed, "code-call-syntax");
 
-      expect(details).toMatchObject({
-        status: "failed",
-        code: "invalid_input",
-        failurePhase: "input",
+      expectFailure(details, "input", "invalid_input", {
         bridgeDispatchStarted: false,
         replaySafe: false,
         telemetry: { callCount: 0 },
@@ -212,14 +191,9 @@ describe("Code Mode guest execution", () => {
       expect(command.execute).not.toHaveBeenCalled();
       expect(testing.activeRuns.size).toBe(0);
 
-      const corrected = await runUntilCompleted({
-        execTool,
-        waitTool: expectDefined(codeModeTools[1], "Code Mode wait"),
-        code:
-          "return await fake_command({ value: " +
-          JSON.stringify("import test from 'node:test';") +
-          " });",
-      });
+      const corrected = await complete(
+        `return await fake_command({ value: "import test from 'node:test';" });`,
+      );
       expect(corrected).toMatchObject({
         status: "completed",
         replaySafe: false,
@@ -246,9 +220,8 @@ describe("Code Mode guest execution", () => {
       });
       const details = await execute(code, "code-call-runtime");
 
-      expect(details.status).toBe("failed");
       const diagnostic = String(details.error);
-      expect(details).toMatchObject({ code: "internal_error", failurePhase: "guest" });
+      expectFailure(details, "guest");
       expect(diagnostic).toContain(error);
       expect(diagnostic).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
       expect(diagnostic).not.toContain("<eval>");
@@ -259,9 +232,7 @@ describe("Code Mode guest execution", () => {
   it.each([false, true])(
     "refuses a new host effect after the boundary deadline (resume=%s)",
     async (resume) => {
-      const target = pluginToolWithExecute("late_effect", "Must not dispatch late", async () =>
-        jsonResult({ done: true }),
-      );
+      const target = jsonTool("late_effect", { done: true });
       const { run: execute, resume: wait } = createGuestHarness([target]);
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
       const original = worker.runCodeModeExecutor;
@@ -344,7 +315,6 @@ describe("Code Mode guest execution", () => {
   );
 
   it("preserves returned tool failures while catching thrown tool errors", async () => {
-    const h = createCodeModeHarness();
     const reason = "Start the Gateway with visitor-access enabled before managing visitors.";
     const errorTool = (name: string, text: string, details: unknown) =>
       pluginToolWithExecute(name, "Fail", async () => ({
@@ -361,30 +331,22 @@ describe("Code Mode guest execution", () => {
         throw new Error("Tool execution threw.");
       }),
     ];
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
-    const exec = expectDefined(h.tools[0], "exec");
-    expect(exec.description).toContain(
+    const { tools: controls, run } = createGuestHarness(tools);
+    expect(controls[0]!.description).toContain(
       "Thrown tool errors are catchable. Returned values may instead report failure. Follow the tool's result contract, and inspect possible effects before retrying.",
     );
-    const result = resultDetails(
-      await exec.execute("tool-error-text", {
-        code: `
-          let returnedCaught = false;
-          let values;
-          try {
-            values = [await flag_only(), await no_details(), await blank_message(), await structured()];
-          } catch {
-            returnedCaught = true;
-          }
+    const result = await run(
+      `
+          const values = [await flag_only(), await no_details(), await blank_message(), await structured()];
           let thrownMessage;
           try {
             await throw_error();
           } catch (error) {
             thrownMessage = error.message;
           }
-          return { values, returnedCaught, thrownMessage };
+          return { values, thrownMessage };
         `,
-      }),
+      "tool-error-text",
     );
     expect(result.status, JSON.stringify(result)).toBe("completed");
     expect(result.value).toEqual({
@@ -394,12 +356,9 @@ describe("Code Mode guest execution", () => {
         { error: true, message: "Visitor store is locked." },
         { status: "failed", error: "structured" },
       ],
-      returnedCaught: false,
       thrownMessage: "Tool execution threw.",
     });
-    for (const tool of tools) {
-      expect(tool.execute).toHaveBeenCalledOnce();
-    }
+    expectToolCalls(1, ...tools);
   });
 
   async function executeSource(args: Record<string, unknown>) {
@@ -412,7 +371,7 @@ describe("Code Mode guest execution", () => {
       { code: " ", command: "return 7;" },
       { code: "return 7;", command: " \n " },
     ])("executes the populated alias: %j", async (args) => {
-      expect(await executeSource(args)).toMatchObject({ status: "completed", value: 7 });
+      expectCompleted(await executeSource(args), 7);
     });
 
     it.each([
@@ -432,10 +391,7 @@ describe("Code Mode guest execution", () => {
       "return module.require('node:fs');",
       "return `${({ value: import('node:fs') }).value}`;",
     ])("rejects module access before dispatch: %s", async (code) => {
-      expect(await executeSource({ code })).toMatchObject({
-        status: "failed",
-        code: "invalid_input",
-        failurePhase: "input",
+      expectFailure(await executeSource({ code }), "input", "invalid_input", {
         bridgeDispatchStarted: false,
         telemetry: { callCount: 0 },
         error: expect.stringContaining("module access is disabled"),
