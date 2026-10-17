@@ -9,14 +9,14 @@ import {
   loadPairedComputerUseAvailabilityForSurface,
   type PairedComputerUseAvailability,
 } from "../agents/computer-use-node-capabilities.js";
-import {
-  isCoreCodingSurfaceToolName,
-  listCoreToolFactoryDescriptors,
-} from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { prepareSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
+import {
+  isCoreCodingSurfaceToolName,
+  listCoreToolFactoryDescriptors,
+} from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
