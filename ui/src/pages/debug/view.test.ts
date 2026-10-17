@@ -7,10 +7,7 @@ import type { EventLogEntry } from "../../api/event-log.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
-import type {
-  CommandLaneDynamicSummary,
-  CommandLaneSnapshot,
-} from "../../lib/gateway-diagnostics.ts";
+import type { CommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -90,8 +87,8 @@ type DebugPresentationFixture = {
   health: Record<string, unknown> | null;
   models: unknown[];
   heartbeat: unknown;
-  lanes: CommandLaneSnapshot[];
-  dynamic: CommandLaneDynamicSummary | null;
+  lanes: CommandLaneDiagnostics["lanes"];
+  dynamic: CommandLaneDiagnostics["dynamic"];
   eventLog: readonly EventLogEntry[];
   callParams: string;
   callResult: string | null;
@@ -310,8 +307,8 @@ describe("DebugPage presentation", () => {
 
   it.each<{
     label: string;
-    lane: CommandLaneSnapshot;
-    dynamic: CommandLaneDynamicSummary | null;
+    lane: CommandLaneDiagnostics["lanes"][number];
+    dynamic: CommandLaneDiagnostics["dynamic"];
     text: string;
     saturated: boolean;
     queued: boolean;
