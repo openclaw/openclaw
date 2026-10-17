@@ -129,7 +129,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
     ).toBe(true);
     const manager = SessionManager.inMemory("/retained");
     manager.appendMessage(makeUserMessage("keep the original view", 2));
-    const before = managerView(manager);
+    const before = { ...managerView(manager), cwd: "/retained", persisted: false };
     // The closed database makes this a cold read, which runs on the target-discovery lane.
     const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
     try {
@@ -274,7 +274,7 @@ it.each([
     }
     const manager = SessionManager.inMemory("/retained");
     manager.appendMessage(makeUserMessage("keep the original view", 10));
-    const before = managerView(manager);
+    const before = { ...managerView(manager), cwd: "/retained", persisted: false };
     const controller = new AbortController();
     const reason = new Error("cancelled streaming hydration");
     const gate = holdFirstChunk();

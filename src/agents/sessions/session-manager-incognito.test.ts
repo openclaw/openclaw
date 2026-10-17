@@ -33,16 +33,10 @@ import { SessionManager } from "./session-manager.js";
 const authority = { assertCurrent() {}, authorize() {} };
 const bindings: SelectedSessionActorStorageBinding[] = [];
 function revocable(message: string) {
-  let current = true;
+  const controller = new AbortController();
   return {
-    revoke: () => {
-      current = false;
-    },
-    assertCurrent() {
-      if (!current) {
-        throw new Error(message);
-      }
-    },
+    revoke: () => controller.abort(new Error(message)),
+    assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 afterEach(async () => {
@@ -108,16 +102,12 @@ it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and 
   const { target } = await create("maintenance");
   const manager = await SessionManager.openAsync(target);
   const fresh = vi.fn();
+  const grant = { beforeFreshMessageCommit: fresh };
   const original = { ...makeUserMessage("original", 1), idempotencyKey: "original:user" };
-  const first = await manager.appendMessageWithTranscriptAnchorAsync(original, {
-    beforeFreshMessageCommit: fresh,
-  });
+  const first = await manager.appendMessageWithTranscriptAnchorAsync(original, grant);
   expect(first).toMatchObject({ appended: true, anchor: { entryId: first.entryId } });
   expect(
-    await manager.appendMessageWithTranscriptAnchorAsync(
-      { ...original, timestamp: 2 },
-      { beforeFreshMessageCommit: fresh },
-    ),
+    await manager.appendMessageWithTranscriptAnchorAsync({ ...original, timestamp: 2 }, grant),
   ).toMatchObject({ appended: false, entryId: first.entryId });
   expect(fresh).toHaveBeenCalledTimes(1);
   await manager.appendLeafControlAsync({ targetId: first.entryId, appendParentId: first.entryId });
