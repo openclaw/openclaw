@@ -6,7 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { SkillBinsProvider } from "./invoke.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 import {
   createNodeHostClient,
   frame,
