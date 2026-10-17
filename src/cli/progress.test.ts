@@ -76,24 +76,23 @@ describe("cli progress", () => {
     }
   });
 
-  it("bounds spinner at 36 columns", () => {
-    const stream = createOutput(true, undefined, 36);
-    const reporter = progress({ label: "Checking channel status (probe)…", stream });
-    expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(
-      theme.accent("Checking channel status (pro…"),
-    );
-    reporter.done();
-    expect(stream.listenerCount("resize")).toBe(0);
-  });
-
-  it("suppresses animation below the frame budget", () => {
-    const stream = createOutput(true, undefined, 6);
-    const reporter = progress({ label: "Loading", stream });
-
-    expect(clackMocks.spinnerInstance.start).not.toHaveBeenCalled();
-    reporter.done();
-    expect(stream.listenerCount("resize")).toBe(0);
-  });
+  it.each<[number, string, string?]>([
+    [36, "Checking channel status (probe)…", "Checking channel status (pro…"],
+    [6, "Loading"],
+  ])(
+    "bounds spinner output at %i columns and removes its resize listener",
+    (columns, label, expected) => {
+      const stream = createOutput(true, undefined, columns);
+      const reporter = progress({ label, stream });
+      if (expected === undefined) {
+        expect(clackMocks.spinnerInstance.start).not.toHaveBeenCalled();
+      } else {
+        expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(theme.accent(expected));
+      }
+      reporter.done();
+      expect(stream.listenerCount("resize")).toBe(0);
+    },
+  );
 
   it("does not log without a tty when fallback is none", () => {
     const write = vi.fn();

@@ -1,21 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  installPackageDir,
-  requestDeferredPackageDirInstall,
-  resolvePackageDirInstallTransaction,
-} from "../infra/install-package-dir.js";
-import {
-  attachPluginInstallTransaction,
-  retainPluginInstallTransaction,
-  withPluginInstallTransactions,
-} from "../plugins/install-transaction.js";
-import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
-import {
-  markRetainedManagedNpmInstall,
-  resolveRetainedManagedNpmInstallMarkerPath,
-} from "../plugins/managed-npm-retention.js";
+import * as packageDir from "../infra/install-package-dir.js";
+import * as installTx from "../plugins/install-transaction.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync as readRecords } from "../plugins/installed-plugin-index-records.js";
+import * as retention from "../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   readPersistedInstalledPluginIndexRowSync as readIndexRow,
@@ -46,8 +35,8 @@ const readPackage = (target: string) => readText(path.join(target, "package.json
 
 it.each([false, true])(
   "preserves package/index agreement after marker handling (refusal=%s)",
-  async (refuse) => {
-    await withOpenClawTestState({ label: "plugin-update-metadata-refusal" }, async (state) => {
+  (refuse) =>
+    withOpenClawTestState({ label: "plugin-update-metadata-refusal" }, async (state) => {
       const pluginId = "metadata-refusal";
       const packageName = "@acme/metadata-refusal";
       const config = { plugins: { enabled: false } };
@@ -59,39 +48,43 @@ it.each([false, true])(
       const sourceRoot = path.dirname(path.dirname(path.dirname(sourcePath)));
       const nextRoot = state.statePath("npm", "projects", "metadata-refusal-next");
       const nextPath = path.join(nextRoot, "node_modules", ...packageName.split("/"));
+      const packageInstall = {
+        sourceDir: sourceRoot,
+        targetDir: nextRoot,
+        mode: "install" as const,
+        timeoutMs: 30_000,
+        logger: {},
+        copyErrorPrefix: "fixture package publish",
+        hasDeps: false,
+        depsLogMessage: "",
+      };
       const recordsAt = (installPath: string, version: string) => ({
         [pluginId]: { source: "npm" as const, spec: `${packageName}@${version}`, installPath },
       });
-      const records = recordsAt(oldPath, "1.0.0");
       const nextRecords = recordsAt(nextPath, "2.0.0");
-      await seedInstalledPluginIndex(records, { config, env: state.env });
+      await seedInstalledPluginIndex(recordsAt(oldPath, "1.0.0"), { config, env: state.env });
       const configBefore = readText(state.configPath);
       const oldSnapshot = { identity: identity(oldPath), bytes: readPackage(oldPath) };
       let nextIdentity: ReturnType<typeof identity> | undefined;
       let assertOriginal: (() => void) | undefined;
-      const markerPath = resolveRetainedManagedNpmInstallMarkerPath(nextPath);
+      const markerPath = retention.resolveRetainedManagedNpmInstallMarkerPath(nextPath);
       let tentativeRow: ReturnType<typeof readIndexRow>;
-      let failNextRead = false;
       let failedReads = 0;
       const readFailure = Object.assign(new Error("database is locked"), {
         code: "ERR_SQLITE_ERROR",
         errcode: 5,
-      });
-      const readExpiry = leaseStore.readOpenClawStateLeaseExpiry;
-      vi.spyOn(leaseStore, "readOpenClawStateLeaseExpiry").mockImplementation((...args) => {
-        if (failNextRead) {
-          failNextRead = false;
-          failedReads++;
-          throw readFailure;
-        }
-        return readExpiry(...args);
       });
       const rm = fs.promises.rm.bind(fs.promises);
       vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
         await rm(target, options);
         if (target === markerPath) {
           tentativeRow = readIndexRow({ env: state.env });
-          failNextRead = refuse;
+          if (refuse) {
+            vi.spyOn(leaseStore, "readOpenClawStateLeaseExpiry").mockImplementationOnce(() => {
+              failedReads++;
+              throw readFailure;
+            });
+          }
         }
       });
       vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -100,36 +93,27 @@ it.each([false, true])(
         throw new Error(`unexpected CLI exit ${code}`);
       });
       vi.mocked(updateNpmInstalledPlugins).mockImplementation(async (params) =>
-        withPluginInstallTransactions(
+        installTx.withPluginInstallTransactions(
           params,
           () => {},
           async (owned, assertCurrent) => {
             assertOriginal = assertCurrent;
-            const installed = await installPackageDir(
-              requestDeferredPackageDirInstall(
-                {
-                  sourceDir: sourceRoot,
-                  targetDir: nextRoot,
-                  mode: "install",
-                  timeoutMs: 30_000,
-                  logger: {},
-                  copyErrorPrefix: "fixture package publish",
-                  hasDeps: false,
-                  depsLogMessage: "",
-                },
-                assertCurrent,
-              ),
+            const installed = await packageDir.installPackageDir(
+              packageDir.requestDeferredPackageDirInstall(packageInstall, assertCurrent),
             );
-            if (!installed.ok) {
-              throw new Error(installed.error);
-            }
-            const transaction = resolvePackageDirInstallTransaction(installed);
+            const transaction =
+              installed.ok && packageDir.resolvePackageDirInstallTransaction(installed);
             if (!transaction) {
-              throw new Error("expected real retained directory transaction");
+              throw new Error(
+                installed.ok ? "expected real retained directory transaction" : installed.error,
+              );
             }
-            retainPluginInstallTransaction(owned, attachPluginInstallTransaction({}, transaction));
+            installTx.retainPluginInstallTransaction(
+              owned,
+              installTx.attachPluginInstallTransaction({}, transaction),
+            );
             nextIdentity = identity(nextPath);
-            await markRetainedManagedNpmInstall({
+            await retention.markRetainedManagedNpmInstall({
               packageDir: nextPath,
               pluginId,
               reason: "retained-package",
@@ -155,23 +139,16 @@ it.each([false, true])(
         await expect(command).resolves.toBeUndefined();
         expect(failedReads).toBe(0);
       }
-      expect(
-        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-      ).toEqual(nextRecords);
+      expect(await readRecords({ env: state.env })).toEqual(nextRecords);
       expect(fs.existsSync(nextPath), "retained inventory must point at a live package").toBe(true);
       expect(identity(nextPath)).toEqual(nextIdentity);
       expect(JSON.parse(readPackage(nextPath)).version).toBe("2.0.0");
       expect({ identity: identity(oldPath), bytes: readPackage(oldPath) }).toEqual(oldSnapshot);
       expect(readText(state.configPath)).toBe(configBefore);
       expect(fs.existsSync(markerPath)).toBe(false);
-      if (!assertOriginal) {
-        throw new Error("update did not capture real package authority");
-      }
-      const original = assertOriginal;
       await withPluginLifecycleLease({ env: state.env }, async (fresh) => {
         fresh.assertOwned();
-        expect(original).toThrow();
+        expect(assertOriginal).toThrow();
       });
-    });
-  },
+    }),
 );

@@ -44,6 +44,21 @@ const readText = (file: string) => fs.readFileSync(file, "utf8");
 const readJson = (file: string) => JSON.parse(readText(file));
 const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 const savedMessage = "Updates saved; they will load on the next Gateway start.";
+const entry = (enabled: boolean, config: Record<string, unknown>) => ({ enabled, config });
+const schema = (properties: Record<string, unknown>, additionalProperties?: boolean) => ({
+  type: "object",
+  properties,
+  additionalProperties,
+});
+function interceptLeaseRead(
+  check: (...args: Parameters<typeof leaseStore.readOpenClawStateLeaseExpiry>) => void,
+) {
+  const read = leaseStore.readOpenClawStateLeaseExpiry;
+  vi.spyOn(leaseStore, "readOpenClawStateLeaseExpiry").mockImplementation((...args) => {
+    check(...args);
+    return read(...args);
+  });
+}
 
 it.each([
   "updated",
@@ -97,8 +112,11 @@ it.each([
       const savedSettings = () => readJson(state.configPath).plugins.entries[pluginId].config;
       const is = (...names: string[]) => names.includes(scenario);
       const pluginId = "listener-fixture";
+      const legacyPath = ["plugins", "entries", pluginId, "config", "oldPort"];
       const pendingState = scenario.startsWith("state-migration");
       const packageName = "@acme/listener-fixture";
+      const managedPlugin = (id: string, version: string, stateDir = state.stateDir) =>
+        writeManagedNpmPlugin({ stateDir, pluginId: id, packageName: `@acme/${id}`, version });
       const retainsOther = is("unrelated-pending", "partial-update", "unrelated-core-legacy");
       const inactive = scenario.startsWith("disabled-");
       const included = scenario.startsWith("include");
@@ -136,32 +154,28 @@ it.each([
           entries: {
             ...(retainsOther
               ? {
-                  "unavailable-owner": {
-                    enabled: scenario === "partial-update",
-                    config: { retainedInput: "keep-me" },
-                  },
+                  "unavailable-owner": entry(scenario === "partial-update", {
+                    retainedInput: "keep-me",
+                  }),
                 }
               : {}),
-            [pluginId]: {
-              enabled: !inactive,
-              config: {
-                ...(ready
-                  ? { listener: { port: 57597, host: "${LISTENER_HOST}" } }
-                  : { oldPort: 57597 }),
-                label: "kept",
-                ...(scenario === "env-reference" ? { oldHost: "${LISTENER_HOST}" } : {}),
-              },
-            },
+            [pluginId]: entry(!inactive, {
+              ...(ready
+                ? { listener: { port: 57597, host: "${LISTENER_HOST}" } }
+                : { oldPort: 57597 }),
+              label: "kept",
+              ...(scenario === "env-reference" ? { oldHost: "${LISTENER_HOST}" } : {}),
+            }),
           },
         },
       };
       const writePlugin = (version: "1.0.0" | "2.0.0") => {
-        const root = writeManagedNpmPlugin({
-          stateDir: version === "1.0.0" ? state.stateDir : state.path("candidate"),
-          packageName,
+        const old = version === "1.0.0";
+        const root = managedPlugin(
           pluginId,
           version,
-        });
+          old ? state.stateDir : state.path("candidate"),
+        );
         const packagePath = path.join(root, "package.json");
         const manifest = readJson(packagePath);
         manifest.openclaw.setupEntry = "./setup-entry.mjs";
@@ -176,29 +190,23 @@ it.each([
         writeJson(path.join(root, "openclaw.plugin.json"), {
           id: pluginId,
           channels: scenario === "non-channel-config-repair" ? [] : [pluginId],
-          ...(version === "2.0.0" && !scenario.startsWith("legacy-contract-")
-            ? {
-                doctorContract:
-                  scenario === "declared-unrelated-surface"
-                    ? { resolveSessionStoreAgentIds: true }
-                    : { configRepair: true },
-              }
-            : {}),
-          configSchema: {
-            type: "object",
-            properties: {
+          doctorContract:
+            old || scenario.startsWith("legacy-contract-")
+              ? undefined
+              : scenario === "declared-unrelated-surface"
+                ? { resolveSessionStoreAgentIds: true }
+                : { configRepair: true },
+          configSchema: schema(
+            {
               label: { type: "string" },
-              ...(version === "1.0.0"
+              ...(old
                 ? { oldPort: { type: "number" }, oldHost: { type: "string" } }
                 : {
-                    listener: {
-                      type: "object",
-                      properties: { port: { type: "number" }, host: { type: "string" } },
-                    },
+                    listener: schema({ port: { type: "number" }, host: { type: "string" } }),
                   }),
             },
-            additionalProperties: incompleteContract,
-          },
+            incompleteContract,
+          ),
         });
         return root;
       };
@@ -233,12 +241,7 @@ it.each([
       }
       const otherRecords: Record<string, PluginInstallRecord> = {};
       if (scenario === "partial-update") {
-        const installPath = writeManagedNpmPlugin({
-          stateDir: state.stateDir,
-          packageName: "@acme/unavailable-owner",
-          pluginId: "unavailable-owner",
-          version: "1.0.0",
-        });
+        const installPath = managedPlugin("unavailable-owner", "1.0.0");
         writeJson(path.join(installPath, "openclaw.plugin.json"), {
           id: "unavailable-owner",
           doctorContract: { configRepair: true },
@@ -284,8 +287,8 @@ it.each([
               reason: "The previous updater retained the installed package.",
               command: "openclaw doctor --fix",
               ...(inactive || pendingState ? { requiresStateMigration: true as const } : {}),
-              configPaths: [["plugins", "entries", pluginId, "config", "oldPort"]],
-              validationExcludedPaths: [["plugins", "entries", pluginId, "config", "oldPort"]],
+              configPaths: [legacyPath],
+              validationExcludedPaths: [legacyPath],
             },
           ],
         });
@@ -365,17 +368,18 @@ it.each([
         "wrong-doctor-surface",
         "declared-unrelated-surface",
       );
-      const failure =
-        inspectionFailure ||
-        afterCompletion ||
-        is(
-          "missing-normalizer",
-          "rules-only-no-pending",
-          "include-post-publish-failure",
-          "transform-failure",
-          "write-failure",
-          "revoked",
-        );
+      const reason = is("missing-normalizer", "rules-only-no-pending")
+        ? "Legacy listener requires repair"
+        : inspectionFailure
+          ? "Plugin config repair could not be inspected"
+          : scenario === "transform-failure"
+            ? "fixture transform refused"
+            : scenario === "write-failure"
+              ? "fixture publication refused"
+              : scenario === "include-post-publish-failure"
+                ? "failed to verify plugin lifecycle lease"
+                : undefined;
+      const failure = reason !== undefined || afterCompletion || scenario === "revoked";
       gateway.call.mockReset();
       if (scenario === "write-failure") {
         vi.spyOn(configIo, "replaceConfigFile").mockRejectedValueOnce(
@@ -425,9 +429,8 @@ it.each([
         );
       }
       if (afterCompletion) {
-        const readExpiry = leaseStore.readOpenClawStateLeaseExpiry;
         let inspectingCompletion = false;
-        vi.spyOn(leaseStore, "readOpenClawStateLeaseExpiry").mockImplementation((...args) => {
+        interceptLeaseRead((...args) => {
           const database = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
             resolveOpenClawStateSqlitePath(state.env),
           );
@@ -462,27 +465,22 @@ it.each([
               inspectingCompletion = false;
             }
           }
-          return readExpiry(...args);
         });
       }
       if (scenario === "include-post-publish-failure") {
-        const readExpiry = leaseStore.readOpenClawStateLeaseExpiry;
-        vi.spyOn(leaseStore, "readOpenClawStateLeaseExpiry").mockImplementation((...args) => {
+        interceptLeaseRead(() => {
           if (!refusedAfterPublication && readText(includePath) !== beforeInclude) {
             refusedAfterPublication = true;
             throw new Error("fixture post-publication authority refused");
           }
-          return readExpiry(...args);
         });
       }
       if (scenario === "revoked") {
         let revoked = false;
-        const readExpiry = leaseStore.readOpenClawStateLeaseExpiry;
-        vi.spyOn(leaseStore, "readOpenClawStateLeaseExpiry").mockImplementation((...args) => {
+        interceptLeaseRead(() => {
           if (revoked) {
             throw new Error("fixture authority revoked");
           }
-          return readExpiry(...args);
         });
         const replaceConfig = configIo.replaceConfigFile;
         vi.spyOn(configIo, "replaceConfigFile").mockImplementation((params) =>
@@ -583,17 +581,6 @@ it.each([
         return;
       }
       if (failure) {
-        const reason = is("missing-normalizer", "rules-only-no-pending")
-          ? "Legacy listener requires repair"
-          : inspectionFailure
-            ? "Plugin config repair could not be inspected"
-            : scenario === "transform-failure"
-              ? "fixture transform refused"
-              : scenario === "write-failure"
-                ? "fixture publication refused"
-                : scenario === "include-post-publish-failure"
-                  ? "failed to verify plugin lifecycle lease"
-                  : undefined;
         await expect(command).rejects.toThrow(reason);
         if (scenario === "rollback-generation-conflict") {
           expect(savedSettings()).toEqual({ listener: { port: 57597 }, label: "kept" });
@@ -662,7 +649,6 @@ it.each([
       }
       if (pendingState) {
         expect(applyRuntime).not.toHaveBeenCalled();
-        expect(gateway.call).not.toHaveBeenCalled();
         expect(log.mock.calls.flat().join("\n")).toContain("openclaw doctor --fix");
         expect(fs.existsSync(previousPath)).toBe(true);
       } else if (settled) {

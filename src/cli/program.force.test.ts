@@ -49,10 +49,14 @@ function usePlatform(platform: NodeJS.Platform) {
 }
 
 const nodeListener = "p42\ncnode\n";
+const waitOptions = { timeoutMs: 500, intervalMs: 100 };
 const toolError = (
   message: string,
   details: { code?: string; status?: number; stdout?: string; stderr?: string },
 ) => Object.assign(new Error(message), details);
+const throwError = (error: Error) => () => {
+  throw error;
+};
 
 describe("gateway --force helpers", () => {
   const defaultKillMock = usePlatform("linux");
@@ -60,16 +64,14 @@ describe("gateway --force helpers", () => {
     probePortUsageMock.mockReset().mockResolvedValue("busy");
   });
 
-  it.each([
+  it.each<[string, Error]>([
     ["lsof has no matches", toolError("no matches", { status: 1 })],
     ["lsof is unavailable", toolError("not found", { code: "ENOENT" })],
   ])("returns without cleanup when %s and the bind probe reports free", async (_name, error) => {
     probePortUsageMock.mockResolvedValue("free");
-    execFileSyncMock.mockImplementation(() => {
-      throw error;
-    });
+    execFileSyncMock.mockImplementation(throwError(error));
 
-    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+    const result = await forceFreePortAndWait(18789, waitOptions);
 
     expect(result).toEqual({
       killed: [],
@@ -80,59 +82,53 @@ describe("gateway --force helpers", () => {
     expect(probePortUsageMock).toHaveBeenCalledWith(18789);
   });
 
-  it.each([{ name: "later malformed PID", output: "p456\ncpython\npabc\ncnode\n" }])(
-    "fails closed for $name when fuser cannot identify a listener",
-    async ({ output }) => {
-      execFileSyncMock.mockImplementation((cmd: string) => {
-        if (cmd.includes("lsof")) {
-          return output;
-        }
-        throw toolError("no matches", { status: 1, stdout: "", stderr: "" });
-      });
+  it("fails closed for a later malformed PID when fuser cannot identify a listener", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd.includes("lsof")) {
+        return "p456\ncpython\npabc\ncnode\n";
+      }
+      throw toolError("no matches", { status: 1, stdout: "", stderr: "" });
+    });
 
-      await expect(forceFreePortAndWait(18789, { timeoutMs: 0 })).rejects.toThrow(
-        /still busy.*no listener PID/i,
-      );
+    await expect(forceFreePortAndWait(18789, { timeoutMs: 0 })).rejects.toThrow(
+      /still busy.*no listener PID/i,
+    );
 
-      expect(execFileSyncMock).toHaveBeenCalledWith(
-        "fuser",
-        ["-k", "-TERM", "18789/tcp"],
-        expect.anything(),
-      );
-      expect(defaultKillMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "fuser",
+      ["-k", "-TERM", "18789/tcp"],
+      expect.anything(),
+    );
+    expect(defaultKillMock).not.toHaveBeenCalled();
+  });
 
   it("continues when a discovered listener exits before it can be signaled", async () => {
     probePortUsageMock.mockResolvedValue("free");
     execFileSyncMock
       .mockReturnValueOnce(["p42", "cnode", "p99", "cssh", ""].join("\n"))
       .mockReturnValue("");
-    const gone = Object.assign(new Error("no such process"), { code: "ESRCH" });
-    const killMock = vi.fn().mockImplementationOnce(() => {
-      throw gone;
-    });
+    const killMock = vi
+      .fn()
+      .mockImplementationOnce(throwError(toolError("no such process", { code: "ESRCH" })));
     process.kill = killMock;
 
     expect((await forceFreePortAndWait(18789)).killed).toEqual<PortProcess[]>([
       { pid: 42, command: "node" },
       { pid: 99, command: "ssh" },
     ]);
-    expect(killMock).toHaveBeenNthCalledWith(1, 42, "SIGTERM");
-    expect(killMock).toHaveBeenNthCalledWith(2, 99, "SIGTERM");
+    expect(killMock.mock.calls).toEqual([
+      [42, "SIGTERM"],
+      [99, "SIGTERM"],
+    ]);
     expect(probePortUsageMock).not.toHaveBeenCalled();
   });
 
   it("does not suppress listener ownership-guard errors", async () => {
     execFileSyncMock.mockReturnValue(nodeListener);
-    const guardError = Object.assign(new Error("ownership verification failed"), {
-      code: "ESRCH",
-    });
+    const guardError = toolError("ownership verification failed", { code: "ESRCH" });
     await expect(
       forceFreePortAndWait(18789, {
-        beforeSignal: () => {
-          throw guardError;
-        },
+        beforeSignal: throwError(guardError),
       }),
     ).rejects.toThrow(guardError);
     expect(defaultKillMock).not.toHaveBeenCalled();
@@ -141,10 +137,7 @@ describe("gateway --force helpers", () => {
   it("propagates EPERM from process.kill without fuser fallback", async () => {
     execFileSyncMock.mockReturnValue(nodeListener);
     probePortUsageMock.mockResolvedValue("free");
-    const denied = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    const rejectSignal = vi.fn(() => {
-      throw denied;
-    });
+    const rejectSignal = vi.fn(throwError(toolError("permission denied", { code: "EPERM" })));
     process.kill = rejectSignal;
 
     await expect(forceFreePortAndWait(18789)).rejects.toThrow(/failed to kill pid 42/);
@@ -162,11 +155,7 @@ describe("gateway --force helpers", () => {
       .mockReturnValueOnce(nodeListener)
       .mockReturnValue("");
 
-    const promise = forceFreePortAndWait(18789, {
-      timeoutMs: 500,
-      intervalMs: 100,
-      sigtermTimeoutMs: 400,
-    });
+    const promise = forceFreePortAndWait(18789, { ...waitOptions, sigtermTimeoutMs: 400 });
 
     await vi.runAllTimersAsync();
     const res = await promise;
@@ -202,64 +191,41 @@ describe("gateway --force helpers", () => {
     expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 42, signal: "SIGKILL" });
   });
 
-  it("freezes guarded fuser PIDs before signaling when the port owner changes", async () => {
-    let fuserPids = [4242];
-    execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd.includes("lsof")) {
-        throw toolError("spawnSync lsof EACCES", { code: "EACCES" });
-      }
-      if (args.includes("-k")) {
-        throw new Error("guarded fuser cleanup must not use resource-targeted kill");
-      }
-      return `${fuserPids.join(" ")}\n`;
-    });
-    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
-    const beforeSignal = vi.fn(() => {
-      fuserPids = [5252];
-    });
-
-    const result = await forceFreePortAndWait(18789, {
-      timeoutMs: 500,
-      intervalMs: 100,
-      beforeSignal,
-    });
-
-    expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
-    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 4242, signal: "SIGTERM" });
-    expect(defaultKillMock).toHaveBeenCalledOnce();
-    expect(defaultKillMock).toHaveBeenCalledWith(4242, "SIGTERM");
-    expect(defaultKillMock).not.toHaveBeenCalledWith(5252, expect.anything());
-    expect(execFileSyncMock).toHaveBeenCalledWith("fuser", ["18789/tcp"], expect.anything());
-  });
-
-  it("never derives guarded fuser victims from stderr diagnostics", async () => {
-    execFileSyncMock.mockImplementation((cmd: string) => {
-      if (cmd.includes("lsof")) {
-        throw toolError("spawnSync lsof EACCES", { code: "EACCES" });
-      }
-      throw toolError("fuser diagnostics", {
-        status: 1,
-        stdout: "4242 5151oops\n",
-        stderr: "18789/tcp: 5252\nfuser warning for device 6161\n",
+  it.each(["owner changes", "stderr diagnostics"])(
+    "signals only guarded fuser PIDs: %s",
+    async (scenario) => {
+      let fuserPids = [4242];
+      execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd.includes("lsof")) {
+          throw toolError("spawnSync lsof EACCES", { code: "EACCES" });
+        }
+        if (scenario === "stderr diagnostics") {
+          throw toolError("fuser diagnostics", {
+            status: 1,
+            stdout: "4242 5151oops\n",
+            stderr: "18789/tcp: 5252\nfuser warning for device 6161\n",
+          });
+        }
+        if (args.includes("-k")) {
+          throw new Error("guarded fuser cleanup must not use resource-targeted kill");
+        }
+        return `${fuserPids.join(" ")}\n`;
       });
-    });
-    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
-    const beforeSignal = vi.fn();
+      probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
+      const beforeSignal = vi.fn(() => {
+        if (scenario === "owner changes") {
+          fuserPids = [5252];
+        }
+      });
 
-    const result = await forceFreePortAndWait(18789, {
-      timeoutMs: 500,
-      intervalMs: 100,
-      beforeSignal,
-    });
+      const result = await forceFreePortAndWait(18789, { ...waitOptions, beforeSignal });
 
-    expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
-    expect(beforeSignal).toHaveBeenCalledOnce();
-    expect(beforeSignal).toHaveBeenCalledWith({ port: 18789, pid: 4242, signal: "SIGTERM" });
-    expect(defaultKillMock).toHaveBeenCalledOnce();
-    expect(defaultKillMock).toHaveBeenCalledWith(4242, "SIGTERM");
-    expect(defaultKillMock).not.toHaveBeenCalledWith(5252, expect.anything());
-    expect(defaultKillMock).not.toHaveBeenCalledWith(6161, expect.anything());
-  });
+      expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
+      expect(beforeSignal.mock.calls).toEqual([[{ port: 18789, pid: 4242, signal: "SIGTERM" }]]);
+      expect(defaultKillMock.mock.calls).toEqual([[4242, "SIGTERM"]]);
+      expect(execFileSyncMock).toHaveBeenCalledWith("fuser", ["18789/tcp"], expect.anything());
+    },
+  );
 
   it("uses fuser SIGKILL escalation when port stays busy", async () => {
     vi.useFakeTimers();
@@ -288,13 +254,12 @@ describe("gateway --force helpers", () => {
     await vi.runAllTimersAsync();
     const result = await promise;
 
-    expect(result.escalatedToSigkill).toBe(true);
-    expect(result.waitedMs).toBe(100);
+    expect(result).toMatchObject({ escalatedToSigkill: true, waitedMs: 100 });
     const killCall = execFileSyncMock.mock.calls.find(
       ([cmd, args]) => cmd === "fuser" && Array.isArray(args) && args.includes("-KILL"),
     );
     expect(killCall?.[1]).toEqual(["-k", "-KILL", "18789/tcp"]);
-    expect((killCall?.[2] as { encoding?: string } | undefined)?.encoding).toBe("utf-8");
+    expect(killCall?.[2]).toMatchObject({ encoding: "utf-8" });
   });
 
   it("throws when lsof is unavailable and fuser is missing", async () => {
@@ -322,9 +287,7 @@ describe("gateway --force helpers (Windows netstat path)", () => {
     ].join("\r\n");
 
   it("throws a descriptive error when netstat fails", async () => {
-    execFileSyncMock.mockImplementation(() => {
-      throw new Error("access denied");
-    });
+    execFileSyncMock.mockImplementation(throwError(new Error("access denied")));
     await expect(forceFreePortAndWait(18789)).rejects.toThrow(/netstat failed/);
   });
 
@@ -338,9 +301,10 @@ describe("gateway --force helpers (Windows netstat path)", () => {
       ["-ano"],
       { env: expect.any(Object), encoding: "utf-8", killSignal: "SIGKILL", timeout: 10_000 },
     );
-    expect(defaultKillMock).toHaveBeenCalledTimes(2);
-    expect(defaultKillMock).toHaveBeenCalledWith(42, "SIGTERM");
-    expect(defaultKillMock).toHaveBeenCalledWith(99, "SIGTERM");
+    expect(defaultKillMock.mock.calls).toEqual([
+      [42, "SIGTERM"],
+      [99, "SIGTERM"],
+    ]);
     expect(killed).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
   });
 });

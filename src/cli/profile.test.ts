@@ -45,15 +45,12 @@ describe("parseCliProfileArgs", () => {
     },
   );
 
-  it("rejects missing profile value", () => {
-    expect(parseCliProfileArgs(["node", "openclaw", "--profile"]).ok).toBe(false);
-  });
-
   it.each([
-    ["--dev first", ["node", "openclaw", "--dev", "--profile", "work", "status"]],
-    ["--profile first", ["node", "openclaw", "--profile", "work", "--dev", "status"]],
-  ])("rejects combining --dev with --profile (%s)", (_name, argv) => {
-    expect(parseCliProfileArgs(argv).ok).toBe(false);
+    ["--profile"],
+    ["--dev", "--profile", "work", "status"],
+    ["--profile", "work", "--dev", "status"],
+  ])("rejects invalid profile options: %j", (...args) => {
+    expect(parseCliProfileArgs(["node", "openclaw", ...args]).ok).toBe(false);
   });
 });
 
@@ -140,34 +137,22 @@ describe("applyCliProfileEnv", () => {
 });
 
 describe("formatCliCommand", () => {
-  it.each([
-    ["Default", "openclaw doctor --fix"],
-    ["bad profile", "openclaw doctor --fix"],
-    ["dev", "openclaw --dev doctor"],
-  ])("returns command unchanged for profile %s: %s", (profile, cmd) => {
-    expect(formatCliCommand(cmd, { OPENCLAW_PROFILE: profile })).toBe(cmd);
-  });
-
-  it("trims whitespace from profile", () => {
-    expect(formatCliCommand("openclaw doctor --fix", { OPENCLAW_PROFILE: "  jbopenclaw  " })).toBe(
+  it.each<[string, NodeJS.ProcessEnv, string?]>([
+    ["openclaw doctor --fix", { OPENCLAW_PROFILE: "Default" }],
+    ["openclaw doctor --fix", { OPENCLAW_PROFILE: "bad profile" }],
+    ["openclaw --dev doctor", { OPENCLAW_PROFILE: "dev" }],
+    [
+      "openclaw doctor --fix",
+      { OPENCLAW_PROFILE: "  jbopenclaw  " },
       "openclaw --profile jbopenclaw doctor --fix",
-    );
-  });
-
-  it("ignores unsafe container hints", () => {
-    expect(
-      formatCliCommand("openclaw gateway status --deep", {
-        OPENCLAW_CONTAINER_HINT: "demo; rm -rf /",
-      }),
-    ).toBe("openclaw gateway status --deep");
-  });
-
-  it("preserves the active container for non-root update: pnpm openclaw", () => {
-    expect(
-      formatCliCommand("pnpm openclaw plugins update telegram", {
-        OPENCLAW_CONTAINER_HINT: "demo",
-        OPENCLAW_PROFILE: "work",
-      }),
-    ).toBe("pnpm openclaw --container demo plugins update telegram");
+    ],
+    ["openclaw gateway status --deep", { OPENCLAW_CONTAINER_HINT: "demo; rm -rf /" }],
+    [
+      "pnpm openclaw plugins update telegram",
+      { OPENCLAW_CONTAINER_HINT: "demo", OPENCLAW_PROFILE: "work" },
+      "pnpm openclaw --container demo plugins update telegram",
+    ],
+  ])("formats %s with %j", (cmd, env, expected = cmd) => {
+    expect(formatCliCommand(cmd, env)).toBe(expected);
   });
 });
