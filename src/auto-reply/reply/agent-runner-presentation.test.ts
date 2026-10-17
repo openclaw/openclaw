@@ -115,6 +115,32 @@ it.each(["direct", "buffered"] as const)(
   },
 );
 
+it("forwards completed options through the reasoning-bound block handler", async () => {
+  const delivered = vi.fn(async (_payload: ReplyPayload) => {});
+  const typing = createTypingController({});
+  const presentation = createPresentation({
+    delivery: {
+      opts: { onPreparedBlockReply: async (plan) => delivered(plan.payload) },
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      applyReplyToMode: (payload) => payload,
+      typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+    },
+  });
+  const handler = presentation.blockReplyHandler;
+  if (!handler) {
+    throw new Error("expected the prepared block delivery handler");
+  }
+  try {
+    await handler({ text: "Final answer." }, { completed: true });
+    expect(delivered).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "Final answer." }),
+    );
+  } finally {
+    typing.cleanup();
+  }
+});
+
 it("refreshes typing for whitespace appended while typing sends are failing", async () => {
   vi.useFakeTimers();
   const onCleanup = vi.fn();

@@ -71,14 +71,15 @@ import type {
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { buildReasoningParams } from "./agent-runner-run-params.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
+import { bindReplyReasoningVisibility, isReplyReasoningVisible } from "./reasoning-visibility.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
-import { bindReplyReasoningVisibility, isReplyReasoningVisible } from "./reasoning-visibility.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import { resolveReplySessionEventDelivery } from "./reply-operation-run-state.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
@@ -700,23 +701,8 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     resolvedVerboseLevel: params.resolvedVerboseLevel,
   });
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const onBlockReply = params.opts?.onBlockReply;
   const reasoningVisibility = params.followupRun.run.reasoningVisibility;
-  const executionParams: AgentTurnParams = {
-    ...params,
-    opts: {
-      ...params.opts,
-      runId,
-      ...(onBlockReply
-        ? {
-            onBlockReply: (...args) => {
-              bindReplyReasoningVisibility(args[0], reasoningVisibility);
-              return onBlockReply(...args);
-            },
-          }
-        : {}),
-    },
-  };
+  const executionParams = buildReasoningParams(params, runId, reasoningVisibility);
   return await runAgentTurnWithOutcome(executionParams, runId, async () => {
     const result = await executeAgentTurnOutcome(executionParams, runId);
     if (result.outcome.kind === "settled") {

@@ -433,7 +433,7 @@ export async function executePreparedReplyRun(
           )
       : undefined;
   const reasoningVisibility =
-    opts?.onReasoningVisibility && opts.registerReasoningVisibilityCleanup
+    opts?.onReasoningVisibility && opts.registerReasoningVisibilityCleanup && sessionKey
       ? await createReplyReasoningVisibility({
           agentId,
           sessionKey,

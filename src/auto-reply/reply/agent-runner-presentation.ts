@@ -212,17 +212,19 @@ export function createAgentTurnPresentation(params: {
         })
       : undefined;
 
+  const reasoningBoundBlockReplyHandler: typeof blockReplyHandler = blockReplyHandler
+    ? (...args) => {
+        // The prebuilt block pipeline bypasses opts.onBlockReply while enqueueing.
+        bindReplyReasoningVisibility(args[0], params.turn.followupRun.run.reasoningVisibility);
+        return blockReplyHandler(...args);
+      }
+    : undefined;
+
   return {
     presentPartialReply,
     normalizeStreamingText,
     presentWithTyping,
-    blockReplyHandler: blockReplyHandler
-      ? (payload) => {
-          // The prebuilt block pipeline bypasses opts.onBlockReply while enqueueing.
-          bindReplyReasoningVisibility(payload, params.turn.followupRun.run.reasoningVisibility);
-          return blockReplyHandler(payload);
-        }
-      : undefined,
+    blockReplyHandler: reasoningBoundBlockReplyHandler,
   };
 }
 

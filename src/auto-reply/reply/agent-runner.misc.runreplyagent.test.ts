@@ -56,8 +56,7 @@ import {
 } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { type BaseRunOptions, createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
 import { clearPendingFinalDeliveryAfterSuccess } from "./dispatch-from-config.pending-final.js";
-import type { FollowupRun } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { scheduleFollowupDrain } from "./queue.js";
 import { createReplyReasoningVisibility } from "./reasoning-visibility.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -703,7 +702,10 @@ it.each([false, true])(
         },
       }).run();
       const payloads = Array.isArray(result) ? result : [result];
-      const reasoning = expectDefined(payloads.find((payload) => payload?.isReasoning));
+      const reasoning = expectDefined(
+        payloads.find((payload) => payload?.isReasoning),
+        "reasoning reply",
+      );
       expect(isVisible(reasoning)).toBe(true);
       expect(onBlockReply).toHaveBeenCalledOnce();
       owner.close();

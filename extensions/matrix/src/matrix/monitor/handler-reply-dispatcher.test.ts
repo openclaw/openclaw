@@ -1,11 +1,11 @@
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
-import { createTypingCallbacks } from "./runtime-api.js";
 
 const deliveryMocks = vi.hoisted(() => ({
   deliver: vi.fn(),

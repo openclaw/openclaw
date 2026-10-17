@@ -1526,14 +1526,22 @@ describe("followup queue collect routing", () => {
       const q = createQueueCase();
       try {
         const reasoningVisibility = {
-          retainForQueue: () => {}, releaseDispatch: () => {}, close: () => {},
+          retainForQueue: () => {},
+          releaseDispatch: () => {},
+          close: () => {},
         };
         for (const [index, prompt] of ["same one", "same two"].entries()) {
-          const item = createRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" });
+          const item = createRun({
+            prompt,
+            originatingChannel: "slack",
+            originatingTo: "channel:A",
+          });
           q.add({
             ...item,
             channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
-              audit, channelId: "slack", participantId: mixed ? `user-${index}` : "user-1",
+              audit,
+              channelId: "slack",
+              participantId: mixed ? `user-${index}` : "user-1",
             }),
             run: { ...item.run, senderId: "user-1", senderIsOwner: false, reasoningVisibility },
           });
@@ -1543,8 +1551,11 @@ describe("followup queue collect routing", () => {
         expect(q.calls[0]?.run.senderId).toBe(mixed ? undefined : "user-1");
         expect(q.calls[0]?.run.reasoningVisibility).toBe(mixed ? undefined : reasoningVisibility);
         if (!mixed) {
-          expect(consumeChannelAdmissionEvidence(q.calls[0]?.channelAdmissionEvidence)).toMatchObject({
-            ingressState: "present", invoker: { state: "present", kind: "person" },
+          expect(
+            consumeChannelAdmissionEvidence(q.calls[0]?.channelAdmissionEvidence),
+          ).toMatchObject({
+            ingressState: "present",
+            invoker: { state: "present", kind: "person" },
           });
         }
       } finally {
