@@ -58,18 +58,26 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 
 function createTools(
   config: OpenClawToolsOptions["config"],
-  options: { sandboxed?: boolean; sessionConfigSource?: "runtime" | "pinned" } = {},
+  options: Omit<OpenClawToolsOptions, "config"> = {},
 ) {
   return createOpenClawTools({
     agentSessionKey: "global",
     runSessionKey: "agent:research:main",
-    sandboxed: options.sandboxed,
     config,
-    ...(options.sessionConfigSource ? { sessionConfigSource: options.sessionConfigSource } : {}),
     disablePluginTools: true,
     wrapBeforeToolCallHook: false,
+    ...options,
   });
 }
+
+function expectGateway(method: string, params: Record<string, unknown>) {
+  expect(embeddedGatewayCalls).toHaveBeenCalledWith(
+    expect.objectContaining({ method, params: expect.objectContaining(params) }),
+  );
+}
+
+const agentRows = (...ids: string[]) =>
+  expect.arrayContaining(ids.map((agentId) => expect.objectContaining({ agentId })));
 
 function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string) {
   const tool = tools.find((candidate) => candidate.name === name);
@@ -194,37 +202,34 @@ describe("openclaw session lookup context", () => {
     },
   );
 
-  it.each([{ scope: "global", mainKey: "main", runSessionKey: "global" }] as const)(
-    "routes progress cards to $runSessionKey under $scope scope",
-    async (scenario) => {
-      const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
-        card: null,
-      });
-      try {
-        const tools = createOpenClawTools({
-          config: {
-            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-            session: { scope: scenario.scope, mainKey: scenario.mainKey },
-          },
+  it("routes progress cards to global under global scope", async () => {
+    const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+      card: null,
+    });
+    try {
+      const tools = createTools(
+        {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          session: { scope: "global", mainKey: "main" },
+        },
+        {
           agentSessionKey: "agent:research:main",
-          runSessionKey: scenario.runSessionKey,
+          runSessionKey: "global",
           requesterAgentIdOverride: "research",
-          disablePluginTools: true,
           disableMessageTool: true,
-          wrapBeforeToolCallHook: false,
-        });
+        },
+      );
 
-        await requireTool(tools, "progress_card").execute("synthetic-progress", {});
+      await requireTool(tools, "progress_card").execute("synthetic-progress", {});
 
-        expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
-          sessionKey: scenario.runSessionKey,
-          agentId: "research",
-        });
-      } finally {
-        gatewayCall.mockRestore();
-      }
-    },
-  );
+      expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
+        sessionKey: "global",
+        agentId: "research",
+      });
+    } finally {
+      gatewayCall.mockRestore();
+    }
+  });
 
   it("binds nested session lookups to the durable caller", async () => {
     const runSessionKey = "agent:research:main";
@@ -239,24 +244,9 @@ describe("openclaw session lookup context", () => {
     await requireTool(tools, "sessions_history").execute("history", { sessionKey: "current" });
 
     expect(createEmbeddedCallGatewayMock).toHaveBeenCalledWith();
-    expect(embeddedGatewayCalls).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.list",
-        params: expect.objectContaining({ spawnedBy: runSessionKey }),
-      }),
-    );
-    expect(embeddedGatewayCalls).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.search",
-        params: expect.objectContaining({ sessionKeys: [runSessionKey] }),
-      }),
-    );
-    expect(embeddedGatewayCalls).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "chat.history",
-        params: expect.objectContaining({ sessionKey: runSessionKey }),
-      }),
-    );
+    expectGateway("sessions.list", { spawnedBy: runSessionKey });
+    expectGateway("sessions.search", { sessionKeys: [runSessionKey] });
+    expectGateway("chat.history", { sessionKey: runSessionKey });
   });
 
   it("preserves implicit all-agent discovery for authorized callers", async () => {
@@ -290,18 +280,13 @@ describe("openclaw session lookup context", () => {
       query: "hit",
     });
 
-    expect((listed.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ agentId: "main" }),
-        expect.objectContaining({ agentId: "research" }),
-      ]),
-    );
-    expect((searched.details as { results: Array<{ snippet: string }> }).results).toEqual(
-      expect.arrayContaining([
+    expect(listed.details).toMatchObject({ sessions: agentRows("main", "research") });
+    expect(searched.details).toMatchObject({
+      results: expect.arrayContaining([
         expect.objectContaining({ snippet: "main hit" }),
         expect.objectContaining({ snippet: "research hit" }),
       ]),
-    );
+    });
     const discoveryRequests = embeddedGatewayCalls.mock.calls
       .map(([request]) => request as GatewayRequest)
       .filter((request) => request.method === "sessions.list");
@@ -331,9 +316,7 @@ describe("openclaw session lookup context", () => {
     setEmbeddedMode(true);
 
     const granted = await list.execute("granted", {});
-    expect((granted.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
-    );
+    expect(granted.details).toMatchObject({ sessions: agentRows("main") });
 
     setRuntimeConfigSnapshot(restrictedConfig);
     await expect(
@@ -344,9 +327,9 @@ describe("openclaw session lookup context", () => {
       }),
     ).resolves.toMatchObject({ details: { status: "forbidden" } });
     const revoked = await list.execute("revoked", {});
-    expect((revoked.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual([
-      expect.objectContaining({ agentId: "research" }),
-    ]);
+    expect(revoked.details).toMatchObject({
+      sessions: [expect.objectContaining({ agentId: "research" })],
+    });
     await expect(
       history.execute("revoked-history", { sessionKey: "agent:main:main" }),
     ).resolves.toMatchObject({ details: { status: "forbidden" } });
@@ -355,8 +338,6 @@ describe("openclaw session lookup context", () => {
     ).resolves.toMatchObject({ details: { status: "forbidden" } });
     setRuntimeConfigSnapshot(accessibleConfig);
     const restored = await list.execute("restored", {});
-    expect((restored.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
-    );
+    expect(restored.details).toMatchObject({ sessions: agentRows("main") });
   });
 });

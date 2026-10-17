@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
@@ -92,68 +93,60 @@ export function registerSessionsSendTimeoutTests({
   getSessionTool,
   callGatewayMock,
 }: SessionsSendTimeoutFixtures) {
-  it.each([
-    {
-      name: "provider-attributed terminal timeout without a diagnostic",
-      waitResult: {
-        status: "ok",
-        endedAt: 3000,
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      expectedError: "agent run timed out",
-    },
-  ] as const)(
-    "sessions_send preserves a $name through Tool Search without starting A2A",
-    async ({ waitResult, expectedError }) => {
-      const calls: Array<{ method?: string; params?: unknown }> = [];
-      const requesterKey = "agent:main:main";
-      const targetKey = "agent:director1:main";
-      await upsertSessionEntryCore(
-        { agentId: "director1", sessionKey: targetKey },
-        { sessionId: "timeout-target", updatedAt: 1 },
-      );
-      callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as { method?: string; params?: unknown };
-        calls.push(request);
-        if (request.method === "agent") {
-          return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
-        }
-        if (request.method === "agent.wait") {
-          return { runId: "run-terminal", ...waitResult };
-        }
-        return {};
-      });
+  it("sessions_send preserves a provider-attributed terminal timeout without a diagnostic through Tool Search without starting A2A", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:director1:main";
+    await upsertSessionEntryCore(
+      { agentId: "director1", sessionKey: targetKey },
+      { sessionId: "timeout-target", updatedAt: 1 },
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-terminal",
+          status: "ok",
+          endedAt: 3000,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        };
+      }
+      return {};
+    });
 
-      const tool = getSessionTool("sessions_send", {
-        agentSessionKey: requesterKey,
-        agentChannel: "discord",
-      });
-      const catalogRef = createToolSearchCatalogRef();
-      registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
-      const runtime = new ToolSearchRuntime(
-        { catalogRef },
-        resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
-        { validateInput: true },
-      );
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
+      { validateInput: true },
+    );
 
-      const details = await runtime.callValue("sessions_send", {
-        sessionKey: targetKey,
-        message: "ping",
-        timeoutSeconds: 1,
-      });
-      expect(details).toEqual({
-        runId: "run-terminal",
-        status: "timeout",
-        error: expectedError,
-        sentBeforeError: true,
-        sessionKey: targetKey,
-      });
-      expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-      expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-      expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(1);
-    },
-  );
+    const details = await runtime.callValue("sessions_send", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(details).toEqual({
+      runId: "run-terminal",
+      status: "timeout",
+      error: "agent run timed out",
+      sentBeforeError: true,
+      sessionKey: targetKey,
+    });
+    expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(1);
+  });
 }
 
 export function registerSessionsSendLateReplyTests({
@@ -197,10 +190,7 @@ export function registerSessionsSendLateReplyTests({
         },
       );
       let targetWaitCount = 0;
-      let releaseDelayedWait = () => {};
-      const delayedWaitGate = new Promise<void>((resolve) => {
-        releaseDelayedWait = resolve;
-      });
+      const delayedWaitGate = createDeferred();
       let requesterProviderStarts = 0;
       let requesterAdmissionClosed: boolean | undefined;
       callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -232,7 +222,7 @@ export function registerSessionsSendLateReplyTests({
                 ...(pendingError ? { pendingError: true, error: "retrying provider" } : {}),
               };
             }
-            await delayedWaitGate;
+            await delayedWaitGate.promise;
             if (failure) {
               return { runId: "run-target", status: "error", error: failure, stopReason };
             }
@@ -284,18 +274,16 @@ export function registerSessionsSendLateReplyTests({
         });
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(1);
         expect(requesterProviderStarts).toBe(0);
-        releaseDelayedWait();
+        delayedWaitGate.resolve();
 
-        await vi.waitFor(
-          () => {
-            expect(requesterAdmissionClosed).toBe(false);
-          },
-          { timeout: 2_000, interval: 5 },
-        );
-        await settleContinuations();
-        await vi.waitFor(() => {
-          expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
+        await vi.waitFor(() => expect(requesterAdmissionClosed).toBe(false), {
+          timeout: 2_000,
+          interval: 5,
         });
+        await settleContinuations();
+        await vi.waitFor(() =>
+          expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0),
+        );
         expect(requesterProviderStarts).toBe(1);
 
         const requesterReplyCall = calls.find(
@@ -323,7 +311,7 @@ export function registerSessionsSendLateReplyTests({
           expect(replyParams?.extraSystemPrompt).toContain("This result is delivered once");
         }
         expect(calls.find((call) => call.method === "send")).toBeUndefined();
-      }, releaseDelayedWait);
+      }, delayedWaitGate.resolve);
     },
   );
 }

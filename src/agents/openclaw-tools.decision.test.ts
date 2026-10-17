@@ -56,9 +56,7 @@ const answer = {
 } satisfies ProviderDecisionOutcome;
 const config: OpenClawConfig = {
   agents: {
-    defaults: {
-      decisionModel: "fixture/default",
-    },
+    defaults: { decisionModel: "fixture/default" },
     entries: {
       main: {},
       alternate: { decisionModel: "fixture/override" },
@@ -68,10 +66,7 @@ const config: OpenClawConfig = {
 };
 
 // Exercise core assembly, the real Decision runtime, and registered provider admission together.
-function fixture(
-  evaluate: DecisionProviderV1["evaluate"] = async () => answer,
-  isReady?: () => boolean,
-) {
+function fixture(evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer)) {
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "decision-fixture",
@@ -84,12 +79,7 @@ function fixture(
   const api = builder.createApi(record, { config });
   runPluginRegisterSyncInRegistry(
     (registration) =>
-      registration.registerDecisionProvider({
-        id: "fixture",
-        contractVersion: 1,
-        evaluate,
-        isReady,
-      }),
+      registration.registerDecisionProvider({ id: "fixture", contractVersion: 1, evaluate }),
     api,
     builder.registry,
     record.id,
@@ -101,6 +91,7 @@ function fixture(
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
   });
+  return evaluate;
 }
 
 // Disable unrelated plugin tool discovery; the core factory and wrappers remain real.
@@ -129,8 +120,7 @@ afterEach(() => {
 
 describe("core decision_evaluate registered flow", () => {
   it("keeps the explicit tool independent of automatic eligibility through Labs on/off transitions", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
+    const evaluate = fixture();
     const retained = requiredTool("alternate");
     for (const decisionAssistance of [false, true, false]) {
       const current: OpenClawConfig = {
@@ -175,8 +165,7 @@ describe("core decision_evaluate registered flow", () => {
   });
 
   it("rejects resource bounds before rubric hashing or provider execution", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate);
+    const evaluate = fixture();
     const snapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -215,13 +204,7 @@ describe("core decision_evaluate registered flow", () => {
       agents: { defaults: { decisionModel: "fixture/default@synthetic-profile" } },
     })!;
     expect(tool.description).toContain("at most 99 questions");
-    setRuntimeConfigSnapshot({
-      agents: {
-        defaults: {
-          decisionModel: "fixture/reconfigured",
-        },
-      },
-    });
+    setRuntimeConfigSnapshot({ agents: { defaults: { decisionModel: "fixture/reconfigured" } } });
     let nested: unknown = "private evidence";
     for (let depth = 0; depth < 10000; depth++) {
       nested = { child: nested };
@@ -247,15 +230,13 @@ describe("core decision_evaluate registered flow", () => {
     }
     expect(evaluate).not.toHaveBeenCalled();
   });
-  it.each([{ ...batch, agentId: "disabled" }])(
-    "rejects malformed or routing arguments without echoing evidence",
-    async (input) => {
-      const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-      fixture(evaluate);
-      await expect(requiredTool().execute("call", input)).rejects.toThrow("no evidence was sent");
-      expect(evaluate).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects malformed or routing arguments without echoing evidence", async () => {
+    const evaluate = fixture();
+    await expect(requiredTool().execute("call", { ...batch, agentId: "disabled" })).rejects.toThrow(
+      "no evidence was sent",
+    );
+    expect(evaluate).not.toHaveBeenCalled();
+  });
 
   it("propagates caller cancellation before and during provider work", async () => {
     const cancellation = new Error("caller cancelled");

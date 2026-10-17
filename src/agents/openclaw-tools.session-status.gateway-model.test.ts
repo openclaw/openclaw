@@ -217,6 +217,13 @@ async function fixture(
       },
       run,
     );
+  const execute = (params: { model: string; sessionKey?: string }) =>
+    withPluginRuntimeGatewayRequestScope(gatewayScope, () =>
+      withOperatorToolGatewayAuthority(
+        { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+        () => withCaller(() => tool.execute("status-selection", params)),
+      ),
+    );
   return {
     scope,
     context,
@@ -228,13 +235,13 @@ async function fixture(
     retireGateway: () => {
       current = false;
     },
-    execute: (params: { model: string; sessionKey?: string }) =>
-      withPluginRuntimeGatewayRequestScope(gatewayScope, () =>
-        withOperatorToolGatewayAuthority(
-          { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
-          () => withCaller(() => tool.execute("status-selection", params)),
-        ),
-      ),
+    execute,
+    select: async (model: string, changedModel: boolean, sessionKey?: string) => {
+      expect((await execute({ model, sessionKey })).details).toMatchObject({
+        agentId,
+        changedModel,
+      });
+    },
   };
 }
 
@@ -254,10 +261,7 @@ it.each([false, true])(
     const configWrite = vi.spyOn(configRuntime, "mutateConfigFileWithRetry");
     const configBefore = structuredClone(cfg);
 
-    expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
-      agentId: "support",
-      changedModel: true,
-    });
+    await target.select("chosen", true, "main");
     const selected = target.read();
     expect(selected.sessionId).not.toBe("");
     expect(selected).toMatchObject({ providerOverride: "fixture", modelOverride: "chosen" });
@@ -267,25 +271,19 @@ it.each([false, true])(
     await flushPendingSessionsChangedEvents(target.context);
     target.broadcast.mockClear();
 
-    expect((await target.execute({ sessionKey: "main", model: "chosen" })).details).toMatchObject({
-      changedModel: false,
-    });
+    await target.select("chosen", false, "main");
     expect(target.read()).toEqual(selected);
     await flushPendingSessionsChangedEvents(target.context);
     expect(onPatch).toHaveBeenCalledOnce();
     expect(target.broadcast).not.toHaveBeenCalled();
 
-    expect((await target.execute({ model: "default" })).details).toMatchObject({
-      changedModel: true,
-    });
+    await target.select("default", true);
     const reset = target.read();
     expect(reset).toMatchObject({ modelOverrideSource: "default", liveModelSwitchPending: true });
     expect(reset.providerOverride).toBeUndefined();
     expect(reset.modelOverride).toBeUndefined();
     expect(reset.modelFallback).toBeUndefined();
-    expect((await target.execute({ model: "fixture/default" })).details).toMatchObject({
-      changedModel: false,
-    });
+    await target.select("fixture/default", false);
     expect(target.read()).toEqual(reset);
     expect(onPatch).toHaveBeenCalledTimes(2);
     expect(configWrite).not.toHaveBeenCalled();
@@ -302,20 +300,16 @@ it.each([
     entry: availability === "sandbox" ? { sandbox: "required" } : {},
   });
   const before = target.read();
-  if (availability === "unavailable" || availability === "retired before commit") {
-    runtime.prepare.mockResolvedValue(
-      availability === "unavailable"
-        ? { kind: "unavailable", message }
-        : {
-            kind: "ready",
-            runtimeId: nativeHarness.id,
-            harness: nativeHarness,
-            validate: vi
-              .fn<() => string | undefined>()
-              .mockReturnValueOnce(undefined)
-              .mockReturnValue(message),
-          },
-    );
+  if (availability === "retired before commit") {
+    runtime.prepare.mockResolvedValue({
+      kind: "ready",
+      runtimeId: nativeHarness.id,
+      harness: nativeHarness,
+      validate: vi
+        .fn<() => string | undefined>()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(message),
+    });
   } else if (availability === "worker") {
     const placement: WorkerSessionPlacementRecord = {
       sessionId: before.sessionId,
@@ -431,6 +425,11 @@ it("routes status model changes through the original operator policy and preserv
     },
   });
   await withPluginRuntimeGatewayRequestScope(target.gatewayScope, async () => {
+    const select = async (model: string, changedModel: boolean) => {
+      expect((await target.tool.execute("selection", { model })).details).toMatchObject({
+        changedModel,
+      });
+    };
     const runAs = <T>(profileId: string, run: () => Promise<T>) => {
       const client = sharingPolicyClient({ user: profileId, scopes: ["operator.admin"] });
       return withPluginRuntimeGatewayRequestScope({ ...target.gatewayScope, client }, () =>
@@ -455,18 +454,12 @@ it("routes status model changes through the original operator policy and preserv
           );
           expect(target.read()).toEqual(before);
         }
-        expect(
-          (await target.tool.execute("allowed-selection", { model: "chosen" })).details,
-        ).toMatchObject({ changedModel: true });
+        await select("chosen", true);
         const selected = target.read();
         expect(selected).toMatchObject({ providerOverride: "fixture", modelOverride: "allowed" });
-        expect(
-          (await target.tool.execute("same-selection", { model: "chosen" })).details,
-        ).toMatchObject({ changedModel: false });
+        await select("chosen", false);
         expect(target.read()).toEqual(selected);
-        expect(
-          (await target.tool.execute("default-selection", { model: "default" })).details,
-        ).toMatchObject({ changedModel: true });
+        await select("default", true);
         expect(target.read().modelOverride).toBeUndefined();
         expect(target.context.getRuntimeConfig().agents?.defaults?.model).toEqual(
           cfg.agents?.defaults?.model,

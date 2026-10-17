@@ -27,28 +27,23 @@ function createAuthStore(providers: string[] = []): AuthProfileStore {
     profiles: Object.fromEntries(
       providers.map((provider) => [
         `${provider}:default`,
-        {
-          provider,
-          type: "api_key",
-          key: "test",
-        },
+        { provider, type: "api_key", key: "test" },
       ]),
     ),
   };
 }
 
-function createPlugin(params: {
-  id: string;
-  origin?: PluginManifestRecord["origin"];
+function createPlugin({
+  setupProviders,
+  origin = "bundled",
+  ...params
+}: Pick<PluginManifestRecord, "id" | "imageGenerationProviderMetadata"> & {
   contracts: NonNullable<PluginManifestRecord["contracts"]>;
-  imageGenerationProviderMetadata?: PluginManifestRecord["imageGenerationProviderMetadata"];
-  videoGenerationProviderMetadata?: PluginManifestRecord["videoGenerationProviderMetadata"];
-  musicGenerationProviderMetadata?: PluginManifestRecord["musicGenerationProviderMetadata"];
+  origin?: PluginManifestRecord["origin"];
   setupProviders?: Array<{ id: string; envVars?: string[] }>;
 }): PluginManifestRecord {
   return {
-    id: params.id,
-    origin: params.origin ?? "bundled",
+    origin,
     rootDir: `/plugins/${params.id}`,
     source: `/plugins/${params.id}/index.js`,
     manifestPath: `/plugins/${params.id}/openclaw.plugin.json`,
@@ -57,11 +52,8 @@ function createPlugin(params: {
     cliBackends: [],
     skills: [],
     hooks: [],
-    contracts: params.contracts,
-    imageGenerationProviderMetadata: params.imageGenerationProviderMetadata,
-    videoGenerationProviderMetadata: params.videoGenerationProviderMetadata,
-    musicGenerationProviderMetadata: params.musicGenerationProviderMetadata,
-    setup: params.setupProviders ? { providers: params.setupProviders } : undefined,
+    ...params,
+    setup: setupProviders ? { providers: setupProviders } : undefined,
   };
 }
 
@@ -80,32 +72,32 @@ function createExplicitMediaModelConfig(): OpenClawConfig {
   };
 }
 
-function createStandardMediaPlugins(
-  mediaProvider = "media-owner",
-): [PluginManifestRecord, PluginManifestRecord, PluginManifestRecord, PluginManifestRecord] {
+function createStandardMediaPlugins(mediaProvider = "media-owner"): PluginManifestRecord[] {
   const mediaEnvVar = mediaProvider === "anthropic" ? "ANTHROPIC_API_KEY" : "MEDIA_OWNER_API_KEY";
   return [
-    createPlugin({
-      id: "image-owner",
-      contracts: { imageGenerationProviders: ["image-owner"] },
-      setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
-    }),
-    createPlugin({
-      id: "video-owner",
-      contracts: { videoGenerationProviders: ["video-owner"] },
-      setupProviders: [{ id: "video-owner", envVars: ["VIDEO_OWNER_API_KEY"] }],
-    }),
-    createPlugin({
-      id: "music-owner",
-      contracts: { musicGenerationProviders: ["music-owner"] },
-      setupProviders: [{ id: "music-owner", envVars: ["MUSIC_OWNER_API_KEY"] }],
-    }),
+    ...(["image", "video", "music"] as const).map((kind) =>
+      createPlugin({
+        id: `${kind}-owner`,
+        contracts: { [`${kind}GenerationProviders`]: [`${kind}-owner`] },
+        setupProviders: [{ id: `${kind}-owner`, envVars: [`${kind.toUpperCase()}_OWNER_API_KEY`] }],
+      }),
+    ),
     createPlugin({
       id: "media-owner",
       contracts: { mediaUnderstandingProviders: [mediaProvider] },
       setupProviders: [{ id: mediaProvider, envVars: [mediaEnvVar] }],
     }),
   ];
+}
+
+const allMedia = { imageGenerate: true, videoGenerate: true, musicGenerate: true, pdf: true };
+type PlanOptions = Parameters<typeof resolveOptionalMediaToolFactoryPlan>[0];
+function expectPlan(
+  config: OpenClawConfig,
+  options: Omit<PlanOptions, "config">,
+  expected = allMedia,
+) {
+  expect(resolveOptionalMediaToolFactoryPlan({ config, ...options })).toEqual(expected);
 }
 
 function installSnapshot(
@@ -237,38 +229,26 @@ describe("optional media tool factory planning", () => {
       expires: Date.now() + 60_000,
     };
 
-    expect(
+    const available = (authStore: AuthProfileStore, runtime = preparedModelRuntime) =>
       resolveImageToolFactoryAvailable({
         config,
         agentDir: "/agent",
-        authStore: createAuthStore(["custom"]),
-        preparedModelRuntime,
-      }),
-    ).toBe(true);
-    expect(
-      resolveImageToolFactoryAvailable({
-        config,
-        agentDir: "/agent",
-        authStore: oauthStore,
-        preparedModelRuntime,
-      }),
-    ).toBe(false);
+        authStore,
+        preparedModelRuntime: runtime,
+      });
+    expect(available(createAuthStore(["custom"]))).toBe(true);
+    expect(available(oauthStore)).toBe(false);
     for (const [capabilities, expected] of [
       [["audio"], false],
       [["image"], true],
     ] as const) {
       expect(
-        resolveImageToolFactoryAvailable({
-          config,
-          agentDir: "/agent",
-          authStore: oauthStore,
-          preparedModelRuntime: {
-            metadataSnapshot: snapshot,
-            mediaCapabilityProviders: {
-              mediaUnderstandingProviders: [{ id: "codex", capabilities }],
-            },
-          } as never,
-        }),
+        available(oauthStore, {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: {
+            mediaUnderstandingProviders: [{ id: "codex", capabilities }],
+          },
+        } as never),
       ).toBe(expected);
     }
   });
@@ -316,17 +296,9 @@ describe("optional media tool factory planning", () => {
     const allowlistFromAlsoAllowOnlyPolicy = ["group:memory", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY];
     installSnapshot(config, []);
 
-    expect(
-      resolveOptionalMediaToolFactoryPlan({
-        config,
-        authStore: createAuthStore(),
-        toolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
-      }),
-    ).toEqual({
-      imageGenerate: true,
-      videoGenerate: true,
-      musicGenerate: true,
-      pdf: true,
+    expectPlan(config, {
+      authStore: createAuthStore(),
+      toolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
     });
 
     const toolNames = createOpenClawTools({
@@ -335,29 +307,24 @@ describe("optional media tool factory planning", () => {
       authProfileStore: createAuthStore(),
       pluginToolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
     }).map((tool) => tool.name);
-    expect(toolNames).toContain("image_generate");
-    expect(toolNames).toContain("video_generate");
-    expect(toolNames).toContain("music_generate");
-    expect(toolNames).toContain("pdf");
+    expect(toolNames).toEqual(
+      expect.arrayContaining(["image_generate", "video_generate", "music_generate", "pdf"]),
+    );
   });
 
   it("keeps denylists authoritative when alsoAllow-only policies preserve factory construction", () => {
     const config = createExplicitMediaModelConfig();
     installSnapshot(config, []);
 
-    expect(
-      resolveOptionalMediaToolFactoryPlan({
-        config,
+    expectPlan(
+      config,
+      {
         authStore: createAuthStore(),
         toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
         toolDenylist: ["video_generate", "pdf"],
-      }),
-    ).toEqual({
-      imageGenerate: true,
-      videoGenerate: false,
-      musicGenerate: true,
-      pdf: false,
-    });
+      },
+      { ...allMedia, videoGenerate: false, pdf: false },
+    );
   });
 
   it("keeps auth-backed providers on the factory path", () => {
@@ -365,16 +332,8 @@ describe("optional media tool factory planning", () => {
     installSnapshot(config, createStandardMediaPlugins());
     vi.stubEnv("VIDEO_OWNER_API_KEY", "video-key");
 
-    expect(
-      resolveOptionalMediaToolFactoryPlan({
-        config,
-        authStore: createAuthStore(["image-owner", "music-owner", "media-owner"]),
-      }),
-    ).toEqual({
-      imageGenerate: true,
-      videoGenerate: true,
-      musicGenerate: true,
-      pdf: true,
+    expectPlan(config, {
+      authStore: createAuthStore(["image-owner", "music-owner", "media-owner"]),
     });
   });
 

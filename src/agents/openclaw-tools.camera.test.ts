@@ -65,8 +65,23 @@ function setupNodeInvokeMock(options: {
   );
 }
 
-function expectInvoke(params: unknown, command: string, input: Record<string, unknown>) {
-  expect(params).toMatchObject({ nodeId: NODE_ID, command, params: input });
+function mockInvoke(
+  command: string,
+  input: Record<string, unknown>,
+  payload: unknown,
+  commands?: string[],
+) {
+  setupNodeInvokeMock({
+    commands,
+    onInvoke: (params) => {
+      expect(params).toMatchObject({ nodeId: NODE_ID, command, params: input });
+      return { payload };
+    },
+  });
+}
+
+async function expectNodeError(input: Record<string, unknown>, error: string | RegExp) {
+  await expect(executeNodes(input)).rejects.toThrow(error);
 }
 
 function firstMediaUrl(result: NodesToolResult): string {
@@ -92,12 +107,7 @@ afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("nodes camera_snap", () => {
   it("uses front/high-quality defaults and includes images for vision models", async () => {
-    setupNodeInvokeMock({
-      onInvoke: (params) => {
-        expectInvoke(params, "camera.snap", { facing: "front", maxWidth: 1600, quality: 0.95 });
-        return { payload: JPG_PAYLOAD };
-      },
-    });
+    mockInvoke("camera.snap", { facing: "front", maxWidth: 1600, quality: 0.95 }, JPG_PAYLOAD);
     const result = await executeNodes({ action: "camera_snap" }, { modelHasVision: true });
     expect(result.content?.filter((block) => block.type === "image")).toEqual([
       { type: "image", data: JPG_PAYLOAD.base64, mimeType: "image/jpeg" },
@@ -105,9 +115,10 @@ describe("nodes camera_snap", () => {
   });
 
   it("rejects facing both when deviceId is provided", async () => {
-    await expect(
-      executeNodes({ action: "camera_snap", facing: "both", deviceId: "cam-123" }),
-    ).rejects.toThrow(/facing=both is not allowed when deviceId is set/i);
+    await expectNodeError(
+      { action: "camera_snap", facing: "both", deviceId: "cam-123" },
+      /facing=both is not allowed when deviceId is set/i,
+    );
   });
 
   it("does not publish the front camera when the back camera returns malformed image data", async () => {
@@ -119,9 +130,7 @@ describe("nodes camera_snap", () => {
     });
     const rename = vi.spyOn(fs, "rename");
     try {
-      await expect(executeNodes({ action: "camera_snap", facing: "both" })).rejects.toThrow(
-        /invalid base64/i,
-      );
+      await expectNodeError({ action: "camera_snap", facing: "both" }, /invalid base64/i);
       expect(rename).not.toHaveBeenCalled();
     } finally {
       const publishedPaths = rename.mock.calls.map(([, destination]) => String(destination));
@@ -137,7 +146,8 @@ describe("nodes camera_snap", () => {
         payload: captures++ === 0 ? { ...JPG_PAYLOAD, format: "webp" } : JPG_PAYLOAD,
       }),
     });
-    await expect(executeNodes({ action: "camera_snap", facing: "both" })).rejects.toThrow(
+    await expectNodeError(
+      { action: "camera_snap", facing: "both" },
       /unsupported camera\.snap format/i,
     );
     expect(captures).toBe(1);
@@ -184,14 +194,13 @@ describe("nodes camera_clip", () => {
 describe("nodes photos_latest", () => {
   it("rejects a non-array photos collection instead of reporting an empty photo library", async () => {
     setupNodeInvokeMock({ invokePayload: { photos: {} } });
-    await expect(executeNodes({ action: "photos_latest" })).rejects.toThrow(
-      "invalid photos.latest payload",
-    );
+    await expectNodeError({ action: "photos_latest" }, "invalid photos.latest payload");
   });
 
   it("rejects more photos than the node was asked to return", async () => {
     setupNodeInvokeMock({ invokePayload: { photos: [PHOTO, PHOTO] } });
-    await expect(executeNodes({ action: "photos_latest" })).rejects.toThrow(
+    await expectNodeError(
+      { action: "photos_latest" },
       "photos.latest returned 2 photos; requested at most 1",
     );
   });
@@ -208,7 +217,8 @@ describe("nodes photos_latest", () => {
       .mockReturnValueOnce(firstPhotoId)
       .mockReturnValueOnce(secondPhotoId);
     try {
-      await expect(executeNodes({ action: "photos_latest", limit: 2 })).rejects.toThrow(
+      await expectNodeError(
+        { action: "photos_latest", limit: 2 },
         /unsupported photos\.latest format/i,
       );
       await expect(fs.stat(firstPhotoPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -220,12 +230,7 @@ describe("nodes photos_latest", () => {
   });
 
   it("returns an explicit model-facing result when no photos are available", async () => {
-    setupNodeInvokeMock({
-      onInvoke: (params) => {
-        expectInvoke(params, "photos.latest", { limit: 1, maxWidth: 1600, quality: 0.85 });
-        return { payload: { photos: [] } };
-      },
-    });
+    mockInvoke("photos.latest", { limit: 1, maxWidth: 1600, quality: 0.85 }, { photos: [] });
     const result = await executeNodes({ action: "photos_latest" }, { modelHasVision: false });
     expect(result.content).toStrictEqual([{ type: "text", text: "No photos found." }]);
     expect(result.details).toStrictEqual([]);
@@ -248,30 +253,19 @@ describe("nodes photos_latest", () => {
 describe("nodes command actions", () => {
   it("routes device_status and returns its payload", async () => {
     const payload = { battery: { state: "charging", lowPowerModeEnabled: false } };
-    setupNodeInvokeMock({
-      commands: ["device.status"],
-      onInvoke: (params) => {
-        expectInvoke(params, "device.status", {});
-        return { payload };
-      },
-    });
+    mockInvoke("device.status", {}, payload, ["device.status"]);
     const result = await executeNodes({ action: "device_status" });
     expect(JSON.parse(firstText(result))).toStrictEqual(payload);
   });
 
   it("routes notification replies with trimmed reply text", async () => {
     const payload = { ok: true, key: "n1", action: "reply" };
-    setupNodeInvokeMock({
-      commands: ["notifications.actions"],
-      onInvoke: (params) => {
-        expectInvoke(params, "notifications.actions", {
-          key: "n1",
-          action: "reply",
-          replyText: "On it",
-        });
-        return { payload };
-      },
-    });
+    mockInvoke(
+      "notifications.actions",
+      { key: "n1", action: "reply", replyText: "On it" },
+      payload,
+      ["notifications.actions"],
+    );
     const result = await executeNodes({
       action: "notifications_action",
       notificationKey: "n1",
@@ -288,17 +282,12 @@ describe("nodes command actions", () => {
       accuracyMeters: 18,
       provider: "network",
     };
-    setupNodeInvokeMock({
-      commands: ["location.get"],
-      onInvoke: (params) => {
-        expectInvoke(params, "location.get", {
-          maxAgeMs: 12_000,
-          desiredAccuracy: "balanced",
-          timeoutMs: 4_500,
-        });
-        return { payload };
-      },
-    });
+    mockInvoke(
+      "location.get",
+      { maxAgeMs: 12_000, desiredAccuracy: "balanced", timeoutMs: 4_500 },
+      payload,
+      ["location.get"],
+    );
     const result = await executeNodes({
       action: "location_get",
       maxAgeMs: 12_000,
@@ -311,23 +300,15 @@ describe("nodes command actions", () => {
 
 describe("nodes invoke", () => {
   it("blocks media invoke commands to avoid base64 context bloat", async () => {
-    await expect(
-      executeNodes({
-        action: "invoke",
-        invokeCommand: "photos.latest",
-        invokeParamsJson: '{"limit":1}',
-      }),
-    ).rejects.toThrow(/use action="photos_latest"/i);
+    await expectNodeError(
+      { action: "invoke", invokeCommand: "photos.latest", invokeParamsJson: '{"limit":1}' },
+      /use action="photos_latest"/i,
+    );
   });
 
   it("allows media invoke commands when explicitly enabled", async () => {
     const payload = { photos: [{ format: "jpg", base64: "aGVsbG8=", width: 1, height: 1 }] };
-    setupNodeInvokeMock({
-      onInvoke: (params) => {
-        expectInvoke(params, "photos.latest", { limit: 1 });
-        return { payload };
-      },
-    });
+    mockInvoke("photos.latest", { limit: 1 }, payload);
     const result = await executeNodes(
       { action: "invoke", invokeCommand: "photos.latest", invokeParamsJson: '{"limit":1}' },
       { allowMediaInvokeCommands: true },
