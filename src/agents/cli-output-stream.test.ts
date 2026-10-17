@@ -1,8 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type {
-  CliOutput,
-  CliJsonlStreamingParserOptions as ParserOptions,
-} from "./cli-output-contracts.js";
+import type * as Cli from "./cli-output-contracts.js";
 import {
   createClaudeParser,
   joinJsonlFrames,
@@ -10,7 +7,8 @@ import {
   claudeTextDelta,
 } from "./cli-output.test-helpers.js";
 
-type ExpectedOutput = Pick<CliOutput, "text"> & Partial<CliOutput>;
+type ParserOptions = Cli.CliJsonlStreamingParserOptions;
+type ExpectedOutput = Pick<Cli.CliOutput, "text"> & Partial<Cli.CliOutput>;
 function createParser(overrides: Partial<ParserOptions> = {}) {
   return createClaudeParser({
     backend: {
@@ -24,7 +22,10 @@ function createParser(overrides: Partial<ParserOptions> = {}) {
   });
 }
 function finishFrames(parser: ReturnType<typeof createParser>, ...frames: unknown[]) {
-  parser.push(joinJsonlFrames(...frames, ""));
+  const events = frames.map((frame) =>
+    typeof frame === "string" ? claudeTextDelta(frame) : frame,
+  );
+  parser.push(joinJsonlFrames(...events, ""));
   parser.finish();
 }
 function result(text: string, fields: Record<string, unknown> = {}) {
@@ -58,11 +59,14 @@ function toolStart(id = "tool-1", index?: number) {
 function itemMessage(text: string) {
   return { type: "item.completed", item: { type: "agent_message", text } };
 }
-function syntheticNoResponse(text = "No response requested.", model = "<synthetic>") {
+function assistant(content: unknown[], model = "claude-sonnet-4-6") {
   return {
     type: "assistant",
-    message: { model, role: "assistant", content: [{ type: "text", text }] },
+    message: { model, role: "assistant", content },
   };
+}
+function syntheticNoResponse(text = "No response requested.", model = "<synthetic>") {
+  return assistant([{ type: "text", text }], model);
 }
 function nativeInit(tools: string[], fields: Record<string, unknown> = {}) {
   return { type: "system", subtype: "init", tools, ...fields };
@@ -82,12 +86,12 @@ const stoppedFailure = {
     terminalReason: "hook_stopped",
     stopReason: "tool_use",
   },
-} satisfies Partial<CliOutput>;
+} satisfies Partial<Cli.CliOutput>;
 
-it.each([
-  {
-    name: "fresh and warm parent initialization",
-    frames: [
+it.each<[name: string, frames: unknown[], expected: string[][]]>([
+  [
+    "fresh and warm parent initialization",
+    [
       nativeInit(["Read", "Bash", "mcp__openclaw__automations"], {
         session_id: "reused-session",
       }),
@@ -96,19 +100,19 @@ it.each([
       result("warm turn complete"),
       nativeInit([], { session_id: "replacement-session" }),
     ],
-    expected: [["Read", "Bash", "mcp__openclaw__automations"], ["Read"], []],
-  },
-  {
-    name: "subagent and non-initialization exclusion",
-    frames: [
+    [["Read", "Bash", "mcp__openclaw__automations"], ["Read"], []],
+  ],
+  [
+    "subagent and non-initialization exclusion",
+    [
       nativeInit(["Read"], { parent_tool_use_id: null }),
       nativeInit(["Bash"], { parent_tool_use_id: "child-call" }),
       { type: "system", subtype: "status", tools: [] },
       { type: "assistant", tools: ["Write"] },
     ],
-    expected: [["Read"]],
-  },
-])("observes native tools across chunked $name", ({ frames, expected }) => {
+    [["Read"]],
+  ],
+])("observes native tools across chunked %s", (_name, frames, expected) => {
   const snapshots: unknown[] = [];
   const parser = createClaudeParser({ onNativeTools: (tools) => snapshots.push(tools) });
   const first = JSON.stringify(frames[0]);
@@ -131,18 +135,11 @@ it.each<[name: string, frames: unknown[], expected: ExpectedOutput]>([
   ],
   ["ordinary lookalike", [syntheticNoResponse(undefined, "claude-sonnet-4-6")], { text: "" }],
   ["different synthetic text", [syntheticNoResponse("No reply needed.")], { text: "" }],
-  ["real text", [syntheticNoResponse(), claudeTextDelta("real answer")], { text: "real answer" }],
+  ["real text", [syntheticNoResponse(), "real answer"], { text: "real answer" }],
   [
     "tool activity",
     [
-      {
-        type: "assistant",
-        message: {
-          model: "claude-sonnet-4-6",
-          role: "assistant",
-          content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }],
-        },
-      },
+      assistant([{ type: "tool_use", id: "tool-1", name: "Read", input: {} }]),
       syntheticNoResponse(),
     ],
     { text: "" },
@@ -161,7 +158,7 @@ it.each<[name: string, frames: unknown[], terminalReason: string, expected: Expe
   ["empty hook-stopped turn", [], "hook_stopped", { text: "", ...stoppedFailure }],
   [
     "hook stop after streamed reply",
-    [claudeTextDelta("streamed answer")],
+    ["streamed answer"],
     "hook_stopped",
     { text: "streamed answer" },
   ],
@@ -188,7 +185,6 @@ it.each<[name: string, frames: unknown[], terminalReason: string, expected: Expe
       session_id: "hook-stopped",
       stop_reason: "tool_use",
       terminal_reason: terminalReason,
-      num_turns: 4,
     }),
   );
   expectOutput(parser, "hook-stopped", expected);
@@ -209,8 +205,7 @@ it.each([
     expect(parser.hasTerminalResult()).toBe(false);
     expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text.trim() });
     expect(parser.getOutput()?.errorText).toEqual(rejected ? expect.any(String) : undefined);
-    expect(parseJsonlEvent).toHaveBeenCalledOnce();
-    expect(parseJsonlEvent).toHaveBeenCalledWith(
+    expect(parseJsonlEvent).toHaveBeenCalledExactlyOnceWith(
       JSON.stringify(frame),
       expect.objectContaining({ backendId: "claude-cli" }),
     );
@@ -239,15 +234,11 @@ it.each<
     frames: unknown[],
     expectedText: string,
     expectedRawFinalText?: string,
-    checkDelta?: boolean,
+    checkDelta?: true | "reconstruct",
   ]
 >([
-  ["no result envelope", [claudeTextDelta("hello")], "hello", undefined, true],
-  [
-    "empty result envelope",
-    [claudeTextDelta("hello"), claudeTextDelta(" world"), result("")],
-    "hello world",
-  ],
+  ["no result envelope", ["hello"], "hello", undefined, true],
+  ["empty result envelope", ["hello", " world", result("")], "hello world"],
   [
     "tool split inside one message",
     [...message("Before."), toolStart(), ...reply("DONE")],
@@ -255,15 +246,15 @@ it.each<
     "DONE",
   ],
   [
+    "pre-tool text and reconstructible deltas without a commentary consumer",
+    [...message("Before."), toolStart(), messageStop, messageStart, ...reply("DONE")],
+    "Before.\n\nDONE",
+    "DONE",
+    "reconstruct",
+  ],
+  [
     "toolless closer after tool-using message",
-    [
-      ...message("Before."),
-      toolStart(),
-      claudeTextDelta("After."),
-      messageStop,
-      messageStart,
-      ...reply("DONE"),
-    ],
+    [...message("Before."), toolStart(), "After.", messageStop, messageStart, ...reply("DONE")],
     "Before.\n\nAfter.\n\nDONE",
     "DONE",
   ],
@@ -291,16 +282,12 @@ it.each<
   ],
   [
     "suffix match inside one message",
-    [
-      messageStart,
-      claudeTextDelta("discarded draft authoritative result"),
-      result("authoritative result"),
-    ],
+    [messageStart, "discarded draft authoritative result", result("authoritative result")],
     "authoritative result",
   ],
   [
     "divergent streamed text",
-    [claudeTextDelta("draft wording"), result("authoritative result")],
+    ["draft wording", result("authoritative result")],
     "authoritative result",
   ],
 ])(
@@ -317,11 +304,15 @@ it.each<
       text: expectedText,
       ...(expectedRawFinalText === undefined ? {} : { rawFinalText: expectedRawFinalText }),
     });
-    if (checkDelta) {
+    if (checkDelta === true) {
       expect(deltas).toEqual([
         { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
       ]);
       expect(sessionIds).toEqual(["session-stream"]);
+    }
+    if (checkDelta === "reconstruct") {
+      expect(deltas.map((entry) => entry.delta).join("")).toBe(expectedText);
+      expect(deltas.at(-1)?.text).toBe(expectedText);
     }
   },
 );
@@ -359,29 +350,8 @@ it.each<[name: string, frames: unknown[], expected: string, commentary?: boolean
     ...frames,
     result(""),
   );
-  // rawFinalText is omitted when the final message equals the reply text.
   const output = parser.getOutput();
   expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
-});
-
-it("keeps pre-tool text and reconstructible deltas without a commentary consumer", () => {
-  const deltas: Array<{ text: string; delta: string }> = [];
-  const parser = createParser({ onAssistantDelta: (delta) => deltas.push(delta) });
-  finishFrames(
-    parser,
-    init("session-tool-split"),
-    ...message("Before."),
-    toolStart(),
-    messageStop,
-    messageStart,
-    ...reply("DONE"),
-  );
-  expectOutput(parser, "session-tool-split", {
-    text: "Before.\n\nDONE",
-    rawFinalText: "DONE",
-  });
-  expect(deltas.map((entry) => entry.delta).join("")).toBe("Before.\n\nDONE");
-  expect(deltas.at(-1)?.text).toBe("Before.\n\nDONE");
 });
 
 it("judges post-interim-result segments on their own stream state", () => {
@@ -407,17 +377,12 @@ it.each<[name: string, frames: unknown[], expected: string[]]>([
   ["no preceding text", [toolStart("toolu_1", 0)], []],
   [
     "consecutive tool blocks",
-    [claudeTextDelta("First, checking files."), toolStart("toolu_1", 1), toolStart("toolu_2", 2)],
+    ["First, checking files.", toolStart("toolu_1", 1), toolStart("toolu_2", 2)],
     ["First, checking files."],
   ],
   [
     "new text segments",
-    [
-      claudeTextDelta("Reading the file now."),
-      toolStart("toolu_a", 1),
-      claudeTextDelta(" Now searching."),
-      toolStart("toolu_b", 3),
-    ],
+    ["Reading the file now.", toolStart("toolu_a", 1), " Now searching.", toolStart("toolu_b", 3)],
     ["Reading the file now.", "Now searching."],
   ],
 ])("emits commentary once for %s", (_name, frames, expected) => {
@@ -427,29 +392,27 @@ it.each<[name: string, frames: unknown[], expected: string[]]>([
   expect(commentaryTexts).toEqual(expected);
 });
 
-it.each([{ name: "shared lexical prefix", results: ["Hi", "History matters.", "Final answer."] }])(
-  "delivers completed $name results before settlement and retains retry boundaries",
-  ({ results }) => {
-    const completed: string[] = [];
-    const indices: number[] = [];
-    const parser = createClaudeParser({
-      onCompletedReply: (text, index) => {
-        completed.push(text);
-        indices.push(index);
-      },
-    });
-    for (const text of results.slice(0, 2)) {
-      parser.push(
-        joinJsonlFrames(result(text, { subtype: "success", openclaw_interim_result: true }), ""),
-      );
-    }
-    expect(completed).toEqual(results.slice(0, 2));
-    expect(indices).toEqual([0, 1]);
-    finishFrames(parser, result("Final answer.", { subtype: "success" }));
-    expect(completed).toEqual(results.slice(0, 2));
-    expect(parser.getOutput()).toMatchObject({ text: results.join("\n"), textParts: results });
-  },
-);
+it("delivers completed shared-prefix results before settlement and retains retry boundaries", () => {
+  const results = ["Hi", "History matters.", "Final answer."];
+  const completed: string[] = [];
+  const indices: number[] = [];
+  const parser = createClaudeParser({
+    onCompletedReply: (text, index) => {
+      completed.push(text);
+      indices.push(index);
+    },
+  });
+  for (const text of results.slice(0, 2)) {
+    parser.push(
+      joinJsonlFrames(result(text, { subtype: "success", openclaw_interim_result: true }), ""),
+    );
+  }
+  expect(completed).toEqual(results.slice(0, 2));
+  expect(indices).toEqual([0, 1]);
+  finishFrames(parser, result("Final answer.", { subtype: "success" }));
+  expect(completed).toEqual(results.slice(0, 2));
+  expect(parser.getOutput()).toMatchObject({ text: results.join("\n"), textParts: results });
+});
 
 it("does not redeliver repeated or empty held result acknowledgments", () => {
   const completed: string[] = [];
