@@ -87,32 +87,24 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
           </Show>
         </div>
       </Show>
-      <openclaw-tooltip
-        prop:content={
-          props.transcriptSearchAvailable
-            ? t("sessionsView.transcriptSearchTitle")
-            : t("sessionsView.transcriptSearchUnavailable")
-        }
+      <button
+        ref={(element) => (trigger = element)}
+        class="btn btn--xs btn--icon sessions-toolbar__icon sessions-transcript-search__trigger"
+        type="submit"
+        aria-label={t("sessionsView.transcriptSearchTitle")}
+        aria-controls="sessions-transcript-search-input"
+        aria-expanded={expanded() ? "true" : "false"}
+        disabled={!props.transcriptSearchAvailable || loading()}
+        onClick={(event: MouseEvent) => {
+          if (!expanded()) {
+            event.preventDefault();
+            setExpanded(true);
+            onSettled(() => input?.focus({ preventScroll: true }));
+          }
+        }}
       >
-        <button
-          ref={(element) => (trigger = element)}
-          class="btn btn--xs btn--icon sessions-transcript-search__trigger"
-          type="submit"
-          aria-label={t("sessionsView.transcriptSearchTitle")}
-          aria-controls="sessions-transcript-search-input"
-          aria-expanded={expanded() ? "true" : "false"}
-          disabled={!props.transcriptSearchAvailable || loading()}
-          onClick={(event: MouseEvent) => {
-            if (!expanded()) {
-              event.preventDefault();
-              setExpanded(true);
-              onSettled(() => input?.focus({ preventScroll: true }));
-            }
-          }}
-        >
-          <Icon name="search" />
-        </button>
-      </openclaw-tooltip>
+        <Icon name="search" />
+      </button>
     </form>
   );
 }

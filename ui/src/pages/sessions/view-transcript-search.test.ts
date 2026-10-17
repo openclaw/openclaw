@@ -32,7 +32,7 @@ describe("sessions transcript search view", () => {
       await Promise.resolve();
 
       const rosterFilter = container.querySelector<HTMLInputElement>(
-        '.sessions-filter-bar input[type="text"]',
+        '.sessions-filter-popover__search input[type="text"]',
       );
       const transcriptTrigger = container.querySelector<HTMLButtonElement>(
         ".sessions-transcript-search__trigger",
@@ -58,9 +58,7 @@ describe("sessions transcript search view", () => {
           ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
         expect(onTranscriptSearch).toHaveBeenCalledTimes(1);
       } else {
-        expect(transcriptTrigger?.closest("openclaw-tooltip")?.content).toBe(
-          "Transcript search requires a newer Gateway.",
-        );
+        expect(transcriptTrigger?.closest("openclaw-tooltip")).toBeNull();
       }
       expect(onTranscriptSearch).toHaveBeenCalledTimes(available ? 1 : 0);
     },
@@ -145,7 +143,10 @@ describe("Sessions query clearing", () => {
       });
       try {
         renderSessionsView({ ...props, onSearchChange }, container);
-        const input = container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+        container.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
+        const input = container.querySelector<HTMLInputElement>(
+          ".sessions-filter-popover__search input",
+        )!;
         expect(input.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
         const clear = container.querySelector<HTMLButtonElement>(
           'button[aria-label="Clear search"]',
@@ -186,7 +187,10 @@ describe("Sessions query clearing", () => {
           cancelable: true,
         });
         input.dispatchEvent(emptyEscape);
-        expect(emptyEscape.defaultPrevented).toBe(false);
+        expect(emptyEscape.defaultPrevented).toBe(true);
+        expect(container.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(
+          false,
+        );
         expect(onSearchChange).toHaveBeenCalledTimes(1);
         container.querySelector<HTMLButtonElement>(".data-table-empty-state button")!.click();
         expect(props.onClearFilters).toHaveBeenCalledOnce();
@@ -214,7 +218,10 @@ describe("Sessions query clearing", () => {
     let overlayOwner: Overlay | undefined;
     try {
       renderSessionsView(props, container);
-      const input = container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      container.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
+      const input = container.querySelector<HTMLInputElement>(
+        ".sessions-filter-popover__search input",
+      )!;
       if (owner !== "unfocused") {
         input.focus();
       }
@@ -250,7 +257,9 @@ describe("Sessions query clearing", () => {
       input.dispatchEvent(event);
       expect(onSearchChange).not.toHaveBeenCalled();
       expect(input.value).toBe("keep me");
-      expect(event.defaultPrevented).toBe(owner === "prevented");
+      if (owner === "prevented") {
+        expect(event.defaultPrevented).toBe(true);
+      }
     } finally {
       overlayOwner?.dispose();
       overlay?.removeAttribute("open");

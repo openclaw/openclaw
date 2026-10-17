@@ -6,11 +6,7 @@ import {
 import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
-import {
-  SettingsPage,
-  SettingsSection,
-  SettingsSegmented,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsPage, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -19,13 +15,8 @@ import {
   type SessionRowGroup,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
-import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
-import {
-  categoryDropHandlers,
-  handleSessionsSearchKeydown,
-  SessionsAdvancedFilters,
-} from "./sessions-filters.tsx";
+import { categoryDropHandlers, SessionsAdvancedFilters } from "./sessions-filters.tsx";
 import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
@@ -126,42 +117,31 @@ export function SessionsView(props: SessionsProps) {
       ) : undefined}
       <SettingsSection
         title={t("sessionsView.title")}
-        count={props.result ? rows().length : undefined}
         actions={
           <>
-            {props.statusFilter === "archived" ? (
-              <button
-                class="btn danger"
-                disabled={
-                  props.loading ||
-                  archivedCount() === 0 ||
-                  Boolean(props.deleteArchivedDisabledReason)
-                }
-                title={props.deleteArchivedDisabledReason}
-                onClick={props.onDeleteAllArchived}
-              >
-                <Icon name="trash" /> {t("sessionsView.deleteAllArchived")}
-              </button>
-            ) : undefined}
             <TranscriptSearchForm {...props} />
-            <openclaw-tooltip prop:content={t("common.refresh")}>
-              <button
-                class="btn btn--xs btn--icon sessions-toolbar__refresh"
-                type="button"
-                aria-label={t("common.refresh")}
-                disabled={props.refreshing}
-                onClick={() => props.onRefresh()}
-              >
-                <Icon name="refresh" />
-              </button>
-            </openclaw-tooltip>
+            <button
+              class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
+              type="button"
+              aria-label={t("common.refresh")}
+              disabled={props.refreshing}
+              onClick={() => props.onRefresh()}
+            >
+              <Icon name="refresh" />
+            </button>
+            <SessionsAdvancedFilters
+              {...props}
+              searchQuery={props.searchQuery}
+              archivedCount={archivedCount()}
+            />
             <Show when={application}>
               {(context) => (
                 <ContextNewSessionAction
                   context={context()}
-                  class="btn btn--xs btn--icon primary sessions-toolbar__new-session"
+                  class="btn btn--xs btn--icon primary sessions-toolbar__icon sessions-toolbar__new-session"
                   agentId={props.agentId}
                   label={t("newSession.title")}
+                  showTooltip={false}
                 />
               )}
             </Show>
@@ -207,9 +187,7 @@ function SortHeader(
 }
 
 function SessionsTable(props: SessionsProps) {
-  let searchInput!: HTMLInputElement;
   const rawRows = createMemo(() => props.result?.sessions ?? []);
-  const searchQuery = createMemo(() => props.searchQuery);
   const pageSizeValue = createMemo(() => String(props.pageSize));
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));
   const sorted = createMemo(() => {
@@ -269,55 +247,6 @@ function SessionsTable(props: SessionsProps) {
   );
   return (
     <>
-      <div
-        class="sessions-toolbar sessions-filter-bar"
-        role="group"
-        aria-label={t("sessionsView.filterControls")}
-      >
-        <div class="data-table-search sessions-toolbar__search">
-          <Icon name="search" />
-          <input
-            ref={(element) => (searchInput = element)}
-            type="text"
-            aria-label={t("sessionsView.searchPlaceholder")}
-            placeholder={t("sessionsView.searchPlaceholder")}
-            value={searchQuery()}
-            onInput={(e) => props.onSearchChange(e.currentTarget.value)}
-            onKeyDown={(event: KeyboardEvent) => handleSessionsSearchKeydown(event, props)}
-          />
-          <button
-            type="button"
-            class="sessions-toolbar__clear"
-            aria-label={t("sessionsView.clearSearch")}
-            title={t("sessionsView.clearSearch")}
-            hidden={!props.searchQuery}
-            disabled={!props.searchQuery}
-            onClick={() => {
-              searchInput.focus({ preventScroll: true });
-              props.onSearchChange("");
-            }}
-          >
-            <Icon name="x" />
-          </button>
-        </div>
-        <SettingsSegmented<SessionArchivedFilter>
-          value={props.statusFilter}
-          ariaLabel={t("sessionsView.sessionState")}
-          class="sessions-view-segment"
-          options={[
-            { value: "active", label: t("common.active") },
-            {
-              value: "archived",
-              label: t("sessionsView.archived"),
-              title: t("sessionsView.archivedOnlyTooltip"),
-            },
-            { value: "all", label: t("sessionsView.all") },
-          ]}
-          onChange={(value) => props.onStatusFilterChange(value)}
-        />
-        <SessionsAdvancedFilters {...props} />
-      </div>
-
       {props.selectedKeys.size > 0 ? (
         <div class="data-table-bulk-bar">
           <span>{t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>

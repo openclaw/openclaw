@@ -270,7 +270,12 @@ describeControlUiE2e("Control UI session transcript search", () => {
       },
     });
 
-    await page.locator('.sessions-view-segment input[value="archived"]').click();
+    await page.getByRole("button", { name: "Filters", exact: true }).click();
+    await page
+      .locator(
+        '.sessions-filter-popover:popover-open .sessions-view-segment input[value="archived"]',
+      )
+      .click();
     await expect.poll(() => new URL(page!.url()).searchParams.get("status")).toBe("archived");
     await page.locator(".session-data-row").getByText("Archived task", { exact: true }).waitFor();
     await captureUiProof("filter-scope.png");

@@ -425,7 +425,7 @@ describe("sessions view", () => {
     expect(keys).toEqual(["pinned", "newer"]);
   });
 
-  it("keeps session state visible and moves advanced controls into the filter popover", async () => {
+  it("keeps session filters in the header popover without a count badge", async () => {
     const container = document.createElement("div");
     const onSearchChange = vi.fn();
     document.body.append(container);
@@ -443,18 +443,19 @@ describe("sessions view", () => {
       );
       await Promise.resolve();
 
-      const toolbar = container.querySelector(".sessions-filter-bar");
-      const trigger = toolbar?.querySelector<HTMLButtonElement>(
+      const actions = container.querySelector(".settings-section__actions");
+      const trigger = actions?.querySelector<HTMLButtonElement>(
         ".sessions-filter-popover__trigger",
       );
-      const popover = toolbar?.querySelector(".sessions-filter-popover");
+      const popover = actions?.querySelector(".sessions-filter-popover");
       const panel = popover?.querySelector(".sessions-filter-popover__panel");
-      expect(toolbar?.getAttribute("role")).toBe("group");
-      expect(toolbar?.getAttribute("aria-label")).toBe("Session filters");
-      expect(toolbar?.querySelector(".sessions-view-segment")).not.toBeNull();
+      expect(container.querySelector(".sessions-filter-bar")).toBeNull();
+      expect(container.querySelector(".settings-count")).toBeNull();
+      expect(panel?.querySelector(".sessions-view-segment")).not.toBeNull();
+      expect(panel?.querySelector(".sessions-filter-popover__search input")).not.toBeNull();
       expect(trigger?.textContent?.trim()).toBe("");
       expect(trigger?.getAttribute("aria-label")).toBe("Filters");
-      expect(trigger?.getAttribute("title")).toBe("Filters");
+      expect(trigger?.getAttribute("title")).toBeNull();
       expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
       expect(trigger?.getAttribute("aria-expanded")).toBe("false");
       expect(
@@ -495,7 +496,7 @@ describe("sessions view", () => {
       expect(trigger?.getAttribute("aria-expanded")).toBe("false");
       expect(document.activeElement).toBe(trigger);
       expect(
-        container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")?.value,
+        container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")?.value,
       ).toBe("keep me");
       expect(onSearchChange).not.toHaveBeenCalled();
     } finally {
@@ -854,7 +855,7 @@ describe("sessions view", () => {
     expect(onSelectPage).not.toHaveBeenCalled();
   });
 
-  it("shows a compact total beside the sessions heading", async () => {
+  it("keeps the sessions heading free of count and status badges", async () => {
     const container = document.createElement("div");
     renderView(
       buildMultiResult([
@@ -879,7 +880,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".settings-count")?.textContent?.trim()).toBe("2");
+    expect(container.querySelector(".settings-count")).toBeNull();
     expect(container.querySelector(".sessions-heading-fact")).toBeNull();
   });
 
