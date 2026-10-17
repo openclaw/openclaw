@@ -524,6 +524,10 @@ suite.define(() => {
             }).toMatchObject({ succeeded: true });
           }
           await waitForReply(page, marker);
+          // Persisted replies can precede the browser's terminal event.
+          await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+            state: "hidden",
+          });
           await screenshot(page, `${marker}-result`);
           adminResults[action] = "succeeded";
         }
