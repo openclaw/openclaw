@@ -49,10 +49,6 @@ async function observe(mode: string) {
           return { release: () => released++ };
         },
       },
-      getBufferedAmount: (ws) => {
-        gatewaySocket = ws;
-        return ws.bufferedAmount;
-      },
     });
   });
   const url = await listen(server);
@@ -63,6 +59,11 @@ async function observe(mode: string) {
     attachment: { kind: "stream", streamId: "runtime-proof" },
   });
   const client = new WebSocket(`${url}/desktop/observe?token=${token}`);
+  const pause = WebSocket.prototype.pause;
+  WebSocket.prototype.pause = function (this: WebSocket) {
+    gatewaySocket = this;
+    pause.call(this);
+  };
   try {
     await once(client, "open");
     const banner = once(client, "message");
@@ -98,6 +99,7 @@ async function observe(mode: string) {
     }
     await until(() => stream.destroyed && released === 1);
   } finally {
+    WebSocket.prototype.pause = pause;
     client.terminate();
     stream.destroy();
     await new Promise<void>((resolve) => {

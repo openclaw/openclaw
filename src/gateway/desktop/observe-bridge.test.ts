@@ -5,6 +5,7 @@ import path from "node:path";
 import { Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { WebSocket as NpmWebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
@@ -55,7 +56,6 @@ afterEach(async () => {
 async function createProxyHarness(
   params: {
     control?: boolean;
-    getBufferedAmount?: (ws: WebSocket) => number;
     stream?: Duplex;
     preauth?: RfbPreauthDescriptor;
     requester?: DesktopObserveRequester;
@@ -103,7 +103,6 @@ async function createProxyHarness(
           return { release };
         },
       },
-      ...(params.getBufferedAmount ? { getBufferedAmount: params.getBufferedAmount } : {}),
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -463,6 +462,11 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       let blocked = true;
       let releaseWrite: (() => void) | undefined;
       let gatewaySocket: WebSocket | undefined;
+      const pause = NpmWebSocket.prototype.pause;
+      vi.spyOn(NpmWebSocket.prototype, "pause").mockImplementation(function (this: WebSocket) {
+        gatewaySocket = this;
+        pause.call(this);
+      });
       const stream = new Duplex({
         writableHighWaterMark: 1,
         read() {},
@@ -479,10 +483,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
         control,
         stream,
         requester: { signal: new AbortController().signal, isCurrent: () => true },
-        getBufferedAmount: (ws) => {
-          gatewaySocket = ws;
-          return ws.bufferedAmount;
-        },
       });
       const pulse = new Promise<Buffer>((resolve) => {
         harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
@@ -553,7 +553,10 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     let bufferedAmount = 5 * 1024 * 1024;
     const pause = vi.spyOn(net.Socket.prototype, "pause");
     const resume = vi.spyOn(net.Socket.prototype, "resume");
-    const harness = await createProxyHarness({ getBufferedAmount: () => bufferedAmount });
+    vi.spyOn(NpmWebSocket.prototype, "bufferedAmount", "get").mockImplementation(
+      () => bufferedAmount,
+    );
+    const harness = await createProxyHarness();
     pause.mockClear();
     resume.mockClear();
     harness.desktopPeer.write(Buffer.from("RFB"));
