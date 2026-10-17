@@ -45,11 +45,10 @@ export function resolveThinkingProfile({
       preserveWhenCatalogReasoningFalse: true,
     };
   }
+  // Kimi Code's K2.8 backend leaks reasoning into visible text when thinking is disabled.
+  // Only advertise enabled thinking so reasoning stays in its separate block.
   return {
-    levels: [
-      { id: "off", label: "off" },
-      { id: "low", label: "on" },
-    ],
-    defaultLevel: "off",
+    levels: [{ id: "low", label: "on" }],
+    defaultLevel: "low",
   };
 }
