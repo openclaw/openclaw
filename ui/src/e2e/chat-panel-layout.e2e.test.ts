@@ -33,6 +33,59 @@ function widgetInput(page: Page): Locator {
   return page.frameLocator(".board-widget__frame").frameLocator("iframe").locator("#widget-note");
 }
 
+function documentIdentity(input: Locator) {
+  return input.evaluate((element) =>
+    Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
+  );
+}
+
+async function installWidget(page: Page, title: string, markup: string) {
+  const body = buildWidgetDocument(title, markup);
+  await page.route("**/__openclaw__/board/**", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body }),
+  );
+}
+
+function boardResponse(name: string, title: string, sizeH: number, frameUrl: string) {
+  return {
+    sessionKey,
+    revision: 1,
+    tabs: [{ tabId: "main", title: name === "overview" ? "Overview" : "Main", position: 0 }],
+    widgets: [
+      {
+        name,
+        tabId: "main",
+        title,
+        contentKind: "html",
+        sizeW: 12,
+        sizeH,
+        heightMode: "fixed",
+        position: 0,
+        grantState: "none",
+        revision: 1,
+        instanceId: `${name}-instance`,
+        frameUrl,
+        viewTicket: "ticket",
+        viewTicketTtlMs: 1_200_000,
+        viewGeneration: "0123456789abcdef0123456789abcdef",
+        sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
+        sandboxPort,
+      },
+    ],
+  };
+}
+
+async function layoutAndWait(
+  owner: Page | Locator,
+  action: string | RegExp,
+  visible: Locator,
+  hidden?: Locator,
+) {
+  await selectChatLayoutAction(owner, action);
+  await visible.waitFor();
+  await hidden?.waitFor({ state: "hidden" });
+}
+
 async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bottom") {
   const boxes = await page.evaluate(() => {
     const bounds = (selector: string) => {
@@ -74,12 +127,10 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1440, height: 960 }, permissions: ["local-network-access"] },
       async ({ page }) => {
-        const html = buildWidgetDocument(
+        await installWidget(
+          page,
           "Release overview",
           '<style>body{font:16px system-ui;padding:32px;background:#101820;color:#e5edf5}h1{font-size:36px;color:inherit}section{display:flex;gap:16px;flex-wrap:wrap}article{background:#1b2935;padding:24px;border-radius:12px;min-width:140px}strong{display:block;font-size:36px;color:#61d9ad}label{display:block;margin-top:32px}input{display:block;margin-top:12px;padding:12px;width:80%;background:#1b2935;color:inherit;border:1px solid #395165;border-radius:8px}</style><p>OPENCLAW / RELEASE OVERVIEW</p><h1>Good work. In view.</h1><p>Review the release, then discuss it in this conversation.</p><section><article><strong>24</strong>Merged changes</article><article><strong>8</strong>Ready for review</article><article><strong>92%</strong>Checks passing</article></section><label>Release note<input id="widget-note"></label><script>globalThis.documentIdentity=crypto.randomUUID();</script>',
-        );
-        await page.route("**/__openclaw__/board/**", (route) =>
-          route.fulfill({ status: 200, contentType: "text/html", body: html }),
         );
         const gateway = await installMockGateway(page, {
           sessionKey,
@@ -111,43 +162,19 @@ suite.define(() => {
           ],
           methodResponses: {
             "cron.list": { jobs: [], total: 0, hasMore: false },
-            "board.get": {
-              sessionKey,
-              revision: 1,
-              tabs: [{ tabId: "main", title: "Overview", position: 0 }],
-              widgets: [
-                {
-                  name: "overview",
-                  tabId: "main",
-                  title: "Release overview",
-                  contentKind: "html",
-                  sizeW: 12,
-                  sizeH: 6,
-                  heightMode: "fixed",
-                  position: 0,
-                  grantState: "none",
-                  revision: 1,
-                  instanceId: "overview-instance",
-                  frameUrl: new URL(
-                    "/__openclaw__/board/overview/index.html?bt=ticket",
-                    suite.server.baseUrl,
-                  ).href,
-                  viewTicket: "ticket",
-                  viewTicketTtlMs: 1_200_000,
-                  viewGeneration: "0123456789abcdef0123456789abcdef",
-                  sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
-                  sandboxPort,
-                },
-              ],
-            },
+            "board.get": boardResponse(
+              "overview",
+              "Release overview",
+              6,
+              new URL("/__openclaw__/board/overview/index.html?bt=ticket", suite.server.baseUrl)
+                .href,
+            ),
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
         const input = widgetInput(page);
         await input.fill("Keep the release note while discussing changes");
-        const identity = await input.evaluate((element) =>
-          Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
-        );
+        const identity = await documentIdentity(input);
         const header = page.locator(".chat-pane__header");
         const chat = header.getByRole("button", { name: "Chat", exact: true });
         const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -202,11 +229,7 @@ suite.define(() => {
         await input.waitFor();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
         expect(await input.inputValue()).toBe("Keep the release note while discussing changes");
-        expect(
-          await input.evaluate((element) =>
-            Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
-          ),
-        ).toBe(identity);
+        expect(await documentIdentity(input)).toBe(identity);
         expect(
           (await gateway.getRequests()).some(
             (request) => request.method === "chat.send" || request.method === "sessions.create",
@@ -327,12 +350,10 @@ suite.define(() => {
         permissions: ["local-network-access"],
       },
       async ({ page }) => {
-        const widgetHtml = buildWidgetDocument(
+        await installWidget(
+          page,
           "Panel continuity",
           '<label>Widget note <input id="widget-note"></label><script>globalThis.documentIdentity=crypto.randomUUID();</script>',
-        );
-        await page.route("**/__openclaw__/board/**", (route) =>
-          route.fulfill({ status: 200, contentType: "text/html", body: widgetHtml }),
         );
         const gateway = await installMockGateway(page, {
           sessionKey,
@@ -343,40 +364,18 @@ suite.define(() => {
             { role: "assistant", content: "Arrange the dashboard beside this chat." },
           ],
           methodResponses: {
-            "board.get": {
-              sessionKey,
-              revision: 1,
-              tabs: [{ tabId: "main", title: "Main", position: 0 }],
-              widgets: [
-                {
-                  name: "continuity",
-                  tabId: "main",
-                  title: "Panel continuity",
-                  contentKind: "html",
-                  sizeW: 12,
-                  sizeH: 4,
-                  heightMode: "fixed",
-                  position: 0,
-                  grantState: "none",
-                  revision: 1,
-                  instanceId: "continuity-instance",
-                  frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/continuity/index.html?bt=ticket`,
-                  viewTicket: "ticket",
-                  viewTicketTtlMs: 1_200_000,
-                  viewGeneration: "0123456789abcdef0123456789abcdef",
-                  sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
-                  sandboxPort,
-                },
-              ],
-            },
+            "board.get": boardResponse(
+              "continuity",
+              "Panel continuity",
+              4,
+              `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/continuity/index.html?bt=ticket`,
+            ),
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
         const input = widgetInput(page);
         await input.fill("Keep this unsaved widget input");
-        const documentIdentity = await input.evaluate((element) =>
-          Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
-        );
+        const identity = await documentIdentity(input);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep this chat draft");
         const chat = page.locator(".sidebar-region__primary");
@@ -385,11 +384,7 @@ suite.define(() => {
         const sideHeader = page.locator('[data-region-header="side"]');
         const width = await regionSize(dashboard);
         const expectContinuity = async () => {
-          expect(
-            await input.evaluate((element) =>
-              Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
-            ),
-          ).toBe(documentIdentity);
+          expect(await documentIdentity(input)).toBe(identity);
           expect(await input.inputValue()).toBe("Keep this unsaved widget input");
           expect(await composer.inputValue()).toBe("Keep this chat draft");
         };
@@ -412,16 +407,14 @@ suite.define(() => {
           if (dock === "right") {
             await page.screenshot({ path: path.join(suite.artifactDir, "side-expanded.png") });
           }
-          await selectChatLayoutAction(paneHeader, "Restore split");
-          await chat.waitFor();
+          await layoutAndWait(paneHeader, "Restore split", chat);
           expect(await dashboard.boundingBox()).toEqual(priorSize);
           await expectPaneHeaderGeometry(page, dock);
           await expectContinuity();
           if (dock === "right") {
             await page.screenshot({ path: path.join(suite.artifactDir, "side-restored.png") });
           }
-          await selectChatLayoutAction(paneHeader, "Expand Dashboard");
-          await chat.waitFor({ state: "hidden" });
+          await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
           await dashboardTab.focus();
           await page.keyboard.press("Space");
           await chat.waitFor();
@@ -429,14 +422,10 @@ suite.define(() => {
         }
         await dockChatSidePanel(page, "right");
         await expectPaneHeaderGeometry(page, "right");
-        await selectChatLayoutAction(paneHeader, "Expand Dashboard");
-        await chat.waitFor({ state: "hidden" });
+        await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
         await selectChatLayoutAction(paneHeader, "Restore split");
-        await selectChatLayoutAction(paneHeader, "Minimize side panel");
-        await chat.waitFor();
-        await dashboard.waitFor({ state: "hidden" });
-        await selectChatLayoutAction(paneHeader, /^(Side panel|Minimize side panel)$/);
-        await dashboard.waitFor();
+        await layoutAndWait(paneHeader, "Minimize side panel", chat, dashboard);
+        await layoutAndWait(paneHeader, /^(Side panel|Minimize side panel)$/, dashboard);
         await expectContinuity();
         await chat.evaluate((element) => {
           const initialWidth = element.getBoundingClientRect().width;
@@ -470,11 +459,9 @@ suite.define(() => {
           await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
           await expectPaneHeaderGeometry(page, dock);
           await expectContinuity();
-          await selectChatLayoutAction(paneHeader, "Focus");
-          await chat.waitFor({ state: "hidden" });
+          await layoutAndWait(paneHeader, "Focus", dashboard, chat);
           await expectContinuity();
-          await selectChatLayoutAction(paneHeader, "Restore split");
-          await chat.waitFor();
+          await layoutAndWait(paneHeader, "Restore split", chat);
           await expectContinuity();
         }
         await dockChatSidePanel(page, "left");
@@ -483,11 +470,9 @@ suite.define(() => {
         await page.keyboard.press("ArrowRight");
         await expect.poll(() => regionSize(chat)).toBeGreaterThan(width);
         const resizedWidth = await regionSize(chat);
-        await selectChatLayoutAction(paneHeader, "Minimize side panel");
-        await chat.waitFor({ state: "hidden" });
+        await layoutAndWait(paneHeader, "Minimize side panel", dashboard, chat);
         await expectContinuity();
-        await selectChatLayoutAction(paneHeader, /^(Side panel|Minimize side panel)$/);
-        await chat.waitFor();
+        await layoutAndWait(paneHeader, /^(Side panel|Minimize side panel)$/, chat);
         await expectContinuity();
         expect(await regionSize(chat)).toBeCloseTo(resizedWidth, 0);
 
@@ -502,11 +487,8 @@ suite.define(() => {
         const terminal = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
         await terminal.locator(".tp-host canvas").waitFor();
         await expect.poll(() => gateway.getRequests("terminal.open")).toHaveLength(1);
-        await selectChatLayoutAction(page, "Expand Terminal");
-        await dashboard.waitFor({ state: "hidden" });
-        await terminal.waitFor();
-        await selectChatLayoutAction(page, "Restore split");
-        await dashboard.waitFor();
+        await layoutAndWait(page, "Expand Terminal", terminal, dashboard);
+        await layoutAndWait(page, "Restore split", dashboard);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await page.locator('[data-panel-slot="terminal"][data-region="main"]').waitFor();
@@ -519,14 +501,12 @@ suite.define(() => {
         expect(await terminal.isVisible()).toBe(true);
         await page.keyboard.press("Enter");
         await terminal.waitFor({ state: "hidden" });
-        await selectChatLayoutAction(paneHeader, "Restore split");
-        await terminal.waitFor();
+        await layoutAndWait(paneHeader, "Restore split", terminal);
         await chatTab.click();
         await dashboardTab.click();
         await terminal.waitFor({ state: "hidden" });
         await dashboard.waitFor();
-        await selectChatLayoutAction(paneHeader, "Restore split");
-        await terminal.waitFor();
+        await layoutAndWait(paneHeader, "Restore split", terminal);
         expect(await terminal.locator(".tp-host canvas").count()).toBe(1);
         await dockChatSidePanel(page, "right");
         await selectChatLayoutAction(paneHeader, "Focus");
@@ -544,8 +524,7 @@ suite.define(() => {
         );
         // Mobile presents one tool at a time. Minimize the selected Dashboard
         // before measuring the retained Terminal that is still the saved main.
-        await selectChatLayoutAction(paneHeader, "Minimize side panel");
-        await terminal.waitFor();
+        await layoutAndWait(paneHeader, "Minimize side panel", terminal);
         await expect
           .poll(
             async () =>
@@ -553,26 +532,18 @@ suite.define(() => {
           )
           .toBeGreaterThan(30);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(400);
-        await selectChatLayoutAction(paneHeader, "Side panel");
-        await dashboard.waitFor();
-        await terminal.waitFor({ state: "hidden" });
+        await layoutAndWait(paneHeader, "Side panel", dashboard, terminal);
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
         await terminal.waitFor();
         await dashboard.waitFor({ state: "hidden" });
-        await selectChatLayoutAction(paneHeader, "Focus");
-        await dashboard.waitFor();
-        await terminal.waitFor({ state: "hidden" });
-        await selectChatLayoutAction(paneHeader, "Restore split");
-        await terminal.locator(".tp-host canvas").waitFor();
-        await selectChatLayoutAction(paneHeader, /^Swap /);
-        await dashboardTab.waitFor();
+        await layoutAndWait(paneHeader, "Focus", dashboard, terminal);
+        await layoutAndWait(paneHeader, "Restore split", terminal.locator(".tp-host canvas"));
+        await layoutAndWait(paneHeader, /^Swap /, dashboardTab);
         const narrowSize = await dashboard.boundingBox();
         await dashboardTab.click();
         await terminal.waitFor({ state: "hidden" });
-        await selectChatLayoutAction(paneHeader, "Restore split");
-        await dashboard.waitFor();
-        await terminal.waitFor({ state: "hidden" });
+        await layoutAndWait(paneHeader, "Restore split", dashboard, terminal);
         expect(await dashboard.boundingBox()).toEqual(narrowSize);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         await page.setViewportSize({ width: 1440, height: 1000 });

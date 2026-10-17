@@ -1,3 +1,4 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -15,39 +16,73 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
 
+function permissionSession(name: string, label: string) {
+  return {
+    key: `agent:main:${name}`,
+    kind: "direct",
+    label,
+    permissionMode: "guarded",
+    sessionId: `${name}-generation`,
+    updatedAt: 1,
+  };
+}
+
+async function permissionControls(page: Page, session: ReturnType<typeof permissionSession>) {
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+  const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+  const trigger = pane.locator('[data-chat-permission-select="true"]');
+  return {
+    pane,
+    trigger,
+    async select(mode: string) {
+      await trigger.click();
+      await pane.locator(`[data-chat-permission-option="${mode}"]`).click();
+    },
+    async settled(mode: string) {
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe(mode);
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
+    },
+  };
+}
+
+async function expectPermissionError(pane: Locator, text: string) {
+  await pane.locator(".chat-error").getByText(text, { exact: false }).waitFor();
+}
+
+async function installPermissionSession(page: Page, session: ReturnType<typeof permissionSession>) {
+  return installMockGateway(page, {
+    sessions: [session],
+    methodResponses: {
+      "sessions.list": {
+        cases: [{ match: { spawnedBy: session.key }, response: chatSessionListResponse([]) }],
+      },
+    },
+    sessionKey: session.key,
+  });
+}
+
+function permissionEvent(
+  session: ReturnType<typeof permissionSession>,
+  permissionMode: string | null,
+  updatedAt: number,
+) {
+  return { ...session, sessionKey: session.key, reason: "patch", permissionMode, updatedAt };
+}
+
 suite.define(() => {
   it("keeps a saved permission mode when its list refresh fails", async () => {
     const artifacts = createControlUiE2eArtifactDir("chat-permission-refresh");
     await suite.withPage(
       createControlUiE2eContextOptions(),
       async ({ page }) => {
-        const session = {
-          key: "agent:main:permission-refresh",
-          kind: "direct",
-          label: "Permission refresh",
-          permissionMode: "guarded",
-          sessionId: "permission-refresh-generation",
-          updatedAt: 1,
-        };
-        const gateway = await installMockGateway(page, {
-          sessions: [session],
-          methodResponses: {
-            "sessions.list": {
-              cases: [{ match: { spawnedBy: session.key }, response: chatSessionListResponse([]) }],
-            },
-          },
-          sessionKey: session.key,
-        });
-
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-        const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const trigger = pane.locator('[data-chat-permission-select="true"]');
+        const session = permissionSession("permission-refresh", "Permission refresh");
+        const gateway = await installPermissionSession(page, session);
+        const { pane, trigger, select, settled } = await permissionControls(page, session);
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
         const patchMatch = { key: session.key, permissionMode: "workspace" };
         await gateway.deferNext("sessions.patch", patchMatch);
 
-        await trigger.click();
-        await pane.locator('[data-chat-permission-option="workspace"]').click();
+        await select("workspace");
         await gateway.waitForRequest("sessions.patch", { match: patchMatch });
         // Hydration can observe the old permission while its write is still pending.
         await evaluateControlUiContext(page, async (context) => {
@@ -76,16 +111,9 @@ suite.define(() => {
           message: "Roster refresh unavailable",
         });
 
-        await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
-        await expect.poll(() => trigger.isEnabled()).toBe(true);
-        await pane
-          .locator(".chat-error")
-          .getByText("Permissions were saved", { exact: false })
-          .waitFor();
-        await pane
-          .locator(".chat-error")
-          .getByText("Roster refresh unavailable", { exact: false })
-          .waitFor();
+        await settled("workspace");
+        await expectPermissionError(pane, "Permissions were saved");
+        await expectPermissionError(pane, "Roster refresh unavailable");
       },
       async ({ page }) => {
         await page.screenshot({ path: `${artifacts}/final-state.png` });
@@ -96,44 +124,20 @@ suite.define(() => {
   it("keeps a newer permission event after an older patch response arrives", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    const session = {
-      key: "agent:main:permission-ordering",
-      kind: "direct",
-      label: "Permission ordering",
-      permissionMode: "guarded",
-      sessionId: "permission-ordering-generation",
-      updatedAt: 1,
-    };
-    const gateway = await installMockGateway(page, {
-      sessions: [session],
-      methodResponses: {
-        "sessions.list": {
-          cases: [{ match: { spawnedBy: session.key }, response: chatSessionListResponse([]) }],
-        },
-      },
-      sessionKey: session.key,
-    });
+    const session = permissionSession("permission-ordering", "Permission ordering");
+    const gateway = await installPermissionSession(page, session);
 
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const trigger = pane.locator('[data-chat-permission-select="true"]');
+      const { trigger, select, settled } = await permissionControls(page, session);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
       const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       const patchMatch = { key: session.key, permissionMode: "workspace" };
       await gateway.deferNext("sessions.patch", patchMatch);
 
-      await trigger.click();
-      await pane.locator('[data-chat-permission-option="workspace"]').click();
+      await select("workspace");
       await gateway.waitForRequest("sessions.patch", { match: patchMatch });
       await gateway.deferNext("sessions.list", rosterMatch);
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...session,
-        sessionKey: session.key,
-        reason: "patch",
-        permissionMode: "full",
-        updatedAt: 3,
-      });
+      await gateway.emitGatewayEvent("sessions.changed", permissionEvent(session, "full", 3));
       await expect
         .poll(() =>
           evaluateControlUiContext(
@@ -156,8 +160,7 @@ suite.define(() => {
         },
       });
 
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("full");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      await settled("full");
       expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
         listRequests + 1,
       );
@@ -186,9 +189,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const trigger = pane.locator('[data-chat-permission-select="true"]');
+      const { pane, trigger, select, settled } = await permissionControls(page, session);
       await trigger.waitFor({ state: "visible", timeout: 10_000 });
       expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
       expect(
@@ -241,28 +242,20 @@ suite.define(() => {
             throw new Error("Mock Gateway is not installed");
           }
           const count = mockGateway.findRequests("sessions.list", match).length;
-          mockGateway.emit("sessions.changed", {
-            ...eventSession,
-            permissionMode: "workspace",
-            reason: "patch",
-            sessionKey: eventSession.key,
-            updatedAt: 3,
-          });
+          mockGateway.emit("sessions.changed", eventSession);
           return count;
         },
-        { session, match: rosterMatch },
+        { session: permissionEvent(session, "workspace", 3), match: rosterMatch },
       );
       await gateway.resolveDeferred("sessions.list", workspaceList);
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      await settled("workspace");
       expect(await trigger.getAttribute("aria-label")).toContain("Workspace");
 
       // Admit this event's refresh before measuring the next mutation's own roster request.
       await waitForRequests(gateway, "sessions.list", workspaceEventListCount + 1, rosterMatch);
       const secondListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.deferNext("sessions.list", rosterMatch);
-      await trigger.click();
-      await pane.locator('[data-chat-permission-option="default"]').click();
+      await select("default");
       const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patchRequests[1]?.params)).toMatchObject({
         key: session.key,
@@ -274,21 +267,14 @@ suite.define(() => {
         { ...session, permissionMode: undefined, updatedAt: 4 },
       ]);
       await gateway.setSessionsListResponse(defaultList);
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...session,
-        permissionMode: null,
-        reason: "patch",
-        sessionKey: session.key,
-        updatedAt: 4,
-      });
+      await gateway.emitGatewayEvent("sessions.changed", permissionEvent(session, null, 4));
       await gateway.resolveDeferred("sessions.list", defaultList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       expect(await trigger.getAttribute("aria-label")).toContain("Default");
 
       // A rejection still belongs to this pane while its physical session remains current.
       await gateway.deferNext("sessions.patch");
-      await trigger.click();
-      await pane.locator('[data-chat-permission-option="full"]').click();
+      await select("full");
       const currentPatch = (await waitForRequests(gateway, "sessions.patch", 3))[2];
       expect(requireRecord(currentPatch?.params)).toMatchObject({
         expectedSessionId: session.sessionId,
@@ -299,16 +285,11 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Permission update could not be applied",
       });
-      await pane
-        .locator(".chat-error")
-        .getByText("Failed to update permissions", { exact: false })
-        .waitFor();
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      await expectPermissionError(pane, "Failed to update permissions");
+      await settled("");
 
       await gateway.deferNext("sessions.patch");
-      await trigger.click();
-      await pane.locator('[data-chat-permission-option="full"]').click();
+      await select("full");
       const stalePatch = (await waitForRequests(gateway, "sessions.patch", 4))[3];
       expect(requireRecord(stalePatch?.params)).toMatchObject({
         expectedSessionId: session.sessionId,
@@ -332,8 +313,7 @@ suite.define(() => {
       await waitForRequests(gateway, "sessions.list", recoveryListCount + 1, rosterMatch);
       await gateway.resolveDeferred("sessions.list", replacementList);
 
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      await settled("read-only");
       expect(await pane.locator(".chat-error").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);

@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { expect as expectBrowser } from "playwright/test";
+import { expect as expectBrowser, type Locator, type Page } from "playwright/test";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -19,6 +19,13 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const artifactRoot = ".artifacts/mock-session-owner/outbox-recovery";
+const pageOptions = { locale: "en-US", serviceWorkers: "block" as const };
+const viewport = { width: 1280, height: 900 };
+const composerFor = (page: Page) => page.locator(".agent-chat__composer-combobox textarea");
+const userFor = (page: Page, text: string, exact = false) =>
+  page.locator(".chat-group.user").getByText(text, { exact });
+const screenshot = (target: Page | Locator, artifacts: string, name: string) =>
+  target.screenshot({ animations: "disabled", path: `${artifacts}/${name}.png` });
 
 suite.define(() => {
   it("keeps delivery recovery visible and keyboard-reachable in narrow chat", async () => {
@@ -102,7 +109,7 @@ suite.define(() => {
   }, 60_000);
 
   it("retires a delivered recovery row when its exact submission loads in history", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+    await suite.withPage(pageOptions, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
       await page.addInitScript(
@@ -157,10 +164,7 @@ suite.define(() => {
         hasActiveRun: false,
         status: "done",
       });
-      await page
-        .locator(".chat-group.user")
-        .getByText("Please check the deployment notes", { exact: true })
-        .waitFor();
+      await userFor(page, "Please check the deployment notes", true).waitFor();
       await row.waitFor({ state: "detached" });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(
@@ -199,7 +203,7 @@ suite.define(() => {
               await writeFile(
                 `${artifactDir}/${name}.png`,
                 await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-                  page.locator(".agent-chat__composer-combobox textarea"),
+                  composerFor(page),
                 ]),
               );
             }
@@ -222,7 +226,7 @@ suite.define(() => {
             action === "exact authoritative history proof"
               ? "already accepted after the reconnect"
               : "retry with the same key";
-          await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+          await composerFor(page).fill(prompt);
           await page.getByRole("button", { name: "Send message" }).click();
 
           const firstRequest = await gateway.waitForRequest("chat.send");
@@ -230,7 +234,7 @@ suite.define(() => {
           const runId = requireString(firstParams.idempotencyKey, "first idempotency key");
 
           await gateway.setOnline(false);
-          const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
+          const userBubble = userFor(page, prompt, true);
           const reconnectStatus = page.locator(
             '.chat-send-status[data-send-state="waiting-reconnect"]',
           );
@@ -431,9 +435,7 @@ suite.define(() => {
           }
 
           if (action === "discard") {
-            await page
-              .locator(".agent-chat__composer-combobox textarea")
-              .fill("send the next message");
+            await composerFor(page).fill("send the next message");
             await page.getByRole("button", { name: "Send message" }).click();
             await page
               .locator(".chat-queue")
@@ -472,9 +474,8 @@ suite.define(() => {
   it("keeps a legacy uncertain send unsent until destination confirmation and explicit Retry", async () => {
     const artifacts = createControlUiE2eArtifactDir("legacy-send", artifactRoot);
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...pageOptions,
+      viewport,
       recordVideo: process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifacts } : undefined,
     });
     const page = await context.newPage();
@@ -522,34 +523,19 @@ suite.define(() => {
         .getByText("Please check the deployment notes")
         .waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
-      await page.screenshot({
-        animations: "disabled",
-        path: `${artifacts}/before-confirmation.png`,
-      });
+      await screenshot(page, artifacts, "before-confirmation");
       await notice.getByRole("button", { name: "Restore", exact: true }).click();
       const dialog = page.locator("openclaw-modal-dialog");
       await dialog.getByText(/Add this saved copy to “Main/).waitFor();
       await dialog.getByText(/Check the original chat before sending it again/).waitFor();
-      await page.screenshot({
-        animations: "disabled",
-        path: `${artifacts}/destination-confirmation.png`,
-      });
+      await screenshot(page, artifacts, "destination-confirmation");
       await dialog.getByRole("button", { name: "Restore", exact: true }).click();
-      await page
-        .locator(".chat-group.user")
-        .getByText("Please check the deployment notes")
-        .waitFor();
+      await userFor(page, "Please check the deployment notes").waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
       await page.reload();
-      await page
-        .locator(".chat-group.user")
-        .getByText("Please check the deployment notes")
-        .waitFor();
+      await userFor(page, "Please check the deployment notes").waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
-      await page.screenshot({
-        animations: "disabled",
-        path: `${artifacts}/recovered-paused-after-reload.png`,
-      });
+      await screenshot(page, artifacts, "recovered-paused-after-reload");
       await page.locator(".chat-group.user").getByRole("button", { name: /Retry/i }).click();
       const request = await gateway.waitForRequest("chat.send");
       expect(requireRecord(request.params)).toMatchObject({
@@ -568,7 +554,7 @@ suite.define(() => {
   it.each(["agent:main:main", "global", "agent:work:workspace"])(
     "keeps exact history and send targets for %s across offline reload and agent navigation",
     async (sessionKey) => {
-      const context = await suite.newBrowserContext({ locale: "en-US", serviceWorkers: "block" });
+      const context = await suite.newBrowserContext(pageOptions);
       const page = await context.newPage();
       const otherKey = "agent:other:thread";
       const mainKey = sessionKey.endsWith(":workspace") ? "workspace" : "main";
@@ -599,22 +585,17 @@ suite.define(() => {
       });
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = composerFor(page);
         await composer.waitFor();
         await gateway.setOnline(false);
         await page.locator(".agent-chat__input--offline").waitFor();
         await composer.fill(`retain destination ${sessionKey}`);
         await page.getByRole("button", { name: "Send message" }).click();
         await page.locator(".chat-queue").getByText("Waiting for reconnect").waitFor();
-        expect(
-          await page
-            .locator(".chat-group.user")
-            .getByText(`retain destination ${sessionKey}`)
-            .count(),
-        ).toBe(0);
+        expect(await userFor(page, `retain destination ${sessionKey}`).count()).toBe(0);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, otherKey));
         await gateway.setOnline(true);
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await composerFor(page).waitFor();
         const request = await gateway.waitForRequest("chat.send");
         expect(requireRecord(request.params)).toMatchObject({
           sessionKey,
@@ -641,9 +622,8 @@ suite.define(() => {
   it("recovers an ambiguous IndexedDB attachment draft through rendered controls without sending", async () => {
     const artifacts = createControlUiE2eArtifactDir("attachment-draft", artifactRoot);
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...pageOptions,
+      viewport,
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
@@ -717,26 +697,17 @@ suite.define(() => {
         .locator("openclaw-modal-dialog")
         .getByRole("button", { name: "Restore", exact: true })
         .click();
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
-      await page.screenshot({
-        animations: "disabled",
-        path: `${artifacts}/attachment-after-confirmation.png`,
-      });
-      await page
+      const composer = composerFor(page);
+      const attachment = page
         .locator(".chat-attachments-preview .chat-attachment-file__name")
-        .getByText("legacy-note.txt", { exact: true })
-        .waitFor();
+        .getByText("legacy-note.txt", { exact: true });
+      await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
+      await screenshot(page, artifacts, "attachment-after-confirmation");
+      await attachment.waitFor();
       await page.reload();
       await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
-      await page
-        .locator(".chat-attachments-preview .chat-attachment-file__name")
-        .getByText("legacy-note.txt", { exact: true })
-        .waitFor();
-      await page.screenshot({
-        animations: "disabled",
-        path: `${artifacts}/attachment-recovered-after-reload.png`,
-      });
+      await attachment.waitFor();
+      await screenshot(page, artifacts, "attachment-recovered-after-reload");
       await expectRequestCountStable(gateway, "chat.send", 0);
     } finally {
       await suite.closeBrowserContext(context);
@@ -745,87 +716,72 @@ suite.define(() => {
 
   it("shows only meaningful saved drafts and deletes a reviewed copy without sending", async () => {
     const artifacts = createControlUiE2eArtifactDir("saved-draft-notice", artifactRoot);
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page);
-        const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
-        await page.addInitScript(
-          ({ gatewayUrl }) => {
-            if (sessionStorage.getItem("saved-draft-notice-seeded")) {
-              return;
-            }
-            sessionStorage.setItem("saved-draft-notice-seeded", "yes");
-            const sessions: Record<
-              string,
-              { updatedAt: number; draftRevision: number; draft?: string }
-            > = Object.fromEntries(
-              Array.from({ length: 20 }, (_, index) => [
-                "agent:main:old-" + index + "\u0000agent:main",
-                { updatedAt: 1790955600000, draftRevision: 42 },
-              ]),
-            );
-            sessions["global\u0000agent:main"] = {
-              updatedAt: 1790955600000,
-              draftRevision: 43,
-              draft: "Could you summarize the latest test results?",
-            };
-            sessionStorage.setItem(
-              "openclaw.control.chatComposer.v4:" + encodeURIComponent(gatewayUrl),
-              JSON.stringify({
-                version: 4,
-                gatewayOwner: gatewayUrl,
-                sessions,
-                recovery: {},
-              }),
-            );
-          },
-          { gatewayUrl: gatewayAddress },
-        );
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-        const notice = page.locator(".chat-outbox-recovery");
-        await notice
-          .locator(".chat-outbox-recovery-row")
-          .getByText("Could you summarize the latest test results?", { exact: true })
-          .waitFor();
-        await page.screenshot({ animations: "disabled", path: artifacts + "/notification.png" });
-        await notice.screenshot({
-          animations: "disabled",
-          path: artifacts + "/notification-detail.png",
-        });
-        expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
-        await page.emulateMedia({ colorScheme: "dark" });
-        await page.waitForFunction(() => document.documentElement.dataset.themeMode === "dark");
-        await page.screenshot({
-          animations: "disabled",
-          path: artifacts + "/notification-dark.png",
-        });
-        await page.setViewportSize({ width: 390, height: 844 });
-        await page.screenshot({
-          animations: "disabled",
-          path: artifacts + "/notification-mobile.png",
-        });
-        await notice.screenshot({
-          animations: "disabled",
-          path: artifacts + "/notification-mobile-detail.png",
-        });
-        expect(await notice.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-          true,
-        );
-        await notice.getByText("Draft", { exact: true }).waitFor();
-        expect(await notice.getByText("Unsent", { exact: true }).count()).toBe(0);
-        await notice.getByRole("button", { name: "Delete", exact: true }).click();
-        const dialog = page.locator("openclaw-modal-dialog");
-        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-        expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
-        await notice.getByRole("button", { name: "Delete", exact: true }).click();
-        await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-        await notice.waitFor({ state: "detached" });
-        await page.reload();
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-        expect(await notice.count()).toBe(0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      },
-    );
+    await suite.withPage({ ...pageOptions, viewport }, async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
+      await page.addInitScript(
+        ({ gatewayUrl }) => {
+          if (sessionStorage.getItem("saved-draft-notice-seeded")) {
+            return;
+          }
+          sessionStorage.setItem("saved-draft-notice-seeded", "yes");
+          const sessions: Record<
+            string,
+            { updatedAt: number; draftRevision: number; draft?: string }
+          > = Object.fromEntries(
+            Array.from({ length: 20 }, (_, index) => [
+              "agent:main:old-" + index + "\u0000agent:main",
+              { updatedAt: 1790955600000, draftRevision: 42 },
+            ]),
+          );
+          sessions["global\u0000agent:main"] = {
+            updatedAt: 1790955600000,
+            draftRevision: 43,
+            draft: "Could you summarize the latest test results?",
+          };
+          sessionStorage.setItem(
+            "openclaw.control.chatComposer.v4:" + encodeURIComponent(gatewayUrl),
+            JSON.stringify({
+              version: 4,
+              gatewayOwner: gatewayUrl,
+              sessions,
+              recovery: {},
+            }),
+          );
+        },
+        { gatewayUrl: gatewayAddress },
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      const notice = page.locator(".chat-outbox-recovery");
+      await notice
+        .locator(".chat-outbox-recovery-row")
+        .getByText("Could you summarize the latest test results?", { exact: true })
+        .waitFor();
+      await screenshot(page, artifacts, "notification");
+      await screenshot(notice, artifacts, "notification-detail");
+      expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.waitForFunction(() => document.documentElement.dataset.themeMode === "dark");
+      await screenshot(page, artifacts, "notification-dark");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await screenshot(page, artifacts, "notification-mobile");
+      await screenshot(notice, artifacts, "notification-mobile-detail");
+      expect(await notice.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      await notice.getByText("Draft", { exact: true }).waitFor();
+      expect(await notice.getByText("Unsent", { exact: true }).count()).toBe(0);
+      await notice.getByRole("button", { name: "Delete", exact: true }).click();
+      const dialog = page.locator("openclaw-modal-dialog");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(1);
+      await notice.getByRole("button", { name: "Delete", exact: true }).click();
+      await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+      await notice.waitFor({ state: "detached" });
+      await page.reload();
+      await composerFor(page).waitFor();
+      expect(await notice.count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
   });
 });

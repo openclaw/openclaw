@@ -26,6 +26,9 @@ import {
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const plainHttpHost = "plain-http.test";
+const retainedText = "Mock Gateway: retained v3 Blob submission";
+const upgradeText = "Mock Gateway: upgrade this inline queue";
+const originalBytes = file.buffer.toString("base64");
 const suite = createChatFlowE2eSuite({
   args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
 });
@@ -54,6 +57,7 @@ suite.define(() => {
       await suite.withPage(
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
+          const pane = paneFor(page);
           const destination = legacySessionKey === "global" ? "agent:main:main" : legacySessionKey;
           const draftScope = `chat:v3:${destination}\u0000agent:main`;
           const gateway = await installMockGateway(page, {
@@ -72,19 +76,12 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, destination));
           await waitForControlUiGatewayReady(page);
-          await paneFor(page)
-            .getByText("Mock Gateway: payload lifecycle proof.", { exact: true })
-            .waitFor();
+          await pane.getByText("Mock Gateway: payload lifecycle proof.", { exact: true }).waitFor();
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
-          await stage(page, "Mock Gateway: retained v3 Blob submission");
-          await waitForCommittedComposerDraft(
-            page,
-            draftScope,
-            "Mock Gateway: retained v3 Blob submission",
-            [file.name],
-          );
-          await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+          await stage(page, retainedText);
+          await waitForCommittedComposerDraft(page, draftScope, retainedText, [file.name]);
+          await pane.getByRole("button", { name: "Send message", exact: true }).click();
           await expect.poll(async () => (await readQueue(page)).length).toBe(1);
           const original = (await readQueue(page))[0]!;
           const reference = original.attachmentPayload;
@@ -151,18 +148,14 @@ suite.define(() => {
           await expect
             .poll(() => page.evaluate((key) => sessionStorage.getItem(key), legacyKey))
             .toBeNull();
-          expect(await readPayloadBytes(page, reference.key)).toEqual([
-            file.buffer.toString("base64"),
-          ]);
+          expect(await readPayloadBytes(page, reference.key)).toEqual([originalBytes]);
           expect(await readQueue(page)).toEqual([]);
-          expect(await paneFor(page).locator(".chat-queue__item").count()).toBe(0);
-          expect(
-            await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).count(),
-          ).toBe(0);
-          const notice = paneFor(page).locator(".chat-outbox-recovery");
+          expect(await pane.locator(".chat-queue__item").count()).toBe(0);
+          expect(await pane.getByText("Delivery unconfirmed", { exact: true }).count()).toBe(0);
+          const notice = pane.locator(".chat-outbox-recovery");
           await notice
             .locator(".chat-outbox-recovery-row")
-            .getByText("Mock Gateway: retained v3 Blob submission", { exact: true })
+            .getByText(retainedText, { exact: true })
             .waitFor();
           await expectRequestCountStable(gateway, "chat.send", 0);
           await notice.getByRole("button", { name: "Restore", exact: true }).click();
@@ -182,9 +175,9 @@ suite.define(() => {
             animations: "disabled",
           });
           await dialog.getByRole("button", { name: "Restore", exact: true }).click();
-          await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+          await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
           await page.reload();
-          await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+          await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
           expect((await readQueue(page))[0]).toMatchObject({
             id: original.id,
             sessionKey: destination,
@@ -194,9 +187,7 @@ suite.define(() => {
             attachmentPayload: reference,
             storageScope: original.storageScope,
           });
-          expect(await readPayloadBytes(page, reference.key)).toEqual([
-            file.buffer.toString("base64"),
-          ]);
+          expect(await readPayloadBytes(page, reference.key)).toEqual([originalBytes]);
           await expectRequestCountStable(gateway, "chat.send", 0);
           await page.screenshot({
             path: path.join(
@@ -206,10 +197,7 @@ suite.define(() => {
             fullPage: true,
             animations: "disabled",
           });
-          await paneFor(page)
-            .locator(".chat-group.user")
-            .getByRole("button", { name: /Retry/i })
-            .click();
+          await pane.locator(".chat-group.user").getByRole("button", { name: /Retry/i }).click();
           const sent = await gateway.waitForRequest("chat.send");
           expect(sent.params).toMatchObject({
             sessionKey: destination,
@@ -220,14 +208,12 @@ suite.define(() => {
                 mimeType: file.mimeType,
                 fileName: file.name,
                 origin: "file",
-                content: file.buffer.toString("base64"),
+                content: originalBytes,
               },
             ],
           });
           expect(requireRecord(sent.params).agentId).toBeUndefined();
-          expect(await readPayloadBytes(page, reference.key)).toEqual([
-            file.buffer.toString("base64"),
-          ]);
+          expect(await readPayloadBytes(page, reference.key)).toEqual([originalBytes]);
           await gateway.resolveDeferred("chat.send");
           await expect.poll(async () => (await readQueue(page)).length).toBe(0);
           await expect.poll(() => payloadCount(page)).toBe(0);
@@ -239,6 +225,8 @@ suite.define(() => {
 
   it("upgrades inline queues and the existing draft database, then edits and cancels without touching a newer composer", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const pane = paneFor(page);
+      const composer = composerFor(page);
       await page.route("**/outbox-upgrade", (route) =>
         route.fulfill({ contentType: "text/html", body: "Mock upgrade seed" }),
       );
@@ -314,7 +302,7 @@ suite.define(() => {
           );
         });
         database.close();
-      }, file.buffer.toString("base64"));
+      }, originalBytes);
       const gateway = await installMockGateway(page, {
         historyMessages: history,
         sessionInfo: {
@@ -326,20 +314,18 @@ suite.define(() => {
         inFlightRun: { runId: "mock-held-run", text: "Mock Gateway: keeping upgrade queue held." },
       });
       await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-      await expect
-        .poll(() => composerFor(page).inputValue())
-        .toBe("Mock Gateway: old durable draft");
-      await expect.poll(() => paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
+      await expect.poll(() => composer.inputValue()).toBe("Mock Gateway: old durable draft");
+      await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(1);
       expect(await readQueue(page)).toEqual([]);
-      expect(await paneFor(page).locator(".chat-queue__item").count()).toBe(0);
+      expect(await pane.locator(".chat-queue__item").count()).toBe(0);
       // Recovery cannot overwrite the independently migrated durable draft.
-      await composerFor(page).fill("");
-      await paneFor(page).getByRole("button", { name: "Remove draft.txt", exact: true }).click();
+      await composer.fill("");
+      await pane.getByRole("button", { name: "Remove draft.txt", exact: true }).click();
       await waitForCommittedComposerDraft(page, "chat:v3:agent:main:main\u0000agent:main", null, 0);
-      const notice = paneFor(page).locator(".chat-outbox-recovery");
+      const notice = pane.locator(".chat-outbox-recovery");
       await notice
         .locator(".chat-outbox-recovery-row")
-        .getByText("Mock Gateway: upgrade this inline queue", { exact: true })
+        .getByText(upgradeText, { exact: true })
         .waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
       await notice.getByRole("button", { name: "Restore", exact: true }).click();
@@ -351,20 +337,18 @@ suite.define(() => {
         .toMatchObject([{ sendRunId: "legacy-idempotency", sendAttempts: 0, sendState: "failed" }]);
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
-      await composerFor(page).fill("Mock Gateway: newer independent draft");
-      await paneFor(page)
-        .locator(".agent-chat__file-input")
-        .setInputFiles({
-          name: "draft.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("draft bytes"),
-        });
-      await expect.poll(() => paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
-      const row = paneFor(page).locator(".chat-queue__item");
+      await composer.fill("Mock Gateway: newer independent draft");
+      await pane.locator(".agent-chat__file-input").setInputFiles({
+        name: "draft.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("draft bytes"),
+      });
+      await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(1);
+      const row = pane.locator(".chat-queue__item");
       await row.dblclick();
       await row.locator(".chat-queue__edit-input").fill("cancel this edit");
       await row.locator(".chat-queue__edit-cancel").click();
-      expect((await readQueue(page))[0]?.text).toBe("Mock Gateway: upgrade this inline queue");
+      expect((await readQueue(page))[0]?.text).toBe(upgradeText);
       await row.dblclick();
       await row.locator(".chat-queue__edit-input").fill("Mock Gateway: edited with original bytes");
       await row.locator(".chat-queue__edit-submit").click();
@@ -372,12 +356,12 @@ suite.define(() => {
         .poll(async () => (await readQueue(page))[0]?.text)
         .toBe("Mock Gateway: edited with original bytes");
       expect((await readQueue(page))[0]?.attachmentPayload).toBeDefined();
-      expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer independent draft");
-      expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
+      expect(await composer.inputValue()).toBe("Mock Gateway: newer independent draft");
+      expect(await pane.locator(".chat-attachment-thumb").count()).toBe(1);
       await expect.poll(() => payloadCount(page)).toBe(1);
       await row.getByRole("button", { name: "Remove queued message", exact: true }).click();
       await expect.poll(() => payloadCount(page)).toBe(0);
-      expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer independent draft");
+      expect(await composer.inputValue()).toBe("Mock Gateway: newer independent draft");
       await expectRequestCountStable(gateway, "chat.send", 0);
     });
   });
