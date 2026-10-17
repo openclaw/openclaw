@@ -41,6 +41,7 @@ function fixture(autoVacuum = 0) {
 
 function observeIntegrity(sqlite: ReturnType<typeof requireNodeSqlite>) {
   const statements: string[] = [];
+  // oxlint-disable-next-line typescript/unbound-method -- call preserves the native database receiver.
   const prepare = sqlite.DatabaseSync.prototype.prepare;
   const spy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (
     this: DatabaseSync,
@@ -73,7 +74,7 @@ it.each([
   "uses $checks full checks for $acquisition WAL capture with auto_vacuum=$autoVacuum",
   async ({ acquisition, autoVacuum, checks }) => {
     const { directory, sourcePath, targetPath, sqlite, source, options } = fixture(autoVacuum);
-    using _owner = source;
+    using _ = source;
     expect(fs.statSync(`${sourcePath}-wal`).size).toBeGreaterThan(0);
     const before = familyBytes(sourcePath);
     const observed = observeIntegrity(sqlite);
@@ -115,7 +116,7 @@ it.each(["vacuum", "transform", "validator"] as const)(
   "keeps both checks before and after %s work",
   async (operation) => {
     const { sqlite, source, sourcePath, targetPath, options } = fixture();
-    using _owner = source;
+    using _ = source;
     const labels: string[] = [];
     const observed = observeIntegrity(sqlite);
     await createVerifiedSqliteSnapshot({
@@ -159,7 +160,7 @@ it.each(["index", "foreign-key", "catalog"] as const)(
   "refuses private WAL %s corruption without publishing or changing source artifacts",
   async (corruption) => {
     const { directory, sourcePath, targetPath, source, options } = fixture();
-    using _owner = source;
+    using _ = source;
     if (corruption === "index") {
       corruptIndex(source);
     } else if (corruption === "foreign-key") {
@@ -188,7 +189,7 @@ it.each(["transform", "validate"] as const)(
   "rejects corrupt input before invoking the %s callback",
   async (callback) => {
     const { source, targetPath, options } = fixture();
-    using _owner = source;
+    using _ = source;
     corruptIndex(source);
     const invoked = vi.fn();
     await expect(createVerifiedSqliteSnapshot({ ...options, [callback]: invoked })).rejects.toThrow(
