@@ -44,7 +44,6 @@ bundle while production sources are edited.
 
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
 (after unloading the app), local storage and session storage; the HTTP cache stays warm.
-`snapshotSave` records versions, message count and sidebar view; mismatches fail setup.
 
 `--warm-reload --probe-dir /path/to/probes` adds cache/paint diagnostics. The probe directory supplies `loaf-mutation.init.js` and
 `ws-rpc-census.init.js`. The output records cache reads, cached transcript visibility,

@@ -10,7 +10,6 @@ import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixt
 import { compactCronJobFixture } from "./cron.ts";
 
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
-type TeamScaleCronJob = CronJob & { sessionTarget: "isolated" };
 
 export function createTeamScaleSessionInventory({
   now,
@@ -133,26 +132,28 @@ export function createTeamScaleCronInventory(
   now: number,
   selectedSessionKey: string,
 ) {
-  const cronJobs: TeamScaleCronJob[] = Array.from({ length: count }, (_, index) => ({
-    id: `team-cron-${index + 1}`,
-    name: `Synthetic scheduled check ${index + 1}`,
-    agentId: "main",
-    sessionKey: index % 2 === 0 ? selectedSessionKey : "agent:main:main",
-    enabled: index % 5 !== 0,
-    createdAtMs: now - 86_400_000,
-    updatedAtMs: now - index * 1_000,
-    schedule: { kind: "every", everyMs: 3_600_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: `Run synthetic scheduled verification ${index + 1}.` },
-    state: {
-      nextRunAtMs: now + (index + 1) * 60_000,
-      lastRunAtMs: now - (index + 1) * 60_000,
-      lastRunStatus: index % 11 === 0 ? "error" : index % 13 === 0 ? "skipped" : "ok",
-      ...(index % 11 === 0 ? { lastError: "Synthetic verification failed." } : {}),
-      ...(index % 17 === 0 ? { runningAtMs: now - 1_000 } : {}),
-    },
-  }));
+  const cronJobs = Array.from({ length: count }, (_, index) => {
+    return {
+      id: `team-cron-${index + 1}`,
+      name: `Synthetic scheduled check ${index + 1}`,
+      agentId: "main",
+      sessionKey: index % 2 === 0 ? selectedSessionKey : "agent:main:main",
+      enabled: index % 5 !== 0,
+      createdAtMs: now - 86_400_000,
+      updatedAtMs: now - index * 1_000,
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: `Run synthetic scheduled verification ${index + 1}.` },
+      state: {
+        nextRunAtMs: now + (index + 1) * 60_000,
+        lastRunAtMs: now - (index + 1) * 60_000,
+        lastRunStatus: index % 11 === 0 ? "error" : index % 13 === 0 ? "skipped" : "ok",
+        ...(index % 11 === 0 ? { lastError: "Synthetic verification failed." } : {}),
+        ...(index % 17 === 0 ? { runningAtMs: now - 1_000 } : {}),
+      },
+    } as const;
+  });
   const listCronJobs = (
     params: Record<string, unknown>,
   ): CronJobsListResult<CronJob | CronCompactJob> => {
