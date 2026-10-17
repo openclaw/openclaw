@@ -52,11 +52,12 @@ job. Open the page that matches your task.
 
 Storage-engine PRs, scheduled main runs, and manual CI validations include two hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
-The infrastructure/state and integration groups run in parallel with separate
-databases. Infrastructure/state has a 60-minute budget because full port/recovery
-coverage can exceed 30 minutes; integrations retains a 30-minute budget.
-Database-engine `*.integration.test.ts` suites run with integrations, balancing
-real command/recovery work across the two jobs. Inspect either assignment with
+The infrastructure/state/command and plugin integration groups run in parallel
+with separate databases. Infrastructure/state/commands has a 60-minute budget
+because full port/recovery and interactive setup coverage can exceed 30 minutes;
+plugin integrations retain a 30-minute budget. Database-engine
+`*.integration.test.ts` suites run with infrastructure, leaving enough time for
+plugin coverage in the other job. Inspect either assignment with
 the conformance runner's `--list` option. Their combined inventory matches the
 local full suite; a failure in either shard leaves the other running and fails
 the aggregate gate.

@@ -66,9 +66,9 @@ describe("PostgreSQL conformance shards", () => {
     expect(infra).toContain("src/infra/database-engine/store.test.ts");
     expect(infra).toContain("src/state/openclaw-state-db.postgres.test.ts");
     expect(integrations).toContain("extensions/workboard");
-    expect(integrations).toContain("src/commands/doctor-database-diagnostics.postgres.test.ts");
-    expect(integrations).toContain("src/infra/database-engine/command.integration.test.ts");
-    expect(integrations).toContain("src/infra/database-engine/nested/new.integration.test.ts");
+    expect(infra).toContain("src/commands/doctor-database-diagnostics.postgres.test.ts");
+    expect(infra).toContain("src/infra/database-engine/command.integration.test.ts");
+    expect(infra).toContain("src/infra/database-engine/nested/new.integration.test.ts");
     expect([...infra, ...integrations].toSorted()).toEqual(full.toSorted());
     expect(new Set([...infra, ...integrations]).size).toBe(full.length);
     expect(targets(["--shard", "infra", "--", "--maxWorkers=1"])).toEqual([

@@ -71,11 +71,12 @@ let targets = explicitTargets
     ];
 if (values.shard) {
   targets = targets.filter((target) => {
-    // Real command integrations share the integration shard; newly added suites inherit it.
-    const commandIntegration =
-      target.startsWith("src/infra/database-engine/") && target.endsWith(".integration.test.ts");
+    // Keep command recovery with the 60-minute infrastructure shard; plugin suites
+    // need the integration shard's full budget after interactive setup was added.
     const infra =
-      !commandIntegration && (target.startsWith("src/infra/") || target.startsWith("src/state/"));
+      target.startsWith("src/infra/") ||
+      target.startsWith("src/state/") ||
+      target.startsWith("src/commands/");
     return values.shard === "infra" ? infra : !infra;
   });
 }
