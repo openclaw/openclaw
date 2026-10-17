@@ -3473,6 +3473,7 @@ const workerModules = new Set([
 
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
+  "src/channels/message/ingress-queue.claim-prefix.kernel.ts", // Prefix revalidation SQL is called only by ingress-queue.kernel.ts inside the same worker.
 
   "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
