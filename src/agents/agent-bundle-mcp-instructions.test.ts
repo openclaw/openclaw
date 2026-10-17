@@ -1,7 +1,8 @@
 import http from "node:http";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSessionMcpRuntime, type SessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
+import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -57,7 +58,11 @@ async function startInstructionsMcpServer(instructions: string) {
       );
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve();
+    });
+  });
   const { port } = server.address() as { port: number };
   return { url: `http://127.0.0.1:${port}/mcp`, close: () => server.close() };
 }

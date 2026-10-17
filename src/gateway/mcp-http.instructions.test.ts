@@ -4,7 +4,8 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveMcpLoopbackInstructions } from "./mcp-http.instructions.js";
 
 const peekSessionMcpRuntime = vi.hoisted(() => vi.fn());
-vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-manager-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-bundle-mcp-manager-api.js")>()),
   peekSessionMcpRuntime,
 }));
 
