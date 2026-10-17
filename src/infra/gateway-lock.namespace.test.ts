@@ -7,6 +7,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "../commands/doctor-maintenance-foreground.js";
 import { resolveStateDir } from "../config/paths.js";
+import * as processIdentity from "../shared/pid-alive.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   readGatewayLockProcessNamespace,
@@ -18,7 +19,6 @@ import {
   resolveGatewayLockPaths,
   resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
-import { isGatewayStateOwnerDefinitelyStale } from "./gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
@@ -191,61 +191,70 @@ describe("gateway lock namespaces", () => {
     }
   });
 
-  it("preserves a live state owner when same-host boot identity disagrees", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-boot-mismatch-") };
-    const paths = resolveGatewayLockPaths(env, resolveTestLockDir(env));
-    const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
-    fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const recordedNamespace = {
-      host: os.hostname(),
-      platform: "win32" as const,
-      identity: "2026-10-17T00:00:00.0000000Z",
-    };
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
-    boot.mockReturnValue(() => ({
-      platform: "darwin",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    // A successful observation belongs to one platform; discard a prior Windows fixture's cache.
-    readGatewayLockProcessNamespace();
-    platform.mockReturnValue("win32");
-    boot.mockReturnValue(() => ({
-      platform: "win32",
-      identity: "2026-10-17T00:00:01.0000000Z",
-    }));
-    expect(readGatewayLockProcessNamespace()).toEqual({
-      host: os.hostname(),
-      platform: "win32",
-      identity: "2026-10-17T00:00:01.0000000Z",
-    });
-    const ownerPath = resolveGatewayStateOwnerPath(databasePath);
-    fsSync.mkdirSync(path.dirname(ownerPath), { recursive: true });
-    const writeOwner = (pid: number) =>
-      JSON.stringify({
-        pid,
-        ownerId: `boot-mismatch-${pid}`,
-        createdAt: new Date().toISOString(),
-        configPath: paths.configPath,
-        processNamespace: recordedNamespace,
-      });
-
-    const liveRecord = writeOwner(process.pid);
-    fsSync.writeFileSync(ownerPath, liveRecord);
-    expect(isGatewayStateOwnerDefinitelyStale(JSON.parse(liveRecord), ownerPath)).toBe(false);
-    expect(() => acquireStateDatabaseSchemaLease(databasePath, { busyTimeoutMs: 1 })).toThrow(
-      GatewayStateOwnerContentionError,
-    );
-    expect(fsSync.readFileSync(ownerPath, "utf8")).toBe(liveRecord);
-
-    fsSync.writeFileSync(ownerPath, writeOwner(2_147_483_647));
-    const recovered = acquireGatewayStateOwner({ databasePath });
-    try {
-      expect(fsSync.readFileSync(ownerPath, "utf8")).not.toContain("boot-mismatch-2147483647");
-    } finally {
-      recovered.release();
-    }
-  });
+  it.each([
+    { state: "live", startTime: 123, dead: false, reclaim: false },
+    { state: "unreadable", startTime: null, dead: false, reclaim: false },
+    { state: "reused", startTime: 124, dead: false, reclaim: true },
+    { state: "exited", startTime: null, dead: true, reclaim: true },
+  ])(
+    "uses process identity for a $state Windows owner despite boot disagreement",
+    ({ startTime, dead, reclaim }) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-boot-mismatch-") };
+      const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+      vi.spyOn(os, "homedir").mockReturnValue(env.OPENCLAW_STATE_DIR);
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
+      boot.mockReturnValue(() => ({
+        platform: "darwin",
+        identity: "01234567-89ab-cdef-0123-456789abcdef",
+      }));
+      // Discard the process-lifetime namespace cache from the preceding fixture.
+      readGatewayLockProcessNamespace();
+      platform.mockReturnValue("win32");
+      boot.mockReturnValue(() => ({
+        platform: "win32",
+        identity: "2026-10-17T00:00:01.0000000Z",
+      }));
+      vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(startTime);
+      vi.spyOn(processIdentity, "isPidDefinitelyDead").mockReturnValue(dead);
+      vi.spyOn(processIdentity, "isPidAlive").mockReturnValue(!dead);
+      const ownerPath = resolveGatewayStateOwnerPath(databasePath);
+      fsSync.mkdirSync(path.dirname(ownerPath), { recursive: true });
+      const payload = {
+        pid: 2_147_483_647,
+        ownerId: "previous-owner",
+        createdAt: "2026-10-17T00:00:00.000Z",
+        configPath: path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
+        startTime: 123,
+        processNamespace: {
+          host: os.hostname(),
+          platform: "win32",
+          identity: "2026-10-17T00:00:00.0000000Z",
+        },
+      };
+      const record = JSON.stringify(payload);
+      fsSync.writeFileSync(ownerPath, record);
+      const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
+      fsSync.utimesSync(ownerPath, expired, expired);
+      let acquired: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+      try {
+        if (!reclaim) {
+          expect(() => {
+            acquired = acquireStateDatabaseSchemaLease(databasePath, { busyTimeoutMs: 0 });
+          }).toThrow(GatewayStateOwnerContentionError);
+          expect(fsSync.readFileSync(ownerPath, "utf8")).toBe(record);
+        } else {
+          acquired = acquireGatewayStateOwner({ databasePath });
+          expect(JSON.parse(fsSync.readFileSync(ownerPath, "utf8")).ownerId).not.toBe(
+            "previous-owner",
+          );
+        }
+      } finally {
+        acquired?.release();
+        fsSync.rmSync(ownerPath, { force: true });
+      }
+    },
+  );
 
   it.each(["unreadable", "malformed"])(
     "preserves fresh ownership and reclaims an expired heartbeat when the Linux PID namespace link is %s",

@@ -100,31 +100,20 @@ export function classifyGatewayLockProcessNamespace(
   });
 }
 
-/** A live process on this host can outrank a disputed boot observation. */
-export function hasGatewayLockSameHostBootIdentityChanged(value: unknown): boolean {
-  const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
-  const current = readGatewayLockProcessNamespace();
-  return Boolean(
-    owner &&
-    current &&
-    owner.platform === current.platform &&
-    owner.host === current.host &&
-    owner.identity !== current.identity,
-  );
-}
-
 /** File locks and SQLite leases share one boot/namespace and heartbeat policy. */
 export function classifyGatewayOwnerProcessNamespace(
   value: unknown,
   options: { readHeartbeatAt?: () => number | undefined; ownerHost?: string } = {},
 ): "same" | "dead" | "unknown" {
-  // Legacy local records or comparable boot/namespace identity: existing PID rules.
-  // Different boot on the same host: dead.
-  // Foreign/unreadable namespace: heartbeat >90s old => dead; otherwise unknown/preserve.
   const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
   const ownerHost = owner?.host ?? options.ownerHost;
   const foreignHost = ownerHost !== undefined && ownerHost !== os.hostname();
-  if (value === undefined && !foreignHost) {
+  // Windows boot observations can disagree within one boot. Local Windows owners
+  // use PID and absolute process-start identity; heartbeat age cannot revoke them.
+  if (
+    !foreignHost &&
+    (value === undefined || (process.platform === "win32" && owner?.platform === "win32"))
+  ) {
     return "same";
   }
   const current = readGatewayLockProcessNamespace();
