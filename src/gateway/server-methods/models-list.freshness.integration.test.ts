@@ -1,13 +1,18 @@
-import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "../../agents/prepared-model-runtime.owner.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
+import {
+  closeCatalogServer,
+  createCatalogState,
+  listenCatalogServer,
+  startCatalogGateway,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
 import * as modelsListResult from "./models-list-result.js";
 
 it.for([
@@ -18,18 +23,7 @@ it.for([
   "models.list reuses inventory until explicit refresh (sibling: $withSibling, getter-backed: $getterBacked, empty: $initiallyEmpty)",
   { timeout: 120_000 },
   async ({ withSibling, getterBacked, initiallyEmpty }, { signal }) => {
-    const state = await createOpenClawTestState({
-      label: "catalog-freshness",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    const state = await createCatalogState("catalog-freshness");
     const provider = "freshness-fixture";
     const sibling = "a-failing-fixture";
     const providers = withSibling ? [sibling, provider] : [provider];
@@ -60,20 +54,10 @@ it.for([
       }
     });
     try {
-      endpoint.listen(0, "127.0.0.1");
-      await once(endpoint, "listening");
-      const address = endpoint.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Catalog fixture did not bind a TCP port");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
-      await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-        id: provider,
+      const baseUrl = await listenCatalogServer(endpoint);
+      const pluginPath = await writeCatalogPlugin(
+        state,
         providers,
-        configSchema: { type: "object", additionalProperties: false },
-      });
-      const pluginPath = await state.writeText(
-        "catalog-plugin/index.cjs",
         `module.exports = {
       id: ${JSON.stringify(provider)}, register(api) {
         for (const provider of ${JSON.stringify(providers)}) api.registerProvider({ id: provider, label: "Freshness fixture", auth: [],
@@ -106,6 +90,7 @@ it.for([
         });
       },
     };`,
+        { id: provider },
       );
       const token = "catalog-freshness-gateway-token";
       const cfg = {
@@ -134,12 +119,7 @@ it.for([
             : {}),
         },
       });
-      const { client, server } = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin"],
-      });
+      const { client, server } = await startCatalogGateway(state, cfg, token);
       let requestedRefresh: Promise<unknown> | undefined;
       try {
         await server.startupSettled;
@@ -168,34 +148,26 @@ it.for([
               : result.models.some((row) => row.id === "original")) &&
             (!withSibling || result.siblingModels.includes("sibling")),
         });
-        expect(initial.models.map((row) => row.id)).toEqual(original);
+        const ids = (result: typeof initial) => result.models.map((row) => row.id);
+        expect(ids(initial)).toEqual(original);
         const initialRequests = requests;
         if (!initiallyEmpty) {
           expect(initialRequests).toBe(1);
         }
         if (withSibling && !initiallyEmpty) {
-          const timings: Array<{ patchMs: number; modelsMs: number; bytes: number }> = [];
           const projection = vi.spyOn(modelsListResult, "prepareModelsListResult");
           try {
             for (let index = 0; index < 6; index++) {
-              const start = performance.now();
               const ack = await client.request<{ ok: boolean; config?: unknown }>("config.patch", {
                 raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: index % 2 === 0 } } }),
                 response: "summary",
               });
-              const patched = performance.now();
               expect(ack.ok).toBe(true);
               expect(ack).not.toHaveProperty("config");
               const after = await list();
-              timings.push({
-                patchMs: patched - start,
-                modelsMs: performance.now() - patched,
-                bytes: JSON.stringify(ack).length,
-              });
               expect(after.models).toEqual(initial.models);
               expect(requests).toBe(initialRequests);
             }
-            console.log("Preference patch timings", JSON.stringify(timings));
             expect(projection.mock.calls.length).toBe(0);
             const noop = await client.request("config.patch", {
               raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: false } } }),
@@ -248,7 +220,7 @@ it.for([
         expire(withSibling && !initiallyEmpty ? providers : [provider]);
         // Expiring a provider response cache does not invalidate the published Gateway view.
         const saved = await withinTest(list(), signal);
-        expect(saved.models.map((row) => row.id)).toEqual(original);
+        expect(ids(saved)).toEqual(original);
         expect(saved.siblingModels).toEqual(withSibling ? ["sibling"] : []);
         expect(owner.readFullModelCatalog!()?.pendingProviders).toBeUndefined();
         expect(requests).toBe(initialRequests);
@@ -256,10 +228,7 @@ it.for([
         void requestedRefresh.catch(() => undefined);
         await withinTest(renewal.promise, signal);
         const concurrent = await withinTest(Promise.all([list(), list()]), signal);
-        expect(concurrent.map((result) => result.models.map((row) => row.id))).toEqual([
-          original,
-          original,
-        ]);
+        expect(concurrent.map(ids)).toEqual([original, original]);
         expect(requests).toBe(initialRequests + 1);
         const renewed = await acceptRenewal(() => {
           hold = false;
@@ -268,7 +237,7 @@ it.for([
           }
         });
         await requestedRefresh;
-        expect(renewed.models.map((row) => row.id)).toEqual(["newly-published", ...original]);
+        expect(ids(renewed)).toEqual(["newly-published", ...original]);
 
         if (!withSibling || initiallyEmpty) {
           fail = true;
@@ -287,7 +256,7 @@ it.for([
             expire([provider]);
             return list(true);
           });
-          expect(afterSiblingFailure.models.map((row) => row.id)).toEqual([
+          expect(ids(afterSiblingFailure)).toEqual([
             "after-sibling-failure",
             "newly-published",
             "original",
@@ -295,10 +264,7 @@ it.for([
           expect((await list()).refreshFailed).toBe(true);
         } else {
           const failedRequests = requests;
-          expect((await list()).models.map((row) => row.id)).toEqual([
-            "newly-published",
-            ...original,
-          ]);
+          expect(ids(await list())).toEqual(["newly-published", ...original]);
           expect((await list()).refreshFailed).toBe(true);
           expect((await list()).siblingModels).toEqual(withSibling ? ["sibling"] : []);
           expect(requests).toBe(failedRequests);
@@ -322,10 +288,7 @@ it.for([
         await server.close();
       }
     } finally {
-      endpoint.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        endpoint.close(() => resolve());
-      });
+      await closeCatalogServer(endpoint);
       await state.cleanup();
     }
   },

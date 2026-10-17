@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { text as readText } from "node:stream/consumers";
@@ -7,22 +6,19 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../test-helpers.e2e.js";
+import {
+  catalogReply,
+  closeCatalogServer,
+  createCatalogState,
+  expectAssistantReply,
+  listenCatalogServer,
+  startCatalogGateway,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
 
 it("dispatches a discovered model outside the agent workspace and preserves it after withdrawal", async () => {
-  const state = await createOpenClawTestState({
-    label: "models-dispatch-catalog",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-  });
+  const state = await createCatalogState("models-dispatch-catalog");
   const provider = "opencode";
   const model = "live-only-model";
   const modelRef = `${provider}/${model}`;
@@ -60,22 +56,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       }
       await releaseInference.promise;
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: ${JSON.stringify({
-          id: "chatcmpl-discovered-model",
-          object: "chat.completion.chunk",
-          created: 0,
-          model,
-          choices: [
-            {
-              index: 0,
-              delta: { role: "assistant", content: "CATALOG_DISPATCH_REPLY" },
-              finish_reason: "stop",
-            },
-          ],
-          usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
-        })}\n\ndata: [DONE]\n\n`,
-      );
+      response.end(catalogReply("chatcmpl-discovered-model", model, "CATALOG_DISPATCH_REPLY"));
     })();
     providerWork.push(work);
     void work.catch((error: unknown) => {
@@ -84,21 +65,10 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
     });
   });
   try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Dispatch fixture did not bind a TCP port");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: provider,
-      providers: [provider],
-      modelCatalog: { discovery: { [provider]: "refreshable" } },
-      configSchema: { type: "object", additionalProperties: false },
-    });
-    const pluginPath = await state.writeText(
-      "catalog-plugin/index.cjs",
+    const baseUrl = `${await listenCatalogServer(endpoint)}/v1`;
+    const pluginPath = await writeCatalogPlugin(
+      state,
+      provider,
       `module.exports = {
         id: ${JSON.stringify(provider)},
         register(api) {
@@ -129,6 +99,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
           });
         },
       };`,
+      { modelCatalog: { discovery: { [provider]: "refreshable" } } },
     );
     const token = "catalog-dispatch-gateway-token";
     const cfg = {
@@ -153,11 +124,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
         entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
-      plugins: {
-        allow: [provider],
-        load: { paths: [pluginPath] },
-        slots: { memory: "none" },
-      },
+      plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },
     } satisfies OpenClawConfig;
     await state.writeConfig(cfg);
@@ -169,12 +136,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       },
       order: { [provider]: [`${provider}:default`, `${provider}:alternate`] },
     });
-    const { client, server } = await startGatewayWithClient({
-      cfg,
-      configPath: state.configPath,
-      token,
-      scopes: ["operator.admin"],
-    });
+    const { client, server } = await startCatalogGateway(state, cfg, token);
     try {
       await server.startupSettled;
       const refresh = () =>
@@ -271,16 +233,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       const history = await client.request<{ messages: unknown[] }>("chat.history", {
         sessionKey: session.key,
       });
-      expect(history.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            role: "assistant",
-            content: expect.arrayContaining([
-              expect.objectContaining({ type: "text", text: "CATALOG_DISPATCH_REPLY" }),
-            ]),
-          }),
-        ]),
-      );
+      expectAssistantReply(history.messages, "CATALOG_DISPATCH_REPLY");
 
       const nextSession = await client.request<{ key: string }>("sessions.create", {
         agentId: "main",
@@ -309,11 +262,8 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
     }
   } finally {
     releaseInference.resolve();
-    endpoint.closeAllConnections();
     try {
-      await new Promise<void>((resolve, reject) => {
-        endpoint.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeCatalogServer(endpoint, true);
       await Promise.all(providerWork);
     } finally {
       await state.cleanup();
