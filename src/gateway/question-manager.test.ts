@@ -184,7 +184,7 @@ describe("QuestionManager", () => {
     const record = manager.request({ questions: [secret], timeoutMs: 10, onResolved });
     const observation = manager.observe(record.id)!;
     secret.isSecret = false;
-    clock.setTime(2_000);
+    clock.advanceMonotonicBy(2_000);
     expect(manager.observe(record.id)?.record.status).toBe("pending");
     expect(observation.ordinary).toBe(false);
     expect(onResolved).not.toHaveBeenCalled();
@@ -203,7 +203,7 @@ describe("QuestionManager", () => {
       },
     });
     const observation = manager.observe(original.id)!;
-    clock.setTime(1_011);
+    clock.advanceMonotonicBy(11);
     expect(() => manager.resolve(original.id, answers)).toThrow("was not found");
     expect(manager.get(original.id)?.status).toBe("pending");
     expect(observation.isCurrent()).toBe(false);
@@ -896,7 +896,7 @@ it.each(["answered", "cancelled", "expired"] as const)(
       } else if (status === "cancelled") {
         expect(manager.cancel(id)).toEqual({ status });
       } else {
-        clock.setTime(2_001);
+        clock.advanceMonotonicBy(1_001);
         expect(manager.get(id)?.status).toBe(status);
       }
       await manager.drain();
