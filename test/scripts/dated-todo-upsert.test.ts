@@ -122,18 +122,13 @@ describe("dated TODO issue upsert", () => {
 
     await run();
 
-    expect(calls.create).toHaveLength(0);
-    expect(calls.update).toEqual([
-      expect.objectContaining({ issue_number: tracker.number, state: "open" }),
-    ]);
-    expect(calls.comment).toEqual([
-      expect.objectContaining({
-        issue_number: tracker.number,
-        body: expect.stringContaining("src/urgent.ts:7"),
-      }),
-    ]);
-    expect(calls.sequence).toEqual(["comment", "update"]);
-    expect(calls.warnings).toEqual([expect.stringContaining("Ignored 1 untrusted")]);
+    expect(calls).toMatchObject({
+      create: [],
+      update: [{ issue_number: tracker.number, state: "open" }],
+      comment: [{ issue_number: tracker.number, body: expect.stringContaining("src/urgent.ts:7") }],
+      sequence: ["comment", "update"],
+      warnings: [expect.stringContaining("Ignored 1 untrusted")],
+    });
   });
 
   it("updates the canonical tracker when diagnostics-only search fails", async () => {
@@ -187,30 +182,32 @@ describe("dated TODO issue upsert", () => {
 });
 
 describe("dated TODO report validation", () => {
-  const validateItem = (item: string) => validateDatedTodoReport(REPORT.replace(TODO_ITEM, item));
-  it.each([["invalid date", "- [ ] src/urgent.ts:7 — remove expired compatibility (2026-99-01)"]])(
-    "rejects a malformed %s",
-    (_name, malformed) => {
-      expect(() => validateItem(malformed)).toThrow(/Invalid dated TODO checklist item/u);
-    },
-  );
-
   it.each([
+    ["invalid date", "(2026-07-01)", "(2026-99-01)", /Invalid dated TODO checklist item/u],
+    ["future OVERDUE date", "(2026-07-01)", "(2027-01-01)", /Non-overdue date/u],
     [
-      "future date under OVERDUE",
-      REPORT.replace("(2026-07-01)", "(2027-01-01)"),
-      /Non-overdue date/u,
-    ],
-    [
-      "date beyond 30 days under DUE",
-      REPORT.replace(
-        "## DUE within 30 days\n\n_None._",
-        "## DUE within 30 days\n\n- [ ] src/due.ts:9 — revisit gate (2026-08-25)",
-      ),
+      "late DUE date",
+      "## DUE within 30 days\n\n_None._",
+      "## DUE within 30 days\n\n- [ ] src/due.ts:9 — revisit gate (2026-08-25)",
       /outside the 30-day due window/u,
     ],
-  ])("rejects a %s", (_name, report, expected) => {
-    expect(() => validateDatedTodoReport(report)).toThrow(expected);
+    ...[
+      "notify @maintainers",
+      "see https://example.com",
+      "follow up in GH-123",
+      "remove _expired_ compatibility",
+    ].map(
+      (summary) =>
+        [summary, "remove expired compatibility", summary, /Non-plain-text summary/u] as const,
+    ),
+    [
+      "unexpected prologue",
+      "Generated for 2026-07-25 UTC.\n\n",
+      "Generated for 2026-07-25 UTC.\n\n@maintainers\n\n",
+      /prologue or section order/u,
+    ],
+  ] as const)("rejects %s", (_name, from, to, error) => {
+    expect(() => validateDatedTodoReport(REPORT.replace(from, to))).toThrow(error);
   });
 
   it("binds the report date and file locations to the fresh checkout", () => {
@@ -233,34 +230,11 @@ describe("dated TODO report validation", () => {
     ).toThrow(/Untracked or missing repository path/u);
   });
 
-  it.each([
-    ["mention", "- [ ] src/urgent.ts:7 — notify @maintainers (2026-07-01)"],
-    ["URL", "- [ ] src/urgent.ts:7 — see https://example.com (2026-07-01)"],
-    ["GH reference", "- [ ] src/urgent.ts:7 — follow up in GH-123 (2026-07-01)"],
-  ])("rejects non-plain-text summaries containing a %s", (_name, item) => {
-    expect(() => validateItem(item)).toThrow(/Non-plain-text summary/u);
-  });
-
-  it("allows underscores only inside plain identifiers", () => {
-    const safe = REPORT.replace(
-      "remove expired compatibility",
-      "remove media_legacy compatibility",
-    );
-    const emphasized = REPORT.replace(
-      "remove expired compatibility",
-      "remove _expired_ compatibility",
-    );
-
-    expect(() => validateDatedTodoReport(safe)).not.toThrow();
-    expect(() => validateDatedTodoReport(emphasized)).toThrow(/Non-plain-text summary/u);
-  });
-
-  it("rejects unexpected report prologue content", () => {
-    const report = REPORT.replace(
-      "Generated for 2026-07-25 UTC.\n\n",
-      "Generated for 2026-07-25 UTC.\n\n@maintainers\n\n",
-    );
-
-    expect(() => validateDatedTodoReport(report)).toThrow(/prologue or section order/u);
+  it("allows underscores inside plain identifiers", () => {
+    expect(() =>
+      validateDatedTodoReport(
+        REPORT.replace("remove expired compatibility", "remove media_legacy compatibility"),
+      ),
+    ).not.toThrow();
   });
 });

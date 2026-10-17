@@ -48,7 +48,7 @@ afterEach(() => {
   fsck.budgets.length = 0;
 });
 
-function fixture() {
+function fixture(bytes = 0) {
   const root = temporary.make("openclaw-staging-witness-");
   const repository = join(root, "witness");
   const payloadRoot = join(root, "payload");
@@ -88,6 +88,12 @@ function fixture() {
     files: [{ path: "source.txt", mode: "100644", blob: git("hash-object", "source.txt") }],
     deleted: ["history.txt"],
   };
+  if (bytes) {
+    // Sparse sizing exercises the large-store budget without allocating 4 GiB.
+    const sizing = join(repository, ".git/objects/info/sizing");
+    writeFileSync(sizing, "");
+    truncateSync(sizing, bytes);
+  }
   const witness = {
     gitDir: realpathSync(join(repository, ".git")),
     ref: "refs/heads/main",
@@ -111,17 +117,33 @@ function fixture() {
     metadataPaths,
     addFinderMetadata,
     params: { source, witness, payloadRoot },
+    async verify() {
+      const result = await verifySourceWitness({ source, witness, payloadRoot });
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) {
+        throw new Error("fixture witness must verify");
+      }
+      if (bytes) {
+        expect(fsck.budgets[0]).toBeGreaterThan(200_000);
+      }
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 121_000);
+      expect(() => result.revalidate()).not.toThrow();
+    },
   };
 }
 
 describe.skipIf(process.platform === "win32")("Crabbox staging witness object proof", () => {
-  it.each(["native", "older"] as const)(
-    "verifies objects with %s Git's reference support",
-    async (git) => {
-      const f = fixture();
+  it.each([
+    ["native", 0],
+    ["native", 4 * 1024 ** 3],
+    ["older", 0],
+  ] as const)(
+    "verifies %s Git references with %i extra bytes and refreshes the budget",
+    async (git, bytes) => {
+      const f = fixture(bytes);
       if (git === "native") {
         f.addFinderMetadata();
-        expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
+        await f.verify();
         for (const path of f.metadataPaths) {
           expect(existsSync(path)).toBe(true);
         }
@@ -148,7 +170,7 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
       );
       vi.stubEnv("PATH", shimDir + delimiter + process.env.PATH);
 
-      expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
+      await f.verify();
       if (
         version &&
         (Number(version[1]) > 2 || (Number(version[1]) === 2 && Number(version[2]) >= 50))
@@ -180,29 +202,4 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
       expect(result.reason).not.toContain("fsck");
     }
   });
-
-  it.each([0, 4 * 1024 ** 3])(
-    "scales verification and refreshes the revalidation budget with %i extra bytes",
-    async (bytes) => {
-      const f = fixture();
-      if (bytes) {
-        // A sparse file models object-store size without allocating 4 GiB.
-        const sizing = join(f.params.witness.gitDir, "objects", "info", "sizing");
-        mkdirSync(join(sizing, ".."), { recursive: true });
-        writeFileSync(sizing, "");
-        truncateSync(sizing, bytes);
-      }
-      const explicit = await verifySourceWitness(f.params);
-      expect(explicit).toMatchObject({ ok: true });
-      if (!explicit.ok) {
-        throw new Error("fixture witness must verify");
-      }
-      if (bytes) {
-        expect(fsck.budgets[0]).toBeGreaterThan(200_000);
-      }
-      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 121_000);
-
-      expect(() => explicit.revalidate()).not.toThrow();
-    },
-  );
 });

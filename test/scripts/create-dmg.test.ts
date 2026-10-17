@@ -1,4 +1,3 @@
-// Create Dmg tests cover create dmg script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -16,36 +15,26 @@ import { afterEach, describe, expect, it } from "vitest";
 const tempDirs: string[] = [];
 const scriptPath = "scripts/create-dmg.sh";
 
-function makeApp(plistEntries: string[]): string {
+function makeApp(
+  entries: Record<string, string> = {
+    CFBundleName: "OpenClaw",
+    CFBundleShortVersionString: "2026.6.16",
+  },
+): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-"));
   tempDirs.push(dir);
   const app = path.join(dir, "OpenClaw.app");
   const contents = path.join(app, "Contents");
   mkdirSync(contents, { recursive: true });
+  const dict = Object.entries(entries)
+    .map(([key, value]) => `<key>${key}</key><string>${value}</string>`)
+    .join("");
   writeFileSync(
     path.join(contents, "Info.plist"),
-    [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-      '<plist version="1.0">',
-      "<dict>",
-      ...plistEntries,
-      "</dict>",
-      "</plist>",
-      "",
-    ].join("\n"),
+    `<plist version="1.0"><dict>${dict}</dict></plist>`,
     "utf8",
   );
   return app;
-}
-
-function makeValidApp(): string {
-  return makeApp([
-    "<key>CFBundleName</key>",
-    "<string>OpenClaw</string>",
-    "<key>CFBundleShortVersionString</key>",
-    "<string>2026.6.16</string>",
-  ]);
 }
 
 function makeFakeDmgTools() {
@@ -55,9 +44,13 @@ function makeFakeDmgTools() {
   const hdiutilLog = path.join(dir, "hdiutil.log");
   const osascriptLog = path.join(dir, "osascript.applescript");
   mkdirSync(bin, { recursive: true });
-  const hdiutil = path.join(bin, "hdiutil");
-  writeFileSync(
-    hdiutil,
+  const executable = (name: string, script: string) => {
+    const file = path.join(bin, name);
+    writeFileSync(file, script, "utf8");
+    chmodSync(file, 0o755);
+  };
+  executable(
+    "hdiutil",
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$HDIUTIL_LOG"
@@ -66,25 +59,24 @@ shift || true
 if [[ "\${HDIUTIL_FAIL_ON:-}" == "$command_name" ]]; then
   exit 17
 fi
+value_after() {
+  local key="$1"; shift
+  while (($#)); do
+    if [[ "$1" == "$key" ]]; then printf '%s' "$2"; return; fi
+    shift
+  done
+}
 case "$command_name" in
   create)
     : > "\${!#}"
     ;;
   attach)
-    # Busy hosts can fail with EAGAIN after creating the image devices.
     printf '%s' "$1" > "\${HDIUTIL_LOG}.image"
     if [[ "\${HDIUTIL_ATTACH_EAGAIN:-0}" == "1" ]]; then
       echo "hdiutil: attach failed - Resource temporarily unavailable" >&2
       exit 35
     fi
-    mountpoint=""
-    while (($#)); do
-      if [[ "$1" == "-mountpoint" ]]; then
-        mountpoint="$2"
-        break
-      fi
-      shift
-    done
+    mountpoint="$(value_after -mountpoint "$@")"
     if [[ "\${HDIUTIL_ATTACH_MARKER:-0}" == "1" && -n "$mountpoint" ]]; then
       mkdir -p "$mountpoint"
       printf mounted > "$mountpoint/live-volume-file"
@@ -127,14 +119,7 @@ case "$command_name" in
     fi
     ;;
   convert)
-    output=""
-    while (($#)); do
-      if [[ "$1" == "-o" ]]; then
-        output="$2"
-        break
-      fi
-      shift
-    done
+    output="$(value_after -o "$@")"
     [[ -n "$output" ]]
     printf 'converted' > "$output"
     ;;
@@ -143,28 +128,19 @@ case "$command_name" in
     ;;
 esac
 `,
-    "utf8",
   );
-  chmodSync(hdiutil, 0o755);
-  const osascript = path.join(bin, "osascript");
-  writeFileSync(osascript, '#!/usr/bin/env bash\ncat > "$OSASCRIPT_LOG"\nexit 0\n', "utf8");
-  chmodSync(osascript, 0o755);
+  executable("osascript", '#!/usr/bin/env bash\ncat > "$OSASCRIPT_LOG"\nexit 0\n');
   for (const command of ["sleep", "sync"]) {
-    const tool = path.join(bin, command);
-    writeFileSync(tool, `#!/bin/bash\nprintf '${command} %s\\n' "$*" >> "$HDIUTIL_LOG"\n`, "utf8");
-    chmodSync(tool, 0o755);
+    executable(command, `#!/bin/bash\nprintf '${command} %s\\n' "$*" >> "$HDIUTIL_LOG"\n`);
   }
-  const mount = path.join(bin, "mount");
-  writeFileSync(
-    mount,
+  executable(
+    "mount",
     `#!/bin/bash
 echo '/dev/disk1s1 on / (apfs, sealed, local, read-only, journaled)'
 [[ -f "$HDIUTIL_LOG.attached" ]] && echo "/dev/disk99s1 on $(cat "$HDIUTIL_LOG.attached") (hfs, local, nobrowse)"
 exit 0
 `,
-    "utf8",
   );
-  chmodSync(mount, 0o755);
   return {
     env: {
       HDIUTIL_LOG: hdiutilLog,
@@ -186,7 +162,7 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}) {
 }
 
 function fixture(subdirectory = "") {
-  const app = makeValidApp();
+  const app = makeApp();
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
   tempDirs.push(root);
   const outputDir = path.join(root, subdirectory);
@@ -228,44 +204,17 @@ afterEach(() => {
 });
 
 describe("create-dmg plist validation", () => {
-  it("keeps temporary DMG artifacts scoped to one run", () => {
+  it("keeps resize-limit scratch data private to the run", () => {
     const script = readFileSync(scriptPath, "utf8");
-
-    expect(script).toContain('DMG_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-dmg.XXXXXX")"');
-    expect(script).toContain('DMG_SOURCE="$DMG_TEMP/source"');
-    expect(script).toContain('MOUNT_POINT="$DMG_TEMP/mount"');
-    expect(script).toContain('DMG_RW_PATH="$DMG_TEMP/image-rw.dmg"');
-    expect(script).toContain('DMG_OUTPUT_TEMP=""');
-    expect(script).toContain('DMG_FINAL_PATH=""');
-    expect(script).toContain(
-      'DMG_OUTPUT_TEMP="$(mktemp -d "$(dirname "$OUT_PATH")/.openclaw-dmg.XXXXXX")"',
-    );
-    expect(script).toContain('DMG_FINAL_PATH="$DMG_OUTPUT_TEMP/final.dmg"');
     expect(script).toContain('DMG_LIMITS_PATH="$DMG_TEMP/resize-limits.txt"');
     expect(script).toContain('hdiutil resize -limits "$DMG_RW_PATH" >"$DMG_LIMITS_PATH"');
     expect(script).not.toContain("/tmp/openclaw-dmg-limits.txt");
-    expect(script).not.toContain('"/Volumes/$DMG_VOLUME_NAME"');
-    expect(script).not.toContain('tell application "Finder" to close every window');
-  });
-
-  it("fails malformed DMG resize slack before creating images", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const validationBlock = script.slice(
-      script.indexOf("require_integer_list()"),
-      script.indexOf("to_applescript_list4()"),
-    );
-
-    expect(validationBlock).toContain("require_nonnegative_integer()");
-    expect(validationBlock).toContain(
-      'require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"',
-    );
-    expect(validationBlock).toContain("must be a finite non-negative integer");
   });
 
   it.runIf(process.platform === "darwin")(
     "fails before hdiutil when required plist keys are missing",
     () => {
-      const app = makeApp(["<key>CFBundleName</key>", "<string>OpenClaw</string>"]);
+      const app = makeApp({ CFBundleName: "OpenClaw" });
       const result = runScript([app, path.join(path.dirname(app), "out.dmg")]);
 
       expect(result.status).toBe(1);
@@ -276,53 +225,65 @@ describe("create-dmg plist validation", () => {
 });
 
 describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries", () => {
-  it("uses private intermediate paths without deleting caller-owned siblings", () => {
-    const { outputDir, output, tools, run } = fixture();
-    const sibling = path.join(outputDir, "OpenClaw-rw.dmg");
-    writeFileSync(output, "previous output", "utf8");
-    writeFileSync(sibling, "caller owned", "utf8");
+  it.each(["", "nested/artifacts"])(
+    "publishes to %s without touching caller siblings",
+    (subdirectory) => {
+      const { outputDir, output, tools, run } = fixture(subdirectory);
+      const sibling = path.join(outputDir, "OpenClaw-rw.dmg");
+      if (!subdirectory) {
+        writeFileSync(output, "previous output", "utf8");
+        writeFileSync(sibling, "caller owned", "utf8");
+      }
 
-    const result = run();
+      const result = run();
 
-    expect(result.status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("converted");
-    expect(readFileSync(sibling, "utf8")).toBe("caller owned");
-    const log = readFileSync(tools.hdiutilLog, "utf8");
-    expectPrivateDmgMount(log);
-    expect(log).toContain("convert ");
-    // hdiutil sizes -srcfolder images with filesystem overhead; an explicit
-    // byte estimate underallocates bundles containing many small files.
-    const create = log.split("\n").find((line) => line.startsWith("create "));
-    expect(create).toContain("-srcfolder ");
-    expect(create).not.toMatch(/\s-(?:size|megabytes|sectors)\s/);
-    expect(log).toContain("final.dmg");
-    expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
-    expect(log).not.toContain(sibling);
-  });
-
-  it("creates a caller-provided output directory before finalizing the DMG", () => {
-    const { outputDir, output, tools, run } = fixture("nested/artifacts");
-
-    const result = run();
-
-    expect(result.status).toBe(0);
-    expect(existsSync(outputDir)).toBe(true);
-    expect(readFileSync(output, "utf8")).toBe("converted");
-    const log = readFileSync(tools.hdiutilLog, "utf8");
-    expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
-  });
+      expect(result.status).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe("converted");
+      expect(existsSync(outputDir)).toBe(true);
+      if (!subdirectory) {
+        expect(readFileSync(sibling, "utf8")).toBe("caller owned");
+      }
+      const log = readFileSync(tools.hdiutilLog, "utf8");
+      expectPrivateDmgMount(log);
+      expect(log).toContain("convert ");
+      // hdiutil sizes -srcfolder images with filesystem overhead; an explicit
+      // byte estimate underallocates bundles containing many small files.
+      const create = log.split("\n").find((line) => line.startsWith("create "));
+      expect(create).toContain("-srcfolder ");
+      expect(create).not.toMatch(/\s-(?:size|megabytes|sectors)\s/);
+      expect(log).toContain("final.dmg");
+      expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
+      expect(log).not.toContain(sibling);
+    },
+  );
 
   it.each([
-    ["malformed", "400 nope 900 420", "must contain only integer values"],
-    ["multiline", "400 100 900 420\nnope", "must be a single line"],
-  ])("fails before image creation with %s Finder bounds", (_name, bounds, error) => {
-    const { output, tools, run } = fixture();
-    const result = run({ DMG_WINDOW_BOUNDS: bounds });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`DMG_WINDOW_BOUNDS ${error}`);
-    expect(existsSync(output)).toBe(false);
-    expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
-  });
+    [
+      "malformed",
+      { DMG_WINDOW_BOUNDS: "400 nope 900 420" },
+      "DMG_WINDOW_BOUNDS must contain only integer values",
+    ],
+    [
+      "multiline",
+      { DMG_WINDOW_BOUNDS: "400 100 900 420\nnope" },
+      "DMG_WINDOW_BOUNDS must be a single line",
+    ],
+    [
+      "invalid resize slack",
+      { DMG_EXTRA_SECTORS: "-1" },
+      "DMG_EXTRA_SECTORS must be a finite non-negative integer",
+    ],
+  ] satisfies [string, NodeJS.ProcessEnv, string][])(
+    "fails before image creation with %s",
+    (_name, env, error) => {
+      const { output, tools, run } = fixture();
+      const result = run(env);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(error);
+      expect(existsSync(output)).toBe(false);
+      expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
+    },
+  );
 
   it("preserves an existing output when verification fails", () => {
     const { output, tools, run } = fixture();
