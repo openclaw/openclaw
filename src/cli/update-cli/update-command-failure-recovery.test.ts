@@ -16,7 +16,10 @@ import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as utils from "../../utils.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
-import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
+import {
+  finishSuccessfulPackageSwitch,
+  validConfigSnapshot,
+} from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure as ReportedUpdateCommandFailure } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
@@ -46,6 +49,30 @@ vi.mock("./update-command-service-plan.js", async (importOriginal) => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
+function mockService(
+  readRuntime: ReturnType<typeof gatewayService.resolveGatewayService>["readRuntime"],
+) {
+  vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
+    ...gatewayService.resolveGatewayService(),
+    readRuntime,
+    readCommand: vi.fn(async () => null),
+    isLoaded: vi.fn(async () => false),
+  });
+}
+function mockFreePort() {
+  return vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
+    port,
+    status: "free",
+    listeners: [],
+    hints: [],
+  }));
+}
+async function useRealVerification() {
+  const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
+    "./update-command-verification.js",
+  );
+  vi.mocked(verifyUpdatedGateway).mockImplementationOnce(actual.verifyUpdatedGateway);
+}
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.activePort.mockReset();
@@ -84,25 +111,12 @@ describe("post-update failure recovery observation", () => {
       env: process.env,
     });
     const readRuntime = vi.fn(async () => ({ status: "stopped", missingUnit: true }));
-    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
-      ...gatewayService.resolveGatewayService(),
-      readRuntime,
-      readCommand: vi.fn(async () => null),
-      isLoaded: vi.fn(async () => false),
-    });
-    const inspect = vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
-      port,
-      status: "free",
-      listeners: [],
-      hints: [],
-    }));
+    mockService(readRuntime);
+    const inspect = mockFreePort();
     const sleep = vi.spyOn(utils, "sleep").mockImplementation(async () => {
       throw new Error("Headless recovery must not wait for Gateway startup");
     });
-    const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
-      "./update-command-verification.js",
-    );
-    vi.mocked(verifyUpdatedGateway).mockImplementationOnce(actual.verifyUpdatedGateway);
+    await useRealVerification();
     mocks.converge.mockImplementationOnce(async ({ result }) => ({
       resultWithPostUpdate: { ...result, status: "error", reason: "post-update-plugins" },
     }));
@@ -115,18 +129,11 @@ describe("post-update failure recovery observation", () => {
         rollbackBlockedReason: undefined,
         schemaVersions,
         configSnapshot: {
+          ...validConfigSnapshot,
           path: configPath,
           exists: false,
           raw: null,
-          valid: true,
-          parsed: {},
-          config: {},
-          sourceConfig: {},
           resolved: {},
-          runtimeConfig: {},
-          warnings: [],
-          issues: [],
-          legacyIssues: [],
         },
         preManagedServiceStop: {
           stopped: false,
@@ -187,18 +194,8 @@ describe("post-update failure recovery observation", () => {
       const env = { ...process.env };
       const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       const readRuntime = vi.fn(async () => ({ status: "unknown" }));
-      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
-        ...gatewayService.resolveGatewayService(),
-        readRuntime,
-        readCommand: vi.fn(async () => null),
-        isLoaded: vi.fn(async () => false),
-      });
-      const inspect = vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
-        port,
-        status: "free",
-        listeners: [],
-        hints: [],
-      }));
+      mockService(readRuntime);
+      const inspect = mockFreePort();
       let elapsedMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const sleep = vi.spyOn(utils, "sleep").mockImplementation(async (ms) => {
@@ -206,10 +203,7 @@ describe("post-update failure recovery observation", () => {
       });
       const waitForStartup = vi.spyOn(restartHealth, "waitForGatewayHealthyRestart");
       mocks.activePort.mockResolvedValueOnce(19431);
-      const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
-        "./update-command-verification.js",
-      );
-      vi.mocked(verifyUpdatedGateway).mockImplementationOnce(actual.verifyUpdatedGateway);
+      await useRealVerification();
       const failure = await withUpdateCommandTerminalResult(async (registerRun) => {
         registerRun(run);
         await finishSuccessfulPackageSwitch(

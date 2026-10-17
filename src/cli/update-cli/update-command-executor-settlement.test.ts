@@ -74,6 +74,10 @@ type SettlementStore = Pick<
 >;
 const rows = new Map<string, ManagedHandoffLease>();
 const readers = new Set<Disposable>();
+const captureFailure = (admitted: { reject: (error: unknown) => void }) => (error: unknown) => {
+  admitted.reject(error);
+  return error;
+};
 function lease(key: string, owner: string, pid = process.pid): ManagedHandoffLease {
   return {
     key,
@@ -261,10 +265,7 @@ it.each([
       },
       1000,
     )
-      .catch((error: unknown) => {
-        admitted.reject(error);
-        return error;
-      })
+      .catch(captureFailure(admitted))
       .finally(() => {
         ended = true;
       });
@@ -328,10 +329,7 @@ it.each(["direct", "delegated"] as const)(
       },
       1000,
     )
-      .catch((error: unknown) => {
-        admitted.reject(error);
-        return error;
-      })
+      .catch(captureFailure(admitted))
       .finally(() => {
         ended = true;
       });
@@ -380,10 +378,7 @@ it.each([
             return operation(await executor.enter(root));
           })
         : runWithExecutorFence(kind, operation)
-    ).catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
-    });
+    ).catch(captureFailure(admitted));
     try {
       await admitted.promise;
       await setImmediate();
@@ -426,10 +421,7 @@ it.each(["forced", "uncertain"] as const)(
         throw original;
       });
       await childWork;
-    }).catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
-    });
+    }).catch(captureFailure(admitted));
     try {
       await admitted.promise;
       await setImmediate();
@@ -491,10 +483,7 @@ it.each(["forced", "uncertain"] as const)(
       expect(runtime.ok).toBe(true);
       releaseUpdateCommandPreflightForHandoff(fence);
       handedOff = true;
-    }).catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
-    });
+    }).catch(captureFailure(admitted));
     try {
       await admitted.promise;
       await setImmediate();
@@ -522,10 +511,7 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
       await cancelled.promise;
       throw new CommandProcessCleanupError({ cause: deadline.signal.reason });
     })
-    .catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
-    });
+    .catch(captureFailure(admitted));
   try {
     await admitted.promise;
     await vi.advanceTimersByTimeAsync(1000);

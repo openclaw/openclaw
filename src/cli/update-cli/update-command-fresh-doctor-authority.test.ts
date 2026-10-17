@@ -40,22 +40,19 @@ afterAll(async () => {
   await receipts.close();
 });
 
-const source = (name: string, distWorkerPath: string) =>
+const source = (name: string) =>
   resolveRuntimeWorkerUrl({
     currentModuleUrl: updateExecutorNativeEntrypoints.executor.currentModuleUrl,
     sourceWorkerName: name,
-    distWorkerPath: `legacy-finalizer/src/${distWorkerPath}`,
+    distWorkerPath: `legacy-finalizer/src/${name.replace(/^\.\.\//, "").replace(/^\.\.\//, "")}.js`,
   });
-const doctor = source("../../commands/doctor", "commands/doctor.js");
-const worker = source(
-  "../../infra/update-migrated-finalize.worker",
-  "infra/update-migrated-finalize.worker.js",
-);
-const temporary = source("../../infra/tmp-openclaw-dir", "infra/tmp-openclaw-dir.js");
-const packageRoot = source("../../infra/openclaw-root", "infra/openclaw-root.js");
-const runtime = source("../../runtime", "runtime.js");
-const database = source("../../state/openclaw-state-db", "state/openclaw-state-db.js");
-const doctorResult = source("../../infra/update-doctor-result", "infra/update-doctor-result.js");
+const doctor = source("../../commands/doctor");
+const worker = source("../../infra/update-migrated-finalize.worker");
+const temporary = source("../../infra/tmp-openclaw-dir");
+const packageRoot = source("../../infra/openclaw-root");
+const runtime = source("../../runtime");
+const database = source("../../state/openclaw-state-db");
+const doctorResult = source("../../infra/update-doctor-result");
 
 it.for(["healthy", "original-owner-replaced"] as const)(
   "fresh Doctor retains update authority at final config I/O: %s",
@@ -81,12 +78,11 @@ it.for(["healthy", "original-owner-replaced"] as const)(
         );
         vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
         let diagnostics = "";
-        vi.spyOn(defaultRuntime, "log").mockImplementation((text) => {
-          diagnostics += String(text);
-        });
-        vi.spyOn(defaultRuntime, "error").mockImplementation((text) => {
-          diagnostics += String(text);
-        });
+        for (const method of ["log", "error"] as const) {
+          vi.spyOn(defaultRuntime, method).mockImplementation((text) => {
+            diagnostics += String(text);
+          });
+        }
         await state.writeConfig({
           plugins: { enabled: false },
           agents: { defaults: { workspace: state.workspaceDir } },
@@ -95,20 +91,10 @@ it.for(["healthy", "original-owner-replaced"] as const)(
             auth: { mode: "token", token: "doctor-authority-test-token" },
             nodes: {
               commands: {
-                deny: [
-                  "camera.snap",
-                  "camera.clip",
-                  "screen.record",
-                  "computer.act",
-                  "mobile.ui.observe",
-                  "mobile.ui.act",
-                  "contacts.add",
-                  "calendar.add",
-                  "reminders.add",
-                  "sms.send",
-                  "sms.search",
-                  "health.summary",
-                ],
+                deny: (
+                  "camera.snap camera.clip screen.record computer.act mobile.ui.observe mobile.ui.act " +
+                  "contacts.add calendar.add reminders.add sms.send sms.search health.summary"
+                ).split(" "),
               },
             },
           },
@@ -116,7 +102,6 @@ it.for(["healthy", "original-owner-replaced"] as const)(
         const original = fs.readFileSync(state.configPath, "utf8");
         const readyPath = state.path("ready");
         const progressPath = state.path("doctor-progress");
-        const outputPath = state.path("doctor-output");
         const proceed = state.path("proceed");
         // Root/temp discovery stays isolated; the worker, full Doctor flow, grant,
         // input-hash check, config writer and filesystem effects remain real.
@@ -129,14 +114,6 @@ it.for(["healthy", "original-owner-replaced"] as const)(
         ${doctor.pathname.endsWith(".ts") ? `process.chdir(${JSON.stringify(path.resolve("."))});` : ""}
         const mark=(stage)=>fs.appendFileSync(${JSON.stringify(progressPath)},JSON.stringify({stage,at:Date.now(),pid:process.pid})+"\\n");
         mark("fixture-entry");
-        for(const name of ['stdout','stderr']) {
-          const stream=process[name];
-          const write=stream.write.bind(stream);
-          stream.write=(chunk,...args)=>{
-            fs.appendFileSync(${JSON.stringify(outputPath)},String(chunk));
-            return write(chunk,...args);
-          };
-        }
         process.on('exit',(code)=>mark({event:'exit',code}));
         const overrides=new Map([
           [${JSON.stringify(temporary.href)}, ${JSON.stringify(`export function resolvePreferredOpenClawTmpDir(){return ${JSON.stringify(control)};}`)}],
@@ -210,7 +187,6 @@ it.for(["healthy", "original-owner-replaced"] as const)(
           () => ({ ok: true as const }),
           (error: unknown) => ({ ok: false as const, error: formatUpdateFinalizationError(error) }),
         );
-        let binding: { pid: number; authority: boolean };
         try {
           // The atomic record also covers settlement beating delivery on the receipt socket.
           await withinTest(
@@ -226,7 +202,9 @@ it.for(["healthy", "original-owner-replaced"] as const)(
             ]),
             signal,
           );
-          binding = JSON.parse(fs.readFileSync(readyPath, "utf8"));
+          const binding: { pid: number; authority: boolean } = JSON.parse(
+            fs.readFileSync(readyPath, "utf8"),
+          );
           expect(binding.pid).not.toBe(process.pid);
           expect(fs.readFileSync(state.configPath, "utf8")).toBe(original);
           if (fault === "original-owner-replaced") {
@@ -246,22 +224,6 @@ it.for(["healthy", "original-owner-replaced"] as const)(
           await pending;
         }
         const outcome = await pending;
-        console.log(
-          JSON.stringify({
-            fault,
-            ...binding,
-            outcome,
-            ...(!outcome.ok && fault === "healthy"
-              ? {
-                  progress: fs.readFileSync(progressPath, "utf8"),
-                  childOutput: fs.existsSync(outputPath)
-                    ? fs.readFileSync(outputPath, "utf8").slice(-5000)
-                    : "",
-                }
-              : {}),
-            configChanged: fs.readFileSync(state.configPath, "utf8") !== original,
-          }),
-        );
         if (fault === "healthy") {
           expect(outcome.ok, diagnostics).toBe(true);
           expect(

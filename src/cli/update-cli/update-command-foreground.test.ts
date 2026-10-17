@@ -1,7 +1,7 @@
 import "./update-command-execution.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as openClawRoot from "../../infra/openclaw-root.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -45,6 +45,16 @@ const { bindExecutionGuards, executionParams, mocks, schemaContext, successfulUp
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const foregroundRunId = "b834d63c-0310-4a9b-9b04-48b6b5da6cfe";
 let claimPath: string;
+const expectNotCalled = (...spies: MockInstance[]) => {
+  for (const spy of spies) {
+    expect(spy).not.toHaveBeenCalled();
+  }
+};
+function mockPackageRoot(root: string) {
+  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
+  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+}
+
 beforeEach(async () => {
   const home = dirs.make("foreground-claim-");
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
@@ -79,8 +89,7 @@ it.each([
   "invalid-completion",
 ] as const)("refuses invalid handoff command admission: %s", async (response) => {
   const root = dirs.make("foreground-admission-");
-  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
-  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+  mockPackageRoot(root);
   const nativePlan = vi
     .spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan")
     .mockRejectedValue(new Error("Unexpected native plan from invalid handoff metadata"));
@@ -131,13 +140,8 @@ it.each([
     reason: "managed-service-preflight",
   });
   expect(handoff.inspect).toHaveBeenCalledTimes(handshakeRefusal ? 1 : 0);
-  expect(nativePlan).not.toHaveBeenCalled();
-  expect(nativeOwner).not.toHaveBeenCalled();
-  expect(mocks.maybeStopService).not.toHaveBeenCalled();
-  expect(mocks.captureSchemaContext).not.toHaveBeenCalled();
-  expect(state).not.toHaveBeenCalled();
-  expect(create).not.toHaveBeenCalled();
-  expect(adopt).not.toHaveBeenCalled();
+  expectNotCalled(nativePlan, nativeOwner, mocks.maybeStopService, mocks.captureSchemaContext);
+  expectNotCalled(state, create, adopt);
 });
 
 it("keeps post-core continuation separate from foreground request admission", async () => {
@@ -151,9 +155,8 @@ it("keeps post-core continuation separate from foreground request admission", as
   );
   vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
   vi.stubEnv(POST_CORE_UPDATE_CHANNEL_ENV, "stable");
-  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
+  mockPackageRoot(root);
   vi.spyOn(openClawRoot, "resolveOpenClawPackageRootSync").mockReturnValue(root);
-  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
   const nativePlan = vi
     .spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan")
     .mockResolvedValue({ rootRedirect: null });
@@ -161,16 +164,14 @@ it("keeps post-core continuation separate from foreground request admission", as
   const prepared = await prepareUpdateCommand({ json: true, dryRun: true });
   expect(prepared).toMatchObject({ postCoreUpdateResume: true, discoveredRoot: root });
   expect(prepared.servicePlan).toBeUndefined();
-  expect(handoff.inspect).not.toHaveBeenCalled();
-  expect(nativePlan).not.toHaveBeenCalled();
+  expectNotCalled(handoff.inspect, nativePlan);
 });
 
 it.each(["preparation", "environment", "state preflight"] as const)(
   "refuses a foreground claim lost after successful %s before ledger admission",
   async (boundary) => {
     const root = dirs.make("foreground-interleave-");
-    vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
-    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+    mockPackageRoot(root);
     const nativePlan = vi
       .spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan")
       .mockResolvedValue({ rootRedirect: null });
@@ -222,10 +223,7 @@ it.each(["preparation", "environment", "state preflight"] as const)(
     });
     expect(expired).toBe(true);
     expect(handoff.inspect).toHaveBeenCalled();
-    expect(nativePlan).not.toHaveBeenCalled();
-    expect(nativeOwner).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-    expect(adopt).not.toHaveBeenCalled();
+    expectNotCalled(nativePlan, nativeOwner, create, adopt);
     expect(updateRunLedger.getUpdateRun(before.runId)).toEqual(before);
   },
 );
@@ -269,10 +267,12 @@ it.each(["schema", "execution", "already current"] as const)(
         reason: "managed-service-preflight",
       });
     }
-    expect(mocks.maybeStopService).not.toHaveBeenCalled();
-    expect(mocks.captureSchemaContext).not.toHaveBeenCalled();
-    expect(mocks.captureManagedPreflight).not.toHaveBeenCalled();
-    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+    expectNotCalled(
+      mocks.maybeStopService,
+      mocks.captureSchemaContext,
+      mocks.captureManagedPreflight,
+      mocks.prepareMutableUpdate,
+    );
   },
 );
 

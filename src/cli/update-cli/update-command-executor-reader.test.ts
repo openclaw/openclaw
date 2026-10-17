@@ -88,6 +88,12 @@ function write(operation: (database: DatabaseSync) => void) {
   }
 }
 
+function expectLeaseReleased() {
+  write((database) => {
+    expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(0);
+  });
+}
+
 function snapshot() {
   return fs
     .readdirSync(root, { recursive: true })
@@ -161,11 +167,7 @@ describe("invocation-scoped update ownership reader", () => {
       expect(preparations).toBeGreaterThan(0);
       expect(preparations).toBeLessThanOrEqual(2);
     });
-    write((database) => {
-      expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(
-        0,
-      );
-    });
+    expectLeaseReleased();
   });
 
   it.each([false, true])(
@@ -256,11 +258,7 @@ describe("invocation-scoped update ownership reader", () => {
       } else {
         await result;
       }
-      write((database) => {
-        expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(
-          0,
-        );
-      });
+      expectLeaseReleased();
     },
   );
 
@@ -310,11 +308,7 @@ describe("invocation-scoped update ownership reader", () => {
     expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
     // A mismatched start identity proves the old generation dead to the existing
     // release owner. Refusing its fence must not disable that normal reclamation.
-    write((database) => {
-      expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(
-        0,
-      );
-    });
+    expectLeaseReleased();
   });
 
   const damage: { name: string; apply: () => void; windowsSharingError?: string }[] = [
