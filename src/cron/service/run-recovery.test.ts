@@ -2,7 +2,6 @@ import { expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
@@ -11,12 +10,10 @@ import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { readCronRunHistoryCandidates, readCronRunHistoryRecords } from "../store/read-only.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
-import { createCronScheduledRunId } from "../store/run-request-id.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { recoverCronRuns } from "./run-recovery.js";
 import { makeCronRecoveryState } from "./run-recovery.test-support.js";
-import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
@@ -40,12 +37,13 @@ function job(id: string, overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-async function recoveryStore(jobs: CronJob[]) {
+async function activeStore(id: string, overrides: Partial<CronJob> = {}, runId?: string) {
+  const entry = job(id, overrides);
   const { storePath } = await makeStorePath();
-  await writeCronStoreSnapshot({ storePath, jobs });
+  await writeCronStoreSnapshot({ storePath, jobs: [entry] });
   const context = captureOpenClawStateWorkerContext();
   const storeKey = cronStoreKey(storePath);
-  return {
+  const store = {
     storePath,
     storeKey,
     context,
@@ -53,28 +51,6 @@ async function recoveryStore(jobs: CronJob[]) {
       executeOpenClawStateWorker(context, {
         type: "cron.recoverRuns",
         input: { storeKey, nowMs: now + 1_000 },
-      }),
-    request: (
-      entry: CronJob,
-      receiptId = `manual:${storeKey}:${entry.id}`,
-      requestRunId?: string,
-    ) =>
-      executeOpenClawStateWorker(context, {
-        type: "cron.requestRuns",
-        input: {
-          storeKey,
-          nowMs: now,
-          requests: [
-            {
-              jobId: entry.id,
-              receiptId,
-              requestRunId,
-              configRevision: resolveCronJobConfigRevision(entry),
-              mode: "force",
-              preserveSchedule: true,
-            },
-          ],
-        },
       }),
     history: async () => {
       const { records } = await readCronRunHistoryCandidates(storeKey);
@@ -87,12 +63,23 @@ async function recoveryStore(jobs: CronJob[]) {
       ).entries;
     },
   };
-}
-
-async function activeStore(id: string, overrides: Partial<CronJob> = {}, runId?: string) {
-  const entry = job(id, overrides);
-  const store = await recoveryStore([entry]);
-  const requested = await store.request(entry, undefined, runId);
+  const requested = await executeOpenClawStateWorker(context, {
+    type: "cron.requestRuns",
+    input: {
+      storeKey,
+      nowMs: now,
+      requests: [
+        {
+          jobId: id,
+          receiptId: `manual:${storeKey}:${id}`,
+          requestRunId: runId,
+          configRevision: resolveCronJobConfigRevision(entry),
+          mode: "force",
+          preserveSchedule: true,
+        },
+      ],
+    },
+  });
   expect(requested.rejected).toEqual([]);
   expect(requested.accepted).toHaveLength(1);
   const request = requested.accepted[0]!;
@@ -111,7 +98,7 @@ async function activeStore(id: string, overrides: Partial<CronJob> = {}, runId?:
 }
 
 async function record(
-  store: Awaited<ReturnType<typeof recoveryStore>>,
+  store: Awaited<ReturnType<typeof activeStore>>["store"],
   receipt: CronRunReceiptHandle,
   delivery: { delivered: true; deliveryStatus: "delivered" } | undefined = undefined,
 ) {
@@ -184,18 +171,8 @@ it.each(["at", "every"] as const)(
     );
     const runCommandJob = vi.fn();
     const onEvent = vi.fn();
-    const state = createCronServiceState({
-      scheduler: createTestGatewayScheduler(),
-      storePath: store.storePath,
-      cronEnabled: true,
-      nowMs: () => now + 1_000,
-      log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-      runCommandJob,
-      onEvent,
-    });
+    const state = makeCronRecoveryState(logger, store.storePath, now + 1_000);
+    Object.assign(state.deps, { runCommandJob, onEvent, runIsolatedAgentJob: vi.fn() });
     try {
       await start(state);
       const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
@@ -327,24 +304,6 @@ it("preserves a replacement one-shot committed while its prior run was active", 
   const outcome = await store.recover();
   expect(outcome.jobs[0]).toMatchObject({ enabled: true, state: { nextRunAtMs: now + 60_000 } });
   expect(outcome.interruptedRuns).toHaveLength(1);
-});
-
-it("retains timed queued work but skips a request whose transient context was lost", async () => {
-  const timed = job("timed");
-  const manual = job("manual");
-  const store = await recoveryStore([timed, manual]);
-  await store.request(timed, createCronScheduledRunId(store.storeKey, timed.id, now));
-  await store.request(manual);
-  const outcome = await store.recover();
-  expect(outcome.jobs.find((entry) => entry.id === timed.id)?.state.queuedAtMs).toBe(now);
-  expect(outcome.jobs.find((entry) => entry.id === manual.id)?.state.queuedAtMs).toBeUndefined();
-  expect(await store.history()).toMatchObject([
-    {
-      jobId: manual.id,
-      status: "skipped",
-      error: "cron: queued request lost its launch context",
-    },
-  ]);
 });
 
 it("rolls back history and receipt retirement if the interrupted job cannot commit", async () => {

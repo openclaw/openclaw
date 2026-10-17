@@ -1,24 +1,20 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import * as cronSchedule from "../schedule.js";
 import type { CronJob } from "../types.js";
+import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
-import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
+import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 
 function repairFixture(id: string, iso: string, overrides: Partial<CronJob> = {}) {
   const runningAtMs = Date.parse(iso);
-  const state = createCronServiceState({
-    scheduler: createTestGatewayScheduler(),
-    storePath: `/tmp/startup-run-repair-${id}.json`,
-    cronEnabled: true,
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    nowMs: () => runningAtMs + 1_000,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(),
-  });
+  const state = makeCronRecoveryState(
+    { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    `/tmp/startup-run-repair-${id}.json`,
+    runningAtMs + 1_000,
+  );
+  state.deps.runIsolatedAgentJob = vi.fn();
   const job: CronJob = {
     id,
     name: id,

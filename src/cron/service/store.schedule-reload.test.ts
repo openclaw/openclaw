@@ -5,7 +5,7 @@ import {
   setupCronServiceSuite,
 } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type { CronJob, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobPatch, CronJobState } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { ensureLoaded } from "./store.js";
@@ -35,21 +35,19 @@ async function seedJob(initial?: Partial<CronJob>) {
 
 function makeService(storePath: string) {
   const onEvent = vi.fn();
-  return {
-    ...createCronServiceWithStateForTest({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      log: logger,
-      nowMs: () => NOW,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      onEvent,
-    }),
+  const service = createCronServiceWithStateForTest({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: logger,
+    nowMs: () => NOW,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent,
-  };
+  });
+  return { ...service, onEvent };
 }
 
 const stale = NOW + 3_600_000;
@@ -57,6 +55,9 @@ const due = NOW - 1_000;
 const cron = (expr = "0 6 * * *") => ({ kind: "cron" as const, expr, tz: "UTC" });
 const every = (anchorMs: number) => ({ kind: "every" as const, everyMs: 60_000, anchorMs });
 const at = (hour: number) => ({ kind: "at" as const, at: `2026-03-23T${hour}:00:00.000Z` });
+function deadlines(s?: CronJobState) {
+  return [s?.nextRunAtMs, s?.pacedNextRunAtMs, s?.forcePreservedNextRunAtMs];
+}
 
 async function expectEdit(
   initial: Partial<CronJob>,
@@ -79,26 +80,17 @@ async function expectEdit(
     expect(result?.schedule).toEqual(patch.schedule ?? job.schedule);
     expect(result?.pacing).toEqual(patch.pacing ?? job.pacing);
     expect(result?.enabled).toBe(patch.enabled ?? job.enabled);
-    expect([
-      result?.state.nextRunAtMs,
-      result?.state.pacedNextRunAtMs,
-      result?.state.forcePreservedNextRunAtMs,
-    ]).toEqual([nextRunAtMs, undefined, preserved]);
+    expect(deadlines(result?.state)).toEqual([nextRunAtMs, undefined, preserved]);
   }
   expect(observer.state.durableNextRunAtMsByJobId.get(job.id)).toBe(nextRunAtMs);
   expect(writer.onEvent).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ action: "updated", jobId: job.id, nextRunAtMs }),
   );
   expect(observer.onEvent).not.toHaveBeenCalled();
-  await recomputeUnownedCronSchedules(
-    observer.state,
-    recomputeExpired ? { recomputeExpired } : undefined,
-  );
+  const options = recomputeExpired ? { recomputeExpired } : undefined;
+  await recomputeUnownedCronSchedules(observer.state, options);
   const maintained = findJobOrThrow(observer.state, job.id);
-  expect([maintained.state.nextRunAtMs, maintained.state.forcePreservedNextRunAtMs]).toEqual([
-    nextRunAtMs,
-    preserved,
-  ]);
+  expect(deadlines(maintained.state)).toEqual([nextRunAtMs, undefined, preserved]);
   expect(observer.onEvent).not.toHaveBeenCalled();
 }
 
@@ -164,9 +156,7 @@ it.each<EditCase>([
 
     const reloaded = findJobOrThrow(state, job.id);
     expect(reloaded.schedule).toEqual(updated.schedule);
-    expect(reloaded.state.nextRunAtMs).toBe(nextRunAtMs);
-    expect(reloaded.state.pacedNextRunAtMs).toBeUndefined();
-    expect(reloaded.state.forcePreservedNextRunAtMs).toBeUndefined();
+    expect(deadlines(reloaded.state)).toEqual([nextRunAtMs, undefined, undefined]);
     expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(nextRunAtMs);
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
     expect(onEvent).not.toHaveBeenCalled();
