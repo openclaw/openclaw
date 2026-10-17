@@ -15,10 +15,19 @@ import { prepareCliDatabaseEngine } from "../../cli/database-engine-selection.js
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { ensureConfigReady } from "../../cli/program/config-guard.js";
 import { agentsDeleteCommand } from "../../commands/agents.commands.delete.js";
+import { assertCronStateSchemaSupported } from "../../commands/doctor/cron/schema-safety.js";
+import { inspectCronOwnerRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import { saveModelProviderApiKey } from "../../commands/models/auth-api-key.js";
 import { runStartupConfigPreflight } from "../../commands/startup-config-preflight.js";
 import { captureConfigHealthStateStore } from "../../config/io.health-state.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
+import { saveCronJobsStore } from "../../cron/store.js";
+import { cronStoreKey } from "../../cron/store/key.js";
+import {
+  inspectCronJobsReadOnly,
+  loadCronJobsStoreWithConfigJobsReadOnly,
+} from "../../cron/store/read-only.js";
+import type { CronStoreFile } from "../../cron/types.js";
 import {
   createPluginCache,
   retirePluginCache,
@@ -26,11 +35,18 @@ import {
   withPluginCache,
 } from "../../plugins/plugin-cache.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import {
+  withArtifactPreservingStateReads,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { withEngineStoreAdmission } from "./admission-scope.js";
+import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -155,7 +171,7 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
               key: "sk-synthetic-offline-cli-replacement",
             });
             expect(store.order?.openai).toEqual(["openai:offline"]);
-            using health = captureConfigHealthStateStore(
+            const health = captureConfigHealthStateStore(
               { env: state.env, homedir: () => state.home, logger: console },
               state.configPath,
             );
@@ -211,6 +227,86 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
         await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
       }
       await client.end();
+    }
+  });
+});
+
+describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
+  it("loads jobs and Doctor inventory through PostgreSQL while retaining an anchor-only local store", async () => {
+    const prefix = `cron_read_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    const client = new pg.Client({ connectionString: connection });
+    await client.connect();
+    try {
+      await withOpenClawTestState({ label: "postgres-cron-read-only" }, async (state) => {
+        installDatabaseEngineSelection({
+          effectiveEngines: resolveDatabaseFamilyEngines({
+            database: { engine: "sqlite", families: { state: { engine: "postgres" } } },
+          }),
+          postgres: { connection: connection!, schemaPrefix: prefix },
+        });
+        const storePath = state.statePath("cron", "jobs.json");
+        const store: CronStoreFile = {
+          version: 1,
+          jobs: [
+            {
+              id: "postgres-read-only",
+              name: "persisted PostgreSQL job",
+              enabled: true,
+              agentId: "main",
+              createdAtMs: 1,
+              updatedAtMs: 2,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "synthetic event" },
+              state: { nextRunAtMs: 60_001 },
+            },
+          ],
+        };
+        await saveCronJobsStore(storePath, store);
+        await closeStateDatabaseForTest();
+        const ownerRows = withEngineStoreAdmission(() => {
+          assertCronStateSchemaSupported(state.env);
+          return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+            ({ db }) => inspectCronOwnerRowsForDoctor(db, cronStoreKey(storePath)),
+            { env: state.env },
+          );
+        });
+        expect(ownerRows).toEqual([
+          expect.objectContaining({ job_id: "postgres-read-only", agent_id: "main" }),
+        ]);
+        for (const preserveArtifacts of [false, true]) {
+          const read = () => loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env);
+          const loaded = await (preserveArtifacts
+            ? withArtifactPreservingStateReads(read)
+            : read());
+          expect(loaded.store).toEqual(store);
+          expect(loaded.invalidConfigRows).toEqual([]);
+        }
+        expect(await inspectCronJobsReadOnly(state.env)).toEqual([
+          expect.objectContaining({ id: "postgres-read-only", definition: expect.any(Object) }),
+        ]);
+        using anchor = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env), {
+          readOnly: true,
+        });
+        expect(
+          anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
+        ).toEqual([{ name: "openclaw_engine_anchor" }]);
+      });
+    } finally {
+      await closeStateDatabaseForTest();
+      resetDatabaseEngineSelectionForTest();
+      try {
+        const schemas = await client.query<{ schema_name: string }>(
+          "SELECT schema_name FROM information_schema.schemata WHERE starts_with(schema_name, $1)",
+          [`${prefix}_`],
+        );
+        for (const { schema_name: schema } of schemas.rows) {
+          await client.query(`DROP SCHEMA "${schema}" CASCADE`);
+        }
+      } finally {
+        await client.end();
+      }
     }
   });
 });

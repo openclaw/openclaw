@@ -6,6 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  rewriteDoctorSessionEntries,
+  scanDoctorSessionEntryRecords,
+} from "../commands/doctor/shared/session-entry-rewrite.js";
+import { migrateLegacySessionEntryState } from "../commands/doctor/shared/session-entry-shape.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
@@ -18,6 +23,7 @@ import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
@@ -157,6 +163,67 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
+
+  it("scans and repairs legacy Doctor state while retaining opaque PostgreSQL JSON numbers", () => {
+    withEngineStoreAdmission(() => {
+      const database = owners.openOpenClawAgentDatabase({ agentId: "doctor" });
+      const sessionKey = "agent:doctor:main";
+      const raw =
+        '{"sessionId":"doctor-session","updatedAt":42,"status":"queued","pendingFinalDelivery":true,"pendingFinalDeliveryText":"saved reply","opaqueCount":9007199254740993,"opaque":{"value":123456789012345678901234567890,"label":"retained"}}';
+      try {
+        database.db
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+          )
+          .run(sessionKey, "doctor-session", raw, 42);
+        database.db
+          .prepare(
+            "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, 'conversation', ?, ?)",
+          )
+          .run("doctor-session", sessionKey, 42, 42);
+        const scope = { agentId: "doctor", storePath: database.path };
+        const expectedIdentity = readDatabasePathIdentitySync(database.path);
+        const scanned: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
+        scanDoctorSessionEntryRecords(scope, (record) => scanned.push(record), expectedIdentity);
+        expect(scanned).toEqual([
+          {
+            sessionKey,
+            entry: expect.objectContaining({ status: "queued", pendingFinalDelivery: true }),
+          },
+        ]);
+        expect(
+          rewriteDoctorSessionEntries({
+            scope,
+            sessionKeys: [sessionKey],
+            expectedIdentity,
+            rawTransform: (entry, key, updatedAt) =>
+              migrateLegacySessionEntryState(entry, updatedAt, key),
+          }),
+        ).toBe(1);
+        const row = database.db
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey);
+        const repairedRaw = row?.entry_json;
+        assert(typeof repairedRaw === "string");
+        expect(JSON.parse(repairedRaw)).toMatchObject({
+          sessionId: "doctor-session",
+          updatedAt: 42,
+          status: "interrupted",
+          pendingFinalDelivery: { kind: "replayable", text: "saved reply", createdAt: 42 },
+          opaque: { label: "retained" },
+        });
+        expect(repairedRaw).not.toContain("pendingFinalDeliveryText");
+        expect(repairedRaw).toContain("9007199254740993");
+        expect(repairedRaw).toContain("123456789012345678901234567890");
+        using anchor = openNodeSqliteDatabase(database.path, { readOnly: true });
+        expect(
+          anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
+        ).toEqual([{ name: "openclaw_engine_anchor" }]);
+      } finally {
+        owners.closeOpenClawAgentDatabaseByPath(database.path);
+      }
+    });
+  });
 
   it("opens default and explicit stores, retains identity, and closes both handles", () => {
     return withEngineStoreAdmission(() => {

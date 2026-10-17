@@ -387,7 +387,7 @@ vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readConfigFileSnapshotMock }));
 
-// Dispatcher fixtures replace storage startup; engine selection has real CLI coverage.
+// mock-isolation: Dispatcher fixtures replace storage startup; real CLI tests cover selection.
 vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => false }));
 
 // mock-isolation: Gateway admission must read synthetic snapshots without real config I/O.
