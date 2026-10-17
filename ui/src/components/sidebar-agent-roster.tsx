@@ -114,10 +114,13 @@ export function SidebarAgentRoster(props: RosterProps) {
   );
   const pinnedCards = () => roster.cards().filter((card) => pinnedIds().has(card.id));
   const unpinnedCards = () => roster.cards().filter((card) => !pinnedIds().has(card.id));
-  const hiddenAgentSections = createParkedProjection(
-    () => new Set(roster.cards().map((card) => card.id)),
-    presented,
-  );
+  const hiddenAgentSections = createMemo<ReadonlySet<string>>((previous) => {
+    const next = new Set(roster.cards().map((card) => card.id));
+    if (previous?.size === next.size && [...next].every((id) => previous.has(id))) {
+      return previous;
+    }
+    return next;
+  });
   createEffect(
     () => [roster.store(), props.involvingMe] as const,
     ([store, involvingMe]) => {
