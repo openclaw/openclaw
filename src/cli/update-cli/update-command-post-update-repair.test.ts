@@ -920,6 +920,17 @@ describe("post-activation failure settlement without inference", () => {
         run.executorFence = await executor.enter(root);
         const failure = await finishUpdate(params).catch((error: unknown) => error);
         assert(failure instanceof UpdateCommandFailure);
+        if (localVersionOnly && !recovered) {
+          const refusal = failure.result.steps.findLast(
+            (step) => step.name === "gateway migration recovery",
+          );
+          expect(refusal?.stderrTail).toContain("expected schema 1, found 2");
+          expect(refusal?.stderrTail).toContain(
+            receipt === "migration-local-client-newer"
+              ? path.join("client", "credentials.sqlite")
+              : path.join("control", "services.sqlite"),
+          );
+        }
         expect(
           failure.result.recovery,
           JSON.stringify({
@@ -970,12 +981,6 @@ describe("post-activation failure settlement without inference", () => {
           (step) => step.step === "gateway migration recovery",
         );
         expect(refusal).toMatchObject({ status: "failed", exitCode: 1 });
-        expect(refusal?.stderrTail).toContain("expected schema 1, found 2");
-        expect(refusal?.stderrTail).toContain(
-          receipt === "migration-local-client-newer"
-            ? path.join("client", "credentials.sqlite")
-            : path.join("control", "services.sqlite"),
-        );
       }
       if (migration && !recovered) {
         expect(rendered).toContain("openclaw doctor --fix");
