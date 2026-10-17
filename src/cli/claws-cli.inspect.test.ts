@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -111,6 +111,28 @@ describe("claws inspect extensions", () => {
       { config: mocks.config },
     );
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("strips terminal controls from the reported agent name", async () => {
+    const { root, runtime } = await createInspectFixture("claude");
+    // Drop the fixture's extension so the report path needs no package preflight.
+    await rm(join(root, "profiles", "openclaw.yml"));
+    await writeFile(
+      join(root, "openclaw.claw.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "demo-agent", name: "Agent\u001b]0;pwned\u0007CLAW_MARKER_9F3E2D" },
+      }),
+      "utf8",
+    );
+
+    await runClawsInspectCommand(root, {}, runtime);
+
+    const lines = runtime.log.mock.calls.map((call) => String(call[0]));
+    const agentLine = lines.find((line) => line.startsWith("Agent: "));
+    expect(agentLine).toBeDefined();
+    expect(agentLine).toContain("CLAW_MARKER_9F3E2D");
+    expect(agentLine).not.toMatch(/\p{Cc}/u);
   });
 
   it("rejects a plugin declared by both the portable manifest and OpenClaw profile", async () => {
