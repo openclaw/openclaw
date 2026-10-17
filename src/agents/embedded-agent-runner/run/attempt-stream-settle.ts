@@ -424,6 +424,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    // Memory extraction must see the original history, not a provider summary.
+    ...(attempt.trigger === "memory"
+      ? { anthropicServerCompaction: false, responsesServerCompaction: false }
+      : {}),
   };
   const selectedAuth = attempt.runtimePlan?.auth;
   const auth = selectedAuth?.selectedAuthMode
@@ -451,25 +455,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   const ownsCompaction = input.contextEngineInfo?.ownsCompaction === true;
   const suppressResponsesCompaction =
-    attempt.trigger === "memory" ||
-    (ownsCompaction && resolvedExtraParams.responsesServerCompaction !== true);
-  const suppressAnthropicCompaction =
-    attempt.trigger === "memory" ||
-    (ownsCompaction && resolvedExtraParams.anthropicServerCompaction !== true);
-  const effectiveExtraParams =
-    suppressResponsesCompaction || suppressAnthropicCompaction
-      ? {
-          ...resolvedExtraParams,
-          ...(suppressResponsesCompaction
-            ? { responsesServerCompaction: false, responsesCompactEndpoint: false }
-            : {}),
-          ...(suppressAnthropicCompaction ? { anthropicServerCompaction: false } : {}),
-        }
-      : resolvedExtraParams;
-  const suppressCompactionReplay =
-    attempt.model.api === "anthropic-messages"
-      ? suppressAnthropicCompaction
-      : suppressResponsesCompaction;
+    attempt.model.api === "openai-responses" &&
+    (attempt.trigger === "memory" ||
+      (ownsCompaction && resolvedExtraParams.responsesServerCompaction !== true));
+  const effectiveExtraParams = suppressResponsesCompaction
+    ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
+    : resolvedExtraParams;
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.transportConfig ?? attempt.config,
@@ -660,7 +651,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // Agent turns carry no credential, and provider wrappers classify auth from
   // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
   session.agent.streamFn = wrapApiKey(session.agent.streamFn);
-  if (suppressCompactionReplay) {
+  if (suppressResponsesCompaction) {
     // Checkpoints already stored by older builds must not replace the engine's selection.
     session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
       messages.some(
@@ -716,7 +707,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   return {
     serverToolClearingEnabled,
     compactionReplayEnabled:
-      !suppressCompactionReplay &&
+      !suppressResponsesCompaction &&
       resolveCompactionReplayEligibility(attempt.model, {
         extraParams: effectiveExtraParams,
         apiKey: transportApiKey,

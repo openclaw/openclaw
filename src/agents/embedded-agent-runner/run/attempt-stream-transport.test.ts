@@ -288,9 +288,16 @@ describe("prepareEmbeddedAttemptTransport", () => {
         { owns: true, configured: true, suppressed: false },
         { owns: false, configured: undefined, suppressed: false },
         { owns: true, configured: true, suppressed: true, trigger: "memory" as const },
-      ].map((scenario) => Object.assign({ api }, scenario)),
+      ]
+        .filter((scenario) => api === "openai-responses" || !scenario.trigger)
+        .map((scenario) =>
+          Object.assign(scenario, {
+            api,
+            suppressed: api === "openai-responses" && scenario.suppressed,
+          }),
+        ),
     ),
-  )("respects context-engine compaction ownership: %j", async (scenario) => {
+  )("respects OpenAI compaction ownership without changing Anthropic: %j", async (scenario) => {
     const { input, session, streamFn } = createTransportFixture({
       pruning: false,
       apiKey: "sk-synthetic",
@@ -334,7 +341,9 @@ describe("prepareEmbeddedAttemptTransport", () => {
     const prepared = await prepareEmbeddedAttemptTransport(input);
     await session.agent.streamFn(input.attempt.model, { messages }, {});
 
-    expect(prepared.compactionReplayEnabled).toBe(!scenario.suppressed);
+    expect(prepared.compactionReplayEnabled).toBe(
+      !scenario.suppressed && scenario.configured !== false,
+    );
     expect(prepared.effectiveExtraParams[parameter]).toBe(
       scenario.suppressed ? false : scenario.configured,
     );

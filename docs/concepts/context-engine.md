@@ -103,20 +103,18 @@ For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by pr
 ### Provider compaction ownership
 
 When the active context engine declares `info.ownsCompaction: true`, OpenClaw
-disables provider-native compaction and stored provider checkpoint replay by
-default. Set the corresponding model parameter explicitly to `true` to opt in:
-`params.responsesServerCompaction` for OpenAI Responses or
-`params.anthropicServerCompaction` for Anthropic. Engines that do not own
-compaction, including `legacy`, retain the provider's existing default-on behavior
-on eligible routes.
+disables OpenAI Responses native compaction and stored Responses checkpoint replay
+by default. Set `params.responsesServerCompaction` explicitly to `true` to opt in.
+Engines that do not own compaction, including `legacy`, retain the existing
+default-on behavior on eligible OpenAI routes. Other providers are unchanged.
 
-Preexisting provider checkpoints are bypassed while this ownership guard is
+Preexisting Responses checkpoints are bypassed while this ownership guard is
 active; their stored data is not deleted. Explicit opt-in allows a matching
-provider checkpoint to take precedence over the selected engine's assembled
+Responses checkpoint to take precedence over the selected engine's assembled
 context. Choose it only when you want provider-managed context to override engine
 assembly for those requests.
 
-Memory-extraction (memory flush) turns always disable provider-native compaction
+Memory-extraction (memory flush) turns always disable Responses native compaction
 and checkpoint replay, even with explicit opt-in, so extraction can use the
 unsummarized history.
 
