@@ -200,13 +200,9 @@ it.skipIf(process.platform === "win32").each([
          } else {
            await store.execute({ type: "append", input: "accepted write survived" });
          }
-         if (scenario === "already-closing") {
+         if (scenario === "already-closing" || scenario.startsWith("failed-close")) {
            backgroundClose = store.close().catch(() => undefined);
-           await nativeClose.promise;
-         }
-         if (scenario.startsWith("failed-close")) {
-           backgroundClose = store.close().catch(() => undefined);
-           await terminationStarted.promise;
+           await (scenario === "already-closing" ? nativeClose.promise : terminationStarted.promise);
          }
          if (scenario === "failed-settlement") {
            source.runtimeGeneration.retain({}, async () => { throw new Error("fixture settlement failed"); });
@@ -332,12 +328,11 @@ it.skipIf(process.platform === "win32").each([
     expectExit(result, code);
     expect(result.stdout).toMatch(/"retained":\["openclaw-update-runtime-[A-Za-z0-9]{6}"\]/u);
     expect(result.stdout).toContain("natural finalization completed");
-    if (exit !== "failure-report") {
-      expect(result.stdout).toContain("signal command unwound");
-    }
     if (exit === "failure-report") {
       expect(result.stderr).toContain("Update failure reported");
       expect(result.stderr).not.toContain("Unexpected error:");
+    } else {
+      expect(result.stdout).toContain("signal command unwound");
     }
     expect(result.stderr).toContain("worker generation settled; cleanup deferred");
     const retained = (await fs.readdir(base)).filter((name) =>

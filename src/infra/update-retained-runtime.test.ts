@@ -96,11 +96,7 @@ it.for([false, true])(
       });
     const result = withRetainedUpdateRuntime(moduleUrl, async (retain) => {
       receipt.metrics = await retain(retainOptions(root));
-      const name = (await fs.readdir(base)).find((entry) =>
-        entry.startsWith("openclaw-update-runtime-"),
-      );
-      assert.ok(name);
-      directory = path.join(base, name);
+      directory = await retainedDirectory(base);
       const source = captureRuntimeWorkerSource(
         pathToFileURL(path.join(root, "dist/state/store.js")),
       );
@@ -126,13 +122,9 @@ it.for([false, true])(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    try {
+    const expectBlocked = async (gate: Promise<void>, phase: string) => {
       await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          settled,
-          "Updater returned before worker settlement",
-        ),
+        awaitGateBeforeSettlement(gate, settled, `Updater returned before ${phase}`),
         signal,
       );
       expect(await maintain()).toContainEqual(
@@ -141,24 +133,15 @@ it.for([false, true])(
       expect(assertResourcesSettled).not.toHaveBeenCalled();
       assert.ok(directory);
       expect((await stat(directory)).isDirectory()).toBe(true);
+    };
+    try {
+      await expectBlocked(entered.promise, "worker settlement");
       release.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          nativeEntered.promise,
-          settled,
-          "Updater returned before native retirement",
-        ),
-        signal,
-      );
-      expect(await maintain()).toContainEqual(
-        expect.stringContaining("the creating update still owns this runtime"),
-      );
-      expect(assertResourcesSettled).not.toHaveBeenCalled();
+      await expectBlocked(nativeEntered.promise, "native retirement");
       expect(reportRetained).not.toHaveBeenCalledWith(
         directory,
         expect.stringContaining("worker generation settled; cleanup deferred"),
       );
-      expect((await stat(directory)).isDirectory()).toBe(true);
     } finally {
       release.resolve();
       nativeRelease.resolve();
@@ -196,11 +179,7 @@ it("reports the retained runtime and reason when a borrowed worker cannot settle
     setLoggerOverride({ level: "warn", consoleLevel: "silent", file: log });
     const operation = withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
       receipt.metrics = await retain(retainOptions(root));
-      const directory = (await fs.readdir(base)).find((entry) =>
-        entry.startsWith("openclaw-update-runtime-"),
-      );
-      assert.ok(directory);
-      retained = path.join(base, directory);
+      retained = await retainedDirectory(base);
       const { runtimeGeneration } = captureRuntimeWorkerSource(moduleUrl);
       assert.ok(runtimeGeneration);
       runtimeGeneration.retain({}, async () => {
@@ -246,6 +225,14 @@ async function writeFiles(root: string, files: Record<string, string>) {
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, content);
   }
+}
+
+async function retainedDirectory(base: string) {
+  const name = (await fs.readdir(base)).find((entry) =>
+    entry.startsWith("openclaw-update-runtime-"),
+  );
+  assert.ok(name);
+  return path.join(base, name);
 }
 
 const packageJson = JSON.stringify({
@@ -342,18 +329,16 @@ it.each(
   async ({ kind, explicitLink }) => {
     const root = await fixture(tempDirs.make("retained-recovery-boundary-"), "npm");
     const anchor = resolvePackageActivationAnchor(path.join(root, "node_modules/openclaw"));
-    const recoveryRoot =
-      kind === "control"
-        ? resolvePackageActivationControl(anchor)
-        : kind === "legacy-journal"
-          ? `${anchor}.sqlite`
-          : kind === "legacy-helper"
-            ? `${anchor}.recovery.mjs`
-            : kind === "unknown-suffix"
-              ? `${anchor}.notes`
-              : kind === "anchor"
-                ? anchor
-                : `${anchor}.superseded-00000000-0000-4000-8000-000000000001`;
+    const recoveryRoots: Record<string, string> = {
+      control: resolvePackageActivationControl(anchor),
+      "legacy-journal": `${anchor}.sqlite`,
+      "legacy-helper": `${anchor}.recovery.mjs`,
+      "unknown-suffix": `${anchor}.notes`,
+      anchor,
+      superseded: `${anchor}.superseded-00000000-0000-4000-8000-000000000001`,
+    };
+    const recoveryRoot = recoveryRoots[kind];
+    assert.ok(recoveryRoot);
     const recoveryFile = kind.startsWith("legacy-")
       ? recoveryRoot
       : path.join(recoveryRoot, kind === "control" ? "operation.sqlite" : "previous/dist/entry.js");
