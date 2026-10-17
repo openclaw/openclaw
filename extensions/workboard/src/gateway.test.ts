@@ -13,6 +13,8 @@ import {
 } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
 
+type SubagentRun = OpenClawPluginApi["runtime"]["subagent"]["run"];
+
 function createGateway({
   store = createWorkboardSqliteTestStore(),
   sessionsBoard,
@@ -22,13 +24,13 @@ function createGateway({
 }: {
   store?: WorkboardStore;
   sessionsBoard?: Parameters<typeof registerWorkboardGatewayMethods>[0]["sessionsBoard"];
-  run?: OpenClawPluginApi["runtime"]["subagent"]["run"];
+  run?: SubagentRun;
   workspace?: boolean;
   worktrees?: OpenClawPluginApi["runtime"]["worktrees"];
 } = {}) {
-  const capture = createGatewayMethodCapture();
+  const { methods, registerGatewayMethod } = createGatewayMethodCapture();
   const api = {
-    registerGatewayMethod: capture.registerGatewayMethod,
+    registerGatewayMethod,
     runtime: {
       ...(workspace
         ? {
@@ -49,13 +51,11 @@ function createGateway({
     context: Record<string, unknown> = {},
   ) => {
     const respond = vi.fn();
-    await capture.methods
-      .get(`workboard.${name}`)!
-      .handler({ params, respond, ...context } as never);
+    await methods.get(`workboard.${name}`)!.handler({ params, respond, ...context } as never);
     const [ok, data, error] = respond.mock.calls[0] ?? [];
     return Object.assign(respond, { ok, data, error });
   };
-  return { api, methods: capture.methods, invoke, store };
+  return { api, methods, invoke, store };
 }
 
 function conflict(card: Record<string, unknown>) {
@@ -575,9 +575,10 @@ describe("workboard gateway methods", () => {
   });
 
   it("threads maxStarts and dispatches omitted params with the legacy default cap", async () => {
-    const run = vi.fn(async (input: { idempotencyKey: string }) => ({
-      runId: `accepted:${input.idempotencyKey}`,
-    }));
+    const run = vi.fn<SubagentRun>(async (input) => {
+      expect(input.idempotencyKey).toEqual(expect.any(String));
+      return { runId: `accepted:${input.idempotencyKey}` };
+    });
     const { invoke, store } = createGateway({ run });
     const seed = (boardId: string, prefix: string, unassignedFirst = false) =>
       Promise.all(
@@ -600,7 +601,6 @@ describe("workboard gateway methods", () => {
     expect(run).toHaveBeenCalledTimes(4);
 
     const defaultCards = await seed("default", "Legacy", true);
-
     const defaultRespond = await invoke("cards.dispatch", undefined);
     expect(defaultRespond.ok).toBe(true);
     expect(defaultRespond.data?.started).toHaveLength(3);
