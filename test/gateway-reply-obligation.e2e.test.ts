@@ -25,7 +25,6 @@ const REQUIRED_REQUEST = "REQUIRED_EMPTY_CONTROL";
 const REQUIRED_RECOVERED = "REQUIRED_RECOVERED";
 const variants = ["empty", "no-reply"] as const;
 type Variant = (typeof variants)[number];
-type ObservedEvent = { event?: string; payload?: unknown };
 let instance: OpenClawTestInstance | undefined;
 let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
 
@@ -95,7 +94,7 @@ describe("Gateway trusted reply obligations", () => {
       const prepared = await gateway.cli(["--help"], { timeoutMs: 120_000 });
       expect(prepared.code, prepared.stderr).toBe(0);
       await gateway.startGateway();
-      const events: ObservedEvent[] = [];
+      const errorSessions: unknown[] = [];
       const client = await connectGatewayClient({
         url: gateway.url,
         token: gateway.gatewayToken,
@@ -106,9 +105,14 @@ describe("Gateway trusted reply obligations", () => {
         }),
         signal,
         onEvent: (event) => {
-          events.push(event);
           const payload = asOptionalRecord(event.payload);
           const data = asOptionalRecord(payload?.data);
+          if (
+            (event.event === "chat" && payload?.state === "error") ||
+            (event.event === "agent" && data?.phase === "error")
+          ) {
+            errorSessions.push(payload?.sessionKey);
+          }
           if (
             event.event !== "agent" ||
             payload?.stream !== "lifecycle" ||
@@ -199,17 +203,7 @@ describe("Gateway trusted reply obligations", () => {
             peerRequests: 1,
             callbackRequests: 1,
           });
-          expect(
-            events.filter((event) => {
-              const payload = asOptionalRecord(event.payload);
-              const data = asOptionalRecord(payload?.data);
-              return (
-                payload?.sessionKey === scenario.parentKey &&
-                ((event.event === "chat" && payload.state === "error") ||
-                  (event.event === "agent" && data?.phase === "error"))
-              );
-            }),
-          ).toEqual([]);
+          expect(errorSessions.filter((key) => key === scenario.parentKey)).toEqual([]);
         }
 
         const requiredKey = "agent:main:reply-obligation-required";
@@ -231,9 +225,6 @@ describe("Gateway trusted reply obligations", () => {
         });
         expect(activeFixture.failures).toEqual([]);
         expect(gateway.logs()).not.toContain("sessions_send reply flow failed");
-        console.log(
-          "[reply-obligation-proof] Late peer empty/NO_REPLY completions settled once; a required empty request recovered",
-        );
       } finally {
         activeFixture.releaseAll();
         await disconnectGatewayClient(client);
@@ -347,16 +338,14 @@ async function startFixture(scenarios: Scenario[]) {
       if (++requiredRequests > 2) {
         throw new Error("Required reply exceeded one empty response and one recovery");
       }
-      final(requiredRequests === 1 ? "" : REQUIRED_RECOVERED);
-      return;
+      return final(requiredRequests === 1 ? "" : REQUIRED_RECOVERED);
     }
     const scenario = scenarios.find((candidate) =>
       userTexts.some((text) => text.includes(candidate.peerResult)),
     );
     if (scenario) {
       scenario.callbackRequests += 1;
-      final(scenario.variant === "empty" ? "" : "NO_REPLY");
-      return;
+      return final(scenario.variant === "empty" ? "" : "NO_REPLY");
     }
     const peer = scenarios.find((candidate) => userText.includes(candidate.peerPrompt));
     if (peer) {
@@ -365,8 +354,7 @@ async function startFixture(scenarios: Scenario[]) {
       }
       peer.peerStarted.resolve();
       await peer.releasePeer.promise;
-      final(peer.peerResult);
-      return;
+      return final(peer.peerResult);
     }
     const parent = scenarios.find((candidate) => userText.includes(candidate.parentPrompt));
     if (!parent || ++parent.parentRequests > 2) {
@@ -378,8 +366,7 @@ async function startFixture(scenarios: Scenario[]) {
       if (!serialized?.includes("accepted") || !serialized.includes("pending")) {
         throw new Error("Real sessions_send did not accept delayed peer delivery");
       }
-      final(parent.parentFinal);
-      return;
+      return final(parent.parentFinal);
     }
     const item = {
       type: "function_call",
@@ -393,19 +380,20 @@ async function startFixture(scenarios: Scenario[]) {
       }),
       status: "completed",
     };
+    const event = (type: string, fields: Record<string, unknown>) => ({
+      type: `response.${type}`,
+      output_index: 0,
+      ...fields,
+    });
     writeOpenAiResponsesSse(response, [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
+      event("output_item.added", {
         item: { ...item, status: "in_progress", arguments: "" },
-      },
-      {
-        type: "response.function_call_arguments.done",
+      }),
+      event("function_call_arguments.done", {
         item_id: item.id,
-        output_index: 0,
         arguments: item.arguments,
-      },
-      { type: "response.output_item.done", output_index: 0, item },
+      }),
+      event("output_item.done", { item }),
       {
         type: "response.completed",
         response: {

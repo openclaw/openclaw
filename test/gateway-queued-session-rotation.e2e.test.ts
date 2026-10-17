@@ -17,23 +17,12 @@ import {
 } from "./helpers/openclaw-test-instance.js";
 import { createDeferred } from "./helpers/promise.js";
 
-type MockModelRequest = {
-  body: Record<string, unknown>;
-};
-
-type MockModelServer = {
-  baseUrl: string;
-  requests: MockModelRequest[];
-  releaseHeldResponse: () => void;
-  stop: () => Promise<void>;
-};
-
 const TEST_TIMEOUT_MS = 150_000;
 const WAIT_OPTS = { timeout: 30_000, interval: 20 } as const;
 
 const instances: OpenClawTestInstance[] = [];
 const cleanupDirs: string[] = [];
-const modelServers: MockModelServer[] = [];
+const modelServers: Awaited<ReturnType<typeof startMockModelServer>>[] = [];
 
 afterEach(async () => {
   await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
@@ -76,8 +65,8 @@ function createQueuedRotationConfig(fixtureDir: string, baseUrl: string): OpenCl
   };
 }
 
-async function startMockModelServer(): Promise<MockModelServer> {
-  const requests: MockModelRequest[] = [];
+async function startMockModelServer() {
+  const requests: { body: Record<string, unknown> }[] = [];
   const heldResponse = createDeferred();
   const server = await startOpenAiResponsesModelServer({
     modelId: "queued-rotation",
@@ -125,20 +114,17 @@ async function writeTurnTracerPlugin(pluginDir: string, tracePath: string): Prom
   );
   await writeFile(
     path.join(pluginDir, "index.mjs"),
-    [
-      'import { appendFileSync } from "node:fs";',
-      "export default {",
-      '  id: "queued-rotation-tracer",',
-      '  name: "Queued Rotation Tracer",',
-      "  register(api) {",
-      '    api.on("agent_turn_prepare", () => {',
-      `      appendFileSync(${JSON.stringify(tracePath)}, JSON.stringify({ prepared: true }) + "\\n");`,
-      "      return {};",
-      "    });",
-      "  },",
-      "};",
-      "",
-    ].join("\n"),
+    `import { appendFileSync } from "node:fs";
+export default {
+  id: "queued-rotation-tracer", name: "Queued Rotation Tracer",
+  register(api) {
+    api.on("agent_turn_prepare", () => {
+      appendFileSync(${JSON.stringify(tracePath)}, JSON.stringify({ prepared: true }) + "\\n");
+      return {};
+    });
+  },
+};
+`,
   );
 }
 
@@ -185,39 +171,30 @@ async function startScenario(name: string, trace = false) {
   const client = new GatewayChatClient({ url: instance.url, token: "secret-token" });
   client.start();
   await client.waitForReady();
-  return { instance, client, modelServer, tracePath };
+  const send = async (sessionKey: string, message: string, runId: string) => {
+    expect((await client.sendChat({ sessionKey, message, runId })).status).toBe("started");
+  };
+  return { instance, client, modelServer, tracePath, send };
 }
 
 describe("Gateway queued session rotation", () => {
   it(
     "runs a replacement turn after /new cancels an active turn",
     async () => {
-      const { client, modelServer, tracePath } = await startScenario(
+      const { client, modelServer, tracePath, send } = await startScenario(
         "queued-session-rotation",
         true,
       );
       const sessionKey = "agent:main:queued-rotation-e2e";
       try {
-        const first = await client.sendChat({
-          sessionKey,
-          message: "OPENCLAW_E2E_HELD_TURN",
-          runId: "queued-rotation-held",
-        });
-        expect(first.status).toBe("started");
+        await send(sessionKey, "OPENCLAW_E2E_HELD_TURN", "queued-rotation-held");
         await vi.waitFor(async () => {
           expect(modelServer.requests).toHaveLength(1);
           expect(await readTraceCount(tracePath)).toBe(1);
         }, WAIT_OPTS);
 
-        const replacement = await client.sendChat({
-          sessionKey,
-          message: "/new OPENCLAW_E2E_AFTER_RESET",
-          runId: "queued-rotation-reset",
-        });
-        expect(replacement.status).toBe("started");
-
-        // The accepted reset turn must keep its lifecycle through cancellation and
-        // rotation; losing it here leaves the turn before both hook and model entry.
+        await send(sessionKey, "/new OPENCLAW_E2E_AFTER_RESET", "queued-rotation-reset");
+        // The reset turn must survive cancellation/rotation and reach both hook and model.
         await vi.waitFor(async () => {
           expect(modelServer.requests).toHaveLength(2);
           expect(await readTraceCount(tracePath)).toBe(2);
@@ -236,23 +213,13 @@ describe("Gateway queued session rotation", () => {
   it(
     "stops without retrying a queued followup during shutdown",
     async () => {
-      const { instance, client, modelServer } = await startScenario("followup-drain-restart");
+      const { instance, client, modelServer, send } = await startScenario("followup-drain-restart");
       const sessionKey = "agent:main:followup-drain-restart-e2e";
       try {
-        const first = await client.sendChat({
-          sessionKey,
-          message: "OPENCLAW_E2E_HELD_BEFORE_RESTART",
-          runId: "followup-restart-held",
-        });
-        expect(first.status).toBe("started");
+        await send(sessionKey, "OPENCLAW_E2E_HELD_BEFORE_RESTART", "followup-restart-held");
         await vi.waitFor(() => expect(modelServer.requests).toHaveLength(1), WAIT_OPTS);
 
-        const second = await client.sendChat({
-          sessionKey,
-          message: "OPENCLAW_E2E_QUEUED_DURING_RESTART",
-          runId: "followup-restart-queued",
-        });
-        expect(second.status).toBe("started");
+        await send(sessionKey, "OPENCLAW_E2E_QUEUED_DURING_RESTART", "followup-restart-queued");
         await vi.waitFor(async () => {
           const history = (await client.loadHistory({ sessionKey })) as {
             pendingInputs?: ChatPendingInputsPage;

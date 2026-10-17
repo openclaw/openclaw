@@ -53,6 +53,8 @@ it.skipIf(process.platform !== "linux")(
   "resumes six interrupted turns after handing off within five seconds of its receipt after plugin cleanup",
   { timeout: 180_000 },
   async ({ signal }) => {
+    const beforeExit = <T>(pending: Promise<T>, closed: Promise<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(pending, closed, message), signal);
     const provider = await startGatewayRestartProvider(signal);
     let instance: OpenClawTestInstance | undefined;
     let client: GatewayClient | undefined;
@@ -232,13 +234,10 @@ it.skipIf(process.platform !== "linux")(
           return result.runId;
         });
         expect(new Set(runIds).size).toBe(6);
-        await withinTest(
-          awaitGateBeforeSettlement(
-            provider.ready,
-            closed,
-            "Gateway exited before all six model calls and two exec sessions were pending",
-          ),
-          signal,
+        await beforeExit(
+          provider.ready,
+          closed,
+          "Gateway exited before all six model calls and two exec sessions were pending",
         );
         expect(
           writeGatewayRestartIntentSync({
@@ -365,13 +364,10 @@ it.skipIf(process.platform !== "linux")(
         client = await connect();
         await client.request("sessions.subscribe", { agentId: "main" });
         provider.releaseRecovery();
-        const recovered = await withinTest(
-          awaitGateBeforeSettlement(
-            Promise.all([...recoveredTurns.values()].map((turn) => turn.promise)),
-            once(successor, "close"),
-            "Successor exited before all six interrupted turns completed",
-          ),
-          signal,
+        const recovered = await beforeExit(
+          Promise.all([...recoveredTurns.values()].map((turn) => turn.promise)),
+          once(successor, "close"),
+          "Successor exited before all six interrupted turns completed",
         );
         for (const turn of recovered) {
           expect(turn, instance.logs()).toMatchObject({ phase: "end" });

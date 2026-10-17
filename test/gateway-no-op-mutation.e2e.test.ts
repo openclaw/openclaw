@@ -19,18 +19,13 @@ import {
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
 
-const TEST_TIMEOUT_MS = 180_000;
 const SESSION_KEY = "agent:main:no-op-proof";
 const VISIBLE_MARKER = "NO_OP_WRITE_VISIBLE_ANSWER";
 
 type CapturedRequest = { input?: unknown[] };
 
-type MockModelServer = OpenAiResponsesModelServer & {
-  requests: CapturedRequest[];
-};
-
 const instances: OpenClawTestInstance[] = [];
-const modelServers: MockModelServer[] = [];
+const modelServers: OpenAiResponsesModelServer[] = [];
 
 afterEach(async () => {
   await Promise.allSettled(instances.splice(0).map((instance) => instance.cleanup()));
@@ -40,7 +35,7 @@ afterEach(async () => {
 describe("Gateway no-op mutation continuation", () => {
   it(
     "returns a visible answer after the first tool call is a no-op write",
-    { timeout: TEST_TIMEOUT_MS },
+    { timeout: 180_000 },
     async () => {
       const modelServer = await startMockModelServer();
       modelServers.push(modelServer);
@@ -75,7 +70,7 @@ describe("Gateway no-op mutation continuation", () => {
         const response = await client.request<{
           runId?: string;
           status?: string;
-          result?: { payloads?: Array<{ text?: string; isError?: boolean }> };
+          result?: { payloads?: Array<{ text?: string }> };
         }>(
           "agent",
           {
@@ -102,7 +97,7 @@ describe("Gateway no-op mutation continuation", () => {
   );
 });
 
-async function startMockModelServer(): Promise<MockModelServer> {
+async function startMockModelServer() {
   const requests: CapturedRequest[] = [];
   const server = await startOpenAiResponsesModelServer({
     modelId: "no-op-proof",

@@ -1,6 +1,5 @@
 // E2E: the shipped Gateway process bounds requester wakes restored from SQLite.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,7 +8,7 @@ import {
 } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
+  writeChildSession,
 } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import { loadConfig } from "../src/config/io.js";
@@ -24,6 +23,10 @@ import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/te
 import { redactSensitiveText } from "../src/logging/redact.js";
 import type { Deferred } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -34,22 +37,10 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { withSubagentRecoveryOperator } from "./helpers/subagent-recovery-operator.js";
 
 const TEST_TIMEOUT_MS = 180_000;
-const MODEL_REF = "restored-settle/restored-settle";
 const PROBE_MARKER = "restored wake ordering probe";
 const RESTORED_WAKE_MARKER = "Every subagent in this batch has now settled";
 
-type HeldModelServer = {
-  active: () => number;
-  closed: (index: number) => boolean;
-  requestAgeMs: (index: number) => number;
-  close: () => Promise<void>;
-  countRequestsContaining: (marker: string) => number;
-  peakRestored: () => number;
-  release: (index: number) => void;
-  releaseAll: () => void;
-  requestCount: () => number;
-  url: string;
-};
+type HeldModelServer = Awaited<ReturnType<typeof startHeldModelServer>>;
 
 const instances: OpenClawTestInstance[] = [];
 const modelServers: HeldModelServer[] = [];
@@ -278,12 +269,11 @@ async function seedRestoredRequesters(
           const requesterSessionKey = `agent:main:gateway-restored-requester-${index}`;
           const requesterTurnRunId = `yielded-${runId}`;
           const childSessionKey = `agent:main:subagent:gateway-restored-settle-${index}`;
-          const storePath = await writeSubagentSessionEntry({
-            stateDir: instance.stateDir,
-            agentId: "main",
-            sessionKey: requesterSessionKey,
-            defaultSessionId: `gateway-restored-requester-${index}`,
-          });
+          const storePath = await writeChildSession(
+            instance.stateDir,
+            requesterSessionKey,
+            `gateway-restored-requester-${index}`,
+          );
           if (options.yieldedFence) {
             await replaceSessionEntry(
               { storePath, sessionKey: requesterSessionKey },
@@ -303,12 +293,11 @@ async function seedRestoredRequesters(
               },
             );
           }
-          await writeSubagentSessionEntry({
-            stateDir: instance.stateDir,
-            agentId: "main",
-            sessionKey: childSessionKey,
-            defaultSessionId: `gateway-restored-child-${index}`,
-          });
+          await writeChildSession(
+            instance.stateDir,
+            childSessionKey,
+            `gateway-restored-child-${index}`,
+          );
           const requester = expectDefined(
             loadSessionEntry({ agentId: "main", sessionKey: requesterSessionKey }),
             "restored requester session",
@@ -384,46 +373,19 @@ async function seedRestoredRequesters(
 }
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
-  return {
-    plugins: { enabled: false },
-    agents: {
-      defaults: {
-        heartbeat: { every: "0m" },
-        maxConcurrent: 8,
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
-      },
-    },
-    tools: { profile: "minimal" },
-    models: {
-      mode: "replace",
-      providers: {
-        "restored-settle": {
-          baseUrl: `${baseUrl}/v1`,
-          apiKey: "test-token-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "restored-settle",
-              name: "restored-settle",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4_096,
-            },
-          ],
-        },
-      },
-    },
-  };
+  const config = createOpenAiResponsesModelConfig({
+    baseUrl,
+    providerId: "restored-settle",
+    modelId: "restored-settle",
+    reasoning: false,
+    toolProfile: "minimal",
+  });
+  config.plugins = { enabled: false };
+  config.agents!.defaults!.maxConcurrent = 8;
+  return config;
 }
 
-async function startHeldModelServer(): Promise<HeldModelServer> {
+async function startHeldModelServer() {
   const releases: Deferred[] = [];
   const requestBodies: string[] = [];
   const responses: ServerResponse[] = [];
@@ -432,28 +394,16 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   let activeRestored = 0;
   let peakRestored = 0;
   let requestCount = 0;
-  const server = createServer((request, response) => {
-    void handleModelRequest(request, response).catch((error: unknown) => {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: String(error) } }));
-    });
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "restored-settle",
+    bindError: "restored requester model server did not bind",
+    onRequest: handleModelRequest,
   });
 
   async function handleModelRequest(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && url.pathname === "/v1/models") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ id: "restored-settle", object: "model" }] }));
-      return;
-    }
-    if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-      response.writeHead(404).end();
-      return;
-    }
-
     let body = "";
     for await (const chunk of request) {
       body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
@@ -488,11 +438,6 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
     }
   }
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
   const releaseAll = () => {
     for (const release of releases) {
       release?.resolve(undefined);
@@ -500,21 +445,18 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   };
   return {
     active: () => active,
-    closed: (index) => responses[index]?.destroyed ?? false,
-    requestAgeMs: (index) => Date.now() - (requestStartedAt[index] ?? Date.now()),
-    countRequestsContaining: (marker) =>
+    closed: (index: number) => responses[index]?.destroyed ?? false,
+    requestAgeMs: (index: number) => Date.now() - (requestStartedAt[index] ?? Date.now()),
+    countRequestsContaining: (marker: string) =>
       requestBodies.filter((body) => body.includes(marker)).length,
     peakRestored: () => peakRestored,
-    release: (index) => releases[index]?.resolve(undefined),
+    release: (index: number) => releases[index]?.resolve(undefined),
     releaseAll,
     requestCount: () => requestCount,
-    url: `http://127.0.0.1:${address.port}`,
+    url: server.baseUrl,
     close: async () => {
       releaseAll();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await server.close();
     },
   };
 }
