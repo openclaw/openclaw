@@ -40,7 +40,6 @@ type SqliteInstruction = {
   opcode: string;
   p1: number;
   p2: number;
-  p3: number;
   p4: string | null;
   p5: number;
 };
@@ -50,6 +49,12 @@ afterEach(() => {
   for (const db of budgetDatabases.splice(0)) {
     db.close();
   }
+});
+const page = (events: unknown[], hasMore: boolean, sizes: Record<string, number> = {}) => ({
+  kind: "page",
+  events,
+  hasMore,
+  ...sizes,
 });
 function budgetDatabase() {
   const db = openNodeSqliteDatabase(":memory:");
@@ -115,33 +120,26 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
     );
     const table = db
       .prepare(
-        "SELECT rootpage FROM sqlite_schema WHERE type = 'table' AND name = 'transcript_events'",
+        "SELECT rootpage FROM sqlite_schema WHERE name = 'transcript_events' AND type = 'table'",
       )
       .get();
     const column = db
       .prepare("SELECT cid FROM pragma_table_info('transcript_events') WHERE name = 'event_json'")
       .get();
-    expect(table).toBeDefined();
-    expect(column).toBeDefined();
+    expect([table, column]).not.toContain(undefined);
     clearNodeSqliteKyselyCacheForDatabase(db);
     const prepare = db.prepare.bind(db);
     const sizingQueries: string[] = [];
     const readinessQueries: string[] = [];
     const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
-      if (
-        statement
-          .columns()
-          .some(
-            ({ name }) =>
-              name === "size_bytes" || name === "serialized_bytes" || name === "event_bytes",
-          )
-      ) {
+      const columns = new Set(statement.columns().map(({ name }) => name));
+      if (["size_bytes", "serialized_bytes", "event_bytes"].some((name) => columns.has(name))) {
         sizingQueries.push(query);
       }
       if (
         query.includes("context_eligible") &&
-        statement.columns().some(({ name }) => name === "session_id" || name === "has_unclassified")
+        ["session_id", "has_unclassified"].some((name) => columns.has(name))
       ) {
         readinessQueries.push(query);
       }
@@ -210,41 +208,32 @@ it("bounds display delta sizing before its byte limit and resumes in order", asy
           ? "metadata"
           : null,
     );
-    try {
-      const blocked = read(scope, limits);
-      expect(blocked).toMatchObject({
-        kind: "page",
-        events: [],
-        hasMore: true,
+    using _ = { [Symbol.dispose]: counter.restore };
+    expect(read(scope, limits)).toMatchObject(
+      page([], true, {
         requiredBytes: Buffer.byteLength(JSON.stringify(events[0])) + 1,
         serializedBytes: 0,
-      });
-      expect(counter.rowCounts.metadata).toBeLessThanOrEqual(128);
+      }),
+    );
+    expect(counter.rowCounts.metadata).toBeLessThanOrEqual(128);
 
-      const expected = events.slice(0, 70);
-      const maxBytes = expected.reduce(
-        (total, event) => total + Buffer.byteLength(JSON.stringify(event)) + 1,
-        0,
-      );
-      const first = read(scope, { ...limits, maxBytes });
-      assert(first.kind === "page", "Expected the first delta page");
-      expect(first.events.map(({ event }) => event)).toEqual(expected);
-      expect(first).toMatchObject({ hasMore: true, serializedBytes: maxBytes });
-      expect(first).not.toHaveProperty("requiredBytes");
-      expect(counter.rowCounts.metadata).toBeLessThanOrEqual(256);
+    const expected = events.slice(0, 70);
+    const maxBytes = expected.reduce(
+      (total, event) => total + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
+    const first = read(scope, { ...limits, maxBytes });
+    assert(first.kind === "page", "Expected the first delta page");
+    expect(first.events.map(({ event }) => event)).toEqual(expected);
+    expect(first).toMatchObject({ hasMore: true, serializedBytes: maxBytes });
+    expect(first).not.toHaveProperty("requiredBytes");
+    expect(counter.rowCounts.metadata).toBeLessThanOrEqual(256);
 
-      const rest = read(scope, { cursor: first.cursor, maxEvents: 1_000, maxBytes: 1_000_000 });
-      assert(rest.kind === "page", "Expected the remaining delta page");
-      expect(rest.events.map(({ event }) => event)).toEqual(events.slice(expected.length));
-      expect(rest.hasMore).toBe(false);
-      expect(read(scope, { cursor: rest.cursor })).toMatchObject({
-        kind: "page",
-        events: [],
-        hasMore: false,
-      });
-    } finally {
-      counter.restore();
-    }
+    const rest = read(scope, { cursor: first.cursor, maxEvents: 1_000, maxBytes: 1_000_000 });
+    assert(rest.kind === "page", "Expected the remaining delta page");
+    expect(rest.events.map(({ event }) => event)).toEqual(events.slice(expected.length));
+    expect(rest.hasMore).toBe(false);
+    expect(read(scope, { cursor: rest.cursor })).toMatchObject(page([], false));
   });
 });
 
@@ -286,12 +275,14 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
     expect(readTranscriptEventRows(database, scope.sessionId).map((row) => row.eventJson)).toEqual(
       canonical,
     );
-    expect(readTranscriptRawDelta(scope, { maxBytes: sizeBytes + events.length })).toMatchObject({
-      kind: "page",
-      events: events.map((event, seq) => ({ event, seq })),
-      hasMore: false,
-      serializedBytes: sizeBytes + 1,
-    });
+    const raw = (maxBytes: number) => readTranscriptRawDelta(scope, { maxBytes });
+    expect(raw(sizeBytes + events.length)).toMatchObject(
+      page(
+        events.map((event, seq) => ({ event, seq })),
+        false,
+        { serializedBytes: sizeBytes + 1 },
+      ),
+    );
 
     database.db
       .prepare(
@@ -299,14 +290,13 @@ it("admits compressed transcript bytes before decoding and preserves canonical s
       )
       .run(scope.sessionId, compressed!.seq!);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBe(sizeBytes);
-    expect(readTranscriptRawDelta(scope, { maxBytes: 1 })).toMatchObject({
-      kind: "page",
-      events: [],
-      hasMore: true,
-      requiredBytes: Buffer.byteLength(canonical[0]!) + 1,
-      serializedBytes: 0,
-    });
-    expect(() => readTranscriptRawDelta(scope, { maxBytes: sizeBytes + events.length })).toThrow();
+    expect(raw(1)).toMatchObject(
+      page([], true, {
+        requiredBytes: Buffer.byteLength(canonical[0]!) + 1,
+        serializedBytes: 0,
+      }),
+    );
+    expect(() => raw(sizeBytes + events.length)).toThrow();
     expect(() => loadTranscriptEventsSync({ ...scope, maxEventBytes: sizeBytes - 1 })).toThrow(
       /transcript store is too large to export/u,
     );
@@ -377,24 +367,21 @@ it("bounds history tail sizing while retaining an oversized newest event", async
           ? "metadata"
           : null,
     );
-    try {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const page = read(scope, options);
-        expect(page.totalMessages).toBe(1_002);
-        expect(page.events).toEqual([
-          expect.objectContaining({ event: expect.objectContaining({ id: "new" }) }),
-        ]);
-      }
-      // Each read sizes the newest event and its rejecting predecessor, then releases
-      // its SQLite iterator so the same connection can commit the next transcript write.
-      expect(counter.rowCounts.metadata).toBeLessThanOrEqual(6);
-      await persistSessionTranscriptTurn(scope, {
-        messages: [transcriptMessage("next", "new", { role: "user", content: "next" })],
-        touchSessionEntry: false,
-      });
-      expect(read(scope, options).events.at(-1)?.event).toMatchObject({ id: "next" });
-    } finally {
-      counter.restore();
+    using _ = { [Symbol.dispose]: counter.restore };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = read(scope, options);
+      expect(result.totalMessages).toBe(1_002);
+      expect(result.events).toEqual([
+        expect.objectContaining({ event: expect.objectContaining({ id: "new" }) }),
+      ]);
     }
+    // Each read sizes the newest event and its rejecting predecessor, then releases
+    // its SQLite iterator so the same connection can commit the next transcript write.
+    expect(counter.rowCounts.metadata).toBeLessThanOrEqual(6);
+    await persistSessionTranscriptTurn(scope, {
+      messages: [transcriptMessage("next", "new", { role: "user", content: "next" })],
+      touchSessionEntry: false,
+    });
+    expect(read(scope, options).events.at(-1)?.event).toMatchObject({ id: "next" });
   });
 });
