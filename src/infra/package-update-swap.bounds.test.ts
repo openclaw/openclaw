@@ -591,16 +591,19 @@ describe("npm rollback content diagnostics", () => {
           await fs.unlink(cache);
           await fs.symlink("../dist/index.js", cache);
         } else if (change === "cache during scan") {
+          // The walk stats each path exactly once, so a second lstat of the cache
+          // is the drift sweep re-stat'ing it. Substituting before that call makes
+          // the sweep observe the change, which holds whether the sweep runs
+          // sequentially or in batches. Mutating after it would let the sweep
+          // record the entry as unchanged.
           const lstat = fs.lstat.bind(fs);
-          let parentReads = 0;
+          let cacheReads = 0;
           vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-            const stat = await lstat(...args);
-            if (String(args[0]) === path.dirname(cache) && ++parentReads === 2) {
-              // Replace after the parent's final observation; only the entry recheck can catch it.
+            if (String(args[0]) === cache && ++cacheReads === 2) {
               await fs.unlink(cache);
               await fs.symlink("../dist/index.js", cache);
             }
-            return stat;
+            return lstat(...args);
           });
         } else {
           const before = await fs.stat(entry);
