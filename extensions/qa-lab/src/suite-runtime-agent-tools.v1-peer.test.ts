@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { callPluginToolsMcp } from "./suite-runtime-agent-tools.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const peer = new URL("../../../test/fixtures/mcp-v1-peripheral-peer.mjs", import.meta.url).href;
+const peer = new URL("./suite-runtime-agent-tools.v1-peer.fixture.mjs", import.meta.url).href;
 const { cleanup, makeTempDir } = createTempDirHarness();
 
 describe("QA MCP v1 stdio interoperability", () => {

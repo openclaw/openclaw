@@ -17,6 +17,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@openclaw/crabbox-provider": "workspace:*",
     "@openclaw/discord": "workspace:*",
     "@openclaw/matrix": "workspace:*",

@@ -74,10 +74,6 @@ vi.mock("./channel-bridge.js", () => ({
   },
 }));
 
-vi.mock("./channel-shared.js", () => ({
-  ClaudePermissionRequestSchema: { shape: { params: {} } },
-}));
-
 vi.mock("./channel-tools.js", () => ({
   getChannelMcpCapabilities: vi.fn(() => undefined),
   registerChannelMcpTools: vi.fn(),

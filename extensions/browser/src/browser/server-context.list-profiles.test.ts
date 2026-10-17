@@ -131,7 +131,6 @@ describe("browser server-context listProfiles", () => {
     expect(fixture.listProcesses).toHaveBeenCalledTimes(4);
     expect(fixture.callTool).toHaveBeenCalledWith(
       { name: "list_pages", arguments: {} },
-      undefined,
       { signal: expect.any(AbortSignal), timeout: 300 },
     );
     const profile = ctx.forProfile(fixture.profile.name).profile;
@@ -183,7 +182,6 @@ describe("browser server-context listProfiles", () => {
 
       expect(fixture.callTool).toHaveBeenCalledWith(
         { name: "list_pages", arguments: {} },
-        undefined,
         { signal: expect.any(AbortSignal), timeout: 4_000 },
       );
       await vi.advanceTimersByTimeAsync(3_999);

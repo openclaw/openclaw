@@ -5,9 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withChromeMcpLease } from "./chrome-mcp-routing.js";
 import { closeChromeMcpSession, getChromeMcpPid } from "./chrome-mcp-session.js";
 
-const peer = fileURLToPath(
-  new URL("../../../../test/fixtures/mcp-v1-peripheral-peer.mjs", import.meta.url),
-);
+const peer = fileURLToPath(new URL("./chrome-mcp.v1-peer.fixture.mjs", import.meta.url));
 
 describe("Chrome MCP v1 stdio interoperability", () => {
   let state: OpenClawTestState;

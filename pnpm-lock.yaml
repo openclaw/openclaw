@@ -842,6 +842,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.1
+        version: 1.32.1(supports-color@10.2.2)(zod@4.6.5)
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -2105,6 +2108,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.1
+        version: 1.32.1(supports-color@10.2.2)(zod@4.6.5)
       '@openclaw/crabbox-provider':
         specifier: workspace:*
         version: link:../crabbox
