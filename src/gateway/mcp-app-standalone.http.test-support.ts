@@ -231,6 +231,7 @@ export {
   createMcpAppStandaloneTicket,
   createSerializedHost,
   executeMcpAppOperation,
+  handleMcpAppStandaloneHttpRequest,
   issueTicket,
   mocks,
   nowMs,
