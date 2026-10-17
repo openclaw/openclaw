@@ -70,6 +70,53 @@ function imageSource(width: number, height: number, color: string) {
 }
 
 describe("progressive image viewer geometry", () => {
+  it.each([
+    { name: "portrait trackpad pinch", width: 360, height: 800, input: "pinch" },
+    { name: "landscape mouse wheel", width: 800, height: 360, input: "wheel" },
+    { name: "small image double-click", width: 320, height: 200, input: "double-click" },
+  ])(
+    "keeps the image point under the pointer during $name zoom",
+    async ({ width, height, input }) => {
+      const { viewer, image } = await mountImage({
+        src: imageSource(width, height, "#264060"),
+        title: "Pointer zoom",
+      });
+      const before = image.getBoundingClientRect();
+      // An off-center point distinguishes pointer zoom from center-only button zoom.
+      const x = before.left + before.width * 0.6;
+      const y = before.top + before.height * 0.4;
+      const stage = viewer.querySelector(".stage")!;
+      if (input === "double-click") {
+        stage.dispatchEvent(
+          new MouseEvent("dblclick", { clientX: x, clientY: y, bubbles: true, cancelable: true }),
+        );
+      } else {
+        stage.dispatchEvent(
+          new WheelEvent("wheel", {
+            clientX: x,
+            clientY: y,
+            deltaY: -1,
+            ctrlKey: input === "pinch",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+      await nextFrame();
+      const after = image.getBoundingClientRect();
+      expect(after.width).toBeGreaterThan(before.width);
+      expect(after.left + after.width * 0.6).toBeCloseTo(x, 0);
+      expect(after.top + after.height * 0.4).toBeCloseTo(y, 0);
+
+      viewer.querySelector<HTMLButtonElement>('[aria-label="Reset zoom"]')!.click();
+      await nextFrame();
+      const reset = image.getBoundingClientRect();
+      for (const dimension of ["x", "y", "width", "height"] as const) {
+        expect(reset[dimension]).toBeCloseTo(before[dimension], 0);
+      }
+    },
+  );
+
   it("restores its original tile after Escape removes a still-closing native modal", async () => {
     const trigger = document.createElement("button");
     trigger.textContent = "Open image tile";
