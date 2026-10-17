@@ -30,9 +30,11 @@ class RailScrollTestHost extends HTMLElement {
   updateComplete = Promise.resolve(true);
   private view?: ReturnType<typeof mountSolid>;
   private renderContent?: () => void;
+  private stopTranscript?: () => void;
 
   connectedCallback() {
     this.append(this.transcriptRoot);
+    this.stopTranscript = this.transcript?.subscribe(() => this.requestRender());
     this.transcript?.start();
     this.view = mountSolid(
       () => {
@@ -53,6 +55,8 @@ class RailScrollTestHost extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.stopTranscript?.();
+    this.stopTranscript = undefined;
     this.transcript?.dispose();
     this.view?.unmount();
     this.renderContent = undefined;
