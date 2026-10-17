@@ -25,15 +25,31 @@ import {
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun } from "./openclaw-delegate-tool.js";
 
-vi.mock("./in-process-gateway.js", () => ({
-  callInProcessGatewayTool: vi.fn(),
-}));
+vi.mock("./in-process-gateway.js", () => ({ callInProcessGatewayTool: vi.fn() }));
 
 const callGateway = vi.mocked(callInProcessGatewayTool);
 
 beforeEach(() => {
   callGateway.mockReset();
 });
+
+type Options = Omit<Parameters<typeof createOpenClawDelegateToolsForRun>[0], "sessionAgentId">;
+function delegate(options: Options = {}) {
+  const [tool] = createOpenClawDelegateToolsForRun({
+    sessionAgentId: "main",
+    runSessionKey: "agent:main:main",
+    ...options,
+  });
+  if (!tool) {
+    throw new Error("expected OpenClaw delegation tool");
+  }
+  return tool;
+}
+function expectUnscoped() {
+  expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+  expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
+  expect(getScopedPluginCache()).toBeUndefined();
+}
 
 describe("openclaw delegation tool", () => {
   it("admits each delegated call outside its caller generation without dropping caller fences", async () => {
@@ -48,51 +64,35 @@ describe("openclaw delegation tool", () => {
     bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
     const controller = new AbortController();
     const approvalAuthorityCheck = vi.fn(() => true);
-    const [tool] = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
-      runSessionKey: "agent:main:main",
-    });
-    if (!tool) {
-      throw new Error("expected OpenClaw delegation tool");
-    }
+    const tool = delegate();
+    const caller = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      approvalAuthorityCheck,
+      approvalSignals: [controller.signal],
+    };
     callGateway.mockImplementation(async () => {
-      expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
-      expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
-      expect(getScopedPluginCache()).toBeUndefined();
-      expect(getGatewayToolCallerIdentity()).toMatchObject({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        approvalAuthorityCheck,
-        approvalSignals: [controller.signal],
-      });
+      expectUnscoped();
+      expect(getGatewayToolCallerIdentity()).toMatchObject(caller);
       return { reply: "Ready." };
     });
     await withPreparedModelRuntimePluginGenerationScope(generation, () =>
-      withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          approvalAuthorityCheck,
-          approvalSignals: [controller.signal],
-        },
-        () =>
-          withPluginRuntimeGenerationScope(
-            { metadataSnapshot: generation.pluginMetadataSnapshot, pluginRegistry: registry },
-            async () => {
-              for (const message of ["First helper call", "Second helper call"]) {
-                await tool.execute("delegate", { message });
-                expect(getPreparedModelRuntimePluginGeneration()).toBe(generation);
-                expect(getPluginRuntimeGenerationRegistry()).toBe(registry);
-                expect(getScopedPluginCache()).toBe(cache);
-              }
-            },
-          ),
+      withGatewayToolCallerIdentity(caller, () =>
+        withPluginRuntimeGenerationScope(
+          { metadataSnapshot: generation.pluginMetadataSnapshot, pluginRegistry: registry },
+          async () => {
+            for (const message of ["First helper call", "Second helper call"]) {
+              await tool.execute("delegate", { message });
+              expect(getPreparedModelRuntimePluginGeneration()).toBe(generation);
+              expect(getPluginRuntimeGenerationRegistry()).toBe(registry);
+              expect(getScopedPluginCache()).toBe(cache);
+            }
+          },
+        ),
       ),
     );
     expect(getGatewayToolCallerIdentity()).toBeUndefined();
-    expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
-    expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
-    expect(getScopedPluginCache()).toBeUndefined();
+    expectUnscoped();
   });
 
   it("relays context and the completed approval outcome", async () => {
@@ -101,15 +101,11 @@ describe("openclaw delegation tool", () => {
       reply: "Applied.",
       action: "none",
     });
-    const tool = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
+    const tool = delegate({
       runSessionKey: "agent:main:dm:one",
       agentChannel: "webchat",
       execSession: { permissionMode: "guarded" },
-    })[0];
-    if (!tool) {
-      throw new Error("expected OpenClaw delegation tool");
-    }
+    });
     expect(tool.description).toContain("Gateway restart");
     expect(tool.description).toContain("approve in the Control UI");
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("openclaw");
@@ -125,9 +121,7 @@ describe("openclaw delegation tool", () => {
         turnSourceChannel: "webchat",
       },
     });
-    expect(result.details).toEqual({
-      reply: "Applied.",
-    });
+    expect(result.details).toEqual({ reply: "Applied." });
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe("{ reply: string; action?: string }");
@@ -155,7 +149,7 @@ describe("openclaw delegation tool", () => {
     { name: "filesystem-restricted", options: { fsPolicy: { workspaceOnly: true } }, full: false },
   ] satisfies Array<{
     name: string;
-    options: Omit<Parameters<typeof createOpenClawDelegateToolsForRun>[0], "sessionAgentId">;
+    options: Options;
     full: boolean;
   }>)("carries $name authority privately, not in RPC data", async ({ options, full }) => {
     const runController = new AbortController();
@@ -168,14 +162,7 @@ describe("openclaw delegation tool", () => {
       ]);
       return { sessionId: "delegate", reply: "Done." };
     });
-    const [tool] = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
-      runSessionKey: "agent:main:main",
-      ...options,
-    });
-    if (!tool) {
-      throw new Error("expected OpenClaw delegation tool");
-    }
+    const tool = delegate(options);
 
     expect(tool.catalogMode).toBe("direct-only");
     await withGatewayToolCallerIdentity(
@@ -196,17 +183,10 @@ describe("openclaw delegation tool", () => {
     expect(getGatewayToolCallerIdentity()).toBeUndefined();
   });
 
-  it.each([{ agentChannel: "telegram", where: "in this chat" }])(
-    "points $agentChannel runs to where approvals appear",
-    ({ agentChannel, where }) => {
-      // Only messaging channels receive approval prompts; the forwarder skips Webchat and TUI.
-      const [tool] = createOpenClawDelegateToolsForRun({
-        sessionAgentId: "main",
-        runSessionKey: "agent:main:main",
-        agentChannel,
-        execSession: { permissionMode: "guarded" },
-      });
-      expect(tool?.description).toContain(`approve ${where}`);
-    },
-  );
+  it("points telegram runs to in-chat approvals", () => {
+    expect(
+      delegate({ agentChannel: "telegram", execSession: { permissionMode: "guarded" } })
+        .description,
+    ).toContain("approve in this chat");
+  });
 });
