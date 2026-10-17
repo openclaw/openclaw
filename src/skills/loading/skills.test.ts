@@ -70,17 +70,13 @@ async function writePromptLimitSkills(workspaceDir: string) {
 const withClearedEnv = <T>(keys: string[], run: () => T): T =>
   withEnv(Object.fromEntries(keys.map((key) => [key, undefined])), run);
 
-function makeSkillEntry(
-  name: string,
-  metadata: SkillEntry["metadata"],
-  description = "Needs env",
-): SkillEntry {
+function makeSkillEntry(name: string, metadata: SkillEntry["metadata"]): SkillEntry {
   const baseDir = `/virtual/${name}`;
   const filePath = `${baseDir}/SKILL.md`;
   return {
     skill: {
       name,
-      description,
+      description: "Needs env",
       filePath,
       baseDir,
       source: "test",
@@ -110,16 +106,6 @@ function envSkillSnapshot(name: string, metadata: SkillEntry["metadata"]): Skill
       },
     ],
   };
-}
-
-function rawSkillApiKeyRefConfig(skillName: string): OpenClawConfig {
-  return skillConfig(skillName, {
-    apiKey: { source: "file", provider: "default", id: `/skills/entries/${skillName}/apiKey` },
-  });
-}
-
-function resolvedSkillApiKeyConfig(skillName: string, apiKey: string): OpenClawConfig {
-  return skillConfig(skillName, { apiKey });
 }
 
 function skillConfig(
@@ -179,36 +165,29 @@ afterEach(() => {
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
-  it.each([["dashboard", "dashboard_2"]])(
-    "moves a colliding %s skill to the generated alias %s",
-    async (skillName, commandName) => {
-      const workspaceDir = await makeWorkspace();
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", skillName),
-        name: skillName,
-        description: "Custom command skill",
-      });
+  it("moves a colliding dashboard skill to dashboard_2", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "dashboard"),
+      name: "dashboard",
+      description: "Custom command skill",
+    });
 
-      const [command] = withWorkspaceHome(workspaceDir, () =>
-        buildWorkspaceSkillCommandSpecs(workspaceDir, {
-          ...resolveTestSkillDirs(workspaceDir),
-          reservedNames: listReservedChatSlashCommandNames(),
-        }),
-      );
+    const [command] = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        reservedNames: listReservedChatSlashCommandNames(),
+      }),
+    );
 
-      expect(command).toMatchObject({ name: commandName, skillName });
-    },
-  );
+    expect(command).toMatchObject({ name: "dashboard_2", skillName: "dashboard" });
+  });
 
   it("preserves descriptions and tool-dispatch metadata", async () => {
     const workspaceDir = await makeWorkspace();
-    const longDescription =
-      "This is a very long description that exceeds Discord's 100 character limit for slash command descriptions and should be truncated";
+    const longDescription = "Description ".repeat(12);
     await writeWorkspaceSkills(workspaceDir, [
-      {
-        name: "long-desc",
-        description: longDescription,
-      },
+      { name: "long-desc", description: longDescription },
       {
         name: "short-desc",
         description: "Short description",
@@ -429,33 +408,29 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("prefers the active runtime snapshot over raw SecretRef skill config", () => {
-    const skillName = "env-skill";
-    const entries = keyedSkill(skillName);
-    const sourceConfig = rawSkillApiKeyRefConfig(skillName);
-    const runtimeConfig = resolvedSkillApiKeyConfig(skillName, "resolved-key");
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
-    withClearedEnv(["ENV_KEY"], () => {
-      expectOverride(() => applySkillEnvOverrides({ skills: entries, config: sourceConfig }), {
-        ENV_KEY: "resolved-key",
+  it.each(["runtime", "caller"] as const)(
+    "prefers resolved %s config over raw SecretRefs",
+    (resolvedAt) => {
+      const skillName = "env-skill";
+      const entries = keyedSkill(skillName);
+      const sourceConfig = skillConfig(skillName, {
+        apiKey: { source: "file", provider: "default", id: `/skills/entries/${skillName}/apiKey` },
       });
-    });
-  });
+      const resolved = skillConfig(skillName, { apiKey: "resolved-key" }); // pragma: allowlist secret
+      setRuntimeConfigSnapshot(resolvedAt === "runtime" ? resolved : sourceConfig, sourceConfig);
 
-  it("prefers resolved caller skill config when the active runtime snapshot is still raw", () => {
-    const skillName = "env-skill";
-    const entries = keyedSkill(skillName);
-    const sourceConfig = rawSkillApiKeyRefConfig(skillName);
-    const callerConfig = resolvedSkillApiKeyConfig(skillName, "resolved-key");
-    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
-
-    withClearedEnv(["ENV_KEY"], () => {
-      expectOverride(() => applySkillEnvOverrides({ skills: entries, config: callerConfig }), {
-        ENV_KEY: "resolved-key",
+      withClearedEnv(["ENV_KEY"], () => {
+        expectOverride(
+          () =>
+            applySkillEnvOverrides({
+              skills: entries,
+              config: resolvedAt === "runtime" ? sourceConfig : resolved,
+            }),
+          { ENV_KEY: "resolved-key" },
+        );
       });
-    });
-  });
+    },
+  );
 
   it("does not resolve raw skill apiKey refs when the host already provides primaryEnv", () => {
     const entries = keyedSkill("env-skill", "ENV_KEY");
@@ -500,48 +475,38 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("blocks dangerous host env overrides even when declared", () => {
-    const env = {
-      BASH_ENV: "/tmp/pwn.sh",
-      SHELL: "/tmp/evil-shell",
-      NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
-      NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
-      NODE_REPL_HISTORY: "/tmp/node-repl-history",
-      NODE_V8_COVERAGE: "/tmp/coverage",
-    };
+  it.each<{ name: string; env: Record<string, string> }>([
+    {
+      name: "dangerous",
+      env: {
+        BASH_ENV: "/tmp/pwn.sh",
+        SHELL: "/tmp/evil-shell",
+        NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
+        NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+        NODE_REPL_HISTORY: "/tmp/node-repl-history",
+        NODE_V8_COVERAGE: "/tmp/coverage",
+      },
+    },
+    {
+      name: "override-only",
+      env: {
+        HTTPS_PROXY: "http://proxy.example.test:8080",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        DOCKER_HOST: "tcp://docker.example.test:2376",
+      },
+    },
+  ])("blocks $name host env overrides even when declared", ({ name, env }) => {
     const keys = Object.keys(env);
-    const entries = envSkillEntries("dangerous-env-skill", { requires: { env: keys } });
+    const skillName = `${name}-env-skill`;
+    const entries = envSkillEntries(skillName, { requires: { env: keys } });
     withClearedEnv(keys, () => {
       expectOverride(
         () =>
           applySkillEnvOverrides({
             skills: entries,
-            config: skillConfig("dangerous-env-skill", { env }),
+            config: skillConfig(skillName, { env }),
           }),
         Object.fromEntries(keys.map((key) => [key, undefined])),
-      );
-    });
-  });
-
-  it("blocks override-only host env overrides in skill config", () => {
-    const entries = envSkillEntries("override-env-skill", {
-      requires: { env: ["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"] },
-    });
-
-    withClearedEnv(["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"], () => {
-      expectOverride(
-        () =>
-          applySkillEnvOverrides({
-            skills: entries,
-            config: skillConfig("override-env-skill", {
-              env: {
-                HTTPS_PROXY: "http://proxy.example.test:8080",
-                NODE_TLS_REJECT_UNAUTHORIZED: "0",
-                DOCKER_HOST: "tcp://docker.example.test:2376",
-              },
-            }),
-          }),
-        { HTTPS_PROXY: undefined, NODE_TLS_REJECT_UNAUTHORIZED: undefined, DOCKER_HOST: undefined },
       );
     });
   });

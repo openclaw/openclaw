@@ -165,33 +165,17 @@ describe("buildWorkspaceSkillsPrompt", () => {
         extra1: path.join(workspaceDir, "root-1"),
         extra2: path.join(workspaceDir, "root-2"),
       };
-      const descriptions = {
-        workspace: "Workspace version",
-        managed: "Managed version",
-        workshop: "Workshop version",
-        bundled: "Bundled version",
-        extra: "Extra version",
-        execution: "Execution version",
-        extra0: "Variant 0",
-        extra1: "Variant 1",
-        extra2: "Variant 2",
-      };
+      const description = (root: string) => `${root} version`;
       const name = "demo-skill";
       for (const root of roots) {
-        await skill(path.join(locations[root], name), name, descriptions[root]);
+        await skill(path.join(locations[root], name), name, description(root));
       }
       const info = captureLogger("info", compact ? "compact" : "json");
+      const extraDirs = roots
+        .filter((root) => root.startsWith("extra"))
+        .map((root) => locations[root]);
       const options = {
-        config: {
-          ...config,
-          skills: {
-            load: {
-              extraDirs: roots
-                .filter((root) => root.startsWith("extra"))
-                .map((root) => locations[root]),
-            },
-          },
-        },
+        config: { ...config, skills: { load: { extraDirs } } },
         agentId: "main",
         managedSkillsDir: locations.managed,
         bundledSkillsDir: locations.bundled,
@@ -204,16 +188,16 @@ describe("buildWorkspaceSkillsPrompt", () => {
         const entries = loadWorkspaceSkills(workspaceDir, options);
         expect(entries).toHaveLength(1);
         expect(entries[0]?.skill).toMatchObject({
-          description: descriptions[winner],
+          description: description(winner),
           source,
           filePath: path.join(locations[winner], name, "SKILL.md"),
         });
         const prompt = await buildWorkspaceSkillsPrompt(workspaceDir, options);
-        expect(prompt).toContain(descriptions[winner]);
+        expect(prompt).toContain(description(winner));
         expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
         for (const root of roots) {
           if (root !== winner) {
-            expect(prompt).not.toContain(descriptions[root]);
+            expect(prompt).not.toContain(description(root));
           }
         }
         expect(info).toHaveBeenCalledTimes(roots.length - 1);
