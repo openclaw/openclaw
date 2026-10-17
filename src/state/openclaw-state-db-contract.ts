@@ -5,8 +5,8 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
-// v27 removes unused replay/skill indexes and narrows the lease-owner index.
 // v28 moves client credentials and native socket material to the local credential owner.
+// v27 removes unused replay/skill indexes and narrows the lease-owner index.
 // v26 stores session state heads directly in their composite primary-key tree.
 // v25 prevents older readers from dropping recovered subagent operator restrictions.
 // v24 replaces retained task indexes with ordered cron history indexes.

@@ -7,7 +7,6 @@ import type { ClientCredentialLegacyKey } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import type { ClientCredentialCustody } from "./client-credential-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 export type ClientCredentialLegacyImport = {
   key: ClientCredentialLegacyKey;
@@ -21,7 +20,7 @@ export function importClientCredentialLegacy(
   owner: ClientCredentialCustody,
   input: ClientCredentialLegacyImport,
 ): boolean {
-  return runSqliteImmediateTransactionSync(owner.database, () => {
+  return owner.transaction(() => {
     const stored = readClientCredentialReceipt(owner.database);
     if (!stored || stored.phase !== "complete") {
       throw new Error("Client credential migration must complete before legacy import.");

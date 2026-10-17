@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { CLIENT_CREDENTIAL_SOURCE_TABLES } from "../infra/client-credential-schema.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -505,16 +506,11 @@ const stateWriteIndexMigration = {
 
 const stateClientCredentialMigration = {
   version: CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
-  tables: [
-    "device_identities",
-    "device_auth_tokens",
-    "gateway_origin_device_tokens",
-    "exec_approvals_config",
-  ],
+  tables: CLIENT_CREDENTIAL_SOURCE_TABLES,
   columns: [],
   // The credential owner copies, verifies, and retires these before schema publication.
   migrate: () => false,
-  applied: "Moved client credentials and native socket material to the local owner (v27)",
+  applied: "Moved client credentials and native socket material to the local owner (v28)",
 };
 
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
@@ -578,7 +574,10 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
-  const indexSourceSchema = withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL);
+  const indexSourceSchema =
+    previousVersion < 27
+      ? withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL)
+      : OPENCLAW_STATE_SCHEMA_SQL;
   const sourceSchema =
     previousVersion < 26 ? withLegacyStateHeadLayout(indexSourceSchema) : indexSourceSchema;
   // Older binaries can leave same-version repairs pending alongside a version change.

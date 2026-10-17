@@ -19,8 +19,11 @@ import {
   serializeClientCredentialReceipt,
   type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
-import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
-import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import {
+  CLIENT_CREDENTIAL_SCHEMA_VERSION,
+  CLIENT_CREDENTIAL_SOURCE_TABLES,
+  type ClientCredentialDatabase,
+} from "./client-credential-schema.js";
 import { openClientCredentialCustody } from "./client-credential-store.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
@@ -39,13 +42,6 @@ export type ClientCredentialMigrationCapture = {
   generation: string;
   assertCurrent(): void;
 };
-
-const CLIENT_CREDENTIAL_SOURCE_TABLES = [
-  "device_identities",
-  "device_auth_tokens",
-  "gateway_origin_device_tokens",
-  "exec_approvals_config",
-] as const;
 
 /** Fresh shared bootstrap binds existing local-only credentials without replacing them. */
 export function bindFreshClientCredentialStore(

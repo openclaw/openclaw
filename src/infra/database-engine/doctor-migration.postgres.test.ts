@@ -263,7 +263,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     }
   }
 
-  it.each([24, 25, 26])(
+  it.each([24, 25, 26, 27])(
     "backs up and restores the real version %s before the registered migration",
     async (sourceVersion) => {
       await prepare();
@@ -276,10 +276,14 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       };
       await client.query(`
         SET search_path TO "${namespace}";
-        DROP INDEX IF EXISTS idx_state_leases_owner;
-        DROP INDEX IF EXISTS idx_skill_usage_key;
-        DROP INDEX IF EXISTS idx_acp_replay_events_session_seq;
-        ${Object.values(statePostgresRuntime.preWriteIndexesV27Sql).join("\n")}
+        ${
+          sourceVersion < 27
+            ? `DROP INDEX IF EXISTS idx_state_leases_owner;
+               DROP INDEX IF EXISTS idx_skill_usage_key;
+               DROP INDEX IF EXISTS idx_acp_replay_events_session_seq;
+               ${Object.values(statePostgresRuntime.preWriteIndexesV27Sql).join("\n")}`
+            : ""
+        }
         UPDATE "${namespace}".openclaw_schema_meta
           SET version = ${sourceVersion}, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
         UPDATE "${namespace}".schema_meta SET schema_version = ${sourceVersion};

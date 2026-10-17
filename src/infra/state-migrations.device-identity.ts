@@ -21,7 +21,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   hasLegacyDeviceIdentityPath,
   repairInvalidCanonicalIdentity,
@@ -111,7 +110,7 @@ export async function migrateLegacyDeviceIdentity(params: {
       try {
         const stored = readClientCredentialReceipt(owner.database);
         if (stored) {
-          assertClientCredentialStoreReady(owner.database, env, false);
+          owner.transaction(() => assertClientCredentialStoreReady(owner.database, env, false));
           if (stored.receipt.legacyImports["identity:primary"]) {
             if (params.detected.hasInvalidCanonical) {
               owner.close();
@@ -156,7 +155,7 @@ export async function migrateLegacyDeviceIdentity(params: {
           );
         }
         let imported = false;
-        runSqliteImmediateTransactionSync(owner.database, () => {
+        owner.transaction(() => {
           if (!stored) {
             writeClientCredentialReceipt(
               owner.database,

@@ -29,7 +29,7 @@ The client credential format is SQLite schema version 1 at
 `<resolved-client-root>/client/credentials.sqlite`, independent of the selected
 Gateway engine. It contains client identities, device and Gateway-scoped token
 caches, local native socket credentials, and a migration receipt. Native bootstrap
-never opens the selected Gateway database. Shared state schema 27 retires
+never opens the selected Gateway database. Shared state schema 28 retires
 `device_identities`, `device_auth_tokens`, and `gateway_origin_device_tokens`,
 and removes socket material from `exec_approvals_config`. Approval policy remains
 shared; its meaning and execution authority are unchanged.

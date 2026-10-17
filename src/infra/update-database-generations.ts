@@ -99,7 +99,7 @@ function readWalIndexHeader(pathname: string): Buffer | null {
 /** Run only in an isolated process, after all source handles drain, or under a
  * schema-maintenance owner before live reads are admitted: raw close
  * can release this process's SQLite locks. Inspect only the supplied inventory. */
-function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateDatabaseGenerations {
+export function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateDatabaseGenerations {
   return Object.fromEntries(
     paths.map((pathname) => {
       const entry = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });

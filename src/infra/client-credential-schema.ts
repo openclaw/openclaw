@@ -1,6 +1,13 @@
 // Independent of the selected Gateway engine and its shared schema version.
 export const CLIENT_CREDENTIAL_SCHEMA_VERSION = 1;
 
+export const CLIENT_CREDENTIAL_SOURCE_TABLES = [
+  "device_identities",
+  "device_auth_tokens",
+  "gateway_origin_device_tokens",
+  "exec_approvals_config",
+] as const;
+
 // These unchanged tables also describe the shared-state v25 migration source.
 export const CLIENT_CREDENTIAL_LEGACY_TABLES_SQL = `CREATE TABLE device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,

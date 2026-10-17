@@ -5,6 +5,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
 import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import {
   captureUpdateDatabases,
@@ -20,6 +21,7 @@ import { readBackupEngine, verifyMatchedPostgresBackup } from "../snapshot/datab
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { withLegacyStateHeadLayout } from "../state/openclaw-state-db-schema-v26-layout.js";
+import { withLegacyStateWriteIndexes } from "../state/openclaw-state-db-schema-v27-indexes.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -87,7 +89,7 @@ afterAll(async () => {
   }
 });
 
-function seedCredentials(db: EngineConnection, native: boolean, sourceVersion: 25 | 26) {
+function seedCredentials(db: EngineConnection, native: boolean, sourceVersion: 25 | 26 | 27) {
   db.prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)").run(
     "primary",
     identity.deviceId,
@@ -135,7 +137,11 @@ function seedCredentials(db: EngineConnection, native: boolean, sourceVersion: 2
   );
 }
 
-async function fixture(engine: "sqlite" | "postgres", native = false, sourceVersion: 25 | 26 = 25) {
+async function fixture(
+  engine: "sqlite" | "postgres",
+  native = false,
+  sourceVersion: 25 | 26 | 27 = 25,
+) {
   const root = fs.realpathSync(directories.make("client-update-"));
   const stateDir = path.join(root, "state-root");
   const pathname = path.join(stateDir, "state", "openclaw.sqlite");
@@ -207,11 +213,11 @@ async function fixture(engine: "sqlite" | "postgres", native = false, sourceVers
         ),
       );
     } else {
-      db.exec(
-        sourceVersion === 25
-          ? withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL)
-          : OPENCLAW_STATE_SCHEMA_SQL,
-      );
+      const indexedSchema =
+        sourceVersion < 27
+          ? withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL)
+          : OPENCLAW_STATE_SCHEMA_SQL;
+      db.exec(sourceVersion < 26 ? withLegacyStateHeadLayout(indexedSchema) : indexedSchema);
       db.exec(
         CLIENT_CREDENTIAL_SCHEMA_SQL.slice(
           0,
@@ -437,8 +443,12 @@ describe("client credential public update custody", () => {
       fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
       const legacyBytes = Buffer.from(`${JSON.stringify({ version: 1, ...retainedIdentity })}\n`);
       fs.writeFileSync(legacyPath, legacyBytes);
-      {
+      const sourceIdentity = (() => {
         using source = openNodeSqliteDatabase(f.pathname);
+        // This predecessor already completed the independent shared-auth relocation.
+        source
+          .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+          .run(SHARED_AUTH_STORE_STATE_KEY, JSON.stringify({ location: "state-db" }), 1);
         if (damage === "metadata") {
           source
             .prepare("UPDATE device_identities SET device_id=?,created_at_ms=-1,updated_at_ms=-1")
@@ -448,11 +458,14 @@ describe("client credential public update custody", () => {
             .prepare("UPDATE device_identities SET private_key_pem=?")
             .run(retainedIdentity.privateKeyPem);
         }
-      }
+        return source.prepare("SELECT * FROM device_identities").get();
+      })();
+      const captured = await capture(f);
       const maintenance = await beginDoctorMaintenance({
         root: null,
         options: { repair: true, nonInteractive: true },
         runtime: { log() {}, error() {}, exit() {} },
+        databaseGenerations: captured.backup.sourceGenerations,
       });
       expect(maintenance).toBeDefined();
       try {
@@ -465,7 +478,14 @@ describe("client credential public update custody", () => {
             legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
           }),
         );
-        expect(result.warnings).toEqual([]);
+        expect(
+          result.warnings,
+          JSON.stringify({
+            changes: result.changes,
+            stepReceipts: result.stepReceipts,
+            maintenanceWarnings: maintenance!.warnings,
+          }),
+        ).toEqual([]);
         expect(result.stepReceipts?.find((receipt) => receipt.id === "state-schema")).toMatchObject(
           {
             outcome: "completed",
@@ -474,10 +494,11 @@ describe("client credential public update custody", () => {
         expect(
           result.stepReceipts?.find((receipt) => receipt.id === "device-identity"),
         ).toMatchObject({ outcome: "completed" });
-        const repaired = runClientCredentialOperation(f.env, {
-          kind: "identity.read",
-          identity_key: "primary",
-        });
+        const repaired = runClientCredentialOperation(
+          f.env,
+          { kind: "identity.read", identity_key: "primary" },
+          { readOnly: true },
+        );
         if (repaired.kind !== "identity" || !repaired.identity) {
           throw new Error("Doctor did not leave a readable primary identity.");
         }
@@ -512,15 +533,37 @@ describe("client credential public update custody", () => {
             token: "synthetic-original-token",
           });
         }
+        await maintenance!.releaseState();
+        const writes = maintenance!.databaseWrites;
         expect(
-          fs
-            .readdirSync(path.dirname(f.pathname))
-            .some((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-")),
+          writes?.unchanged,
+          JSON.stringify({
+            warnings: maintenance!.warnings,
+            source: captured.backup.sourceGenerations,
+            writes,
+          }),
         ).toBe(true);
+        expect(
+          recordUpdateDatabaseWrites(captured.backup, writes, {
+            name: "candidate Doctor",
+            command: "doctor --fix",
+            cwd: f.root,
+            durationMs: 0,
+            exitCode: 0,
+          }),
+        ).toBeDefined();
+        expect(captured.backup.restoreRefusal).toBeUndefined();
       } finally {
         await maintenance!.release();
         await closeOpenClawStateDatabaseAsync();
       }
+      await rollback(f, captured);
+      {
+        using restored = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+        expect(restored.prepare("SELECT * FROM device_identities").get()).toEqual(sourceIdentity);
+      }
+      expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+      expect(fs.readFileSync(legacyPath)).toEqual(legacyBytes);
     },
   );
 
@@ -564,8 +607,8 @@ describe("client credential public update custody", () => {
     ).toMatchObject({ kind: "token", token: { token: "synthetic-original-token" } });
   });
 
-  it("captures and restores only the canonical v26 credential migration scope", async () => {
-    const f = await fixture("sqlite", false, 26);
+  it("captures and restores only the canonical v27 credential migration scope", async () => {
+    const f = await fixture("sqlite", false, 27);
     const sourceTables = [...credentialTables, "exec_approvals_config"];
     let original;
     {
@@ -590,7 +633,7 @@ describe("client credential public update custody", () => {
     const versionBackup = archives.find(({ inspection }) =>
       inspection.tables.some((table) => table.name === "schema_meta"),
     )!;
-    expect(versionBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 26 });
+    expect(versionBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 27 });
     expect(versionBackup.inspection.tables.map((table) => table.name)).toEqual(
       [
         ...sourceTables,
@@ -601,7 +644,7 @@ describe("client credential public update custody", () => {
       ].toSorted(),
     );
     const retirementBackup = archives.find((archive) => archive !== versionBackup)!;
-    expect(retirementBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 26 });
+    expect(retirementBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 27 });
     expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual([
       ...sourceTables,
       "sqlite_stat1",
@@ -619,7 +662,7 @@ describe("client credential public update custody", () => {
       env: f.env,
     });
     expect(await f.readShared()).toEqual({
-      version: 26,
+      version: 27,
       token: "synthetic-original-token",
       policy,
     });

@@ -72,7 +72,7 @@ it.each<{
 });
 
 it.each(
-  [24, 25, 26].flatMap((version) => [
+  [24, 25, 26, 27].flatMap((version) => [
     { version, profiles: false },
     { version, profiles: true },
   ]),
@@ -113,10 +113,23 @@ it.each(
         },
       ]);
     }
+    expect(
+      source
+        .prepare("PRAGMA index_info(idx_state_leases_owner)")
+        .all()
+        .map((row) => row.name),
+    ).toEqual(version < 27 ? ["owner", "updated_at"] : ["owner"]);
+    expect(
+      source
+        .prepare(`SELECT name FROM sqlite_schema WHERE name IN
+          ('idx_acp_replay_events_session_seq', 'idx_skill_usage_key') ORDER BY name`)
+        .all()
+        .map((row) => row.name),
+    ).toEqual(version < 27 ? ["idx_acp_replay_events_session_seq", "idx_skill_usage_key"] : []);
   },
 );
 it("retains the exact predecessor credential tables for PostgreSQL update recovery", async () => {
-  const predecessor = await loadStatePortDescriptor(26);
+  const predecessor = await loadStatePortDescriptor(27);
   const current = await loadStatePortDescriptor();
   const tables = ["device_identities", "device_auth_tokens", "gateway_origin_device_tokens"];
   const db = new DatabaseSync(":memory:");
@@ -147,7 +160,7 @@ it("retains the exact predecessor credential tables for PostgreSQL update recove
 
 it("captures only the credential retirement scope plus required schema metadata and statistics", () => {
   expect(
-    resolveSchemaMigrationBackupTables({ kind: "state", foundVersion: 26, supportedVersion: 27 }),
+    resolveSchemaMigrationBackupTables({ kind: "state", foundVersion: 27, supportedVersion: 28 }),
   ).toEqual([
     "config_machine_state",
     "device_auth_tokens",

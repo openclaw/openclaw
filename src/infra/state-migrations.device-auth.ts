@@ -23,7 +23,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
@@ -113,9 +112,7 @@ export async function migrateLegacyDeviceAuth(params: {
       try {
         const prior = readClientCredentialReceipt(owner.database);
         if (prior) {
-          runSqliteImmediateTransactionSync(owner.database, () =>
-            assertClientCredentialStoreReady(owner.database, env, false),
-          );
+          owner.transaction(() => assertClientCredentialStoreReady(owner.database, env, false));
           if (prior.receipt.legacyImports["auth:primary"]) {
             return {
               changes: [],
@@ -143,7 +140,7 @@ export async function migrateLegacyDeviceAuth(params: {
           throw new Error("Legacy device-auth store is invalid or unsupported.");
         }
         const store = parseStore(parsed);
-        counts = runSqliteImmediateTransactionSync(owner.database, () => {
+        counts = owner.transaction(() => {
           const db = owner.database;
           if (!readClientCredentialReceipt(db)) {
             if (readClientCredentialFileIdentity(resolveOpenClawStateSqlitePath(env))) {

@@ -27,7 +27,7 @@ import {
   createUpdateDatabaseBackup,
   createUpdateDatabaseBackupInProcess,
 } from "./update-database-backup.js";
-import * as databaseGenerations from "./update-database-generations.js";
+import * as databaseGenerations from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 

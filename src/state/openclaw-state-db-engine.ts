@@ -146,22 +146,22 @@ const statePostgresSchema = {
     };
   }),
 };
+// v27 has the current indexes and still owns the pre-cutover credential tables.
+const statePostgresSchemaV27 = {
+  ...statePostgresSchema,
+  postgres: `${runtime.eagerSql}\n${runtime.clientCredentialSource.sql}`,
+};
+
 // v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
 const statePostgresSchemaV26 = {
+  ...statePostgresSchemaV27,
   postgres:
-    runtime.eagerSql.replace(
+    statePostgresSchemaV27.postgres.replace(
       /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
       runtime.preWriteIndexesV27Sql.state_leases,
     ) +
     runtime.preWriteIndexesV27Sql.skill_usage +
     runtime.preWriteIndexesV27Sql.acp_replay_events,
-  postgresFragments: statePostgresSchema.postgresFragments,
-};
-
-// v24 through v26 share this PostgreSQL catalog; v27 retires the credential tables.
-const statePostgresV26 = {
-  ...statePostgresSchema,
-  postgres: `${runtime.eagerSql}\n${runtime.clientCredentialSource.sql}`,
 };
 
 export const stateEngineSchema: StoreSchema = {
@@ -195,7 +195,7 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 27,
       fromSchema: statePostgresSchemaV26,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV27,
       sql: `${runtime.writeIndexesV27Sql}
         UPDATE schema_meta
         SET schema_version = 27,
@@ -207,6 +207,12 @@ export const stateEngineSchema: StoreSchema = {
           CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
         ON CONFLICT (state_key) DO UPDATE
           SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+    {
+      version: 28,
+      fromSchema: statePostgresSchemaV27,
+      schema: statePostgresSchema,
+      sql: runtime.clientCredentialV28Sql,
     },
   ],
 };

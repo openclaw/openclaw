@@ -177,6 +177,7 @@ export function runUpdateSqliteMigration<T>(
   db: DatabaseSync,
   pathname: string,
   operation: () => T,
+  options?: { retainExclusive?: boolean },
 ): T {
   const context = captures.getStore();
   if (!context?.capture) {
@@ -201,7 +202,7 @@ export function runUpdateSqliteMigration<T>(
     {
       release() {
         try {
-          if (db.isOpen && mode !== "exclusive") {
+          if (db.isOpen && mode !== "exclusive" && !options?.retainExclusive) {
             if (db.isTransaction) {
               throw new Error("Update migration left its source transaction open.");
             }

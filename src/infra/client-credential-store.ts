@@ -35,6 +35,7 @@ import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "./sqlite-user-version.js";
 import { resolveDatabasePathKey } from "./sqlite-worker-identity.js";
+import { runUpdateSqliteMigration } from "./update-doctor-migration-attribution.js";
 export type {
   ClientTokenRecord,
   ClientSocketRecord,
@@ -83,6 +84,7 @@ export type ClientCredentialCustody = {
   database: DatabaseSync;
   path: string;
   created: boolean;
+  transaction<T>(operation: () => T): T;
   run(operation: ClientCredentialOperation, beforeCommit?: () => void): ClientCredentialResult;
   close(): void;
   [Symbol.dispose](): void;
@@ -194,8 +196,19 @@ export function openClientCredentialCustody(
         }
       }
     };
+    const transaction = <T>(operation: () => T): T => {
+      if (closed) {
+        throw new Error("Client credential custody is closed.");
+      }
+      return runUpdateSqliteMigration(
+        database,
+        pathname,
+        () => runSqliteImmediateTransactionSync(database, operation),
+        { retainExclusive: true },
+      );
+    };
     let initialized = false;
-    runSqliteImmediateTransactionSync(database, () => {
+    transaction(() => {
       // Acquire custody before retaining locks so competing openers can release their shared locks.
       database.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Retain owner custody across operation commits.
       if (!getSqliteDatabaseAdmission(database, schemaAdmission)) {
@@ -232,14 +245,12 @@ export function openClientCredentialCustody(
       database,
       path: pathname,
       created,
+      transaction,
       run(operation, beforeCommit) {
-        if (closed) {
-          throw new Error("Client credential custody is closed.");
-        }
         if (options.readOnly && isClientCredentialMutation(operation)) {
           throw new Error("Client credential custody is read-only.");
         }
-        return runSqliteImmediateTransactionSync(database, () => {
+        return transaction(() => {
           const result = performClientCredentialOperation(
             database,
             operation,

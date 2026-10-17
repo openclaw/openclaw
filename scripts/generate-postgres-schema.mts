@@ -365,9 +365,9 @@ export async function generatePostgresSchemas(
           "UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state.schema.contentVersion' AND value_json = '24';\n";
       }
       if (root === ROOT) {
-        files["state-v26-v27.postgres.sql"] =
-          "-- Generated v26-to-v27 publication after the local credential owner has verified and retired source rows.\n" +
-          "UPDATE schema_meta SET schema_version = 27 WHERE meta_key = 'primary' AND schema_version = 26;\n";
+        files["state-v27-v28.postgres.sql"] =
+          "-- Generated v27-to-v28 publication after the local credential owner has verified and retired source rows.\n" +
+          "UPDATE schema_meta SET schema_version = 28 WHERE meta_key = 'primary' AND schema_version = 27;\n";
       }
       if (!options.reportOnly) {
         files["runtime.ts"] = formatGeneratedModule(
@@ -377,7 +377,7 @@ export async function generatePostgresSchemas(
               operatorRecoveryV25Sql: files["state-v24-v25.postgres.sql"],
               preWriteIndexesV27Sql,
               writeIndexesV27Sql,
-              clientCredentialV27Sql: files["state-v26-v27.postgres.sql"],
+              clientCredentialV28Sql: files["state-v27-v28.postgres.sql"],
               clientCredentialSource: await generateClientCredentialSource(),
               fragments: manifest.map(({ file, ...fragment }) => ({
                 ...fragment,

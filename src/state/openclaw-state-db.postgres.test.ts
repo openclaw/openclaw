@@ -6,6 +6,7 @@ import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quarantineAgentDeletionJournal } from "../commands/doctor-agent-deletion-journal-quarantine.js";
+import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import {
   commitDaemonRuntimePin,
   readDaemonRuntimePin,
@@ -19,6 +20,7 @@ import { installDatabaseEngineSelection } from "../infra/database-engine/context
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -356,12 +358,21 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
     }
   });
 
-  it.each([25, 26])(
+  it.each([25, 26, 27])(
     "migrates version %i indexes while preserving heads, leases, lazy fragments and schema admission",
     async (previousVersion) => {
       const directory = tempDirs.make("state-layout-postgres-");
-      const pathname = path.join(directory, "state.sqlite");
-      const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+      const pathname = path.join(directory, "state", "openclaw.sqlite");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: directory,
+        OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
+      };
+      fs.writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ database: { engine: "postgres", postgres: { connection } } }),
+      );
+      const options = { path: pathname, env };
       const client = new pg.Client({ connectionString: connection });
       await client.connect();
       installDatabaseEngineSelection({
@@ -402,16 +413,44 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         );
         closeOpenClawStateDatabaseForTest();
         retireSqliteDatabaseAdmissionForPath(pathname);
-        // Restore the actual pre-v27 catalog before relabeling metadata.
+        // Every predecessor still owns credentials; pre-v27 also owns the old indexes.
         await client.query(`BEGIN;
         SET LOCAL search_path TO "${namespace}";
-        ${legacyWriteIndexesSql}
+        ${statePostgresRuntime.clientCredentialSource.sql}
+        ${previousVersion < 27 ? legacyWriteIndexesSql : ""}
         UPDATE schema_meta SET schema_version = ${previousVersion};
         UPDATE config_machine_state SET value_json = '${previousVersion}'
           WHERE state_key = 'state.schema.contentVersion';
         UPDATE openclaw_schema_meta
           SET version = ${previousVersion}, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
         COMMIT;`);
+        const lock = await acquireGatewayLock({
+          env,
+          allowInTests: true,
+          role: "sqlite-maintenance",
+          timeoutMs: 0,
+        });
+        expect(lock).not.toBeNull();
+        try {
+          const migration = await lock!.run(() =>
+            prepareDoctorDatabaseMigrations({
+              env,
+              databasePaths: [pathname],
+              pendingDatabasePaths: [pathname],
+              pendingMigrations: [
+                {
+                  kind: "state",
+                  path: pathname,
+                  foundVersion: previousVersion,
+                  supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+                },
+              ],
+            }),
+          );
+          expect(migration.warnings).toEqual([]);
+        } finally {
+          await lock!.release();
+        }
         withEngineStoreAdmission(() => {
           const upgraded = openOpenClawStateDatabase(options);
           expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(
@@ -489,7 +528,18 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
   );
 
   it("bootstraps, migrates authority metadata, retains lazy fragments, reuses admission and closes paired handles", async () => {
-    const pathname = path.join(tempDirs.make("state-postgres-"), "state.sqlite");
+    const directory = tempDirs.make("state-postgres-");
+    const pathname = path.join(directory, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: directory,
+      OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
+    };
+    fs.writeFileSync(
+      env.OPENCLAW_CONFIG_PATH,
+      JSON.stringify({ database: { engine: "postgres", postgres: { connection } } }),
+    );
     const run = async (mode: "bootstrap" | "restart" | "migrate") => {
       const anchor = openNodeSqliteDatabase(pathname);
       admitSqliteSchema(anchor);
@@ -506,6 +556,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           execArgv: resolveRuntimeWorkerThreadExecArgv(url),
           workerData: {
             path: pathname,
+            env,
             mode,
             admissions: captureSqliteDatabaseAdmissions(undefined, { location: pathname }),
           },
@@ -545,6 +596,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(cold.threadId).not.toBe(0);
       await client.query(`SET search_path = "${namespace}"`);
       await client.query(`BEGIN;
+        ${statePostgresRuntime.clientCredentialSource.sql}
         ${legacyWriteIndexesSql}
         UPDATE openclaw_schema_meta
           SET version = 24, fingerprint = NULL, ddl_hash = NULL, server_major = NULL

@@ -33,12 +33,12 @@ export async function loadStatePortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "state") {
       return backup;
     }
-    // v24→27 preserves columns; only metadata, SQLite head storage and indexes change.
+    // v24→27 preserves columns; v28 retires client credentials after owner verification.
     // Pin this shared catalog so future column changes need their own predecessor.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 27 ||
-      (sourceVersion !== 24 && sourceVersion !== 25 && sourceVersion !== 26)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 28 ||
+      (sourceVersion !== 24 && sourceVersion !== 25 && sourceVersion !== 26 && sourceVersion !== 27)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -147,26 +147,30 @@ export async function loadStatePortDescriptor(
       });
     },
   };
+  if (sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    return descriptor;
+  }
+  if (sourceVersion === 27) {
+    return { ...descriptor, inspectSqliteSource: undefined };
+  }
   const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
   const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;
-  return sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION
-    ? descriptor
-    : {
-        ...descriptor,
-        sqlite: sourceVersion < 26 ? withLegacyStateHeadLayout(historicalSqlite) : historicalSqlite,
-        postData:
-          descriptor.postData.replace(
-            /CREATE INDEX "idx_state_leases_owner"[^;]+;/u,
-            legacyIndexes.state_leases,
-          ) +
-          legacyIndexes.skill_usage +
-          legacyIndexes.acp_replay_events,
-        expectedCatalog: descriptor.expectedCatalog.map((fact) =>
-          fact.kind === "indexes" &&
-          (fact.table === "skill_usage" || fact.table === "acp_replay_events")
-            ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
-            : fact,
-        ),
-        inspectSqliteSource: undefined,
-      };
+  return {
+    ...descriptor,
+    sqlite: sourceVersion < 26 ? withLegacyStateHeadLayout(historicalSqlite) : historicalSqlite,
+    postData:
+      descriptor.postData.replace(
+        /CREATE INDEX "idx_state_leases_owner"[^;]+;/u,
+        legacyIndexes.state_leases,
+      ) +
+      legacyIndexes.skill_usage +
+      legacyIndexes.acp_replay_events,
+    expectedCatalog: descriptor.expectedCatalog.map((fact) =>
+      fact.kind === "indexes" &&
+      (fact.table === "skill_usage" || fact.table === "acp_replay_events")
+        ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
+        : fact,
+    ),
+    inspectSqliteSource: undefined,
+  };
 }

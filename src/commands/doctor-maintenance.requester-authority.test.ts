@@ -11,8 +11,8 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import {
   createManagedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,

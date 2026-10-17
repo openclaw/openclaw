@@ -1104,7 +1104,7 @@ agent database. Keep writers stopped while activating restored state.
 
 ### Client credential cutover rollback
 
-Before shared state schema 27, client private identities, cached tokens, and
+Before shared state schema 28, client private identities, cached tokens, and
 native socket material live in the shared database. An automatic rollback to
 that format restores the pre-upgrade shared database with those tables intact.
 The older app ignores `client/credentials.sqlite`; do not copy its newer rows
