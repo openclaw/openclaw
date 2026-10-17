@@ -1,4 +1,3 @@
-/** Deterministic lookup helpers for plugin-registered cloud-worker providers. */
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { WorkerProvider } from "./types.js";
