@@ -1,8 +1,4 @@
-import {
-  assertSyncTransactionResult,
-  assertPostgresTransactionUsable,
-  sqlPublicationAnchor,
-} from "../sql-connection.js";
+import { assertSyncTransactionResult, sqlPublicationAnchor } from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
@@ -22,7 +18,6 @@ export function runPostgresTransactionSync<T>(
   readOnly = false,
   reserved = false,
 ): T {
-  assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
   const anchor = sqlPublicationAnchor(db);
   return withSqlitePostCommitPublications(anchor, () => {
@@ -37,14 +32,19 @@ export function runPostgresTransactionSync<T>(
             : `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`,
         );
       }
+      const mutationRevision = db.mutationRevision;
       const result = operation();
       assertSyncTransactionResult(result);
-      assertPostgresTransactionUsable(db);
       if (nested) {
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {
         const scope = currentSqliteWorkerOperationAdmission.getStore();
-        if (!readOnly && scope?.active && !scope.owner.pendingReceipts?.has(anchor)) {
+        if (
+          !readOnly &&
+          scope?.active &&
+          db.mutationRevision !== mutationRevision &&
+          !scope.owner.pendingReceipts?.has(anchor)
+        ) {
           // A domain's staged receipt already settles this commit with its typed facts.
           deferSqliteWorkerCommitReceipt(anchor, {});
         }

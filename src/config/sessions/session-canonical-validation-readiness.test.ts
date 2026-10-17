@@ -29,6 +29,19 @@ import { hasPendingCanonicalSessionValidation } from "./session-canonical-valida
 
 afterEach(() => vi.restoreAllMocks());
 
+function observeWorker(
+  observe: (worker: ReturnType<typeof archiveWorker.createSqliteTranscriptArchiveWorker>) => void,
+) {
+  const create = archiveWorker.createSqliteTranscriptArchiveWorker;
+  return vi
+    .spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker")
+    .mockImplementation((data, locations) => {
+      const worker = create(data, locations);
+      observe(worker);
+      return worker;
+    });
+}
+
 function seedPendingRows(count: number, textBytes = 0, agentId = "main") {
   const options = { agentId };
   const database = openOpenClawAgentDatabase(options);
@@ -176,22 +189,17 @@ it("drains a large backlog in one retained worker while admitting foreground wri
       .all();
     const events: string[] = [];
     let foreground: Promise<void> | undefined;
-    const createWorker = archiveWorker.createSqliteTranscriptArchiveWorker;
-    const started = vi
-      .spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker")
-      .mockImplementation((data, nativeLocations) => {
-        const worker = createWorker(data, nativeLocations);
-        worker.on("message", (message: { type: string }) => {
-          if (message.type !== "reclaimed") {
-            return;
-          }
-          events.push("batch");
-          foreground ??= runOpenClawAgentWriteAdmission(options, () => {
-            events.push("foreground");
-          });
+    const started = observeWorker((worker) => {
+      worker.on("message", (message: { type: string }) => {
+        if (message.type !== "reclaimed") {
+          return;
+        }
+        events.push("batch");
+        foreground ??= runOpenClawAgentWriteAdmission(options, () => {
+          events.push("foreground");
         });
-        return worker;
       });
+    });
     await certifySessionCanonicalValidationPending(options);
     await foreground;
     expect(started).toHaveBeenCalledOnce();
@@ -218,31 +226,26 @@ it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
       }
       let changed = false;
       let markerRetainedAfterFirstBatch = false;
-      const createWorker = archiveWorker.createSqliteTranscriptArchiveWorker;
-      vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
-        (data, nativeLocations) => {
-          const worker = createWorker(data, nativeLocations);
-          worker.on("message", (message: { type: string }) => {
-            if (message.type === "admission-request" && !changed) {
-              if (change === "row changed") {
-                changed = true;
-                database.db.exec(
-                  "UPDATE session_nodes SET parent_session_key = 'agent:main:changed'",
-                );
-              } else if (change === "startup revoked") {
-                changed = true;
-              }
-            } else if (message.type === "reclaimed") {
-              if (change === "row changed") {
-                markerRetainedAfterFirstBatch = hasPendingCanonicalSessionValidation(database);
-              } else if (change === "receipt revoked") {
-                invalidateOpenClawAgentDatabaseValidation(database.path);
-              }
+      observeWorker((worker) => {
+        worker.on("message", (message: { type: string }) => {
+          if (message.type === "admission-request" && !changed) {
+            if (change === "row changed") {
+              changed = true;
+              database.db.exec(
+                "UPDATE session_nodes SET parent_session_key = 'agent:main:changed'",
+              );
+            } else if (change === "startup revoked") {
+              changed = true;
             }
-          });
-          return worker;
-        },
-      );
+          } else if (message.type === "reclaimed") {
+            if (change === "row changed") {
+              markerRetainedAfterFirstBatch = hasPendingCanonicalSessionValidation(database);
+            } else if (change === "receipt revoked") {
+              invalidateOpenClawAgentDatabaseValidation(database.path);
+            }
+          }
+        });
+      });
       const assertCurrentOwner =
         change === "startup revoked"
           ? () => {
@@ -341,26 +344,21 @@ it("shares active runtime certification without retaining success or failure", a
     let holdNext = false;
     let resume: (() => void) | undefined;
     const jobs = vi.fn();
-    const createWorker = archiveWorker.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
-      (data, nativeLocations) => {
-        const worker = createWorker(data, nativeLocations);
-        const post = worker.postMessage.bind(worker);
-        vi.spyOn(worker, "postMessage").mockImplementation((message: unknown, ...args) => {
-          if (isRecord(message) && message.type === "canonical-validation") {
-            jobs();
-            if (holdNext) {
-              holdNext = false;
-              resume = () => post(message, ...args);
-              entered.resolve();
-              return;
-            }
+    observeWorker((worker) => {
+      const post = worker.postMessage.bind(worker);
+      vi.spyOn(worker, "postMessage").mockImplementation((message: unknown, ...args) => {
+        if (isRecord(message) && message.type === "canonical-validation") {
+          jobs();
+          if (holdNext) {
+            holdNext = false;
+            resume = () => post(message, ...args);
+            entered.resolve();
+            return;
           }
-          post(message, ...args);
-        });
-        return worker;
-      },
-    );
+        }
+        post(message, ...args);
+      });
+    });
     await certifySessionCanonicalValidationPending(options);
     jobs.mockClear();
     const dirty = () => {

@@ -139,11 +139,11 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("install")
     .description(
-      "Install a plugin or hook pack (path, archive, npm spec, git repo, clawhub:package, or marketplace entry)",
+      "Install a plugin or hook pack (ClawHub by default; npm:, git:, path, archive, or marketplace)",
     )
     .argument(
       "<path-or-spec-or-plugin>",
-      "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
+      "ClawHub package (optional @version/tag), npm:package, path/archive, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
     .option(

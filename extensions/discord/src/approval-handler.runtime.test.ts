@@ -4,7 +4,8 @@ import { createChannelApprovalHandlerFromCapability } from "openclaw/plugin-sdk/
 import { describe, expect, it, vi } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
-import { Container, parseCustomId } from "./internal/discord.js";
+import { parseCustomId } from "./internal/components.base.js";
+import { Container } from "./internal/components.message.js";
 
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
   const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({

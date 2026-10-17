@@ -21,6 +21,7 @@ import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import {
   renderChildSessionLoadError,
+  renderPendingSessionCreateRow,
   renderSessionTree as SessionTree,
   renderSidebarSessionIndicators,
 } from "./app-sidebar-session-row-render.tsx";
@@ -391,6 +392,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                     </span>
                   </div>
                   <Show when={!isCollapsed()}>
+                    {renderPendingSessionCreateRow(roster.host, card().id)}
                     <For each={homeLoadKeys()}>
                       {(key) => renderChildSessionLoadError(roster.host(), key)}
                     </For>

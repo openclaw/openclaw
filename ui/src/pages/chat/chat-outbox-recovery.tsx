@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -87,21 +87,20 @@ function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
   });
   createEffect(
     () => ({ host: props.host, identity: props.identity, messages: props.messages }),
-    (current, previous) =>
-      // Only captured inputs trigger refresh; sample stored rows without subscribing.
-      untrack(() => {
-        const awaitsProof =
-          previous?.messages !== current.messages &&
-          entries().some((entry) => entry.session.queue?.some((item) => item.sendRunId));
-        if (
-          !previous ||
-          previous.identity !== current.identity ||
-          previous.host !== current.host ||
-          awaitsProof
-        ) {
-          void refresh();
-        }
-      }),
+    // Reconcile durable outbox/draft storage when its owner or delivery receipts change.
+    (current, previous) => {
+      const awaitsProof =
+        previous?.messages !== current.messages &&
+        entries().some((entry) => entry.session.queue?.some((item) => item.sendRunId));
+      if (
+        !previous ||
+        previous.identity !== current.identity ||
+        previous.host !== current.host ||
+        awaitsProof
+      ) {
+        void refresh();
+      }
+    },
   );
   async function refresh() {
     if (!active) {

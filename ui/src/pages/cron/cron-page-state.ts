@@ -41,6 +41,7 @@ import {
   subscribeModelCatalogCache,
 } from "../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import {
   createDeliveryConversations,
@@ -219,12 +220,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         ensureInitialData();
       }
     });
-    document.addEventListener("visibilitychange", onActivation);
-    globalThis.addEventListener("focus", onActivation);
+    const stopVisibility = listen(document, "visibilitychange", onActivation);
+    const stopFocus = listen(globalThis, "focus", onActivation);
     return () => {
       active = false;
-      document.removeEventListener("visibilitychange", onActivation);
-      globalThis.removeEventListener("focus", onActivation);
+      stopVisibility();
+      stopFocus();
       cleanups.splice(0).forEach((stop) => stop());
       gateway.dispose();
       stopModelSuggestions?.();
@@ -722,6 +723,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       }),
     onViewRunTranscript: (entry, trigger) => void runTranscript.open(entry, trigger),
   } satisfies Pick<CronProps, Extract<keyof CronProps, `on${string}`>>;
+  // Commit the cron owner's pending scroll/focus requests to the rendered DOM.
   createEffect(projection.revision, afterRender);
   return {
     context,

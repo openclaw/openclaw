@@ -1,9 +1,10 @@
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { refreshCodexPluginRuntimeState } from "./app-server/plugin-activation.js";
 import { defaultCodexPluginMetadataCache } from "./app-server/plugin-metadata-cache.js";
-import type { v2 } from "./app-server/protocol.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
@@ -49,20 +50,23 @@ import {
   detachConversation,
   resumeThread,
 } from "./command-handler-bindings.js";
-import {
-  CODEX_CONTROL_METHODS,
-  resolveCodexCommandDeps,
-  type CodexCommandDepsOverride,
-} from "./command-handler-deps.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 import {
   resolveCodexConversationControlScope,
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
-import { readCodexConversationBindingData } from "./conversation-binding-data.js";
-
-export type { CodexCommandDepsOverride } from "./command-handler-deps.js";
+import {
+  codexControlRequest,
+  readCodexStatusProbes,
+  requestOptions,
+  safeCodexControlRequest,
+} from "./command-rpc.js";
+import {
+  readCodexConversationBindingData,
+  resolveCodexDefaultWorkspaceDir,
+} from "./conversation-binding-data.js";
 
 const CODEX_HOST_INSPECTION_SUBCOMMANDS = new Set([
   "account",
@@ -75,9 +79,9 @@ const CODEX_HOST_INSPECTION_SUBCOMMANDS = new Set([
 
 export async function handleCodexSubcommand(
   inputCtx: CodexCommandContext,
-  options: { pluginConfig?: unknown; deps: CodexCommandDepsOverride },
+  options: { pluginConfig?: unknown; deps: CodexCommandDeps },
 ): Promise<PluginCommandResult> {
-  const deps = resolveCodexCommandDeps(options.deps);
+  const { deps } = options;
   const args = splitArgs(inputCtx.args);
   if (args.length === 0) {
     return buildCodexSubcommandPickerReply();
@@ -163,20 +167,20 @@ export async function handleCodexSubcommand(
           const data = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
           const workspaceDir =
             data?.kind === "codex-app-server-session" ? data.workspaceDir : undefined;
-          return workspaceDir?.trim() || deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
+          return workspaceDir?.trim() || resolveCodexDefaultWorkspaceDir(pluginConfig);
         },
         list: async (requestParams) => {
           const scope = await getAppServerScope();
-          return (await deps.codexControlRequest(
+          return await codexControlRequest(
             pluginConfig,
             CODEX_CONTROL_METHODS.listPlugins,
             requestParams,
             { ...scope, config: ctx.config },
-          )) as v2.PluginListResponse;
+          );
         },
         install: async (requestParams) => {
           const scope = await getAppServerScope();
-          return (await deps.codexControlRequest(
+          return await codexControlRequest(
             pluginConfig,
             CODEX_CONTROL_METHODS.installPlugin,
             requestParams,
@@ -185,7 +189,7 @@ export async function handleCodexSubcommand(
               config: ctx.config,
               assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
             },
-          )) as v2.PluginInstallResponse;
+          );
         },
         refresh: (workspaceDir) =>
           withCodexPluginCommandContext({ deps, ctx, pluginConfig }, (context) =>
@@ -202,17 +206,15 @@ export async function handleCodexSubcommand(
     if (normalized === "status") {
       const { agentDir } = resolveCodexConversationControlScope(ctx);
       return {
-        text: formatCodexStatus(
-          await deps.readCodexStatusProbes(pluginConfig, ctx.config, agentDir),
-        ),
+        text: formatCodexStatus(await readCodexStatusProbes(pluginConfig, ctx.config, agentDir)),
       };
     }
     if (normalized === "models") {
       const { agentDir } = resolveCodexConversationControlScope(ctx);
       return {
         text: formatModels(
-          await deps.listCodexAppServerModels(
-            deps.requestOptions(pluginConfig, 100, ctx.config, agentDir),
+          await listAllCodexAppServerModels(
+            requestOptions(pluginConfig, 100, ctx.config, agentDir),
           ),
         ),
       };
@@ -261,13 +263,13 @@ export async function handleCodexSubcommand(
         return buildCodexChoiceMenuReply("computer-use");
       }
       return {
-        text: await handleComputerUseCommand(deps, ctx, pluginConfig, rest),
+        text: await handleComputerUseCommand(ctx, pluginConfig, rest),
       };
     }
     if (normalized === "mcp" || normalized === "skills") {
       const scope = await resolveCommandAppServerScope(deps, ctx, pluginConfig);
       using _ = { [Symbol.dispose]: scope.release };
-      const response = await deps.codexControlRequest(
+      const response = await codexControlRequest(
         pluginConfig,
         normalized === "mcp"
           ? CODEX_CONTROL_METHODS.listMcpServers
@@ -284,13 +286,13 @@ export async function handleCodexSubcommand(
       using _ = { [Symbol.dispose]: scope.release };
       const requestScope = { config: ctx.config, ...scope };
       const [account, limits] = await Promise.all([
-        deps.safeCodexControlRequest(
+        safeCodexControlRequest(
           pluginConfig,
           CODEX_CONTROL_METHODS.account,
           { refreshToken: false },
           requestScope,
         ),
-        deps.safeCodexControlRequest(
+        safeCodexControlRequest(
           pluginConfig,
           CODEX_CONTROL_METHODS.rateLimits,
           undefined,
@@ -306,7 +308,6 @@ export async function handleCodexSubcommand(
             agentDir: scope.agentDir,
             authProfileId: scope.authProfileId,
             pluginConfig,
-            safeCodexControlRequest: deps.safeCodexControlRequest,
             account,
             limits,
           }),

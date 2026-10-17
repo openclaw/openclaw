@@ -23,6 +23,7 @@ import { log } from "../logger.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
+import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
@@ -252,6 +253,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     : null;
   assertActiveRun();
   const pluginWorkspace = placement?.workspace;
+  const continuationRetryCount = createAttemptContinuationRetryCount(
+    params,
+    runtime,
+    { sessionId, agentDir },
+    assertActiveRun,
+  );
   const promptMedia = pluginWorkspace
     ? await prepareEmbeddedAttemptPromptExecution({
         attempt: { ...params, model: effectiveModel },
@@ -672,6 +679,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       sessionPromptState.activePrompt.persisted = false;
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    ...continuationRetryCount.capability,
   };
   let rawAttempt: EmbeddedRunAttemptResult;
   try {
@@ -708,6 +716,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   if (pluginWorkspace?.sandboxRuntime) {
     rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }
+  continuationRetryCount.applyTo(rawAttempt);
   return {
     dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },
     runtimePlan,

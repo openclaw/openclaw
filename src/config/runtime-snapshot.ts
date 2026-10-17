@@ -9,11 +9,6 @@ import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
-import { getScopedConfigSnapshotPreparation } from "./io.snapshot-preparation-scope.js";
-import type {
-  CapturedConfigSnapshotPreparation,
-  ConfigSnapshotPreparation,
-} from "./io.snapshot-preparation.types.js";
 import {
   cloneConfigWithResolutionFacts,
   copyConfigResolutionFacts,
@@ -152,7 +147,6 @@ const managedRuntimeConfigWriteOwners = new Map<
   Set<{
     id: symbol;
     preflight?: ManagedRuntimeConfigWritePreflight;
-    prepareSnapshot?: ConfigSnapshotPreparation;
   }>
 >();
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
@@ -506,9 +500,8 @@ export function registerRuntimeConfigWriteListener(
 export function registerManagedRuntimeConfigWriteOwner(
   configPath: string,
   preflight?: ManagedRuntimeConfigWritePreflight,
-  prepareSnapshot?: ConfigSnapshotPreparation,
 ): (() => void) & { ownerId: symbol } {
-  const owner = { id: Symbol("managed-runtime-config-write-owner"), preflight, prepareSnapshot };
+  const owner = { id: Symbol("managed-runtime-config-write-owner"), preflight };
   const owners = managedRuntimeConfigWriteOwners.get(configPath) ?? new Set();
   owners.add(owner);
   managedRuntimeConfigWriteOwners.set(configPath, owners);
@@ -520,39 +513,6 @@ export function registerManagedRuntimeConfigWriteOwner(
     }
   };
   return Object.assign(unregister, { ownerId: owner.id });
-}
-
-/** A read retains one exact host owner; release cannot redirect it to a replacement. */
-export function captureManagedConfigSnapshotPreparation(
-  configPath: string,
-): CapturedConfigSnapshotPreparation | null {
-  const scoped = getScopedConfigSnapshotPreparation(configPath);
-  const owner = [...(managedRuntimeConfigWriteOwners.get(configPath) ?? [])].find(
-    (candidate) => candidate.prepareSnapshot,
-  );
-  const prepare = scoped?.prepare ?? owner?.prepareSnapshot;
-  if (!prepare) {
-    return null;
-  }
-  const isCurrent =
-    scoped?.isCurrent ??
-    (() => Boolean(owner && managedRuntimeConfigWriteOwners.get(configPath)?.has(owner)));
-  const assertCurrent = () => {
-    if (!isCurrent()) {
-      throw new Error("Gateway config snapshot preparation owner has closed");
-    }
-  };
-  const run = async <T>(
-    operation: (prepare: ConfigSnapshotPreparation) => Promise<T>,
-  ): Promise<T> => {
-    assertCurrent();
-    try {
-      return await operation(prepare);
-    } finally {
-      assertCurrent();
-    }
-  };
-  return Object.assign(run, { assertCurrent });
 }
 
 export async function preflightManagedRuntimeConfigWrite(

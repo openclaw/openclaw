@@ -41,6 +41,7 @@ function estimateRelayEventBytes(event: GatewayRelayEvent): number {
   return JSON.stringify(event).length * 2;
 }
 
+// Owns the Gateway event subscription and browser media; stopLocal releases both.
 export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly input = this.ctx.input;
   private inputContext: AudioContext | null = null;

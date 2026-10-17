@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
+import { injectCodexHistoryDelta } from "./context-engine-history.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -588,6 +589,12 @@ export async function startOrResumeThread(
         });
         if (warmReuse.kind === "ready") {
           cleanupWarmBinding = warmReuse.cleanupOnFailure;
+          await injectCodexHistoryDelta(params, {
+            thread: warmReuse.binding,
+            context: requestContext,
+            bindingIdentity,
+            authority,
+          });
           return publishCodexThreadInferenceBinding(params, warmReuse.binding, true);
         }
         if (incognito || warmReuse.kind === "rotate") {
@@ -617,6 +624,12 @@ export async function startOrResumeThread(
             },
           });
           if (resumed) {
+            await injectCodexHistoryDelta(params, {
+              thread: resumed,
+              context: requestContext,
+              bindingIdentity,
+              authority,
+            });
             return publishCodexThreadInferenceBinding(params, resumed);
           }
         }

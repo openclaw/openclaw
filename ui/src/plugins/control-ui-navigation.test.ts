@@ -75,7 +75,13 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
       return Reflect.get(target, key, receiver);
     },
   });
-  mountSolid(() => menuView.render(), { container: menuRoot });
+  mountSolid(
+    () => {
+      controller.catalogMenuView = controller.catalogMenu.createView(controller.host);
+      return menuView.render();
+    },
+    { container: menuRoot },
+  );
   const [parent, pinned, plain] = contributions;
   const links = [
     parent!.querySelector("a")!,

@@ -111,6 +111,7 @@ import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
 import { registerCodexUsageLimitTests } from "./run-attempt.usage-limits.test-support.js";
+import { registerCodexWorkspacePolicyTests } from "./run-attempt.workspace-policy.test-support.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -3545,39 +3546,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
-  it("applies the session permission mode and root to resumed harness turns", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const nestedCwd = path.join(workspaceDir, "packages", "app");
-    await fs.mkdir(nestedCwd, { recursive: true });
-    await writeExistingBinding(sessionFile, workspaceDir);
-    const harness = createResumeHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.cwd = nestedCwd;
-    params.permissionMode = "full";
-    params.sessionRoot = workspaceDir;
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "guardian" } },
-    });
-    await awaitGateBeforeSettlement(
-      harness.waitForMethod("turn/start"),
-      run,
-      "Codex attempt settled before turn/start",
-    );
-    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-    await run;
-    const resumeParams = harness.requests.find((request) => request.method === "thread/resume")
-      ?.params as Record<string, unknown> | undefined;
-    const turnParams = harness.requests.find((request) => request.method === "turn/start")
-      ?.params as Record<string, unknown> | undefined;
-    expect(resumeParams?.cwd).toBe(nestedCwd);
-    expect(resumeParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
-    expect(resumeParams?.approvalPolicy).toBe("never");
-    expect(resumeParams?.sandbox).toBe("danger-full-access");
-    expect(turnParams?.cwd).toBe(nestedCwd);
-    expect(turnParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
-    expect(turnParams?.approvalPolicy).toBe("never");
-    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
-  });
+  registerCodexWorkspacePolicyTests({ createRunPaths, writeExistingBinding });
+
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, {

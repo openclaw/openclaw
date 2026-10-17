@@ -583,10 +583,20 @@ change `updateAdmissionProtocol: 1` or its comparison rules. An absent field mea
 the installed driver checks the selected package or Git target for `postgres`
 before mutation. A target that lacks it is refused with `database-engine-preflight`:
 reverse-port to SQLite with the current compatible binary before updating, or
-stay on the current version. See [Database engines](/reference/database-engines);
-the port command remains disabled until its release prerequisites are met.
+stay on the current version. See [Database engines](/reference/database-engines).
 SQLite-only installations keep the existing admission path and do not require
 the field. Candidate admission cannot override this installed-driver protection.
+
+Targets also declare supported PostgreSQL families in
+`openclaw.postgresFamilies`. Mixed installations and explicit family overrides
+require the candidate's existing admission checks to accept the complete family
+selection before mutation; `databaseEngines: ["postgres"]` alone is insufficient.
+Preflight uses the effective shared-state engine for registry and plugin facts,
+and each agent store's physical engine for its schema inspection, including
+retained stores and disabled plugins. Updates preserve the default and family
+overrides; they never implicitly port a family. `openclaw update --dry-run`
+previews the flow using installed checks; it does not stage a package or run
+candidate admission, so candidate family compatibility remains pending.
 
 | Owner                                | Checks and operations                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -655,6 +665,14 @@ updater that refuses before staging cannot use a newer candidate's judgment;
 follow the recovery guidance for that installed release first.
 
 ## Database capture and recovery
+
+Candidate SQLite migrations use whole-database `quick_check`, full integrity
+checks of rewritten or re-indexed tables, and foreign-key checks by default.
+Use `openclaw update --full-integrity-check` for a full check of every table and
+index during migration. The default can miss index/table mismatches in untouched
+tables. An older installed updater keeps its own checks until candidate code
+runs and does not recognize the new flag. See
+[migration integrity checks](/install/updating#migration-integrity-checks).
 
 Updates preserve each store's physical engine. Before database mutation, the
 installed updater keeps the existing exact SQLite captures and captures each
@@ -837,6 +855,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                   |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                               |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                 |
+| `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                            |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`
@@ -849,8 +868,10 @@ updater's managed restart. The running Gateway restarts itself when its watcher
 detects the replaced installation, because the old runtime can lose required
 chunks during the package swap. Before publication, the updater prints this
 warning and includes it in JSON update history. It checks the observed Gateway
-version without waiting for startup; unavailable readiness or a version that has
-not switched yet leaves the package update successful with a warning. State
+version and, when available, the expected build ID without waiting for startup.
+A same-version Gateway on a different build is not verified as the replacement.
+Unavailable readiness or an identity that has not switched yet leaves the package
+update successful with a warning. State
 verification blocked by another process or handed off to the newer schema is
 deferred to the candidate. Keep recovery backups and run `openclaw update status`
 and `openclaw doctor` after startup completes. Unrelated update failures retain

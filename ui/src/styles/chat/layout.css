@@ -1804,7 +1804,6 @@ openclaw-chat-video-player {
   min-width: 0;
   margin: 0;
   border: 1px solid var(--border);
-  background: var(--task-suggestion-card-bg);
   color: var(--text);
   font: 11px/1.4 var(--mono);
   white-space: pre-wrap;

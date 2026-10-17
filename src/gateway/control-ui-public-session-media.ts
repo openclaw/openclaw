@@ -108,9 +108,7 @@ export async function serveControlUiPublicSessionMedia(params: {
         if (!message || getPublicSessionEntryId(message) !== entryId) {
           return null;
         }
-        const bytes = await readPublicSessionAttachment(message, attachmentId, locator);
-        const mime = bytes ? await detectMime({ buffer: bytes }) : undefined;
-        return mime && PUBLIC_IMAGE_TYPES.has(mime) ? bytes : null;
+        return await readPublicSessionAttachment(message, attachmentId, locator);
       },
     });
     if (result.kind !== "ok") {

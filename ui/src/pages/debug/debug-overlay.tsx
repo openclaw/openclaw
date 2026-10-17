@@ -27,6 +27,7 @@ type Props = {
 type Methods = { open(mode: DebugOverlayMode): void; toggle(): void };
 
 function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
+  // A bridge's provider ancestry is fixed for this renderer lifetime.
   const inherited = untrack(() => props.context) ? undefined : useApplication();
   const close = () => {
     host.mode = "closed";
@@ -98,6 +99,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       close();
     }
   };
+  // The overlay mode owns its lazy-module request and document Escape handler.
   createEffect(
     () => ({ mode: props.mode, key: props.contentKey, loaded: Boolean(Content()) }),
     (current, previous) => {

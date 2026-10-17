@@ -185,21 +185,19 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   query(sql: string, parameters: readonly SQLInputValue[] = [], readBigInts = false) {
     return observeDatabaseOperation("postgres", "statement", sql, () =>
-      this.execute(sql, parameters, readBigInts),
+      this.execute(rewritePostgresPlaceholders(sql), parameters, readBigInts),
     );
   }
 
   private execute(sql: string, parameters: readonly SQLInputValue[], readBigInts: boolean) {
-    this.assertOpen();
     validatePostgresBindings(parameters);
-    const rewrittenSql = rewritePostgresPlaceholders(sql);
     const wasTransaction = this.isTransaction;
     // A later statement in a combined BEGIN request can fail after BEGIN succeeded.
     if (/^\s*BEGIN\b/i.test(sql)) {
       this.isTransaction = true;
     }
     const result = this.request(
-      { operation: "query", sql: rewrittenSql, parameters },
+      { operation: "query", sql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
@@ -241,11 +239,13 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   prepare(sql: string): SqlStatement {
     this.assertOpen();
-    rewritePostgresPlaceholders(sql);
+    const rewrittenSql = rewritePostgresPlaceholders(sql);
     let readBigInts = false;
     let columns: { name: string }[] = [];
     const execute = (parameters: SQLInputValue[]) => {
-      const result = this.query(sql, parameters, readBigInts);
+      const result = observeDatabaseOperation("postgres", "statement", sql, () =>
+        this.execute(rewrittenSql, parameters, readBigInts),
+      );
       columns = result.columns;
       return result;
     };

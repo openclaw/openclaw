@@ -38,9 +38,11 @@ const configured: unknown = getEnvironmentData("openclaw.test.workboard.connecti
 const connection = typeof configured === "string" ? configured : undefined;
 const prefix = `mempublic_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
 const keywordDatabase = `${prefix}_keyword`;
+const noTrigramDatabase = `${prefix}_no_trigram`;
+const noUnaccentDatabase = `${prefix}_no_unaccent`;
 const providerId = "postgres-memory-fixture";
 let root: string;
-let keywordRoot: string | undefined;
+const capabilityRoots: string[] = [];
 let workspace: string;
 let client: pg.Client;
 let runtime: MemoryPluginRuntime;
@@ -61,8 +63,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       if (root) {
         await cleanupSessionStateForTest({ stateDir: root });
       }
-      if (keywordRoot) {
-        await cleanupSessionStateForTest({ stateDir: keywordRoot });
+      for (const stateDir of capabilityRoots) {
+        await cleanupSessionStateForTest({ stateDir });
       }
       const schemas = await client.query<{ nspname: string }>(
         "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
@@ -72,6 +74,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
       }
       await client.query(`DROP DATABASE IF EXISTS "${keywordDatabase}" WITH (FORCE)`);
+      await client.query(`DROP DATABASE IF EXISTS "${noTrigramDatabase}" WITH (FORCE)`);
+      await client.query(`DROP DATABASE IF EXISTS "${noUnaccentDatabase}" WITH (FORCE)`);
     } finally {
       await client?.end();
       for (const anchor of stateAnchors) {
@@ -140,6 +144,25 @@ function admitStateAnchor(stateRoot: string) {
   stateAnchors.push(anchor);
 }
 
+async function selectCapabilityDatabase(name: string) {
+  await runtime.closeAllMemorySearchManagers?.();
+  await cleanupSessionStateForTest({ stateDir: capabilityRoots.at(-1) ?? root });
+  const stateRoot = tempDirs.make("memory-public-capability-postgres-");
+  capabilityRoots.push(stateRoot);
+  await fs.mkdir(path.join(stateRoot, "state"));
+  await fs.writeFile(path.join(stateRoot, "state", "openclaw.sqlite"), "", { flag: "wx" });
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateRoot, "openclaw.json"));
+  const url = new URL(connection!);
+  url.pathname = `/${name}`;
+  resetDatabaseEngineSelectionForTest();
+  installDatabaseEngineSelection({
+    effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+    postgres: { connection: url.href, schemaPrefix: prefix },
+  });
+  admitStateAnchor(stateRoot);
+}
+
 describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
   beforeEach(() => {
     registerEmbeddingProvider({
@@ -183,15 +206,27 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
     await client.query("CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public");
     await client.query("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public");
     admitStateAnchor(root);
-    await client.query(`CREATE DATABASE "${keywordDatabase}"`);
-    const keywordUrl = new URL(connection!);
-    keywordUrl.pathname = `/${keywordDatabase}`;
-    const keywordClient = new pg.Client({ connectionString: keywordUrl.href });
-    await keywordClient.connect();
-    try {
-      await keywordClient.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
-    } finally {
-      await keywordClient.end();
+    await client.query(`CREATE DATABASE "${keywordDatabase}" TEMPLATE template0`);
+    await client.query(`CREATE DATABASE "${noTrigramDatabase}" TEMPLATE template0`);
+    await client.query(`CREATE DATABASE "${noUnaccentDatabase}" TEMPLATE template0`);
+    for (const database of [keywordDatabase, noTrigramDatabase, noUnaccentDatabase]) {
+      const url = new URL(connection!);
+      url.pathname = `/${database}`;
+      const capabilityClient = new pg.Client({ connectionString: url.href });
+      await capabilityClient.connect();
+      try {
+        if (database !== noUnaccentDatabase) {
+          await capabilityClient.query("CREATE EXTENSION unaccent WITH SCHEMA public");
+        }
+        if (database !== noTrigramDatabase) {
+          await capabilityClient.query("CREATE EXTENSION pg_trgm WITH SCHEMA public");
+        }
+        if (database !== keywordDatabase) {
+          await capabilityClient.query("CREATE EXTENSION vector WITH SCHEMA public");
+        }
+      } finally {
+        await capabilityClient.end();
+      }
     }
     const { createMemoryRuntime } = await vi.importActual<{
       createMemoryRuntime: (host: MemoryCliHost) => MemoryPluginRuntime;
@@ -278,21 +313,7 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
   });
 
   it("serves explicit keyword-only memory without pgvector and rejects semantic bootstrap by name", async () => {
-    await runtime.closeAllMemorySearchManagers?.();
-    await cleanupSessionStateForTest({ stateDir: root });
-    keywordRoot = tempDirs.make("memory-public-keyword-postgres-");
-    await fs.mkdir(path.join(keywordRoot, "state"));
-    await fs.writeFile(path.join(keywordRoot, "state", "openclaw.sqlite"), "", { flag: "wx" });
-    vi.stubEnv("OPENCLAW_STATE_DIR", keywordRoot);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(keywordRoot, "openclaw.json"));
-    const keywordUrl = new URL(connection!);
-    keywordUrl.pathname = `/${keywordDatabase}`;
-    resetDatabaseEngineSelectionForTest();
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: keywordUrl.href, schemaPrefix: prefix },
-    });
-    admitStateAnchor(keywordRoot);
+    await selectCapabilityDatabase(keywordDatabase);
     const keywordConfig = config();
     keywordConfig.memory!.search!.provider = "none";
     const keyword = await managerFor(keywordConfig);
@@ -316,5 +337,31 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
       code: "DATABASE_SEARCH_CAPABILITY_UNAVAILABLE",
       message: expect.stringMatching(/CREATE EXTENSION.*vector/),
     });
+  });
+
+  it("refuses configured trigram search without pg_trgm and names the administrator action", async () => {
+    await selectCapabilityDatabase(noTrigramDatabase);
+    const cfg = config();
+    cfg.agents!.entries!.trigram = { workspace };
+    cfg.memory!.search!.provider = "none";
+    cfg.memory!.search!.store = { fts: { tokenizer: "trigram" } };
+    await expect(
+      (async () => {
+        const manager = await managerFor(cfg, "cli", "trigram");
+        await manager.search("sapphire");
+      })(),
+    ).rejects.toThrow(/PostgreSQL pg_trgm capability unavailable.*CREATE EXTENSION/);
+  });
+
+  it("refuses full-text admission without unaccent and names the administrator action", async () => {
+    await selectCapabilityDatabase(noUnaccentDatabase);
+    const cfg = config();
+    cfg.memory!.search!.provider = "none";
+    await expect(
+      (async () => {
+        const manager = await managerFor(cfg);
+        await manager.search("sapphire");
+      })(),
+    ).rejects.toThrow(/PostgreSQL unaccent capability unavailable.*CREATE EXTENSION/);
   });
 });

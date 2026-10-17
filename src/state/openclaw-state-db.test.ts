@@ -2146,6 +2146,7 @@ describe("openclaw state database", () => {
       { kind: "meeting-transcript-start-time", path: seeded.databasePath },
       { kind: "task-run-indexes-v24", path: seeded.databasePath },
       { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
+      { kind: "session-state-head-layout-v26", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
@@ -2758,33 +2759,40 @@ describe("openclaw state database", () => {
     expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
   });
 
-  it("rejects unrelated current-schema index corruption before exposure", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    createUnsafeIndexDrift(databasePath);
+  it.each([false, true])(
+    "repairs current-schema index corruption (recorded failure: %s)",
+    (recordedFailure) => {
+      const stateDir = createTempStateDir();
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      createUnsafeIndexDrift(databasePath);
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(
-      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-    );
-    const checkpointCallback = vi.fn();
-    expect(() =>
-      withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
-    ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
-    expect(checkpointCallback).not.toHaveBeenCalled();
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [
-        expect.stringContaining("Saved pre-repair SQLite backup:"),
-        expect.stringContaining(
-          "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
-        ),
-      ],
-      warnings: [],
-    });
-    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
-    });
-  });
+      if (recordedFailure) {
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+        );
+        const checkpointCallback = vi.fn();
+        expect(() =>
+          withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+        ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
+        expect(checkpointCallback).not.toHaveBeenCalled();
+      }
+      expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+        changes: [
+          expect.stringContaining("Saved pre-repair SQLite backup:"),
+          expect.stringContaining(
+            "Rebuilt corrupt shared-state SQLite indexes: unsafe_index_records_value",
+          ),
+        ],
+        warnings: [],
+      });
+      expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA integrity_check").get()).toEqual(
+        {
+          integrity_check: "ok",
+        },
+      );
+    },
+  );
 
   it("configures checkpoint lock waits before schema mutation", () => {
     const stateDir = createTempStateDir();

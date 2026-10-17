@@ -4,10 +4,7 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import type {
-  SidebarPeopleSortMode,
-  SidebarPeopleStatusFilter,
-} from "./sidebar-people-controller.ts";
+import type { SidebarPeopleSortMode, SidebarPeopleStatusFilter } from "./sidebar-people.ts";
 
 export type SidebarOnlineCount = { open: number; running: number };
 

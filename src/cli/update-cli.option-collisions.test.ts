@@ -73,6 +73,15 @@ function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
 describe("update cli option collisions", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it.each([
+    { args: ["--full-integrity-check"], target: updateCommand },
+    { args: ["repair", "--full-integrity-check"], target: updateFinalizeCommand },
+    { args: ["--full-integrity-check", "wizard"], target: updateWizardCommand },
+  ])("passes full migration integrity selection through $args", async ({ args, target }) => {
+    await run(["update", ...args]);
+    expect(firstCallOptions(target)).toMatchObject({ fullIntegrityCheck: true });
+  });
+
   const adoptionArgs = [
     "update",
     "adopt-immutable",

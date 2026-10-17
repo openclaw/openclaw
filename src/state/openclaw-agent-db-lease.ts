@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -32,6 +31,7 @@ import {
   readAgentDatabaseLeaseProvenance,
   agentDatabaseLeaseProcessDeathRefusal,
 } from "./openclaw-agent-db-lease-provenance.js";
+import { agentDatabaseMaintenanceAuthority as maintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   invalidateOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
@@ -71,17 +71,15 @@ export const AGENT_DATABASE_MAINTENANCE_LEASE = {
 } as const;
 
 export class OpenClawAgentDatabaseLeaseActiveError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Live owner PIDs observed by a read-only check; diagnostic evidence, never authority. */
+    readonly ownerPids: readonly number[] = [],
+  ) {
     super(message);
     this.name = "OpenClawAgentDatabaseLeaseActiveError";
   }
 }
-
-const maintenanceAuthority = new AsyncLocalStorage<{
-  authority: OpenClawStateLeaseContext;
-  databasePath: string;
-  assertScopeCurrent?: () => void;
-}>();
 
 /** Ordinary agent worker routing cannot borrow native maintenance authority. */
 export function hasAgentDatabaseMaintenanceAuthority(): boolean {
@@ -102,20 +100,6 @@ export function runWithAgentDatabaseMaintenanceAuthority<T>(
     },
     run,
   );
-}
-
-/** Revalidate the held lease, including immediately before committing a versioned rebuild. */
-export function assertAgentDatabaseMaintenanceAuthority(
-  expected?: OpenClawStateLeaseContext,
-): void {
-  const authority = maintenanceAuthority.getStore()?.authority;
-  if (!authority || (expected && authority !== expected)) {
-    throw new Error(
-      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
-    );
-  }
-  authority.assertOwned();
-  maintenanceAuthority.getStore()?.assertScopeCurrent?.();
 }
 
 /** Revalidate a maintenance owner when present, without requiring ordinary opens to hold one. */
@@ -586,13 +570,15 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): void {
-  const [owner] = readActiveOpenClawAgentDatabaseLeasesReadOnly(
+  const owners = readActiveOpenClawAgentDatabaseLeasesReadOnly(
     options,
     openStateSchemaReadAdmission,
   );
+  const [owner] = owners;
   if (owner) {
     throw new OpenClawAgentDatabaseLeaseActiveError(
       `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
+      [...new Set(owners.map((row) => row.owner_pid))],
     );
   }
 }

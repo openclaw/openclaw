@@ -674,7 +674,7 @@ export function createCodexDynamicToolBridge(params: {
           );
           const operatorHint = readToolOperatorHint(error);
           if (operatorHint) {
-            embeddedAgentLog.error(`[tools] ${toolName} failed: ${errorMessage} ${operatorHint}`);
+            embeddedAgentLog.error(`[tools] ${toolName} failed: ${operatorHint}`);
           }
           executionBoundary.consumeBlocked();
           const failedResult = failedToolResult(errorMessage, executionDisposition);

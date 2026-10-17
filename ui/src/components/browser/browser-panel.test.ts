@@ -12,7 +12,7 @@ import {
   createView,
   stubScreenshotMedia,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 function attachAnnotationOverlay(panel: { renderRoot: HTMLElement }) {
@@ -162,9 +162,9 @@ describe("normalizeBrowserUrlDraft", () => {
         presented: boolean;
         refreshOnPresentation: boolean;
         client: GatewayBrowserClient;
-        browserPanelController: BrowserPanelController;
+        browserPanelController: BrowserPanel;
         renderRoot: HTMLElement;
-        requestUpdate: () => void;
+        invalidate: () => void;
         updateComplete: Promise<unknown>;
       };
       panel.available = true;
@@ -177,7 +177,7 @@ describe("normalizeBrowserUrlDraft", () => {
 
       panel.browserPanelController.activeTargetId = "tab-a";
       panel.browserPanelController.view = retained ? createView("tab-a") : null;
-      panel.requestUpdate();
+      panel.invalidate();
       await panel.updateComplete;
       const preview = panel.renderRoot.querySelector(".bp-shot");
       const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input");
@@ -301,7 +301,7 @@ describe("normalizeBrowserUrlDraft", () => {
     await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
   });
 
-  it.each(["close", "suppress"] as const)(
+  it.each(["close", "suppress", "disconnect"] as const)(
     "ends an active annotation gesture on panel %s",
     async (transition) => {
       localStorage.setItem(
@@ -311,7 +311,7 @@ describe("normalizeBrowserUrlDraft", () => {
       const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
         available: boolean;
         suppressed: boolean;
-        browserPanelController: BrowserPanelController;
+        browserPanelController: BrowserPanel;
         handleToggleRequest: (event: Event) => void;
         renderRoot: HTMLElement;
         updateComplete: Promise<unknown>;
@@ -330,9 +330,12 @@ describe("normalizeBrowserUrlDraft", () => {
         panel.handleToggleRequest(
           new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
         );
-      } else {
+      } else if (transition === "suppress") {
         panel.suppressed = true;
         await panel.updateComplete;
+      } else {
+        panel.remove();
+        await waitForSolid(() => expect(capturedPointers.has(7)).toBe(false));
       }
 
       expect(capturedPointers.has(7)).toBe(false);

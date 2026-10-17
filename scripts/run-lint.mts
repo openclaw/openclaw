@@ -36,6 +36,9 @@ await runWithFailedTrailer("lint", async () => {
       runControllerGuard(process.cwd(), [
         ...(args.staged ? ["--staged"] : []),
         ...(base ? ["--base", base] : []),
+        // The CI checkout owner supplies the actual tested tree's comparison
+        // commit. An explicit caller base still means a local branch fork.
+        ...(!args.base && !args.staged && base ? ["--no-merge-base"] : []),
       ]),
     )
   ) {

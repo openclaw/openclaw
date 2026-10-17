@@ -32,9 +32,3 @@ export function closeAgentPicker(root: ParentNode) {
     closeMenusWithin(picker);
   }
 }
-
-export function closeSessionMenus(
-  root: Pick<ParentNode, "querySelectorAll"> & { ownerDocument: Document },
-) {
-  closeMenusWithin(root);
-}

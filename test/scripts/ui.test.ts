@@ -56,6 +56,7 @@ function copyUiFixture(root: string): void {
     "scripts/lib/build-identity.mts",
     "scripts/lib/output-root-guard.mjs",
     "scripts/lib/record-shared.mjs",
+    "scripts/lib/prepare-control-ui-settings.mts",
     "src/infra/process-env.ts",
     "src/infra/windows-process-start.ts",
     "src/shared/freebsd-process-identity.ts",
@@ -392,7 +393,8 @@ process.exitCode = ${expectedExit};\n`,
     `control-ui.build-${process.pid}-live.retired`,
   ];
   it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache-"));
+    // Preload module URLs must preserve spaces and URL fragment characters.
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache #"));
     copyUiFixture(root);
     for (const file of [
       "scripts/lib/build-artifact-cache.mts",
@@ -413,6 +415,10 @@ process.exitCode = ${expectedExit};\n`,
       "junction",
     );
     fs.mkdirSync(path.join(root, "extensions"));
+    // This fixture owns UI cache behavior; the native presenter builder is
+    // exercised with real source and distribution bytes in its delivery suite.
+    fs.writeFileSync(path.join(root, "scripts/tsx.mjs"), "export {};\n");
+    fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
     writeUiPackageBin(modules, "dompurify", "export {};\n");
     writeUiPackageBin(
       modules,

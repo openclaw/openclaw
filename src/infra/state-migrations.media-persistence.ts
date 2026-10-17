@@ -15,11 +15,11 @@ import {
   MEDIA_ROWS_MIGRATION_META_KEY,
 } from "../state/openclaw-agent-db-contract.js";
 import {
-  assertAgentDatabaseMaintenanceAuthority,
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
   renewAgentDatabaseMaintenanceAuthorityIfPresent,
 } from "../state/openclaw-agent-db-lease.js";
 import { agentDatabaseLifecycle } from "../state/openclaw-agent-db-lifecycle.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,

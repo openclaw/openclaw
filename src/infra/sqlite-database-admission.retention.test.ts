@@ -6,10 +6,11 @@ import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "no
 import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
 import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
@@ -19,6 +20,7 @@ import {
   beginSqliteDatabaseAdmissionOperation,
   discardSqliteDatabaseTransactionAdmissions,
   getSqliteDatabaseAdmission,
+  getOrLoadSqliteDatabaseAdmissionForPath,
   hasPendingSqliteDatabaseSchemaMutation,
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
@@ -34,6 +36,7 @@ import {
   readSqliteDatabaseWriteTokenForPath,
   retireSqliteDatabaseAdmissionForPath,
   retainSqliteDatabaseAdmissionLocation,
+  revokeSqliteDatabaseAdmissions,
   trackSqliteDatabaseAdmissionWorker,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
@@ -107,6 +110,81 @@ it("retires the final closed handle's facts while preserving open siblings and d
     if (second.isOpen) {
       second.close();
     }
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
+it("reuses physical catalog facts after unsealed close and invalidates them on DDL", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-process-facts-"), "proof.sqlite");
+  const database = createDatabase(location);
+  const admitted = getAdmittedSqliteSchemaFacts(database);
+  publishSqliteDatabaseAdmission(database, key, "connection-scoped");
+  database.close();
+  try {
+    database.open();
+    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      admitSqliteSchema(database);
+      expect(getAdmittedSqliteSchemaFacts(database)?.admissionId).toBe(admitted?.admissionId);
+      expect(observation.queries).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+    expect(getSqliteDatabaseAdmission(database, key)).toBeUndefined();
+    database.exec("ALTER TABLE proof ADD COLUMN added TEXT");
+    database.close();
+    database.open();
+    admitSqliteSchema(database);
+    expect(getAdmittedSqliteSchemaFacts(database)?.tableSql.get("proof")).toContain("added TEXT");
+    expect(getAdmittedSqliteSchemaFacts(database)?.admissionId).not.toBe(admitted?.admissionId);
+    database.prepare("UPDATE proof SET value = 43").run();
+    expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
+  } finally {
+    database.close();
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
+it.each([undefined, "process"] as const)(
+  "preserves path-load lifetime when the loader closes its handle (%s)",
+  (lifetime) => {
+    const location = path.join(tempDirs.make("sqlite-admission-loader-close-"), "proof.sqlite");
+    const database = createDatabase(location);
+    const loadedKey = { ...key, name: "test.loader-close", lifetime };
+    try {
+      expect(
+        getOrLoadSqliteDatabaseAdmissionForPath(location, loadedKey, () => {
+          database.close();
+          return "loaded";
+        }),
+      ).toBe("loaded");
+
+      database.open();
+      expect(getSqliteDatabaseAdmission(database, loadedKey)).toBe(
+        lifetime === "process" ? "loaded" : undefined,
+      );
+    } finally {
+      if (database.isOpen) {
+        database.close();
+      }
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
+  },
+);
+
+it("revokes retained validation when corruption is reported after native close", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-closed-corruption-"), "proof.sqlite");
+  const database = createDatabase(location);
+  const admitted = getAdmittedSqliteSchemaFacts(database);
+  database.close();
+  revokeSqliteDatabaseAdmissions(database);
+  try {
+    database.open();
+    admitSqliteSchema(database);
+    expect(getAdmittedSqliteSchemaFacts(database)?.admissionId).not.toBe(admitted?.admissionId);
+    expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+  } finally {
+    database.close();
     retireSqliteDatabaseAdmissionForPath(location);
   }
 });
@@ -448,6 +526,9 @@ it.each([false, true])(
       await siblingWorker.terminate();
       siblingRelay.finish();
       sibling = undefined;
+      expect(recordsFor(location)).toEqual([]);
+      expect(await command("open")).toEqual({ value: 42, admissionId });
+      expect(await command("close")).toBe("close");
       expect(recordsFor(location)).toEqual([]);
       expect(await command("retire")).toBe("retire");
       expect(() => fstatSync(descriptor)).toThrow();

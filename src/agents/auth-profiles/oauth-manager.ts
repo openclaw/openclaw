@@ -249,12 +249,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         }
         store.profiles[params.profileId] = { ...params.candidate };
         validatedAuthoritative = true;
-        authProfilesLog.debug("mirrored refreshed OAuth credential to main agent store", {
-          profileId: params.profileId,
-          expires: Number.isFinite(params.candidate.expires)
-            ? new Date(params.candidate.expires).toISOString()
-            : undefined,
-        });
         return true;
       },
     });

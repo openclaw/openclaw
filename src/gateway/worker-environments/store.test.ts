@@ -4,7 +4,7 @@ import {
   matchesAgentLifecycleBinding,
 } from "../../agents/agent-lifecycle-registry.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { WorkerSshEndpoint as WorkerEnvironmentSshEndpoint } from "../../plugins/types.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -163,8 +163,7 @@ describe("worker environment store", () => {
     const databasePath = database.path;
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    const current = new DatabaseSync(databasePath);
+    const current = openNodeSqliteDatabase(databasePath);
     current.exec("DROP TABLE worker_environment_ssh_fallback_ports;");
     current.close();
 

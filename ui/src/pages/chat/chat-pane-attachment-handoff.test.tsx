@@ -125,11 +125,12 @@ describe("cross-region Home composer ownership", () => {
     current.connected = false;
     const persistence = new ChatComposerPersistence(() => current);
     const controller = createChatState<ChatPageHost>({
-      requestUpdate: () => {},
+      invalidate: () => {},
       updateComplete: Promise.resolve(true),
     });
     current.canRestoreComposer = () => persistence.active;
     const notify = vi.fn(() => persistence.persistChangedState());
+    const unsubscribeDraft = controller.composerDraft.subscribe(notify);
     current.requestUpdate = notify;
     persistence.start();
     const unsubscribe = chatOutboxOwner(current).subscribe(current);
@@ -154,6 +155,7 @@ describe("cross-region Home composer ownership", () => {
     disposals.push(() => {
       handoff.dispose();
       unsubscribe();
+      unsubscribeDraft();
       persistence.stop();
       controller.dispose();
       discardStateStagedAttachments(current);

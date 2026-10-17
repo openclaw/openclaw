@@ -18,6 +18,7 @@ export type ExistingAgentSchemaMeta = {
 export const agentSchemaMetadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
   // Fixed ownership is reusable until tracked DDL can remove or rebuild its storage.
   name: "agent.schema-metadata",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (

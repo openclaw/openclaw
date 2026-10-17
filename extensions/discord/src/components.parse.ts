@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DISCORD_COMPONENT_SELECT_TYPES } from "./components.types.js";
 import type {
   DiscordComponentBlock,
   DiscordComponentButtonSpec,
@@ -196,13 +197,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
 
 function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpec {
   const obj = requireObject(raw, label);
-  const type = readOptionalEnum(obj.type, `${label}.type`, [
-    "string",
-    "user",
-    "role",
-    "mentionable",
-    "channel",
-  ]);
+  const type = readOptionalEnum(obj.type, `${label}.type`, DISCORD_COMPONENT_SELECT_TYPES);
   return {
     type,
     callbackData: normalizeOptionalString(obj.callbackData),

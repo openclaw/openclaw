@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   renderComposerFixture as renderComposer,
@@ -15,7 +16,7 @@ describe("progress card refresh admission", () => {
     { connected: true, canSend: false, visible: false },
   ])(
     "shows refresh only for writable connected composers: %j",
-    ({ connected, canSend, visible }) => {
+    async ({ connected, canSend, visible }) => {
       const onRefresh = vi.fn();
       const card = {
         sessionKey: "agent:main:work",
@@ -29,13 +30,24 @@ describe("progress card refresh admission", () => {
         progressCard: card,
         progressCardRefresh: { onRefresh },
       });
+      document.body.append(view.container);
       onTestFinished(() => {
         disposeComposer(view.container);
+        view.container.remove();
       });
       const refresh = view.container.querySelector<HTMLButtonElement>(
         ".session-progress-card__refresh",
       );
       expect(Boolean(refresh)).toBe(visible);
+      await Promise.resolve();
+      const options = view.container.querySelector<HTMLButtonElement>(
+        ".session-progress-card__options",
+      );
+      options?.click();
+      flush();
+      if (options) {
+        await vi.waitFor(() => expect(options.getAttribute("aria-expanded")).toBe("true"));
+      }
       refresh?.click();
       expect(onRefresh).toHaveBeenCalledTimes(visible ? 1 : 0);
       expect(view.props.onSend).not.toHaveBeenCalled();

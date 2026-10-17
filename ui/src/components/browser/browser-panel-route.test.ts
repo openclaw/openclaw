@@ -13,7 +13,7 @@ import {
   stubScreenshotMedia,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
 import "./browser-panel.ts";
 
@@ -107,9 +107,8 @@ function pageTitle(panel: Panel) {
   return panel.renderRoot?.querySelector<HTMLImageElement>(".bp-shot")?.alt;
 }
 
-function controllerFor(panel: Panel): BrowserPanelController {
-  return (panel as unknown as { browserPanelController: BrowserPanelController })
-    .browserPanelController;
+function controllerFor(panel: Panel): BrowserPanel {
+  return (panel as unknown as { browserPanelController: BrowserPanel }).browserPanelController;
 }
 
 describe("browser panel route handoff", () => {
@@ -209,7 +208,7 @@ describe("browser panel route handoff", () => {
     const afterClick = focusCount();
     expect(afterClick).toBe(1);
     panel.preferredTab = { tab: { ...hostTab }, revision: "first" };
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(focusCount()).toBe(afterClick);
     expect(pageTitle(panel)).toBe("work");
@@ -226,7 +225,7 @@ describe("browser panel route handoff", () => {
     panel.preferredTab = { tab: nodeTab, revision: "third" };
     await panel.updateComplete;
     const hiddenCount = gateway.request.mock.calls.length;
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     expect(gateway.request).toHaveBeenCalledTimes(hiddenCount);
     panel.presented = true;
@@ -438,7 +437,9 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client);
     await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     vi.useFakeTimers();
-    controllerFor(panel).handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+    controllerFor(panel).input.handleWheel(
+      new WheelEvent("wheel", { deltaY: 60, cancelable: true }),
+    );
     chooseCard(panel, nodeTab);
     await vi.advanceTimersByTimeAsync(150);
     expect(

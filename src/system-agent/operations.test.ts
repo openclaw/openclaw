@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createAgent } from "../agents/agent-create.js";
+import { runConfigSet } from "../cli/config-cli.js";
 import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
+import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -89,6 +92,12 @@ const mockConfig = vi.hoisted(() => {
   };
 });
 const mockDaemonRestart = vi.hoisted(() => vi.fn(async () => true));
+// mock-isolation: Keep agent creation and its persistent stores outside the executor fixture.
+vi.mock("../agents/agent-create.js", () => ({ createAgent: vi.fn() }));
+// mock-isolation: Exercise approval and audit without loading the machine's config CLI.
+vi.mock("../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
+// mock-isolation: Never uninstall real plugins while testing executor approval.
+vi.mock("../cli/plugins-uninstall-command.js", () => ({ runPluginUninstallCommand: vi.fn() }));
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const mockScheduleGatewayRestart = vi.hoisted(() =>
   vi.fn(() => ({
@@ -137,6 +146,9 @@ describe("system agent operations", () => {
     ({ runtime, lines } = createSystemAgentTestRuntime());
     mockConfig.reset();
     mockDaemonRestart.mockClear();
+    vi.mocked(createAgent).mockReset();
+    vi.mocked(runConfigSet).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runPluginUninstallCommand).mockReset();
     runPluginInstallCommandMock.mockClear();
     mockScheduleGatewayRestart.mockClear();
     vi.stubEnv("OPENCLAW_STATE_DIR", opTempDirs.make("openclaw-operations-"));
@@ -320,7 +332,6 @@ describe("system agent operations", () => {
   ])(
     "rejects unsafe agent creation for $agentId before any write or audit",
     async ({ agentId, model, error }) => {
-      const createAgent = vi.fn();
       const operation = { kind: "create-agent" as const, agentId, model, workspace: "/tmp/work" };
       expect(isPersistentSystemAgentOperation(operation)).toBe(false);
       expect(isPersistentSystemAgentOperation({ kind: "create-agent", agentId: "work" })).toBe(
@@ -329,7 +340,6 @@ describe("system agent operations", () => {
       await expect(
         executeSystemAgentOperation(operation, runtime, {
           approved: true,
-          deps: { createAgent },
         }),
       ).rejects.toThrow(error);
       expect(createAgent).not.toHaveBeenCalled();
@@ -339,18 +349,18 @@ describe("system agent operations", () => {
   );
 
   it("delegates literal main to the canonical creation gate", async () => {
-    const createAgent = vi.fn(async () => ({
+    vi.mocked(createAgent).mockResolvedValue({
       status: "error" as const,
       reason: "legacy-session-migration-required" as const,
       agentId: "main",
       message: "Run openclaw doctor --fix before creating main.",
-    }));
+    });
 
     await expect(
       executeSystemAgentOperation(
         { kind: "create-agent", agentId: "main", workspace: "/tmp/main" },
         runtime,
-        { approved: true, deps: { createAgent } },
+        { approved: true },
       ),
     ).rejects.toThrow("Run openclaw doctor --fix before creating main.");
 
@@ -404,12 +414,11 @@ describe("system agent operations", () => {
   });
 
   it("does not report or audit a gateway restart that returned false", async () => {
-    const runGatewayRestart = vi.fn(async () => false);
+    mockDaemonRestart.mockResolvedValueOnce(false);
 
     await expect(
       executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
         approved: true,
-        deps: { runGatewayRestart },
       }),
     ).rejects.toThrow("Gateway restart did not complete");
 
@@ -443,16 +452,18 @@ describe("system agent operations", () => {
       details: { path: "gateway.auth.token", source: "env", provider: "default" },
     },
   ])(
-    "applies $operation.kind through typed deps and audits the write",
+    "applies $operation.kind through the config command and audits the write",
     async ({ operation, request, audit, details }) => {
-      const runConfigSet = vi.fn(async () => {});
       const result = await executeSystemAgentOperation(operation, runtime, {
         approved: true,
-        deps: { runConfigSet },
         auditDetails: { rescue: true, channel: "whatsapp" },
       });
       expect(result.applied).toBe(true);
-      expect(runConfigSet).toHaveBeenCalledWith(request);
+      expect(runConfigSet).toHaveBeenCalledWith({
+        ...request,
+        runtime: expect.objectContaining({ log: expect.any(Function) }),
+        throwOnError: false,
+      });
       expect(lines.join("\n")).toContain(`[openclaw] done: ${audit.operation}`);
       expectAuditRecord(readLastAuditEntry(), audit, {
         rescue: true,
@@ -476,15 +487,12 @@ describe("system agent operations", () => {
     const mintedName = expect.stringMatching(/^MEMORY_SEARCH_REMOTE_API_KEY_[0-9A-F]{16}$/);
 
     it("writes nothing when the owner's authority is gone before the store write", async () => {
-      const runConfigSet = vi.fn(async () => {});
-
       await expect(
         executeSystemAgentOperation(operation, runtime, {
           approved: true,
           beforePersistentApply: () => {
             throw new Error("requesting run is no longer active");
           },
-          deps: { runConfigSet },
         }),
       ).rejects.toThrow("no longer active");
 
@@ -503,11 +511,9 @@ describe("system agent operations", () => {
           },
         },
       });
-      const runConfigSet = vi.fn(async () => {});
 
       const result = await executeSystemAgentOperation(operation, runtime, {
         approved: true,
-        deps: { runConfigSet },
       });
 
       expect(runConfigSet).toHaveBeenCalledWith(
@@ -522,6 +528,8 @@ describe("system agent operations", () => {
       expect(runConfigSet).toHaveBeenCalledWith({
         path: operation.path,
         cliOptions: { refProvider: "team", refSource: "store", refId: name },
+        runtime: expect.objectContaining({ log: expect.any(Function) }),
+        throwOnError: true,
       });
       expect(await readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
       expect(lines.join("\n")).not.toContain(operation.secret);
@@ -614,31 +622,32 @@ describe("system agent operations", () => {
   });
 
   it("uninstalls a non-route plugin only after approval and audits the write", async () => {
-    const runPluginUninstall = vi.fn(async (pluginId: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`uninstalled ${pluginId}`);
-    });
+    vi.mocked(runPluginUninstallCommand).mockImplementation(
+      async (pluginIds, _opts, pluginRuntime) => {
+        pluginRuntime?.log(`uninstalled ${pluginIds.join(", ")}`);
+      },
+    );
 
     const plan = await executeSystemAgentOperation(
       { kind: "plugin-uninstall", pluginId: "openclaw-demo" },
       runtime,
-      { deps: { runPluginUninstall } },
     );
     expect(plan).toMatchObject({
       applied: false,
       message: "Plan: uninstall plugin openclaw-demo. Say yes to apply.",
     });
-    expect(runPluginUninstall).not.toHaveBeenCalled();
+    expect(runPluginUninstallCommand).not.toHaveBeenCalled();
 
     const result = await executeSystemAgentOperation(
       { kind: "plugin-uninstall", pluginId: "openclaw-demo" },
       runtime,
-      { approved: true, deps: { runPluginUninstall } },
+      { approved: true },
     );
     expect(result.applied).toBe(true);
-    expect(runPluginUninstall).toHaveBeenCalledWith(
-      "openclaw-demo",
-      expect.objectContaining({ log: expect.any(Function) }),
+    expect(runPluginUninstallCommand).toHaveBeenCalledWith(
+      ["openclaw-demo"],
       undefined,
+      expect.objectContaining({ log: expect.any(Function) }),
     );
     expect(lines.join("\n")).toContain("[openclaw] done: plugin.uninstall");
     expect(lines.join("\n")).toContain("Restart the Gateway to apply plugin changes.");
@@ -647,17 +656,16 @@ describe("system agent operations", () => {
   it("refuses plugin uninstall when it cannot prove inference survives", async () => {
     // Fail closed: without a readable config the route cannot be proven safe.
     mockConfig.missing();
-    const runPluginUninstall = vi.fn();
 
     const result = await executeSystemAgentOperation(
       { kind: "plugin-uninstall", pluginId: "openclaw-demo" },
       runtime,
-      { approved: true, deps: { runPluginUninstall } },
+      { approved: true },
     );
     expect(result).toMatchObject({
       applied: false,
     });
-    expect(runPluginUninstall).not.toHaveBeenCalled();
+    expect(runPluginUninstallCommand).not.toHaveBeenCalled();
     expect(lines.join("\n")).toContain("could remove the provider behind");
     expect(lines.join("\n")).toContain("openclaw plugins uninstall openclaw-demo");
   });

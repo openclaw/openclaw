@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
+import {
+  resolveSchemaMigrationBackupTables,
+  resolveSchemaMigrationIntegrityCheck,
+} from "./schema-migration-backup-scope.js";
 
 // mock-isolation: Synthetic declarations test selection without certifying real migration scopes.
 vi.mock("./schema-migration-backup-tables.js", () => ({
@@ -36,5 +39,28 @@ describe("schema migration backup scope", () => {
     expect(
       resolveSchemaMigrationBackupTables({ kind: "state", foundVersion: 22, supportedVersion: 23 }),
     ).toEqual(["config_machine_state", "receipts", "schema_meta"]);
+  });
+
+  it("uses scoped integrity for declared upgrades and full integrity for unknown history", () => {
+    expect(
+      resolveSchemaMigrationIntegrityCheck({
+        kind: "agent",
+        foundVersion: 26,
+        supportedVersion: 28,
+      }),
+    ).toEqual({ check: "quick", tables: ["other", "outbox", "schema_meta"] });
+    expect(
+      resolveSchemaMigrationIntegrityCheck({
+        kind: "agent",
+        foundVersion: 25,
+        supportedVersion: 28,
+      }),
+    ).toEqual({ check: "full" });
+    expect(
+      resolveSchemaMigrationIntegrityCheck(
+        { kind: "agent", foundVersion: 26, supportedVersion: 28 },
+        "full",
+      ),
+    ).toEqual({ check: "full" });
   });
 });

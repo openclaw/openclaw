@@ -5,6 +5,7 @@ import {
   createGatewayConnectionLifecycle,
   type GatewayConnectionScope,
 } from "./gateway-connection-lifecycle.ts";
+import { listen } from "./reactive/listener.ts";
 
 export type GatewayPageChange = {
   readonly snapshot: ApplicationGatewaySnapshot;
@@ -41,16 +42,13 @@ export class GatewayPageBinding {
     phase: "stopped",
   });
   private stopGateway: (() => void) | undefined;
+  private stopActivation: Array<() => void> = [];
   private currentGateway: ApplicationContext["gateway"] | null = null;
   private currentSnapshot: ApplicationGatewaySnapshot | null = null;
   // Snapshots can be mutated in place; retain the previous transport facts.
   private currentClient: GatewayBrowserClient | null = null;
   private currentConnected = false;
   private hasBoundGateway = false;
-
-  private readonly handlePageActivation = () => {
-    this.options.onPageActivation?.();
-  };
 
   constructor(
     private readonly notify: () => void,
@@ -59,8 +57,10 @@ export class GatewayPageBinding {
 
   connect(): void {
     if (this.options.onPageActivation) {
-      document.addEventListener("visibilitychange", this.handlePageActivation);
-      globalThis.addEventListener("focus", this.handlePageActivation);
+      this.stopActivation = [
+        listen(document, "visibilitychange", this.options.onPageActivation),
+        listen(globalThis, "focus", this.options.onPageActivation),
+      ];
     }
     this.refresh();
   }
@@ -140,10 +140,8 @@ export class GatewayPageBinding {
   }
 
   dispose(): void {
-    if (this.options.onPageActivation) {
-      document.removeEventListener("visibilitychange", this.handlePageActivation);
-      globalThis.removeEventListener("focus", this.handlePageActivation);
-    }
+    this.stopActivation.forEach((stop) => stop());
+    this.stopActivation = [];
     this.stopGateway?.();
     this.stopGateway = undefined;
     const previous = this.currentSnapshot;

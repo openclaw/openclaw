@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   WorkerLiveEventSchema,
   type WorkerLiveEvent,
@@ -11,9 +11,80 @@ import { readAgentAssistantSource } from "../infra/agent-events.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
 describe("createWorkerLiveRuntime", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each(["text", "thinking"] as const)(
+    "paces %s previews and flushes their exact delta before tool activity",
+    (kind) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(1_000);
+      const emitted: WorkerLiveEvent[] = [];
+      const runtime = createWorkerLiveRuntime({
+        enqueuePreview: (event) => {
+          emitted.push(event);
+          return true;
+        },
+        emitTerminal: async () => {},
+      });
+      const message = makeAgentAssistantMessage({ content: [] });
+      runtime.handleSessionEvent({ type: "message_start", message });
+      let text = "";
+      const append = (delta: string, time: number) => {
+        vi.setSystemTime(time);
+        text += delta;
+        message.content =
+          kind === "text" ? [{ type: "text", text }] : [{ type: "thinking", thinking: text }];
+        runtime.handleSessionEvent({
+          type: "message_update",
+          message,
+          assistantMessageEvent:
+            kind === "text"
+              ? { type: "text_delta", contentIndex: 0, delta }
+              : { type: "thinking_delta", contentIndex: 0, delta, partial: message },
+        });
+      };
+      append("A", 1_000);
+      append("界", 1_020);
+      append("é", 1_040);
+      expect(emitted).toHaveLength(1);
+      append("\n", 1_075);
+      append("end", 1_080);
+      expect(emitted).toHaveLength(2);
+      runtime.handleSessionEvent({
+        type: "tool_execution_start",
+        toolCallId: "tool-1",
+        toolName: "read",
+        args: {},
+      });
+      runtime.handleSessionEvent({ type: "message_end", message });
+      const itemId = readAgentAssistantSource(message)?.itemId;
+      expect(emitted).toEqual([
+        {
+          kind: kind === "text" ? "assistant" : "thinking",
+          payload: { text: "A", delta: "A", itemId },
+        },
+        {
+          kind: kind === "text" ? "assistant" : "thinking",
+          payload: { text: "A界é\n", delta: "界é\n", itemId },
+        },
+        {
+          kind: kind === "text" ? "assistant" : "thinking",
+          payload: { text: "A界é\nend", delta: "end", itemId },
+        },
+        { kind: "tool", payload: { phase: "start", name: "read", toolCallId: "tool-1", args: {} } },
+      ]);
+      expect(message.content).toEqual(
+        kind === "text"
+          ? [{ type: "text", text: "A界é\nend" }]
+          : [{ type: "thinking", thinking: "A界é\nend" }],
+      );
+    },
+  );
+
   it.each(["aborted", "error", "stop"] as const)(
     "handles an empty %s final after checked text was streamed",
     async (stopReason) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
       const emitted: WorkerLiveEvent[] = [];
       const runtime = createWorkerLiveRuntime({
         enqueuePreview: (event) => {
@@ -35,12 +106,22 @@ describe("createWorkerLiveRuntime", () => {
           delta: "Checked partial reply.",
         },
       });
+      const pending = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Checked partial reply. More." }],
+      });
+      runtime.handleSessionEvent({
+        type: "message_update",
+        message: pending,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " More." },
+      });
+      expect(emitted).toHaveLength(1);
       const terminal = makeAgentAssistantMessage({ content: [], stopReason });
       runtime.handleSessionEvent({ type: "message_end", message: terminal });
       expect(
         emitted.filter((event) => event.kind === "assistant").map((event) => event.payload),
       ).toEqual([
         expect.objectContaining({ text: "Checked partial reply." }),
+        expect.objectContaining({ text: "Checked partial reply. More.", delta: " More." }),
         ...(stopReason === "aborted" ? [] : [expect.objectContaining({ text: "", replace: true })]),
       ]);
       runtime.handleSessionEvent({ type: "agent_end", messages: [terminal], willRetry: false });
@@ -51,6 +132,68 @@ describe("createWorkerLiveRuntime", () => {
       });
     },
   );
+
+  it("flushes late commentary metadata before starting a new assistant occurrence", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const emitted: WorkerLiveEvent[] = [];
+    const runtime = createWorkerLiveRuntime({
+      enqueuePreview: (event) => {
+        emitted.push(event);
+        return true;
+      },
+      emitTerminal: async () => {},
+    });
+    const message = makeAgentAssistantMessage({ content: [{ type: "text", text: "Checking" }] });
+    runtime.handleSessionEvent({ type: "message_start", message });
+    runtime.handleSessionEvent({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Checking" },
+    });
+    message.content = [{ type: "text", text: "Checking a detail." }];
+    runtime.handleSessionEvent({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " a detail." },
+    });
+    message.content = [
+      {
+        type: "text",
+        text: "Checking a detail.",
+        textSignature: '{"v":1,"id":"commentary-1","phase":"commentary"}',
+      },
+    ];
+    runtime.handleSessionEvent({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Checking a detail.",
+        partial: message,
+      },
+    });
+    const final = makeAgentAssistantMessage({ content: [{ type: "text", text: "The answer." }] });
+    runtime.handleSessionEvent({ type: "message_start", message: final });
+    runtime.handleSessionEvent({ type: "message_end", message: final });
+    expect(emitted.map((event) => event.payload)).toEqual([
+      { text: "Checking", delta: "Checking", itemId: readAgentAssistantSource(message)?.itemId },
+      {
+        text: "Checking a detail.",
+        delta: " a detail.",
+        phase: "commentary",
+        itemId: readAgentAssistantSource(message)?.itemId,
+      },
+      {
+        text: "The answer.",
+        delta: "The answer.",
+        itemId: readAgentAssistantSource(final)?.itemId,
+      },
+    ]);
+    expect(readAgentAssistantSource(message)?.itemId).not.toBe(
+      readAgentAssistantSource(final)?.itemId,
+    );
+  });
 
   it("keeps distinct reasoning occurrences through bounded worker payloads", () => {
     const emitted: WorkerLiveEvent[] = [];
