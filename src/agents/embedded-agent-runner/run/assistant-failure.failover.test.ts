@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
@@ -190,10 +191,7 @@ describe("assistant failure recovery", () => {
   it("selects the next profile before marking failure and retries without waiting for the mark", async () => {
     const input = makeInput("rate limit exceeded", { profileId: "anthropic:p1" });
     const events: string[] = [];
-    let releaseMark: (() => void) | undefined;
-    const markPending = new Promise<void>((resolve) => {
-      releaseMark = resolve;
-    });
+    const mark = createDeferredCore();
     input.failover.resolveAuthProfileFailureReason = () => "rate_limit";
     input.failover.advanceAuthProfile = vi.fn(async () => {
       events.push("advance");
@@ -201,7 +199,7 @@ describe("assistant failure recovery", () => {
     });
     input.failover.maybeMarkAuthProfileFailure = vi.fn(async () => {
       events.push("mark-start");
-      await markPending;
+      await mark.promise;
       events.push("mark-finish");
     });
     try {
@@ -214,29 +212,28 @@ describe("assistant failure recovery", () => {
         modelId: "test-model",
       });
     } finally {
-      releaseMark?.();
+      mark.resolve();
     }
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
   });
 
-  it.each([undefined])(
-    "records billing failures for profile %s before surfacing",
-    async (profileId) => {
-      const input = makeInput("credit balance is too low", { profileId });
-      input.failover.resolveAuthProfileFailureReason = () => "billing";
-      const failure = await expectFailure(input);
-      expect(failure).toMatchObject({ reason: "billing", status: 402 });
-      expect(failure.message).toBe(formatBillingErrorMessage("anthropic", "test-model"));
-      expect(input.failover.maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
-        profileId,
-        reason: "billing",
-        modelId: "test-model",
-      });
-      expect(input.runInput.suspendForFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "manual" }),
-      );
-    },
-  );
+  it("records billing failures for profile undefined before surfacing", async () => {
+    const profileId = undefined;
+
+    const input = makeInput("credit balance is too low", { profileId });
+    input.failover.resolveAuthProfileFailureReason = () => "billing";
+    const failure = await expectFailure(input);
+    expect(failure).toMatchObject({ reason: "billing", status: 402 });
+    expect(failure.message).toBe(formatBillingErrorMessage("anthropic", "test-model"));
+    expect(input.failover.maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+      profileId,
+      reason: "billing",
+      modelId: "test-model",
+    });
+    expect(input.runInput.suspendForFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "manual" }),
+    );
+  });
 
   it("preserves the provider failure when profile bookkeeping rejects", async () => {
     const input = makeInput("credit balance is too low");
@@ -259,28 +256,22 @@ describe("assistant failure recovery", () => {
       input.overloadProfileRotations = path === "overload-cap" ? 3 : 0;
       input.failover.resolveAuthProfileFailureReason = () =>
         path === "overload-cap" ? "overloaded" : "billing";
-      let releaseMark: (() => void) | undefined;
-      let markStarted: (() => void) | undefined;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      const pending = new Promise<void>((resolve) => {
-        releaseMark = resolve;
-      });
+      const started = createDeferredCore();
+      const mark = createDeferredCore();
       input.failover.maybeMarkAuthProfileFailure = vi.fn(async () => {
-        markStarted?.();
-        await pending;
+        started.resolve();
+        await mark.promise;
       });
       let settled = false;
       const failure = expectFailure(input).finally(() => {
         settled = true;
       });
       try {
-        await started;
+        await started.promise;
         expect(settled).toBe(false);
         expect(input.traceAttempts).toEqual([]);
       } finally {
-        releaseMark?.();
+        mark.resolve();
       }
       await failure;
       expect(settled).toBe(true);
@@ -317,43 +308,42 @@ describe("assistant failure recovery", () => {
     expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("Profile "));
   });
 
-  it.each([false])(
-    "retains provider error details with model fallback=%s",
-    async (fallbackConfigured) => {
-      for (const [message, reason, status] of [
-        ['  400 {"error":{"message":"credit balance is too low"}}  ', "billing", 400],
-        // An untyped 500 is a provider-side server error; only 408/499/504/522/524 are timeouts.
-        ["500 provider returned HTTP 500", "server_error", 500],
-        ["503 service unavailable", "overloaded", 503],
-        ["request timed out", "timeout", 408],
-        ["401 invalid api key", "auth", 401],
-        ["429 rate limit exceeded", "rate_limit", 429],
-        [
-          '{"type":"error","error":{"type":"invalid_request_error","message":"thinking blocks cannot be modified"}}',
-          "format",
-          400,
-        ],
-      ] as const) {
-        const input = makeInput(message, { fallbackConfigured });
-        const failure = await expectFailure(input);
-        expect(failure).toMatchObject({
-          reason,
-          status,
-          rawError: message.trim(),
-          provider: "anthropic",
-          model: "test-model",
-        });
-        if (reason === "auth") {
-          expect(failure.message).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
-        } else if (reason === "rate_limit") {
-          expect(failure.message).toBe(
-            "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-          );
-        }
-        expect(input.traceAttempts[0]?.status).toBe(status);
+  it("retains provider error details with model fallback=false", async () => {
+    const fallbackConfigured = false;
+
+    for (const [message, reason, status] of [
+      ['  400 {"error":{"message":"credit balance is too low"}}  ', "billing", 400],
+      // An untyped 500 is a provider-side server error; only 408/499/504/522/524 are timeouts.
+      ["500 provider returned HTTP 500", "server_error", 500],
+      ["503 service unavailable", "overloaded", 503],
+      ["request timed out", "timeout", 408],
+      ["401 invalid api key", "auth", 401],
+      ["429 rate limit exceeded", "rate_limit", 429],
+      [
+        '{"type":"error","error":{"type":"invalid_request_error","message":"thinking blocks cannot be modified"}}',
+        "format",
+        400,
+      ],
+    ] as const) {
+      const input = makeInput(message, { fallbackConfigured });
+      const failure = await expectFailure(input);
+      expect(failure).toMatchObject({
+        reason,
+        status,
+        rawError: message.trim(),
+        provider: "anthropic",
+        model: "test-model",
+      });
+      if (reason === "auth") {
+        expect(failure.message).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
+      } else if (reason === "rate_limit") {
+        expect(failure.message).toBe(
+          "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+        );
       }
-    },
-  );
+      expect(input.traceAttempts[0]?.status).toBe(status);
+    }
+  });
 
   it.each([
     [{ kind: "timeout", phase: "compaction", source: "observation" }, {}],
@@ -372,7 +362,9 @@ describe("assistant failure recovery", () => {
     },
   );
 
-  it.each(["timeout"])("ignores stale %s text on a successful assistant", async (errorMessage) => {
+  it("ignores stale timeout text on a successful assistant", async () => {
+    const errorMessage = "timeout";
+
     const input = makeInput(errorMessage);
     if (!input.normalizedAttempt.attemptAssistant) {
       throw new Error("missing test assistant");
@@ -393,23 +385,22 @@ describe("assistant failure recovery", () => {
     expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
   });
 
-  it.each([new Error("provider connection failed")])(
-    "keeps provider $name failures visible to realtime voice",
-    async (error) => {
-      const signal = new AbortController().signal;
-      const input = makeInput(error.message);
-      if (!input.normalizedAttempt.attemptAssistant) {
-        throw new Error("missing test assistant");
-      }
-      Object.assign(input.normalizedAttempt.attemptAssistant, projectProviderError(error, signal));
-      input.normalizedAttempt.attemptAssistant.content = [];
-      input.emptyErrorRetries = 3;
-      const failure = await expectFailure(input);
-      expect(failure.rawError).toBe(error.message);
-      expect(buildRealtimeVoiceAgentErrorProviderResult(failure)).toEqual({
-        error: failure.message,
-      });
-      expect(signal.aborted).toBe(false);
-    },
-  );
+  it("keeps provider Error failures visible to realtime voice", async () => {
+    const error = new Error("provider connection failed");
+
+    const signal = new AbortController().signal;
+    const input = makeInput(error.message);
+    if (!input.normalizedAttempt.attemptAssistant) {
+      throw new Error("missing test assistant");
+    }
+    Object.assign(input.normalizedAttempt.attemptAssistant, projectProviderError(error, signal));
+    input.normalizedAttempt.attemptAssistant.content = [];
+    input.emptyErrorRetries = 3;
+    const failure = await expectFailure(input);
+    expect(failure.rawError).toBe(error.message);
+    expect(buildRealtimeVoiceAgentErrorProviderResult(failure)).toEqual({
+      error: failure.message,
+    });
+    expect(signal.aborted).toBe(false);
+  });
 });
