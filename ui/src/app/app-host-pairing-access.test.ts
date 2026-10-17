@@ -41,7 +41,9 @@ import { ShellLayoutBoundary } from "./shell-layout-traits-solid.tsx";
 type PairingSidebar = AppSidebarElement;
 
 type PairingAuth = { role: string; scopes?: string[] };
-const admin: PairingAuth = { role: "operator", scopes: ["operator.admin"] };
+const operator = (...scopes: string[]): PairingAuth => ({ role: "operator", scopes });
+const admin = operator("operator.admin");
+const pairingOnly = operator("operator.pairing");
 
 function outboxes(sessionKey: string, total: number, draft: boolean) {
   return {
@@ -62,17 +64,6 @@ function deferredRenderer<Renderer>(shell: object, property: string) {
   return { loading, retrying, load };
 }
 
-function stubIntersectionObserver() {
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-}
-
 setupSidebarTest();
 
 function createPairingShell(params: {
@@ -88,13 +79,8 @@ function createPairingShell(params: {
   } as unknown as GatewayBrowserClient);
   gateway.publish({
     phase: params.connected === false ? "stopped" : "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: params.auth ? ({ auth: params.auth } as ApplicationGatewaySnapshot["hello"]) : null,
-    assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
   });
   const snapshot = gateway.gateway.snapshot;
   const sessions = createSessionsHarness("main", params.sessionKeys ?? []);
@@ -135,9 +121,6 @@ function createPairingShell(params: {
       snapshot: overlaySnapshot,
       openDevicePairSetup,
       subscribe: () => () => undefined,
-    },
-    runtimeConfig: {
-      state: { configSnapshot: null, configForm: null, configSchema: null, configUiHints: {} },
     },
     settingsAgentSelection: {
       state: { selectedId: "main", scopeId: "main" },
@@ -218,12 +201,7 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(async () => {
-  await vi.dynamicImportSettled();
-  vi.useRealTimers();
-  document.body.replaceChildren();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+afterEach(() => {
   Reflect.deleteProperty(document, "execCommand");
 });
 
@@ -410,7 +388,7 @@ describe("application shell pairing access", () => {
     expect(stopOverlays).toHaveBeenCalledOnce();
     replacement.snapshot.hello = {
       ...replacement.snapshot.hello,
-      auth: { role: "operator", scopes: ["operator.read"] },
+      auth: operator("operator.read"),
     } as ApplicationGatewaySnapshot["hello"];
     onOpenNewSession?.("main");
     expect(openNewSession).toHaveBeenCalledOnce();
@@ -451,24 +429,24 @@ describe("application shell pairing access", () => {
   it.each([
     { name: "legacy authenticated", auth: { role: "operator" }, canPair: true },
     { name: "legacy unadvertised", auth: null, canPair: true },
-    { name: "read-only", auth: { role: "operator", scopes: ["operator.read"] }, canPair: false },
-    { name: "write-only", auth: { role: "operator", scopes: ["operator.write"] }, canPair: false },
+    { name: "read-only", auth: operator("operator.read"), canPair: false },
+    { name: "write-only", auth: operator("operator.write"), canPair: false },
     {
       name: "pairing-only",
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: pairingOnly,
       canPair: false,
     },
-    { name: "explicitly ungranted", auth: { role: "operator", scopes: [] }, canPair: false },
+    { name: "explicitly ungranted", auth: operator(), canPair: false },
     {
       name: "disconnected",
-      auth: { role: "operator", scopes: ["operator.pairing"] },
+      auth: pairingOnly,
       connected: false,
       canPair: false,
     },
     {
       name: "admin becoming pairing-only",
       auth: admin,
-      nextAuth: { role: "operator", scopes: ["operator.pairing"] },
+      nextAuth: pairingOnly,
       canPair: true,
     },
   ])("gates the sidebar pairing entry for a $name operator", async (scenario) => {
@@ -567,7 +545,6 @@ describe("application shell pairing access", () => {
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
-    stubIntersectionObserver();
     const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
     const execCommand = vi.fn(() => false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -627,7 +604,6 @@ describe("application shell pairing access", () => {
   });
 
   it("publishes layout traits from an already-loaded native route on shell mount", async () => {
-    stubIntersectionObserver();
     const { shell, context, container, refresh } = createPairingShell({ auth: null });
     const router = shell.runtime!.router;
     const definition = router.getRoute("activity")!;

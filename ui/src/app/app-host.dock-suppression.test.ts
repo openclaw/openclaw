@@ -33,6 +33,7 @@ describe("OpenClaw shell dock suppression", () => {
       vi.fn(() => ({ matches: false })),
     );
     const client = {} as GatewayBrowserClient;
+    const row: GatewaySessionRow = { key: "agent:main:main", kind: "direct", updatedAt: 0 };
     const context = {
       basePath: "",
       gateway: {
@@ -100,9 +101,7 @@ describe("OpenClaw shell dock suppression", () => {
             count: 1,
             defaults: {},
             path: "",
-            sessions: [
-              { key: "agent:main:main", kind: "direct", updatedAt: 0 } satisfies GatewaySessionRow,
-            ],
+            sessions: [row],
             ts: 0,
           },
         },
@@ -143,9 +142,8 @@ describe("OpenClaw shell dock suppression", () => {
     const container = shell.element;
     const panel = (kind: "assistant" | "terminal" | "desktop") =>
       container.querySelector(`openclaw-${kind}-panel`);
-    const expectDesktopAvailable = () =>
-      expect(panel("desktop")).toMatchObject({ available: true });
     const expectHomeAvailable = (homeAvailable: boolean, rail = true) => {
+      refreshShellView(shell);
       expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
       if (rail) {
         expect(
@@ -195,70 +193,53 @@ describe("OpenClaw shell dock suppression", () => {
     refreshShellView(shell);
     expect(panel("assistant")).toMatchObject({ pageRouteFailed: true });
 
-    shell.routeState = {
-      routeId: "new-session",
-      location: { pathname: "/new-session", search: "?agent=missing", hash: "" },
-    };
-    refreshShellView(shell);
-    expect(panel("terminal")).toMatchObject({ agentId: "research" });
+    for (const [agent, agentId] of [
+      ["missing", "research"],
+      ["main", "main"],
+    ]) {
+      shell.routeState = {
+        routeId: "new-session",
+        location: { pathname: "/new-session", search: `?agent=${agent}`, hash: "" },
+      };
+      refreshShellView(shell);
+      expect(panel("terminal")).toMatchObject({ agentId });
+    }
 
-    shell.routeState = {
-      routeId: "new-session",
-      location: { pathname: "/new-session", search: "?agent=main", hash: "" },
-    };
-    refreshShellView(shell);
-    expect(panel("terminal")).toMatchObject({ agentId: "main" });
-
-    context.sessions.state.result!.sessions = [
+    for (const result of [
       {
-        key: "agent:main:main",
-        kind: "direct",
-        placement: { state: "active" } as GatewaySessionRow["placement"],
-        updatedAt: 0,
+        ...context.sessions.state.result!,
+        sessions: [{ ...row, placement: { state: "active" } as GatewaySessionRow["placement"] }],
       },
-    ];
-    refreshShellView(shell);
-    expectDesktopAvailable();
-
-    context.sessions.state.result!.sessions = [
-      { key: "agent:main:main", kind: "direct", updatedAt: 0 },
-    ];
-    refreshShellView(shell);
-    expectDesktopAvailable();
-
-    context.sessions.state.result = null;
-    refreshShellView(shell);
-    expectDesktopAvailable();
+      { ...context.sessions.state.result!, sessions: [row] },
+      null,
+    ]) {
+      context.sessions.state.result = result;
+      refreshShellView(shell);
+      expect(panel("desktop")).toMatchObject({ available: true });
+    }
 
     // Home now lives in the retained rail, not duplicate floating chrome.
     // The shell still projects its access through permission, reconnect, and Gateway changes.
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.navigation.snapshot.navCollapsed = true;
-    refreshShellView(shell);
-    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     expectHomeAvailable(true);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.gateway.snapshot.hello!.auth = {
       role: "operator",
       scopes: ["operator.read", "operator.write"],
     };
-    refreshShellView(shell);
-    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     expectHomeAvailable(true);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.gateway.snapshot.phase = "offline";
-    refreshShellView(shell);
     expectHomeAvailable(true);
     context.gateway.connection.gatewayUrl = "ws://another-gateway.test";
-    refreshShellView(shell);
     expectHomeAvailable(false, false);
     context.gateway.snapshot.phase = "connected";
-    refreshShellView(shell);
     expectHomeAvailable(true);
     context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
-    refreshShellView(shell);
-    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     expectHomeAvailable(false, false);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.gateway.snapshot.phase = "offline";
-    refreshShellView(shell);
     expectHomeAvailable(false, false);
   });
 });

@@ -37,8 +37,7 @@ beforeEach(async () => {
   await i18n.setLocale("en");
 });
 afterEach(() => {
-  dispose?.();
-  dispose = undefined;
+  disposeApp();
   runtime?.stop();
   runtime = undefined;
   host?.remove();
@@ -47,6 +46,11 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+function disposeApp() {
+  dispose?.();
+  dispose = undefined;
+}
 
 async function settleRootContent(): Promise<void> {
   flush();
@@ -59,13 +63,9 @@ async function settleImports() {
   await settleRootContent();
 }
 
-function expectSurface(container: HTMLElement, present: string[], absent: string[] = []) {
-  for (const selector of present) {
-    expect(container.querySelector(selector)).not.toBeNull();
-  }
-  for (const selector of absent) {
-    expect(container.querySelector(selector)).toBeNull();
-  }
+function expectSurface(present: string[], absent: string[] = []) {
+  expect(present.map((selector) => host!.querySelector(selector))).not.toContain(null);
+  expect(absent.map((selector) => host!.querySelector(selector))).toEqual(absent.map(() => null));
 }
 
 async function createWarmSurface(warm = true, startup?: Promise<void>, authMethod = "token") {
@@ -210,7 +210,7 @@ describe("warm boot app root", () => {
     const starting = Promise.withResolvers<void>();
     const { container, start } = await createWarmSurface(false, starting.promise);
     expect(start).toHaveBeenCalledOnce();
-    expectSurface(container, [".connect-splash"], ["openclaw-login-gate"]);
+    expectSurface([".connect-splash"], ["openclaw-login-gate"]);
     starting.resolve();
     await starting.promise;
     await settleRootContent();
@@ -222,7 +222,7 @@ describe("warm boot app root", () => {
     await settleImports();
     const shell = container.querySelector("openclaw-app-shell");
     expect(shell).not.toBeNull();
-    expectSurface(container, [], [".connect-splash", "openclaw-login-gate"]);
+    expectSurface([], [".connect-splash", "openclaw-login-gate"]);
     await draw({ lastError: "Connection interrupted; retrying", lastErrorCode: null });
     expect(container.querySelector("openclaw-app-shell")).toBe(shell);
     expect(container.querySelector("openclaw-login-gate")).toBeNull();
@@ -251,25 +251,19 @@ describe("warm boot app root", () => {
     navigation.mockRestore();
     expect(runtime!.context.router.getState().matches[0]?.routeId).toBe("connection");
     await draw();
-    expectSurface(container, ["openclaw-app-shell"], ["openclaw-login-gate"]);
+    expectSurface(["openclaw-app-shell"], ["openclaw-login-gate"]);
     stored = false;
     await draw();
     expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
   });
 
   it.each([
-    { name: "cold connection", warm: false, error: null, code: null, surface: ".connect-splash" },
-    {
-      name: "pairing rejection",
-      warm: true,
-      error: "Pairing required",
-      code: "PAIRING_REQUIRED",
-      surface: "openclaw-login-gate",
-    },
-  ])("keeps $name outside the warm shell", async ({ warm, error, code, surface }) => {
-    const { container, draw } = await createWarmSurface(warm);
+    ["cold connection", false, null, null, ".connect-splash"],
+    ["pairing rejection", true, "Pairing required", "PAIRING_REQUIRED", "openclaw-login-gate"],
+  ] as const)("keeps %s outside the warm shell", async (_name, warm, error, code, surface) => {
+    const { draw } = await createWarmSurface(warm);
     await draw({ lastError: error, lastErrorCode: code });
-    expectSurface(container, [surface], ["openclaw-app-shell"]);
+    expectSurface([surface], ["openclaw-app-shell"]);
   });
 
   it("pins a manual login attempt and releases it only after connection admission", async () => {
@@ -280,7 +274,7 @@ describe("warm boot app root", () => {
     loginGate(container).props.onConnect();
     await settleRootContent();
     expect(connect).toHaveBeenCalledOnce();
-    expectSurface(container, ["openclaw-login-gate"], ["openclaw-app-shell"]);
+    expectSurface(["openclaw-login-gate"], ["openclaw-app-shell"]);
     await draw({ phase: "starting" });
     expect(container.querySelector(".connect-splash")).not.toBeNull();
     snapshot.phase = "connected";
@@ -305,7 +299,7 @@ describe("warm boot app root", () => {
     loginGate(first.container).props.onToggleGatewaySecret();
     await settleRootContent();
     expect(loginGate(first.container).props.showGatewaySecret).toBe(true);
-    dispose?.();
+    disposeApp();
     first.container.remove();
     const second = await createOfflineSurface();
     expect(loginGate(second.container).props.showGatewaySecret).toBe(false);
@@ -323,7 +317,6 @@ describe("warm boot app root", () => {
       secret: "draft-secret",
       showGatewaySecret: true,
     });
-
     const connection = runtime!.context.gateway.connection;
     connection.gatewayUrl = "wss://replacement.example";
     connection.token = "replacement-token";
@@ -346,8 +339,7 @@ describe("warm boot app root", () => {
     const received = vi.fn();
     requestApplicationContext(descendant, received, true);
     expect(received.mock.calls[0]?.[0]).toBe(runtime!.context);
-    dispose?.();
-    dispose = undefined;
+    disposeApp();
     received.mockClear();
     container.append(descendant);
     requestApplicationContext(descendant, received, true);
@@ -375,8 +367,7 @@ describe("warm boot app root", () => {
       value: hook,
     });
 
-    dispose?.();
-    dispose = undefined;
+    disposeApp();
     expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toBeUndefined();
   });
 
@@ -393,8 +384,7 @@ describe("warm boot app root", () => {
       const style = document.documentElement.style;
       expect(style.getPropertyValue("--shell-viewport-height")).toBe("300px");
       expect(style.getPropertyValue("--shell-safe-area-bottom")).toBe("0px");
-      dispose?.();
-      dispose = undefined;
+      disposeApp();
       expect(style.getPropertyValue("--shell-viewport-height")).toBe("");
       expect(style.getPropertyValue("--shell-safe-area-bottom")).toBe("");
     } finally {

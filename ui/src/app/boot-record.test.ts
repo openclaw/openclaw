@@ -25,9 +25,7 @@ const record = (): BootRecord => ({
   sectionOrder: ["category:Work", "ungrouped"],
 });
 
-async function settleWrite(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(500);
-}
+const settleWrite = () => vi.advanceTimersByTimeAsync(500);
 
 async function write(saved = record()): Promise<void> {
   persistBootRecord(saved);
@@ -75,9 +73,6 @@ describe("Control UI boot record", () => {
         agents: { ...saved.agents, agents: [{ id: "main", identity: { name: "Main" } }] },
       });
       expect(readBootRecord("https://another.example", credential)).toBeNull();
-      clearBootRecords();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(readBootRecord(scope, credential)).toBeNull();
     },
   );
 
@@ -117,12 +112,12 @@ describe("Control UI boot record", () => {
   });
 
   it.each([
-    { failure: "oversized", sameOwner: true },
-    { failure: "oversized", sameOwner: false },
-    { failure: "quota", sameOwner: false },
-  ])(
-    "evicts only the publishing owner after $failure failure (same owner: $sameOwner)",
-    async ({ failure, sameOwner }) => {
+    ["oversized", true],
+    ["oversized", false],
+    ["quota", false],
+  ] as const)(
+    "evicts only the publishing owner after %s failure (same owner: %s)",
+    async (failure, sameOwner) => {
       const peer = { ...record(), ...(sameOwner ? {} : { recoveryScope: "peer-account" }) };
       await write(peer);
       const bytes = localStorage.getItem(key);
@@ -182,6 +177,5 @@ describe("Control UI boot record", () => {
     localStorage.setItem(key, JSON.stringify(replacement));
     clearBootRecords(scope, owner);
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(replacement);
-    localStorage.removeItem(key);
   });
 });

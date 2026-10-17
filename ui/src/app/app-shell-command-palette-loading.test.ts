@@ -90,9 +90,22 @@ function mountLoader() {
   return { state, input, foreground, close, disposeOwner };
 }
 
-function type(input: HTMLTextAreaElement, value: string) {
+const selection = (start: number, end: number) => ({
+  selectionStart: start,
+  selectionEnd: end,
+  selectionDirection: "backward",
+});
+
+function type(input: HTMLTextAreaElement, value: string, options?: InputEventInit) {
   input.value = value;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  if (options) {
+    input.setSelectionRange(value.length, value.length);
+  }
+  input.dispatchEvent(
+    options
+      ? new InputEvent("input", { bubbles: true, ...options })
+      : new Event("input", { bubbles: true }),
+  );
 }
 
 describe("cold command palette input custody", () => {
@@ -146,11 +159,7 @@ describe("cold command palette input custody", () => {
     input.setSelectionRange(5, 9, "backward");
     flush();
     expect(container.querySelector("textarea")).toBe(input);
-    expect(input).toMatchObject({
-      selectionStart: 5,
-      selectionEnd: 9,
-      selectionDirection: "backward",
-    });
+    expect(input).toMatchObject(selection(5, 9));
     keydown(input, { metaKey: true });
     flush();
     expect(state.submitRequested()).toBe(true);
@@ -163,16 +172,7 @@ describe("cold command palette input custody", () => {
     (mode) => {
       const { state, input } = mountLoader();
       const edit = (value: string, inputType: string, data: string) => {
-        input.value = value;
-        input.setSelectionRange(value.length, value.length);
-        input.dispatchEvent(
-          new InputEvent("input", {
-            bubbles: true,
-            inputType,
-            data,
-            isComposing: mode === "composing",
-          }),
-        );
+        type(input, value, { inputType, data, isComposing: mode === "composing" });
       };
       edit("Ask @", mode === "pasted" ? "insertFromPaste" : "insertText", "Ask @");
       edit("Ask @Al", "insertText", "Al");
@@ -215,29 +215,26 @@ describe("cold command palette input custody", () => {
     { modifier: { ctrlKey: true }, submit: true, value: "Start this background task" },
     { modifier: { metaKey: true }, submit: true, value: "Start this background task" },
     { modifier: {}, submit: false, value: "unsent prompt" },
-  ])(
-    "handles Enter without leaking a loading prompt ($modifier)",
-    ({ modifier, submit, value }) => {
-      const { state, input, close } = mountLoader();
-      type(input, value);
-      const event = keydown(input, modifier);
-      keydown(input, { ...modifier, repeat: true });
-      expect(event.defaultPrevented).toBe(true);
-      if (!submit) {
-        expect(close).not.toHaveBeenCalled();
-        expect(state.value()).toBe("unsent prompt");
-        const newline = keydown(input, { shiftKey: true });
-        expect(newline.defaultPrevented).toBe(false);
-        expect(state.submitRequested()).toBe(false);
-        return;
-      }
-      const take = state.captureHandoff();
-      expect(take()).toMatchObject({ value, submitRequested: true });
-      expect(take()).toBeUndefined();
-      state.begin();
-      expect(state.captureHandoff()()?.submitRequested).not.toBe(true);
-    },
-  );
+  ])("handles Enter without leaking its prompt ($modifier)", ({ modifier, submit, value }) => {
+    const { state, input, close } = mountLoader();
+    type(input, value);
+    const event = keydown(input, modifier);
+    keydown(input, { ...modifier, repeat: true });
+    expect(event.defaultPrevented).toBe(true);
+    if (!submit) {
+      expect(close).not.toHaveBeenCalled();
+      expect(state.value()).toBe("unsent prompt");
+      const newline = keydown(input, { shiftKey: true });
+      expect(newline.defaultPrevented).toBe(false);
+      expect(state.submitRequested()).toBe(false);
+      return;
+    }
+    const take = state.captureHandoff();
+    expect(take()).toMatchObject({ value, submitRequested: true });
+    expect(take()).toBeUndefined();
+    state.begin();
+    expect(state.captureHandoff()()?.submitRequested).not.toBe(true);
+  });
 
   it.each([
     { remount: false, value: "early draft continued", start: 6, end: 11 },
@@ -256,19 +253,13 @@ describe("cold command palette input custody", () => {
         const replacement = renderLoader(state, close);
         expect(replacement).not.toBe(input);
         expect(replacement.value).toBe(value);
-        expect(replacement).toMatchObject({
-          selectionStart: start,
-          selectionEnd: end,
-          selectionDirection: "backward",
-        });
+        expect(replacement).toMatchObject(selection(start, end));
         // The removed Solid root cleans up after its replacement has mounted.
         await Promise.resolve();
       }
       expect(take()).toEqual({
         value,
-        selectionStart: start,
-        selectionEnd: end,
-        selectionDirection: "backward",
+        ...selection(start, end),
         returnFocus: foreground,
       });
       expect(foreground.value).toBe("Keep this foreground draft");
@@ -294,50 +285,38 @@ describe("cold command palette input custody", () => {
     expect(accepted).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(20);
     expect(accepted).toHaveBeenCalledWith(
-      expect.objectContaining({
-        value: "日本",
-        selectionStart: 1,
-        selectionEnd: 2,
-        selectionDirection: "backward",
-      }),
+      expect.objectContaining({ value: "日本", ...selection(1, 2) }),
     );
   });
 
-  it("retires a composition handoff when its shell owner is disposed", async () => {
-    const { state, input, disposeOwner } = mountLoader();
-    composition(input, "start");
-    type(input, "retired prompt");
-    const take = state.captureHandoff();
-    const accepted = vi.fn();
-    state.handoff(accepted);
-    composition(input, "end");
-    disposeOwner();
-    expect(take()).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(20);
-    expect(accepted).not.toHaveBeenCalled();
-  });
-
-  it.each(["composing", "commit-pending"] as const)(
+  it.each(["disposed", "composing", "commit-pending"] as const)(
     "retires a %s handoff without reviving its prompt on reopen",
     async (phase) => {
-      const { state, input } = mountLoader();
+      const { state, input, disposeOwner } = mountLoader();
       composition(input, "start");
       type(input, "retired text");
       const accepted = vi.fn();
+      const beforeHandoff = phase === "disposed" ? state.captureHandoff() : undefined;
       state.handoff(accepted);
-      const take = state.captureHandoff();
-      if (phase === "commit-pending") {
+      const take = beforeHandoff ?? state.captureHandoff();
+      if (phase !== "composing") {
         composition(input, "end");
       }
-      state.clear();
-      // A late ref/input from the old render cannot resurrect custody.
-      state.inputRef(undefined);
-      state.captureInput();
-      state.begin();
+      if (phase === "disposed") {
+        disposeOwner();
+      } else {
+        state.clear();
+        // A late ref/input from the old render cannot resurrect custody.
+        state.inputRef(undefined);
+        state.captureInput();
+        state.begin();
+      }
       expect(take()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(20);
       expect(accepted).not.toHaveBeenCalled();
-      expect(state.value()).toBe("");
+      if (phase !== "disposed") {
+        expect(state.value()).toBe("");
+      }
     },
   );
 });

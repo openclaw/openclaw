@@ -32,8 +32,12 @@ function expectTitle(shell: ShellDocumentTitleState, title: string, routeId?: Ro
   expect(document.title).toBe(title);
 }
 
-function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult {
-  return { defaultId, mainKey: "main", scope: "per-sender", agents };
+function roster(agents: GatewayAgentRow[]): AgentsListResult {
+  return { defaultId: "main", mainKey: "main", scope: "per-sender", agents };
+}
+
+function sessionRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, kind: "direct", updatedAt: 1, ...fields };
 }
 
 setupSidebarTest();
@@ -42,17 +46,10 @@ async function createConnectedSessionShell() {
   vi.useFakeTimers();
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("requestIdleCallback", vi.fn());
-  const active: GatewaySessionRow = {
-    key: "agent:main:quarterly-launch",
-    kind: "direct",
-    updatedAt: 1,
+  const active = sessionRow("agent:main:quarterly-launch", {
     derivedTitle: "Quarterly launch plan",
-  };
-  const background: GatewaySessionRow = {
-    key: "agent:main:background-task",
-    kind: "direct",
-    updatedAt: 1,
-  };
+  });
+  const background = sessionRow("agent:main:background-task");
   const deletion = createDeferred<{ deleted: boolean }>();
   const request = vi.fn(async (method: string) => {
     if (method === "sessions.delete") {
@@ -87,20 +84,7 @@ async function createConnectedSessionShell() {
 }
 
 describe("OpenClaw shell document title", () => {
-  function createShell(
-    context: ApplicationContext,
-    activeSessionKey?: string,
-  ): ShellDocumentTitleState {
-    const shell = createShellOwner() as unknown as ShellDocumentTitleState;
-    shell.runtime = { context };
-    shell.routeState = { routeId: "chat" };
-    if (activeSessionKey) {
-      shell.activeSessionKey = activeSessionKey;
-    }
-    return shell;
-  }
-
-  function createContext(options: {
+  function createShell(options: {
     phase?: ApplicationContext["gateway"]["snapshot"]["phase"];
     approvalCount?: number;
     brandName?: string;
@@ -108,12 +92,13 @@ describe("OpenClaw shell document title", () => {
     assistantAgentId?: string;
     environment?: { label: string; color: "amber" };
     sessions?: GatewaySessionRow[] | null;
-  }): ApplicationContext {
+    activeSessionKey?: string;
+  }): ShellDocumentTitleState {
     const previousBranding = currentThemeBranding();
     const branding = resolveThemeBranding({ brandName: options.brandName });
     setCurrentThemeBranding(branding);
     onTestFinished(() => setCurrentThemeBranding(previousBranding));
-    return {
+    const context = {
       gateway: {
         snapshot: {
           phase: options.phase ?? "connected",
@@ -132,13 +117,17 @@ describe("OpenClaw shell document title", () => {
         presentation: { result: options.sessions ? { sessions: options.sessions } : null },
       },
     } as unknown as ApplicationContext;
+    const shell = createShellOwner() as unknown as ShellDocumentTitleState;
+    shell.runtime = { context };
+    shell.routeState = { routeId: "chat" };
+    shell.activeSessionKey = options.activeSessionKey ?? "";
+    return shell;
   }
 
   it("keeps a new tab neutral during connecting", () => {
-    const context = createContext({ phase: "connecting", approvalCount: 2 });
-    const shell = createShell(context);
+    const shell = createShell({ phase: "connecting", approvalCount: 2 });
     // Slow initial handshakes are still loading, even after the offline grace period.
-    context.gateway.snapshot.offlineStable = true;
+    shell.runtime!.context.gateway.snapshot.offlineStable = true;
 
     expectTitle(shell, "Chat — OpenClaw");
   });
@@ -146,9 +135,7 @@ describe("OpenClaw shell document title", () => {
   it.each(["OpenClaw", "Northstar"])(
     "uses %s and the environment in route and custodian titles",
     (brandName) => {
-      const shell = createShell(
-        createContext({ brandName, environment: { label: "edge", color: "amber" } }),
-      );
+      const shell = createShell({ brandName, environment: { label: "edge", color: "amber" } });
       expectTitle(shell, `Usage — ${brandName} · edge`, "usage");
       expectTitle(shell, `Ask ${brandName} · edge`, "custodian");
     },
@@ -214,38 +201,36 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("Disconnected shell");
   });
 
-  it("uses the selected agent name for a global-scope main chat", () => {
-    const shell = createShell(
-      createContext({
+  it.each([
+    [
+      {
         assistantAgentId: "molty",
-        agentsList: roster("main", [{ id: "molty", name: "Molty" }]),
-      }),
-      "global",
-    );
-    expectTitle(shell, "Molty — OpenClaw");
-  });
-
-  it("falls back to the session display name when the main agent is missing", () => {
-    const session: GatewaySessionRow = {
-      key: "agent:missing:main",
-      kind: "direct",
-      updatedAt: 1,
-      label: "Fallback thread",
-    };
-    const shell = createShell(
-      createContext({ sessions: [session], agentsList: roster("main", []) }),
-      session.key,
-    );
-    expectTitle(shell, "Fallback thread — OpenClaw");
-  });
+        agentsList: roster([{ id: "molty", name: "Molty" }]),
+        activeSessionKey: "global",
+      },
+      "Molty — OpenClaw",
+    ],
+    [
+      {
+        sessions: [sessionRow("agent:missing:main", { label: "Fallback thread" })],
+        agentsList: roster([]),
+        activeSessionKey: "agent:missing:main",
+      },
+      "Fallback thread — OpenClaw",
+    ],
+  ] satisfies Array<[Parameters<typeof createShell>[0], string]>)(
+    "resolves chat title %j to %s",
+    (options, title) => {
+      expectTitle(createShell(options), title);
+    },
+  );
 
   it.each(["reconnecting", "offline", "reload-required"] as const)(
     "keeps the destination title without stale approvals while %s",
     (phase) => {
-      const context = createContext({ phase, approvalCount: 2 });
-      const shell = createShell(context);
+      const shell = createShell({ phase, approvalCount: 2 });
       expectTitle(shell, "Usage — OpenClaw", "usage");
-      context.gateway.snapshot.phase = "connected";
+      shell.runtime!.context.gateway.snapshot.phase = "connected";
       expectTitle(shell, "(2) Usage — OpenClaw");
     },
   );
