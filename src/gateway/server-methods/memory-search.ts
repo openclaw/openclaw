@@ -6,7 +6,6 @@ import type {
   MemoryCliSearchOutcome,
   MemoryProviderStatus,
   MemorySearchManager,
-  MemorySearchResult,
   MemorySearchResponse,
 } from "../../memory-host-sdk/host/types.js";
 import {
