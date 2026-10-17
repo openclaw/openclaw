@@ -402,6 +402,35 @@ describe("doctor invalid config process exit", () => {
     getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
   );
 
+  it.each(
+    ["sqlite", "postgres"].flatMap((engine) =>
+      ["onboard", "setup"].map((entry) => ({ engine, entry })),
+    ),
+  )(
+    "preserves setup JSON failure output for malformed $engine config through $entry",
+    async ({ engine, entry }) => {
+      const { stateDir, configPath, run } = createDoctorFixture("setup-invalid-json", true);
+      const raw = `{"database":{"engine":"${engine}"}, broken`;
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, raw);
+
+      const result = await run([entry, "--json"], DOCTOR_CHILD_TIMEOUT_MS);
+      expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid config at") },
+      });
+      expect(result.stderr).not.toContain('Run "openclaw doctor --fix" now?');
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(
+        fs
+          .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+          .filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file)),
+      ).toEqual([]);
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
   it.each(["sqlite", "postgres"] as const)(
     "leaves prefixed %s config untouched while a live Gateway owns the target",
     async (engine) => {

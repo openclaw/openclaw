@@ -178,6 +178,7 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
   if (
     isSetupInvocation &&
     !hasFlag(argv, "--non-interactive") &&
+    !hasFlag(argv, "--json") &&
     !isConfigReadFailure(snapshot) &&
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
   ) {
