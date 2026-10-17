@@ -9,6 +9,7 @@ import {
   prepareModelRunCapabilities,
   type PreparedModelThinkingCapability,
 } from "../../agents/model-catalog-lookup.js";
+import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
@@ -31,6 +32,7 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { resolvePublishedRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   isTrustedMessageActionTurnIngress,
@@ -71,12 +73,18 @@ type EmbeddedReplyRoute = Pick<
 >;
 
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  // An already-admitted turn keeps its retained config paired with its plugin
+  // generation lease; rebinding to a newer publication would split them and fail
+  // the nested borrow. Queue drains run outside the generation scope and rebind.
+  const admittedGeneration = getPreparedModelRuntimePluginGeneration();
   return (
+    (admittedGeneration ? null : resolvePublishedRuntimeConfig(config)) ??
     selectApplicableRuntimeConfig({
       inputConfig: config,
       runtimeConfig: getRuntimeConfigSnapshot(),
       runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-    }) ?? config
+    }) ??
+    config
   );
 }
 
