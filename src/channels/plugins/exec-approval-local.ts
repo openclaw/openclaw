@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGatewayNativeApprovalRuntime } from "../../infra/approval-gateway-runtime-context.js";
 import { hasActiveNativeApprovalRoute } from "../../infra/approval-native-route-coordinator.js";
+import { getExecApprovalReplyMetadata } from "../../infra/exec-approval-reply.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";
 
 export async function shouldSuppressLocalExecApprovalPromptAsync(params: {
@@ -14,6 +15,7 @@ export async function shouldSuppressLocalExecApprovalPromptAsync(params: {
   if (!channel) {
     return false;
   }
+  const approvalKind = getExecApprovalReplyMetadata(params.payload)?.approvalKind ?? "exec";
   // Native-route state is process-local and transient. Pass it as a hint so the
   // channel owns the UX decision without duplicating route lookup logic.
   const outbound = getChannelPlugin(channel)?.outbound;
@@ -26,10 +28,10 @@ export async function shouldSuppressLocalExecApprovalPromptAsync(params: {
       payload: params.payload,
       hint: {
         kind: "approval-pending",
-        approvalKind: "exec",
+        approvalKind,
         nativeRouteActive: hasActiveNativeApprovalRoute(
           getGatewayNativeApprovalRuntime()?.routeCoordinator,
-          { channel, accountId: params.accountId, approvalKind: "exec" },
+          { channel, accountId: params.accountId, approvalKind },
         ),
       },
     })) ?? false
