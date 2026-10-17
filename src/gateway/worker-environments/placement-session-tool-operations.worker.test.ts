@@ -6,70 +6,35 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import {
-  createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementStore,
-} from "./placement-store.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
+import { sessionIdentity } from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
-let placements: WorkerSessionPlacementStore;
-let database: OpenClawStateDatabase;
-let stateDir: string;
-const session = {
-  sessionId: "tools-worker-session",
-  agentId: "main",
-  sessionKey: "agent:main:tools-worker-session",
-};
+const session = sessionIdentity("tools-worker-session");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeStateDatabaseForTest();
     cleanup();
   }),
 );
-function openStore() {
-  database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-  placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-}
+const h = usePlacementStoreFixture(
+  () => tempDirs.make("openclaw-session-tools-worker-"),
+  beforeAll,
+);
 beforeAll(async () => {
-  stateDir = tempDirs.make("openclaw-session-tools-worker-");
-  openStore();
-  await advancePlacementFixtureToActive(placements, database, session);
+  await advancePlacementFixtureToActive(h.store, h.database, session);
 });
 afterEach(() => vi.restoreAllMocks());
 async function claim(name: string, toolName: "sessions_send" | "sessions_spawn" = "sessions_send") {
-  const source = await placements.claimTurn({
+  const source = await h.store.claimTurn({
     ...session,
     claimId: `claim-${name}`,
     runId: `run-${name}`,
     owner: { kind: "worker", environmentId: "environment-placement-claim-close", ownerEpoch: 7 },
   });
-  const store = placements;
-  const call = { toolCallId: "call", requestDigest: "digest" };
-  const request = { claim: source, toolName, ...call };
-  const operation = { sourceSessionId: source.sessionId, sourceClaimId: source.claimId, ...call };
-  return {
-    source,
-    request,
-    authorize: (names: string[] = [toolName]) => store.authorizeWorkerTurnTools(source, names),
-    begin: (assertCurrent?: () => void) =>
-      store.beginWorkerSessionToolOperation(request, assertCurrent),
-    authorized: (tool = toolName) => store.isWorkerTurnToolAuthorized(source, tool),
-    complete: (resultJson = "{}") =>
-      store.completeWorkerSessionToolOperation({ ...operation, resultJson }),
-    close: () => store.closeWorkerTurnToolState(source),
-    release: () => store.releaseTurn(source),
-    abandon: async () => {
-      await store.abandonWorkerSessionToolOperation(operation);
-      await store.closeWorkerTurnToolState(source);
-      await store.releaseTurn(source);
-    },
-  };
+  return h.toolTurn(source, toolName);
 }
 
 it.each([
@@ -80,7 +45,6 @@ it.each([
   async ({ toolName, lostReply }) => {
     const turn = await claim("drain", toolName);
     const observed = observeHostDataSql();
-    const { request } = turn;
     try {
       await turn.authorize([` ${toolName} `]);
       expect(turn.authorized()).toBe(true);
@@ -95,8 +59,8 @@ it.each([
       const closing = turn.close();
       expect(turn.authorized()).toBe(false);
       expect(
-        await placements.beginWorkerSessionToolOperation({
-          ...request,
+        await h.store.beginWorkerSessionToolOperation({
+          ...turn.request,
           toolCallId: "late",
           requestDigest: "late-digest",
         }),
@@ -114,9 +78,8 @@ it.each([
     }
     expect(turn.authorized()).toBe(false);
     for (const table of ["worker_turn_tool_authorities", "worker_session_tool_operations"]) {
-      expect(database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
-        count: 0,
-      });
+      const row = h.database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
+      expect(row).toEqual({ count: 0 });
     }
   },
 );
@@ -129,9 +92,7 @@ it("checks live admission at commit and keeps a refused operation replayable", a
   vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
     (admit, attachment) =>
       createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          revoked = true;
-        }
+        revoked ||= request.stage === "commit";
         admit(request, grant);
       }, attachment),
   );
@@ -150,15 +111,13 @@ function loseNextAdmissionOutcome() {
   vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(() => {});
   const createAdmission = admission.createSqliteWorkerOperationAdmission;
   vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-    (admit, attachment) => {
-      const original = createAdmission(admit, attachment);
-      return {
-        ...original,
-        committed: undefined,
-        settlement: { kind: "unknown" as const },
-      };
-    },
+    (admit, attachment) => ({
+      ...createAdmission(admit, attachment),
+      committed: undefined,
+      settlement: { kind: "unknown" as const },
+    }),
   );
+  return corruptReply();
 }
 
 function corruptReply(
@@ -189,8 +148,7 @@ function corruptReply(
 it("reports an uncertain admission to teardown instead of waiting for an unowned operation", async () => {
   const turn = await claim("unknown");
   await turn.authorize();
-  loseNextAdmissionOutcome();
-  const verifyCorruption = corruptReply();
+  const verifyCorruption = loseNextAdmissionOutcome();
   await expect(turn.begin()).rejects.toThrow();
   verifyCorruption();
   expect(turn.authorized()).toBe(false);
@@ -203,30 +161,26 @@ it("cannot fence a reopened owner's same-byte grant with a delayed uncertain out
   const turn = await claim("reopened");
   await turn.authorize();
   const { source } = turn;
-  const previous = placements;
+  const previous = h.store;
   const failed = createDeferredCore<unknown>();
   const deliver = createDeferredCore();
   const runOperation = stateWorker.runOpenClawStateWorkerOperation;
   vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
-    async (context, request, options) => {
-      try {
-        return await runOperation(context, request, options);
-      } catch (error) {
+    (context, request, options) =>
+      runOperation(context, request, options).catch(async (error: unknown) => {
         failed.resolve(error);
         await deliver.promise;
         throw error;
-      }
-    },
+      }),
   );
-  loseNextAdmissionOutcome();
-  const verifyCorruption = corruptReply();
+  const verifyCorruption = loseNextAdmissionOutcome();
   const pending = turn.begin();
   try {
     const originalError = await failed.promise;
     await closeStateDatabaseForTest();
-    openStore();
-    await placements.recoverWorkerSessionToolOperationsAfterRestart();
-    await placements.releaseTurn(source);
+    h.open();
+    await h.store.recoverWorkerSessionToolOperationsAfterRestart();
+    await h.store.releaseTurn(source);
     const successor = await claim("reopened");
     await successor.authorize();
     expect(successor.source).toEqual(source);
