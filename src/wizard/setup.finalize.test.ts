@@ -1660,37 +1660,40 @@ describe("finalizeSetupWizard", () => {
     },
   );
 
-  it("closes a session gateway when finalize fails before TUI launch", async () => {
-    await withPlatform("linux", async () => {
-      isSystemdUserServiceAvailable.mockResolvedValue(false);
-      isContainerEnvironment.mockReturnValue(true);
-      waitForGatewayReachable.mockRejectedValueOnce(new Error("probe failed"));
-      const sessionGateway = { wait: new Promise<void>(() => {}), close: vi.fn(async () => {}) };
-      startOnboardingGatewayProcess.mockResolvedValueOnce(sessionGateway);
-      const prompter = createLaterPrompter();
+  it.each(["probe", "child"])(
+    "closes a session gateway on %s failure before TUI launch",
+    async (source) => {
+      await withPlatform("linux", async () => {
+        isSystemdUserServiceAvailable.mockResolvedValue(false);
+        isContainerEnvironment.mockReturnValue(true);
+        const failure = new Error(`${source} failed`);
+        const child = createDeferred();
+        void child.promise.catch(() => {});
+        waitForGatewayReachable.mockImplementationOnce(() => {
+          if (source === "probe") {
+            return Promise.reject(failure);
+          }
+          child.reject(failure);
+          return new Promise(() => {});
+        });
+        const sessionGateway = { wait: child.promise, close: vi.fn(async () => {}) };
+        startOnboardingGatewayProcess.mockResolvedValueOnce(sessionGateway);
+        const prompter = createLaterPrompter();
 
-      await expect(
-        finalizeSetupWizard(
-          createFinalizeArgs("quickstart", {
-            opts: { installDaemon: undefined, skipHealth: false },
-            settings: { gatewayToken: "test-token" },
-            nextConfig: {
-              gateway: {
-                auth: {
-                  mode: "token",
-                  token: "test-token",
-                },
-              },
-            },
-            prompter,
-          }),
-        ),
-      ).rejects.toThrow("probe failed");
+        await expect(
+          finalizeSetupWizard(
+            createFinalizeArgs("quickstart", {
+              opts: { installDaemon: undefined, skipHealth: false },
+              prompter,
+            }),
+          ),
+        ).rejects.toBe(failure);
 
-      expect(runTui).not.toHaveBeenCalled();
-      expect(sessionGateway.close).toHaveBeenCalledOnce();
-    });
-  });
+        expect(runTui).not.toHaveBeenCalled();
+        expect(sessionGateway.close).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it("uses the resolved setup password for health checks", async () => {
     probeGatewayReachable.mockResolvedValue({ ok: true });

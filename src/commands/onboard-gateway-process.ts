@@ -1,6 +1,6 @@
 import { CLI_RESPAWN_PARENT_ENV } from "../../cli-parent-lifetime.mjs";
 import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
-import { registerSignalExitBarrier } from "../cli/signal-exit-barrier.js";
+import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { signalChildProcessTree } from "../process/child-process-tree.js";
@@ -105,23 +105,15 @@ export async function startOnboardingGatewayProcess(
         });
       }
       await wait;
-    })().finally(() => {
-      for (const [signal, listener] of listeners) {
-        process.off(signal, listener);
-      }
-      unregisterBarrier();
-    });
+    })().finally(() => unregisterGate());
     return closePromise;
   };
-  const unregisterBarrier = registerSignalExitBarrier(close);
-  const signals: NodeJS.Signals[] =
-    process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
-  const listeners = signals.map((signal) => {
-    const listener = () => {
+  // Interrupt before the outer CLI gate waits for this foreground command to finish.
+  const unregisterGate = registerSignalExitGate(
+    completion.then(() => {}),
+    () => {
       void close().catch((error: unknown) => process.stderr.write(`${String(error)}\n`));
-    };
-    process.on(signal, listener);
-    return [signal, listener] as const;
-  });
+    },
+  );
   return { wait, close };
 }

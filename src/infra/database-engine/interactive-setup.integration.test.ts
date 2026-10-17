@@ -236,7 +236,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
           );
           await gateway.waitForOutput("Onboarding child authenticated and ready");
           await gateway.write("\x03");
-          expect((await gateway.waitForExit()).exitCode, gateway.output()).toBe(0);
+          expect((await gateway.waitForExit()).exitCode, gateway.output()).toBe(130);
           expect(gateway.output()).toContain(
             "Onboarding parent retained its CLI role after child shutdown",
           );

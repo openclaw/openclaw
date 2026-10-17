@@ -35,6 +35,7 @@ export async function runQuickstartForegroundGateway(params: {
     });
     const authMode = config.gateway?.auth?.mode ?? (credentials.password ? "password" : "token");
     const gateway = await startOnboardingGatewayProcess();
+    const readiness = new AbortController();
     let failed = false;
     try {
       const stopped = gateway.wait.then(() => null);
@@ -48,6 +49,7 @@ export async function runQuickstartForegroundGateway(params: {
               ? credentials.password
               : undefined,
           ...resolveGatewayStartupTiming(),
+          signal: readiness.signal,
         }),
       ]);
       if (!reachable) {
@@ -92,6 +94,7 @@ export async function runQuickstartForegroundGateway(params: {
       failed = true;
       throw error;
     } finally {
+      readiness.abort();
       await gateway.close().catch((error: unknown) => {
         if (!failed) {
           throw error;

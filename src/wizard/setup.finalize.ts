@@ -441,6 +441,7 @@ export async function finalizeSetupWizard(
   let gatewayHealthCheckFailed = false;
   let resolvedGatewayPassword = "";
   let sessionGateway: OnboardingGatewayProcess | undefined;
+  const readinessAbort = new AbortController();
 
   const { gateway, containerWithoutUserSystemd } = await ensureGatewayServiceForOnboarding({
     flow,
@@ -497,6 +498,7 @@ export async function finalizeSetupWizard(
         tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
       });
       const probeOptions = {
+        signal: readinessAbort.signal,
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: probePassword,
@@ -504,15 +506,23 @@ export async function finalizeSetupWizard(
       // Nothing started (declined or failed install): probe once. A reused running
       // Gateway keeps a bounded wait because the config just written can make it
       // reload; started Gateways use the full startup timing.
-      gatewayProbe =
+      const readiness =
         gateway.status === "failed" || (gateway.status === "skipped" && !sessionGateway)
-          ? await probeGatewayReachable(probeOptions)
-          : await waitForGatewayReachable({
+          ? probeGatewayReachable(probeOptions)
+          : waitForGatewayReachable({
               ...probeOptions,
               ...(sessionGateway || (gateway.status === "ready" && gateway.action !== "reused")
                 ? resolveGatewayStartupTiming()
                 : { deadlineMs: 15_000 }),
             });
+      gatewayProbe = await (sessionGateway
+        ? Promise.race([
+            readiness,
+            sessionGateway.wait.then(() => {
+              throw new Error("Temporary Gateway exited before becoming reachable");
+            }),
+          ])
+        : readiness);
       if (gatewayProbe.ok) {
         try {
           const healthConfig: OpenClawConfig =
@@ -974,6 +984,7 @@ export async function finalizeSetupWizard(
 
     return { launchedTui };
   } finally {
+    readinessAbort.abort();
     if (sessionGateway) {
       await closeSessionGatewayForOnboarding({
         sessionGateway,

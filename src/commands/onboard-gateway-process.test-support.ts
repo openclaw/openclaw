@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import {
+  installCliSignalExitHandlers,
+  registerSignalExitGate,
+  waitForCliSignalExit,
+} from "../cli/signal-exit-barrier.js";
+import {
   assertEngineStoreExecutionAllowed,
   installDatabaseProcessRole,
 } from "../infra/database-engine/admission-scope.js";
@@ -11,6 +16,7 @@ assert(Number.isInteger(port) && port > 0, "Gateway handoff fixture needs a vali
 // Resolve the child from the isolated built package, while this parent remains a CLI one-shot.
 process.argv = [process.execPath, entry, "onboard"];
 installDatabaseProcessRole("cli-oneshot");
+installCliSignalExitHandlers();
 const { prepareCliDatabaseEngine } = await import("../cli/database-engine-selection.js");
 await prepareCliDatabaseEngine(process.argv);
 assertEngineStoreExecutionAllowed();
@@ -20,6 +26,8 @@ const [{ startOnboardingGatewayProcess }, { waitForGatewayReachable }] = await P
   import("./onboard-helpers.js"),
 ]);
 const gateway = await startOnboardingGatewayProcess({ port });
+// The real CLI also holds a gate until the foreground command has finished.
+const releaseCommandGate = registerSignalExitGate(gateway.wait.catch(() => {}));
 try {
   const reachable = await Promise.race([
     gateway.wait.then(() => {
@@ -37,6 +45,8 @@ try {
   await gateway.wait;
 } finally {
   await gateway.close();
+  releaseCommandGate();
 }
 assertEngineStoreExecutionAllowed();
 process.stdout.write("Onboarding parent retained its CLI role after child shutdown\n");
+process.exitCode = await waitForCliSignalExit();
