@@ -17,7 +17,6 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import * as transcriptHeader from "../../config/sessions/session-accessor.sqlite-transcript-header.js";
 import {
   registerProjectRegistry,
   selectStoredProjectRegistry,
@@ -50,6 +49,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
   personClient: (profileId: string, scopes: string[]) => GatewayClient;
 }) {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-creation-shared-store-");
+  const scope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+  const entry = (key: string) => loadSessionEntry(scope(key));
+  const transcript = (key: string, sessionId: string) =>
+    loadTranscriptEvents({ ...scope(key), sessionId });
+  const operator = () => fixture.personClient(fixture.profileId(), ["operator.admin"]);
   const contextFor = (client: GatewayClient) => {
     const context = fixture.context();
     context.getClientConnIds = (filter) =>
@@ -70,6 +74,54 @@ export function registerSessionOperatorPreparationTests(fixture: {
       context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
   });
   const sessionHeader = expect.arrayContaining([expect.objectContaining({ type: "session" })]);
+  const incognitoResponse = [
+    true,
+    {
+      key: expect.stringContaining(":incognito-"),
+      entry: { incognito: true },
+    },
+  ];
+  const startRequest = (
+    method: "sessions.create" | "sessions.patch" | "sessions.patchMany",
+    params: Record<string, unknown>,
+    caller: GatewayClient,
+    context: GatewayRequestContext,
+    requestId: string,
+    authorize = true,
+  ) => {
+    const authorization = authorize
+      ? resolveSessionMutationAuthorization({
+          method,
+          client: caller,
+          context,
+          requestParams: params,
+        })
+      : undefined;
+    if (authorization) {
+      expect(authorization.error).toBeNull();
+    }
+    const responses: Parameters<RespondFn>[] = [];
+    const handler = (
+      method === "sessions.create" ? sessionCreateHandlers : sessionMutationHandlers
+    )[method]!;
+    const running = Promise.resolve(
+      handler({
+        req: { type: "req", id: requestId, method, params },
+        params,
+        client: caller,
+        context,
+        isWebchatConnect: () => true,
+        ...(authorization && {
+          hasCurrentClientAuthority: () => !caller.invalidated,
+          sessionMutationAuthorization: authorization.authorization,
+        }),
+        respond: (...response) => {
+          responses.push(response);
+        },
+      }),
+    );
+    return { responses, running };
+  };
   const cases = (["sessions.patch", "sessions.patchMany", "sessions.create"] as const).flatMap(
     (method) => (["params", "caller", "target"] as const).map((change) => ({ method, change })),
   );
@@ -90,14 +142,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
           [key, originalId],
           [otherKey, `${originalId}-other`],
         ] as const) {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            { sessionId, updatedAt: 1 },
-          );
+          await upsertSessionEntryCore(scope(sessionKey), { sessionId, updatedAt: 1 });
         }
-        const before = loadSessionEntry({ agentId: "main", sessionKey: key });
-        const otherBefore = loadSessionEntry({ agentId: "main", sessionKey: otherKey });
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+        const before = entry(key);
+        const otherBefore = entry(otherKey);
+        const caller = operator();
         const context = contextFor(caller);
         const patch = { model: "openai/gpt-5.6-sol", label: `capture-${method}-${change}` };
         const target = { key };
@@ -115,13 +164,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
                       incognito: true,
                     }
                   : { key, ...patch };
-        const authorized = resolveSessionMutationAuthorization({
-          method,
-          client: caller,
-          context,
-          requestParams: params,
-        });
-        expect(authorized.error).toBeNull();
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         const releases: ReturnType<typeof vi.fn>[] = [];
@@ -158,44 +200,19 @@ export function registerSessionOperatorPreparationTests(fixture: {
                     selectedTarget.resolve();
                     return selected;
                   });
-        const responses: Parameters<RespondFn>[] = [];
-        const handler =
-          method === "sessions.create"
-            ? sessionCreateHandlers[method]!
-            : sessionMutationHandlers[method]!;
-        const running = Promise.resolve(
-          handler({
-            req: { type: "req", id: key, method, params },
-            params,
-            context,
-            client: caller,
-            isWebchatConnect: () => true,
-            hasCurrentClientAuthority: () => !caller.invalidated,
-            sessionMutationAuthorization: authorized.authorization,
-            respond: (...response) => {
-              responses.push(response);
-            },
-          }),
-        ).then(
+        const request = startRequest(method, params, caller, context, key);
+        const { responses } = request;
+        const running = request.running.then(
           () => undefined,
           (error: unknown) => error,
         );
         let replacement: typeof before;
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             entered.promise,
-            running.then((error) => {
-              if (error !== undefined) {
-                if (error instanceof Error) {
-                  throw error;
-                }
-                throw new Error("Handler failed before profile preparation", { cause: error });
-              }
-              throw new Error(
-                `Handler settled before profile preparation: ${JSON.stringify(responses)}`,
-              );
-            }),
-          ]);
+            request.running,
+            "Handler settled before profile preparation",
+          );
           if (targetReadSpy) {
             // Profile readiness does not mean the independent worker target read has completed.
             await withinTest(
@@ -210,11 +227,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
           if (change === "caller") {
             caller.invalidated = true;
           } else if (change === "target") {
-            await upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              { sessionId: `${originalId}-replacement`, updatedAt: 2 },
-            );
-            replacement = loadSessionEntry({ agentId: "main", sessionKey: key });
+            await upsertSessionEntryCore(scope(key), {
+              sessionId: `${originalId}-replacement`,
+              updatedAt: 2,
+            });
+            replacement = entry(key);
           } else if (change === "params") {
             target.key = otherKey;
             patch.model = "anthropic/claude-sonnet-4-6";
@@ -230,21 +247,15 @@ export function registerSessionOperatorPreparationTests(fixture: {
               key: expect.stringMatching(/^agent:main:dashboard:(?!incognito-)/),
             });
             expect(responses[0]?.[1]).not.toHaveProperty("entry.incognito", true);
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toEqual(before);
+            expect(entry(key)).toEqual(before);
           } else if (change === "incognito" || change === "explicit-incognito") {
             expect(error).toBeUndefined();
-            expect(responses[0]).toMatchObject([
-              true,
-              {
-                key: expect.stringContaining(":incognito-"),
-                entry: { incognito: true },
-              },
-            ]);
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toEqual(before);
+            expect(responses[0]).toMatchObject(incognitoResponse);
+            expect(entry(key)).toEqual(before);
           } else if (change === "params") {
             expect(error).toBeUndefined();
             expect(responses[0]?.[0]).toBe(true);
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toMatchObject({
+            expect(entry(key)).toMatchObject({
               sessionId: originalId,
               providerOverride: "openai",
               modelOverride: "gpt-5.6-sol",
@@ -259,11 +270,9 @@ export function registerSessionOperatorPreparationTests(fixture: {
             } else {
               expect(responses[0]?.[0]).toBe(false);
             }
-            expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toEqual(
-              replacement ?? before,
-            );
+            expect(entry(key)).toEqual(replacement ?? before);
           }
-          expect(loadSessionEntry({ agentId: "main", sessionKey: otherKey })).toEqual(otherBefore);
+          expect(entry(otherKey)).toEqual(otherBefore);
           expect(releases.length).toBeGreaterThan(0);
           for (const release of releases) {
             expect(release).toHaveBeenCalledOnce();
@@ -280,51 +289,40 @@ export function registerSessionOperatorPreparationTests(fixture: {
       const root = sessionDirs.make();
       const storePath = path.join(root, "shared.sqlite");
       try {
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+        const caller = operator();
         const context = contextFor(caller);
         const cfg = context.getRuntimeConfig();
         cfg.session = { ...cfg.session, store: storePath };
         await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
         const key = "agent:work:dashboard:shared-physical-main";
         const params = { agentId: "work", key, model: "openai/gpt-5.6-sol" };
-        const authorized = resolveSessionMutationAuthorization({
-          method: "sessions.create",
-          client: caller,
-          context,
-          requestParams: params,
-        });
-        expect(authorized.error).toBeNull();
-        const responses: Parameters<RespondFn>[] = [];
-        await sessionCreateHandlers["sessions.create"]!({
-          req: { type: "req", id: key, method: "sessions.create", params },
+        const { responses, running } = startRequest(
+          "sessions.create",
           params,
-          client: caller,
+          caller,
           context,
-          isWebchatConnect: () => true,
-          hasCurrentClientAuthority: () => !caller.invalidated,
-          sessionMutationAuthorization: authorized.authorization,
-          respond: (...response) => {
-            responses.push(response);
-          },
-        });
+          key,
+        );
+        await running;
         expect(responses).toHaveLength(1);
         expect(responses[0]?.[0], JSON.stringify(responses[0])).toBe(true);
         expect(responses[0]?.[1]).toMatchObject({
           key,
           entry: { providerOverride: "openai", modelOverride: "gpt-5.6-sol" },
         });
-        const entry = loadSessionEntry({ agentId: "work", sessionKey: key, storePath });
-        expect(entry).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-5.6-sol" });
+        const created = loadSessionEntry({ agentId: "work", sessionKey: key, storePath });
+        expect(created).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-5.6-sol" });
         expect(
           loadTranscriptEventsSync({
             agentId: "work",
             sessionKey: key,
-            sessionId: entry!.sessionId,
+            sessionId: created!.sessionId,
             storePath,
           }),
         ).toEqual(sessionHeader);
-        const currentDatabase = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-        expect(currentDatabase.agentId).toBe("main");
+        expect(openOpenClawAgentDatabase({ agentId: "main", path: storePath }).agentId).toBe(
+          "main",
+        );
       } finally {
         await disposeOpenClawAgentDatabaseByPath(storePath);
       }
@@ -334,15 +332,21 @@ export function registerSessionOperatorPreparationTests(fixture: {
       try {
         const repoRoot = await initializeRepository(root, "project");
         const project = await registerProjectRegistry({ path: repoRoot });
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+        const caller = operator();
         const context = contextFor(caller);
         const key = "agent:main:dashboard:captured-project-creation";
-        const stateDatabasePath = resolveOpenClawStateSqlitePath();
-        const agentDatabasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+        const statePath = resolveOpenClawStateSqlitePath();
+        const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+        const closeDatabases = async () => {
+          try {
+            await closeOpenClawAgentDatabaseByPathAsync(agentPath, "main");
+          } finally {
+            await closeOpenClawStateDatabaseByPathAsync(statePath);
+          }
+        };
         // Retire normal-scope actors before acquiring the existing-schema policy.
-        await closeOpenClawAgentDatabaseByPathAsync(agentDatabasePath, "main");
-        await closeOpenClawStateDatabaseByPathAsync(stateDatabasePath);
-        await withExistingOpenClawStateSchema({ path: stateDatabasePath }, async () => {
+        await closeDatabases();
+        await withExistingOpenClawStateSchema({ path: statePath }, async () => {
           const preparation = captureGatewayOperatorRunAuthority({ client: caller, context });
           void preparation.catch(() => {});
           try {
@@ -367,25 +371,17 @@ export function registerSessionOperatorPreparationTests(fixture: {
               },
             });
             expect(result).toMatchObject({ ok: true, key });
-            const entry = loadSessionEntry({ agentId: "main", sessionKey: key });
-            expect(entry).toMatchObject({ sessionRoot: repoRoot, spawnedCwd: repoRoot });
+            const created = entry(key);
+            expect(created).toMatchObject({ sessionRoot: repoRoot, spawnedCwd: repoRoot });
             expect(
-              loadTranscriptEventsSync({
-                agentId: "main",
-                sessionKey: key,
-                sessionId: entry!.sessionId,
-              }),
+              loadTranscriptEventsSync({ ...scope(key), sessionId: created!.sessionId }),
             ).toEqual(sessionHeader);
           } finally {
             try {
               (await preparation.catch(() => undefined))?.release();
             } finally {
               // Captured worker contexts must drain before their schema scope retires.
-              try {
-                await closeOpenClawAgentDatabaseByPathAsync(agentDatabasePath, "main");
-              } finally {
-                await closeOpenClawStateDatabaseByPathAsync(stateDatabasePath);
-              }
+              await closeDatabases();
             }
           }
         });
@@ -394,28 +390,20 @@ export function registerSessionOperatorPreparationTests(fixture: {
       }
     });
     it("preserves fresh System incognito creation", async () => {
-      const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+      const caller = operator();
       delete caller.authenticatedUserProfile;
       caller.internal = { operatorRoleActor: { kind: "system" } };
       const params = { agentId: "main", incognito: true, model: "openai/gpt-5.6-sol" };
-      const responses: Parameters<RespondFn>[] = [];
-      await sessionCreateHandlers["sessions.create"]!({
-        req: { type: "req", id: "system-incognito", method: "sessions.create", params },
+      const { responses, running } = startRequest(
+        "sessions.create",
         params,
-        client: caller,
-        context: contextFor(caller),
-        isWebchatConnect: () => true,
-        respond: (...response) => {
-          responses.push(response);
-        },
-      });
-      expect(responses[0]).toMatchObject([
-        true,
-        {
-          key: expect.stringContaining(":incognito-"),
-          entry: { incognito: true },
-        },
-      ]);
+        caller,
+        contextFor(caller),
+        "system-incognito",
+        false,
+      );
+      await running;
+      expect(responses[0]).toMatchObject(incognitoResponse);
     });
     it.each(
       (["durable", "incognito"] as const).flatMap((storage) => [
@@ -426,16 +414,17 @@ export function registerSessionOperatorPreparationTests(fixture: {
     )(
       "retains $storage creation custody through transcript preparation and commit (fork=$fork, ending=$ending)",
       async ({ storage, fork, ending }) => {
-        const prefix = storage === "incognito" ? "incognito-" : "";
+        const incognito = storage === "incognito";
+        const prefix = incognito ? "incognito-" : "";
         const suffix = `${prefix}owned-header-${fork}-${ending}`;
         const parentKey = `agent:main:dashboard:${suffix}-parent`;
         let childKey = `agent:main:dashboard:${suffix}-child`;
         const parentId = `${suffix}-parent-id`;
-        const parentScope = { agentId: "main", sessionKey: parentKey, sessionId: parentId };
+        const parentScope = { ...scope(parentKey), sessionId: parentId };
         const parentEntry = {
           sessionId: parentId,
           updatedAt: 1,
-          ...(storage === "incognito" ? { incognito: true as const } : {}),
+          ...(incognito ? { incognito: true as const } : {}),
         };
         expect(
           await createSessionEntryWithTranscript(parentScope, () => ({
@@ -446,43 +435,33 @@ export function registerSessionOperatorPreparationTests(fixture: {
         await persistSessionTranscriptTurn(parentScope, {
           cwd: "/tmp",
           updateMode: "none",
-          messages: [
-            {
-              message: {
-                role: "user",
-                content: "Synthetic parent content for owned fork proof.",
-                timestamp: 1,
-              },
-              now: 1,
+          messages: (["user", "assistant"] as const).map((role, i) => ({
+            message: {
+              role,
+              content:
+                role === "user"
+                  ? "Synthetic prompt"
+                  : [{ type: "text" as const, text: "Synthetic reply" }],
+              timestamp: i + 1,
             },
-            {
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Synthetic completed parent reply." }],
-                timestamp: 2,
-              },
-              now: 2,
-            },
-          ],
+            now: i + 1,
+          })),
         });
-        const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+        const caller = operator();
         const context = contextFor(caller);
-        const header = vi.spyOn(transcriptHeader, "ensureTranscriptHeader");
         const prepareFork = sessionFork.prepareSessionForkFromParent;
         const revoked = new Error("original creation source ended before entry commit");
         const runOutsideCreation = AsyncLocalStorage.snapshot();
         let childSessionId: string | undefined;
         let parentReplacement: ReturnType<typeof loadSessionEntry>;
         const assertNoForkState = async (sessionKey: string, sessionId: string) => {
-          expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
-          expect(await loadTranscriptEvents({ agentId: "main", sessionKey, sessionId })).toEqual(
-            [],
-          );
-          if (storage === "incognito") {
+          expect(entry(sessionKey)).toBeUndefined();
+          expect(await transcript(sessionKey, sessionId)).toEqual([]);
+          if (incognito) {
             return;
           }
           const database = openOpenClawAgentDatabase(
-            toDatabaseOptions(resolveSqliteScope({ agentId: "main", sessionKey })),
+            toDatabaseOptions(resolveSqliteScope(scope(sessionKey))),
           );
           expect(
             database.db
@@ -495,27 +474,26 @@ export function registerSessionOperatorPreparationTests(fixture: {
             .spyOn(sessionFork, "prepareSessionForkFromParent")
             .mockImplementation(async (params) => {
               const prepared = await prepareFork(params);
-              if (prepared.status === "prepared") {
-                await assertNoForkState(params.sessionKey, prepared.transcript.sessionId);
-                if (!childSessionId) {
-                  childSessionId = prepared.transcript.sessionId;
-                  if (ending === "source-and-retry") {
-                    source.abort(revoked);
-                  } else if (ending === "parent-replaced") {
-                    // The competing parent writer must not borrow the child's actor binding.
-                    parentReplacement = await runOutsideCreation(async () => {
-                      await upsertSessionEntryCore(
-                        { agentId: "main", sessionKey: parentKey },
-                        {
-                          ...parentEntry,
-                          sessionId: `${parentId}-replacement`,
-                          updatedAt: 2,
-                        },
-                      );
-                      return loadSessionEntry({ agentId: "main", sessionKey: parentKey });
-                    });
-                  }
-                }
+              if (prepared.status !== "prepared") {
+                return prepared;
+              }
+              await assertNoForkState(params.sessionKey, prepared.transcript.sessionId);
+              if (childSessionId) {
+                return prepared;
+              }
+              childSessionId = prepared.transcript.sessionId;
+              if (ending === "source-and-retry") {
+                source.abort(revoked);
+              } else if (ending === "parent-replaced") {
+                // The competing parent writer must not borrow the child's actor binding.
+                parentReplacement = await runOutsideCreation(async () => {
+                  await upsertSessionEntryCore(scope(parentKey), {
+                    ...parentEntry,
+                    sessionId: `${parentId}-replacement`,
+                    updatedAt: 2,
+                  });
+                  return entry(parentKey);
+                });
               }
               return prepared;
             });
@@ -531,10 +509,10 @@ export function registerSessionOperatorPreparationTests(fixture: {
           try {
             return await createGatewaySession({
               ...operatorOptions(caller, context),
-              key: fork && storage === "incognito" ? undefined : childKey,
+              key: fork && incognito ? undefined : childKey,
               parentSessionKey: fork ? parentKey : undefined,
               fork,
-              incognito: storage === "incognito",
+              incognito,
               operatorAuthority: preparation,
               prepareLifecycle: async (target) => {
                 childKey = target.key;
@@ -544,27 +522,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
                     withCommit: async (run) => {
                       const result = await run(() => source.signal.throwIfAborted());
                       if (!fork && !childSessionId) {
-                        const committedEntry = loadSessionEntry({
-                          agentId: "main",
-                          sessionKey: childKey,
-                        });
-                        let childId = committedEntry?.sessionId;
-                        childId ??= header.mock.calls.find(
-                          ([, scope]) => scope.sessionKey === childKey,
-                        )?.[1].sessionId;
-                        if (childId) {
-                          const transcript = await loadTranscriptEvents({
-                            agentId: "main",
-                            sessionKey: childKey,
-                            sessionId: childId,
-                          });
-                          expect(transcript).toEqual(sessionHeader);
-                          expect(committedEntry).toMatchObject({ sessionId: childId });
-                          childSessionId = childId;
-                          if (ending === "source-and-retry" || ending === "source-after-commit") {
-                            source.abort(revoked);
-                          }
-                        }
+                        const committedEntry = entry(childKey);
+                        expect(committedEntry).toHaveProperty("sessionId");
+                        childSessionId = committedEntry!.sessionId;
+                        expect(await transcript(childKey, childSessionId)).toEqual(sessionHeader);
+                        source.abort(revoked);
                       }
                       return result;
                     },
@@ -577,70 +539,43 @@ export function registerSessionOperatorPreparationTests(fixture: {
             (await preparation.catch(() => undefined))?.release();
           }
         };
-        try {
-          const outcome = await createAttempt(new AbortController()).then(
-            (result) => ({ result }),
-            (error: unknown) => ({ error }),
-          );
-          expect(
-            childSessionId,
-            "error" in outcome ? String(outcome.error) : JSON.stringify(outcome.result),
-          ).toBeDefined();
-          if (ending === "parent-replaced") {
-            expect(parentReplacement).toMatchObject({ sessionId: `${parentId}-replacement` });
-          }
-          if (ending === "source-after-commit") {
-            expect(outcome).toMatchObject({ result: { ok: true } });
-            expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toHaveProperty(
-              "sessionId",
-              childSessionId,
-            );
+        const outcome = await createAttempt(new AbortController()).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+        expect(
+          childSessionId,
+          "error" in outcome ? String(outcome.error) : JSON.stringify(outcome.result),
+        ).toBeDefined();
+        if (ending === "parent-replaced") {
+          expect(parentReplacement).toMatchObject({ sessionId: `${parentId}-replacement` });
+        }
+        if (ending === "source-after-commit") {
+          expect(outcome).toMatchObject({ result: { ok: true } });
+          expect(entry(childKey)).toHaveProperty("sessionId", childSessionId);
+        } else {
+          if ("error" in outcome) {
+            expect(outcome.error).toBeInstanceOf(Error);
+            if (ending === "source-and-retry") {
+              expect(outcome.error).toHaveProperty(
+                "message",
+                expect.stringMatching(/creation source ended|operator.*authority.*active/),
+              );
+            }
           } else {
-            if ("error" in outcome) {
-              expect(outcome.error).toBeInstanceOf(Error);
-              if (ending === "source-and-retry") {
-                expect(outcome.error).toHaveProperty(
-                  "message",
-                  expect.stringMatching(/creation source ended|operator.*authority.*active/),
-                );
-              }
-            } else {
-              expect(outcome.result.ok).toBe(false);
-            }
-            expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toBeUndefined();
-            const rejectedKey = childKey;
-            if (fork) {
-              await assertNoForkState(rejectedKey, childSessionId!);
-            } else {
-              expect(
-                await loadTranscriptEvents({
-                  agentId: "main",
-                  sessionKey: rejectedKey,
-                  sessionId: childSessionId!,
-                }),
-              ).toEqual(sessionHeader);
-            }
-            if (ending === "parent-replaced") {
-              expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(
-                parentReplacement,
-              );
-            } else {
-              const retry = await createAttempt(new AbortController());
-              expect(retry).toMatchObject({ ok: true });
-              expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toHaveProperty(
-                "sessionId",
-              );
-              expect(
-                await loadTranscriptEvents({
-                  agentId: "main",
-                  sessionKey: rejectedKey,
-                  sessionId: childSessionId!,
-                }),
-              ).toEqual(fork ? [] : sessionHeader);
-            }
+            expect(outcome.result.ok).toBe(false);
           }
-        } finally {
-          header.mockRestore();
+          expect(entry(childKey)).toBeUndefined();
+          const rejectedKey = childKey;
+          await assertNoForkState(rejectedKey, childSessionId!);
+          if (ending === "parent-replaced") {
+            expect(entry(parentKey)).toEqual(parentReplacement);
+          } else {
+            const retry = await createAttempt(new AbortController());
+            expect(retry).toMatchObject({ ok: true });
+            expect(entry(childKey)).toHaveProperty("sessionId");
+            expect(await transcript(rejectedKey, childSessionId!)).toEqual([]);
+          }
         }
       },
     );

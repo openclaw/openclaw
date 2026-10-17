@@ -27,6 +27,7 @@ import {
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
@@ -50,22 +51,10 @@ afterEach(async () => {
 });
 
 function humanClient(): GatewayClient {
-  return {
-    authenticatedUserId: "perf-reviewer@example.com",
-    authenticatedUserProfile: {
-      profileId: "perf-reviewer",
-      displayName: "Performance Reviewer",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-    },
-  };
+  const client = createSessionMutationTestClient("perf-reviewer");
+  client.authenticatedUserProfile!.displayName = "Performance Reviewer";
+  client.connect.scopes = ["operator.read", "operator.write", "operator.admin"];
+  return client;
 }
 
 function mutationContext(
@@ -330,31 +319,28 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         undefined,
       );
       // Guard batch cost with operation counts, independent of shared-runner contention.
-      expect(statements.counts["whole-store-projection"]).toBe(0);
-      expect(statements.counts["transcript-full-hydration"]).toBe(0);
+      expect(statements.counts).toEqual({
+        "whole-store-projection": 0,
+        "transcript-full-hydration": 0,
+      });
       // One admitted worker transaction owns the batch; the caller never waits in SQLite.
       expect(transactionCounts).toEqual({ begin: 0, commit: 0 });
       expect(workerGrants).toEqual(["transaction", "commit"]);
       expect(
-        sqliteTransactionLabels.filter((label) => label === "session.entry-replacements"),
-      ).toHaveLength(0);
-      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(0);
+        sqliteTransactionLabels.filter((label) =>
+          ["session.entry-replacements", "agent.write"].includes(label),
+        ),
+      ).toEqual([]);
       expect(cronList).toHaveBeenCalledOnce();
-      expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual([
-        ["bound-first", { enabled: false }],
-        ["bound-shared", { enabled: false }],
-        ["bound-last", { enabled: false }],
-      ]);
-      expect(cronUpdateResults).toEqual([
-        { enabled: false, id: "bound-first" },
-        { enabled: false, id: "bound-shared" },
-        { enabled: false, id: "bound-last" },
-      ]);
+      const disabledIds = ["bound-first", "bound-shared", "bound-last"];
+      const disabledJobs = disabledIds.map((id) => ({ id, enabled: false }));
+      expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual(
+        disabledIds.map((id) => [id, { enabled: false }]),
+      );
+      expect(cronUpdateResults).toEqual(disabledJobs);
       expect([...cronJobs.values()].map(({ enabled, id }) => ({ enabled, id }))).toEqual([
         { enabled: true, id: "unrelated" },
-        { enabled: false, id: "bound-first" },
-        { enabled: false, id: "bound-shared" },
-        { enabled: false, id: "bound-last" },
+        ...disabledJobs,
         { enabled: false, id: "already-disabled" },
       ]);
     } finally {
@@ -372,19 +358,13 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         archivedAt: expect.any(Number),
         archivedBy,
       });
-      const auditNotes = (await loadTranscriptEvents(scope)).filter((event) => {
-        if (!event || typeof event !== "object" || !("message" in event)) {
-          return false;
-        }
-        const message = event.message;
-        return (
-          message !== null &&
-          typeof message === "object" &&
-          "customType" in message &&
-          message.customType === "openclaw.system-note"
-        );
-      });
-      expect(auditNotes).toEqual([]);
+      expect(await loadTranscriptEvents(scope)).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.objectContaining({ customType: "openclaw.system-note" }),
+          }),
+        ]),
+      );
     }
   });
 });

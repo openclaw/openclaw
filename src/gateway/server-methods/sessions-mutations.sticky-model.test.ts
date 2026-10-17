@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { clearFollowupQueue, getFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -69,6 +70,7 @@ import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
@@ -133,17 +135,9 @@ function context(clients = new Set<TestClient>()) {
 }
 
 function client(scopes: string[]): TestClient {
-  return {
-    connId: "sticky-model-connection",
-    invalidated: false,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes,
-    },
-  };
+  const base = createSessionMutationTestClient();
+  base.connect.scopes = scopes;
+  return { ...base, connId: "sticky-model-connection", invalidated: false };
 }
 
 function personClient(profileId: string, scopes = ["operator.write"]): TestClient {
@@ -175,6 +169,42 @@ async function patchSession(
   });
   expect(responses).toHaveLength(1);
   return responses[0]!;
+}
+
+async function personalSession(
+  key: string,
+  entry: Partial<SessionEntry> = {},
+  caller = personClient(accountOwnerId),
+) {
+  await seedSession(key, entry);
+  const before = readSession(key);
+  const connections = new Set([caller]);
+  const requestContext = context(connections);
+  const patch = (params: Record<string, unknown> = {}) =>
+    patchSession(
+      { key, model: `openai/gpt-5.6-sol@${personalAuthProfileId}`, ...params },
+      caller.connect.scopes,
+      requestContext,
+      caller,
+    );
+  return { before, caller, connections, requestContext, patch };
+}
+
+const expectForbidden = (response: Parameters<RespondFn>) => {
+  expect(response[0]).toBe(false);
+  expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+};
+
+function runtimeOptions(key: string) {
+  return {
+    cfg,
+    key,
+    model: "openai/gpt-5.6-sol",
+    agentRuntime: "codex",
+    commandSource: "test",
+    operatorRoleActor: { kind: "system" as const },
+    loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
+  };
 }
 
 function queueRuntimeSelection(sessionKey: string) {
@@ -353,47 +383,72 @@ describe("sessions.patch sticky model persistence", () => {
     },
   );
 
-  it("does not persist when model is cleared", async () => {
-    const sessionKey = "agent:main:dm:no-sticky-cleared";
-    await seedSession(sessionKey, {
-      sessionId: "session-cleared",
-      ...selectedModel,
-      modelOverrideSource: "user",
-      modelOverrideRouteResolution: "resolved",
-    });
-    const requestContext = {
-      ...context(),
-      getSessionEventSubscriberConnIds: () => new Set(["reader"]),
-    };
-    const response = await patchSession(
-      { key: sessionKey, model: null },
-      ["operator.admin"],
-      requestContext,
-    );
-    await flushPendingSessionsChangedEvents(requestContext);
-    expect(response[0]).toBe(true);
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-    expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
-      sessionKey,
-      reason: "patch",
-      catalogChanged: true,
-    });
-  });
+  it.each([
+    {
+      field: "model",
+      key: "agent:main:dm:no-sticky-cleared",
+      entry: {
+        sessionId: "session-cleared",
+        ...selectedModel,
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+      },
+    },
+    {
+      field: "agentRuntime",
+      key: "agent:main:runtime-clear",
+      entry: {
+        ...selectedModel,
+        agentRuntimeOverride: "openclaw",
+        authProfileOverrideSource: "user-link",
+        contextTokens: 1000,
+      },
+    },
+  ] as const)(
+    "clears the $field pin and invalidates the catalog without changing other pins",
+    async ({ field, entry, key: sessionKey }) => {
+      await seedSession(sessionKey, {
+        ...entry,
+        ...(field === "agentRuntime" ? { authProfileOverride: personalAuthProfileId } : {}),
+      });
+      const requestContext = {
+        ...context(),
+        getSessionEventSubscriberConnIds: () => new Set(["reader"]),
+      };
+      const response = await patchSession(
+        { key: sessionKey, [field]: null },
+        ["operator.admin"],
+        requestContext,
+      );
+      await flushPendingSessionsChangedEvents(requestContext);
+      expect(response[0]).toBe(true);
+      if (field === "model") {
+        expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      } else {
+        const stored = readSession(sessionKey);
+        expect(stored).toMatchObject({
+          modelOverride: "gpt-5.6-sol",
+          authProfileOverride: personalAuthProfileId,
+          liveModelSwitchPending: true,
+        });
+        expect(stored).not.toHaveProperty("agentRuntimeOverride");
+        expect(stored).not.toHaveProperty("contextTokens");
+        expect(runtimeChoice.prepare).not.toHaveBeenCalled();
+      }
+      expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+        sessionKey,
+        reason: "patch",
+        catalogChanged: true,
+      });
+    },
+  );
 });
 
 describe("sessions.patch personal model-account ownership", () => {
   it("lets the connected human select a saved personal account for this session", async () => {
     const sessionKey = "agent:main:dm:personal-selection-owner";
-    await seedSession(sessionKey, { sessionId: "personal-selection-owner" });
-    const caller = personClient(accountOwnerId);
-    const requestContext = context(new Set([caller]));
-
-    const response = await patchSession(
-      { key: sessionKey, model: `openai/gpt-5.6-sol@${personalAuthProfileId}` },
-      caller.connect.scopes,
-      requestContext,
-      caller,
-    );
+    const { patch } = await personalSession(sessionKey, { sessionId: "personal-selection-owner" });
+    const response = await patch();
 
     expect(response[0]).toBe(true);
     expect(readSession(sessionKey)).toMatchObject({
@@ -408,36 +463,25 @@ describe("sessions.patch personal model-account ownership", () => {
     "denies a new personal selection from a %s before catalog or credential access",
     async (kind) => {
       const sessionKey = `agent:main:dm:personal-selection-denied-${kind.replaceAll(" ", "-")}`;
-      await seedSession(sessionKey, { label: "Original" });
-      const before = readSession(sessionKey);
       const caller =
         kind === "foreign admin"
           ? personClient(otherPersonId, ["operator.admin"])
           : kind === "unidentified admin"
             ? client(["operator.admin"])
             : personClient(accountOwnerId, ["operator.admin"]);
+      const { before, requestContext, patch } = await personalSession(
+        sessionKey,
+        { label: "Original" },
+        caller,
+      );
       if (kind === "agent") {
         caller.internal = {
           syntheticClient: true,
           agentToolCaller: { agentId: "main", sessionKey },
         };
       }
-      const requestContext = context(new Set([caller]));
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
-
-      const response = await patchSession(
-        {
-          key: sessionKey,
-          model: `openai/gpt-5.6-sol@${personalAuthProfileId}`,
-          label: "Must not commit",
-        },
-        caller.connect.scopes,
-        requestContext,
-        caller,
-      );
-
-      expect(response[0]).toBe(false);
-      expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+      expectForbidden(await patch({ label: "Must not commit" }));
       expect(requestContext.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       expect(readCredential).not.toHaveBeenCalled();
       expect(readSession(sessionKey)).toEqual(before);
@@ -449,17 +493,16 @@ describe("sessions.patch personal model-account ownership", () => {
     "rejects a personal selection %s while the model catalog is loading",
     async (loss) => {
       const sessionKey = `agent:main:dm:personal-selection-lost-${loss.replaceAll(" ", "-")}`;
-      await seedSession(sessionKey, { label: "Before catalog" });
-      const before = readSession(sessionKey);
+      const { before, caller, connections, requestContext, patch } = await personalSession(
+        sessionKey,
+        { label: "Before catalog" },
+      );
       const writer: GatewayOperatorRoleDefinition = {
         agents: "*",
         scopes: ["operator.write"],
         sessions: { others: "none" },
       };
       cfg.gateway = { roles: { default: "writer", definitions: { writer } } };
-      const caller = personClient(accountOwnerId);
-      const connections = new Set([caller]);
-      const requestContext = context(connections);
       const catalog = createDeferredCore<ReturnType<typeof catalogSnapshot>>();
       const catalogEntered = createDeferredCore();
       requestContext.loadGatewayModelCatalogSnapshot.mockImplementationOnce(() => {
@@ -467,29 +510,13 @@ describe("sessions.patch personal model-account ownership", () => {
         return catalog.promise;
       });
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
-      const pending = patchSession(
-        {
-          key: sessionKey,
-          model: `openai/gpt-5.6-sol@${personalAuthProfileId}`,
-          label: "Must not commit",
-        },
-        caller.connect.scopes,
-        requestContext,
-        caller,
-      );
+      const pending = patch({ label: "Must not commit" });
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           catalogEntered.promise,
-          pending.then((response) => {
-            throw new Error(
-              `Session patch completed before loading the model catalog: ${JSON.stringify({
-                loss,
-                ok: response[0],
-                error: response[2],
-              })}`,
-            );
-          }),
-        ]);
+          pending,
+          `Personal ${loss} patch settled before loading the catalog`,
+        );
         expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
         if (loss === "invalidated") {
           caller.invalidated = true;
@@ -503,8 +530,7 @@ describe("sessions.patch personal model-account ownership", () => {
       }
       const response = await pending;
 
-      expect(response[0]).toBe(false);
-      expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+      expectForbidden(response);
       expect(readCredential).not.toHaveBeenCalled();
       expect(readSession(sessionKey)).toEqual(before);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
@@ -513,36 +539,24 @@ describe("sessions.patch personal model-account ownership", () => {
 
   it("reports lost personal authority during archive drain as forbidden", async () => {
     const sessionKey = "agent:main:dm:personal-selection-archive-drain";
-    await seedSession(sessionKey, { sessionId: "personal-selection-archive-drain" });
-    const before = readSession(sessionKey);
-    const caller = personClient(accountOwnerId);
-    const connections = new Set([caller]);
+    const { before, caller, connections, requestContext, patch } = await personalSession(
+      sessionKey,
+      { sessionId: "personal-selection-archive-drain" },
+    );
     const release = vi.fn();
     const terminalSessions = new TerminalSessionManager({ emit: vi.fn() });
     vi.spyOn(terminalSessions, "beginAgentSessionDrain").mockImplementation(() => {
       connections.delete(caller);
       return { drained: Promise.resolve(), hasWork: () => false, release };
     });
-    const requestContext = {
-      ...context(connections),
-      terminalSessions,
-      chatQueuedTurns: new Map(),
-      dedupe: new Map(),
-    };
-    const response = await patchSession(
-      {
-        key: sessionKey,
-        model: `openai/gpt-5.6-sol@${personalAuthProfileId}`,
-        archived: true,
-        expectedSessionId: before!.sessionId,
-      },
-      caller.connect.scopes,
-      requestContext,
-      caller,
-    );
-
-    expect(response[0]).toBe(false);
-    expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+    requestContext.terminalSessions = terminalSessions;
+    requestContext.chatQueuedTurns = new Map();
+    requestContext.dedupe = new Map();
+    const response = await patch({
+      archived: true,
+      expectedSessionId: before!.sessionId,
+    });
+    expectForbidden(response);
     expect(readSession(sessionKey)).toEqual(before);
     expect(release).toHaveBeenCalledOnce();
   });
@@ -578,42 +592,6 @@ describe("sessions.patch personal model-account ownership", () => {
 });
 
 describe("explicit session model runtimes", () => {
-  it("clears only the runtime pin and preserves the explicit model and account", async () => {
-    const sessionKey = "agent:main:runtime-clear";
-    await seedSession(sessionKey, {
-      ...selectedModel,
-      agentRuntimeOverride: "openclaw",
-      authProfileOverride: personalAuthProfileId,
-      authProfileOverrideSource: "user-link",
-      contextTokens: 1000,
-    });
-    const requestContext = {
-      ...context(),
-      getSessionEventSubscriberConnIds: () => new Set(["reader"]),
-    };
-    const response = await patchSession(
-      { key: sessionKey, agentRuntime: null },
-      ["operator.admin"],
-      requestContext,
-    );
-    expect(response[0]).toBe(true);
-    await flushPendingSessionsChangedEvents(requestContext);
-    expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
-      sessionKey,
-      reason: "patch",
-      catalogChanged: true,
-    });
-    const stored = readSession(sessionKey);
-    expect(stored).toMatchObject({
-      modelOverride: "gpt-5.6-sol",
-      authProfileOverride: personalAuthProfileId,
-      liveModelSwitchPending: true,
-    });
-    expect(stored).not.toHaveProperty("agentRuntimeOverride");
-    expect(stored).not.toHaveProperty("contextTokens");
-    expect(runtimeChoice.prepare).not.toHaveBeenCalled();
-  });
-
   it.each([
     { model: undefined, agentRuntime: "codex" },
     { model: "gpt-5.6-sol", agentRuntime: "codex" },
@@ -681,15 +659,7 @@ describe("explicit session model runtimes", () => {
 
   it("creates an unlocked session with an explicit runtime and rejects unprivileged adoption changes", async () => {
     const sessionKey = "agent:main:created-runtime";
-    const options = {
-      cfg,
-      key: sessionKey,
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
-      commandSource: "test",
-      operatorRoleActor: { kind: "system" as const },
-      loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
-    };
+    const options = runtimeOptions(sessionKey);
     const result = await createGatewaySession(options);
     expect(result).toMatchObject({
       ok: true,
@@ -736,17 +706,10 @@ describe("explicit session model runtimes", () => {
       kind: "unavailable",
       message: "Refresh the model catalog.",
     });
-    expect(
-      await createGatewaySession({
-        cfg,
-        key: sessionKey,
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
-      }),
-    ).toMatchObject({ ok: false, error: { message: "Refresh the model catalog." } });
+    expect(await createGatewaySession(runtimeOptions(sessionKey))).toMatchObject({
+      ok: false,
+      error: { message: "Refresh the model catalog." },
+    });
     expect(readSession(sessionKey)).toBeUndefined();
   });
 });
