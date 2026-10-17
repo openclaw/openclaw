@@ -283,3 +283,48 @@ it("detects only unescaped supported env references", () => {
     }
   }
 });
+
+it("substitutes through deeply nested documents without overflowing the call stack", () => {
+  const depth = 50_000;
+  let value: unknown = "leaf-${DEEP_LEAF}";
+  for (let i = 0; i < depth; i += 1) {
+    value = { x: value };
+  }
+  const resolved = resolveConfigEnvVars(value, { DEEP_LEAF: "ok" }) as Record<string, unknown>;
+  // Walk the resolved tree iteratively so the test's own comparisons cannot
+  // overflow at the depth under test.
+  let current: unknown = resolved;
+  let levels = 0;
+  let strayKeys = 0;
+  while (typeof current === "object" && current !== null) {
+    const record = current as Record<string, unknown>;
+    if (Object.keys(record).length !== 1) {
+      strayKeys += 1;
+    }
+    current = record.x;
+    levels += 1;
+  }
+  expect(strayKeys).toBe(0);
+  expect(levels).toBe(depth);
+  expect(current).toBe("leaf-ok");
+});
+
+it("preserves source object key order while substituting nested documents", () => {
+  const resolved = resolveConfigEnvVars(
+    {
+      zeta: "${LAST}",
+      nested: { mid: { alpha: "${FIRST}", omega: 2 } },
+      alpha: 1,
+    },
+    { FIRST: "first", LAST: "last" },
+  ) as Record<string, unknown>;
+  // Replacement values must be written in document order: substitution writes
+  // leaves depth-first, and writing them eagerly would reverse object key order.
+  expect(Object.keys(resolved)).toEqual(["zeta", "nested", "alpha"]);
+  expect(resolved).toEqual({
+    zeta: "last",
+    nested: { mid: { alpha: "first", omega: 2 } },
+    alpha: 1,
+  });
+  expect(Object.keys(resolved.nested as Record<string, unknown>)).toEqual(["mid"]);
+});
