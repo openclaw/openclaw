@@ -13,6 +13,8 @@ export const TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
 // Aborted/timed-out completions still join queued projection work; this grace
 // bounds a blocked handler tail so finalization cannot hang forever.
 export const TURN_FINALIZE_DRAIN_ABORT_GRACE_MS = 5_000;
+// A delivered final reply should normally finish through Codex turn/completed.
+export const FINAL_SOURCE_REPLY_COMPLETION_GRACE_MS = 10_000;
 
 export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE = "codex app-server initialize timed out";
 

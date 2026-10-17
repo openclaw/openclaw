@@ -15,6 +15,16 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+## Final replies
+
+After a confirmed final source reply from the `message` tool, OpenClaw gives
+Codex up to ten seconds to complete its native turn. Normal completion preserves
+the successful tool result without adding a false user-interruption marker to
+native history. The session remains occupied during this bounded wait. If Codex
+does not complete, OpenClaw interrupts the turn; that fallback can still leave an
+interruption marker. Explicit cancellation and `sessions_yield` retain their
+existing interruption behavior.
+
 ## Shared output projection
 
 Codex uses the shared native harness projection owners for bounded tool output,

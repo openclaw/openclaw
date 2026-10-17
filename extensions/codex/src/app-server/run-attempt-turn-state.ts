@@ -58,6 +58,7 @@ class CodexAttemptState {
     response: CodexDynamicToolRuntimeResponse;
     durationMs: number;
   };
+  finalSourceReplyCompletionTimer?: NodeJS.Timeout;
   terminalDynamicToolReleaseCheckScheduled = false;
   currentTurnHadNonTerminalDynamicToolResult = false;
 }
@@ -90,6 +91,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     if (state.completed) {
       return;
     }
+    clearTimeout(state.finalSourceReplyCompletionTimer);
+    state.finalSourceReplyCompletionTimer = undefined;
     state.completed = true;
     steeringQueueRef.current?.cancel();
     deadlines.beginSettlement(Date.now());

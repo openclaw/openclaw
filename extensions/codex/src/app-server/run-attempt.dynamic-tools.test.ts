@@ -1,3 +1,4 @@
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createProcessPollDeliveryContract,
@@ -50,6 +51,106 @@ function callTool(
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it.each(["completed", "cancelled", "deadline"] as const)(
+    "lets a delivered final source reply settle natively while preserving %s turns",
+    async (completion) => {
+      const harness = createStartedThreadHarness();
+      const params = createTestParams();
+      const abort = new AbortController();
+      params.abortSignal = abort.signal;
+      params.timeoutMs = 60_000;
+      const message = createRuntimeDynamicTool("message");
+      message.parameters = {
+        type: "object",
+        properties: {
+          action: { type: "string" },
+          message: { type: "string" },
+          final: { type: "boolean" },
+        },
+        additionalProperties: false,
+      };
+      message.execute = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "Sent." }],
+        details: {
+          messageDelivery: {
+            status: "settled",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+        },
+      }));
+      setCodexTestToolFactory(params, () => [message]);
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      setCodexTestModelSupportsTools(params, true);
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      let settled = false;
+      const run = runCodexAppServerAttempt(params).finally(() => {
+        settled = true;
+      });
+      try {
+        await harness.waitForMethod("turn/start");
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const response = await callTool(harness, "message", "final-source-reply", {
+          action: "send",
+          message: "Synthetic final reply.",
+          final: true,
+        });
+        expect(response).toMatchObject({
+          success: true,
+          contentItems: [{ type: "inputText", text: "Sent." }],
+        });
+        await harness.notify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "dynamicToolCall",
+              id: "final-source-reply",
+              tool: "message",
+              ...(response as object),
+            },
+          },
+        });
+        // Run the terminal-tool release callback before checking the native boundary.
+        await yieldImmediate();
+        expect(harness.requests.map(({ method }) => method)).not.toContain("turn/interrupt");
+        expect(settled).toBe(false);
+
+        if (completion === "cancelled") {
+          abort.abort("User cancelled after final delivery");
+          await harness.waitForMethod("turn/interrupt");
+        } else if (completion === "deadline") {
+          await vi.advanceTimersByTimeAsync(9_999);
+          expect(harness.requests.map(({ method }) => method)).not.toContain("turn/interrupt");
+          await vi.advanceTimersByTimeAsync(1);
+          await harness.waitForMethod("turn/interrupt");
+        } else {
+          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        }
+        expect(readAttemptTerminal(await run)).toMatchObject({
+          aborted: completion === "cancelled",
+          timedOut: false,
+        });
+        expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toHaveLength(
+          completion === "completed" ? 0 : 1,
+        );
+        // Neither natural completion nor cancellation leaves a late interrupt behind.
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toHaveLength(
+          completion === "completed" ? 0 : 1,
+        );
+        expect(message.execute).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        await run;
+        closeHost();
+      }
+    },
+  );
+
   it("retains a required command as one native pending call until terminal collection", async () => {
     const command = createRequiredExecRuntimeContract();
     const harness = createStartedThreadHarness();
