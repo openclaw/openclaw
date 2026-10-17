@@ -8,21 +8,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-function readTestDefaultTo(cfg: OpenClawConfig, channelId: string): string | undefined {
-  const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
-  const value = channels?.[channelId]?.defaultTo;
-  return typeof value === "string" ? value : undefined;
-}
-
 function stripTestPrefix(raw: string, channelId: string): string {
   return raw.replace(new RegExp(`^${channelId}:`, "i"), "").trim();
 }
 
-function parseForumTargetForTest(raw: string): {
-  roomId: string;
-  threadId?: number;
-  chatType: "direct" | "group" | "unknown";
-} {
+function parseForumTargetForTest(raw: string) {
   const trimmed = stripTestPrefix(raw.trim(), "forum");
   const topicMatch = /^(.*):topic:(\d+)$/i.exec(trimmed);
   const roomId = topicMatch?.[1]?.trim() || trimmed;
@@ -32,20 +22,7 @@ function parseForumTargetForTest(raw: string): {
     : roomId.startsWith("room:")
       ? "group"
       : "unknown";
-  return { roomId, threadId, chatType };
-}
-
-function createGenericResolveTarget(
-  channelId: string,
-  label: string,
-): ChannelOutboundAdapter["resolveTarget"] {
-  return ({ to }) => {
-    const normalized = to && stripTestPrefix(to, channelId).toLowerCase().replace(/\s+/gu, "-");
-    if (!normalized || normalized === "invalid") {
-      return { ok: false, error: new Error(`${label} target is required`) };
-    }
-    return { ok: true, to: normalized };
-  };
+  return { roomId, threadId, chatType } as const;
 }
 
 export const telegramMessagingForTest: ChannelMessagingAdapter = {
@@ -135,33 +112,35 @@ export function createGenericTargetTestPlugin(
   id: ChannelPlugin["id"],
   label = String(id),
 ): ChannelPlugin {
-  return createTargetPlugin(id, label, {
-    targetPrefixes: [String(id)],
-    // Syntax alone never admits an implicit owner destination.
-    inferTargetChatType: ({ to }) => (/^user:/i.test(to) ? "direct" : undefined),
-  });
-}
-
-function createTargetPlugin(
-  id: ChannelPlugin["id"],
-  label: string,
-  messaging: ChannelMessagingAdapter,
-): ChannelPlugin {
   return createTestChannelPlugin({
     id,
     label,
     outbound: {
       deliveryMode: "direct",
       sendText: async () => ({ channel: id, messageId: `${id}-msg` }),
-      resolveTarget: createGenericResolveTarget(String(id), label),
+      resolveTarget: ({ to }) => {
+        const normalized =
+          to && stripTestPrefix(to, String(id)).toLowerCase().replace(/\s+/gu, "-");
+        return !normalized || normalized === "invalid"
+          ? { ok: false, error: new Error(`${label} target is required`) }
+          : { ok: true, to: normalized };
+      },
     },
-    messaging,
-    resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, String(id)),
+    messaging: {
+      targetPrefixes: [String(id)],
+      // Syntax alone never admits an implicit owner destination.
+      inferTargetChatType: ({ to }) => (/^user:/i.test(to) ? "direct" : undefined),
+    },
+    resolveDefaultTo: ({ cfg }) => {
+      const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
+      const value = channels?.[id]?.defaultTo;
+      return typeof value === "string" ? value : undefined;
+    },
   });
 }
 
 export function createForumTargetTestPlugin(): ChannelPlugin {
-  return createTargetPlugin("forum", "Forum", forumMessagingForTest);
+  return { ...createGenericTargetTestPlugin("forum", "Forum"), messaging: forumMessagingForTest };
 }
 
 export function createTargetsTestRegistry(

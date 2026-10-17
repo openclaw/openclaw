@@ -43,6 +43,8 @@ function isVerifiedSourceDeliveryTarget(
     messageToolSentTargets: [target],
   }).verifiedMessageToolDelivery;
 }
+const slackDestination = { channel: "slack", to: "channel:C1" };
+const slackSend = { tool: "message", provider: "slack", to: "channel:C1" };
 
 describe("source delivery plan", () => {
   it("normalizes message-tool delivery outcomes against the planned source target", () => {
@@ -73,52 +75,28 @@ describe("source delivery plan", () => {
     });
   });
 
-  it("does not satisfy delivery from target metadata without a committed message-tool send", () => {
-    const contract = messageToolPlan({ channel: "slack", to: "channel:C1" });
-
-    const outcome = resolveSourceDeliveryOutcome(contract, {
-      didSendViaMessageTool: false,
-      messageToolSentTargets: [{ tool: "message", provider: "slack", to: "channel:C1" }],
+  it.each([
+    ["does not satisfy uncommitted target metadata", false, [slackSend], false],
+    ["synthesizes the target for legacy sends", true, undefined, true],
+  ] as const)("%s", (_name, didSendViaMessageTool, sent, verified) => {
+    const outcome = resolveSourceDeliveryOutcome(messageToolPlan(slackDestination), {
+      didSendViaMessageTool,
+      messageToolSentTargets: sent?.map((target) => ({ ...target })),
     });
-
-    expect(outcome.visibleDeliveries[0]?.verifiedTarget).toBe(true);
-    expect(outcome).toMatchObject({
-      verifiedMessageToolDelivery: false,
-      satisfiesSourceDelivery: false,
+    expect(outcome).toEqual({
+      visibleDeliveries: [{ via: "message_tool", verifiedTarget: true, target: slackSend }],
+      verifiedMessageToolDelivery: verified,
+      satisfiesSourceDelivery: verified,
       unverifiedMessageToolDelivery: false,
     });
   });
 
-  it("synthesizes the planned target for legacy message-tool sends by default", () => {
-    const contract = messageToolPlan({ channel: "slack", to: "channel:C1" });
-
-    const outcome = resolveSourceDeliveryOutcome(contract, {
-      didSendViaMessageTool: true,
-    });
-
-    expect(outcome.visibleDeliveries).toEqual([
-      {
-        via: "message_tool",
-        verifiedTarget: true,
-        target: { tool: "message", provider: "slack", to: "channel:C1" },
-      },
-    ]);
-    expect(outcome.verifiedMessageToolDelivery).toBe(true);
-    expect(outcome.satisfiesSourceDelivery).toBe(true);
-  });
-
   it("matches source targets through the same provider normalization used by delivery", () => {
     expect(
-      isVerifiedSourceDeliveryTarget(
-        { provider: "message", to: "channel:C1" },
-        { channel: "slack", to: "channel:C1" },
-      ),
+      isVerifiedSourceDeliveryTarget({ provider: "message", to: "channel:C1" }, slackDestination),
     ).toBe(true);
     expect(
-      isVerifiedSourceDeliveryTarget(
-        { provider: "discord", to: "channel:C1" },
-        { channel: "slack", to: "channel:C1" },
-      ),
+      isVerifiedSourceDeliveryTarget({ provider: "discord", to: "channel:C1" }, slackDestination),
     ).toBe(false);
   });
 
