@@ -58,7 +58,7 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { jsonResult, type AnyAgentTool } from "../tools/common.js";
 import type { MessageToolOptions } from "../tools/message-tool-execution.types.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 const plugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -81,6 +81,11 @@ const transport = vi.fn();
 const providerStream = vi.fn<StreamFn>();
 const messageTools: AnyAgentTool[] = [];
 const messageExecutions: MockInstance<AnyAgentTool["execute"]>[] = [];
+const attemptInputs: Array<
+  Pick<EmbeddedRunAttemptParams, "operation" | "disableTools"> & {
+    settled?: ReturnType<typeof snapshotAttempt>;
+  }
+> = [];
 const attemptResults: EmbeddedRunAttemptResult[] = [];
 const events: string[] = [];
 let beforeBuildMessage: () => void;
@@ -93,14 +98,40 @@ function diagnosticText(value: unknown): string | undefined {
   return text?.slice(0, 512);
 }
 
+function snapshotAttempt(result: EmbeddedRunAttemptResult, params: EmbeddedRunAttemptParams) {
+  return {
+    terminal: result.terminal.kind,
+    stopReason: diagnosticText(result.lastAssistant?.stopReason),
+    didSendViaMessagingTool: result.didSendViaMessagingTool,
+    didDeliverSourceReplyViaMessageTool: result.didDeliverSourceReplyViaMessageTool,
+    sourceReplyDelivered: result.sourceReplyDelivered,
+    sourceReplyDeliveryState: result.sourceReplyDeliveryState,
+    finalTargets: result.messagingToolSentTargets.filter(
+      (target) => target.sourceReplyFinal === true,
+    ).length,
+    finalPayloads: result.messagingToolSourceReplyPayloads?.filter(
+      (payload) => payload.sourceReplyFinal === true,
+    ).length,
+    operationSourceReplyDelivered: params.replyOperation?.sourceReplyDelivered,
+  };
+}
+
 // Prepared catalogs, auth and external I/O are fixture inputs. Keep the real
 // harness and attempt owners for tool authority, persistence and release.
 installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full", pluginRegistry: registry });
 installEmbeddedRunnerFastRunE2eMocks({
   runEmbeddedAttempt: async (params) => {
+    const observation: (typeof attemptInputs)[number] = {
+      operation: params.operation ?? "attempt",
+      disableTools: params.disableTools === true,
+    };
+    attemptInputs.push(observation);
     const { runEmbeddedAttempt } =
       await vi.importActual<typeof import("./run/attempt.js")>("./run/attempt.js");
     const result = await runEmbeddedAttempt(params);
+    // The outer runner mutates delivery projections after this return. Preserve
+    // producer facts here so diagnostics cannot mistake inherited state for them.
+    observation.settled = snapshotAttempt(result, params);
     attemptResults.push(result);
     events.push(`attempt:${attemptResults.length}:settled`);
     return result;
@@ -192,6 +223,7 @@ beforeEach(async () => {
   await bindSessionMcpRuntimeTestScheduler();
   messageTools.length = 0;
   messageExecutions.length = 0;
+  attemptInputs.length = 0;
   attemptResults.length = 0;
   events.length = 0;
   transport.mockReset();
@@ -524,8 +556,15 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         release.resolve();
         const result = await withinTest(running, context.signal);
         expect(result.meta.error).toBeUndefined();
-        expect(attemptResults.map((attempt) => attempt.terminal.kind)).toEqual(["ok", "ok"]);
-        expect(messageTools).toHaveLength(2);
+        const settlementDiagnostics = JSON.stringify({
+          attempts: attemptInputs.slice(-4),
+          providerCalls: providerStream.mock.calls.length,
+          messageCalls: messageExecutions.slice(-4).map((spy) => spy.mock.calls.length),
+          transportCalls: transport.mock.calls.length,
+          effects: physicalSend.mock.calls.length,
+          events: events.slice(-12).map((event) => event.slice(0, 512)),
+        });
+        expect(messageTools, settlementDiagnostics).toHaveLength(2);
         expect(messageTools[1]).not.toBe(messageTools[0]);
         expect(messageExecutions[1]).toHaveBeenCalledOnce();
         const successorResult = await messageExecutions[1]?.mock.results[0]?.value;
@@ -548,6 +587,10 @@ describe("ordinary source reply across deferred plugin refresh", () => {
           }),
         ).toHaveLength(1);
         expect(testing.activeRuns.size).toBe(0);
+        expect(
+          attemptResults.map((attempt) => attempt.terminal.kind),
+          settlementDiagnostics,
+        ).toEqual(["ok", "ok"]);
       } finally {
         release.resolve();
         abort.abort();
