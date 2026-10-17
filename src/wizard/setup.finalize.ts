@@ -20,6 +20,10 @@ import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommandNonExiting } from "../commands/health.js";
 import {
+  startOnboardingGatewayProcess,
+  type OnboardingGatewayProcess,
+} from "../commands/onboard-gateway-process.js";
+import {
   probeGatewayReachable,
   waitForGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -49,7 +53,6 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import {
-  buildSessionGatewayAuthOverride,
   gatewayAuthUsesLocalPassword,
   resolveGatewayLocalPassword,
 } from "./setup.finalize-gateway-auth.js";
@@ -71,26 +74,12 @@ type FinalizeOnboardingOptions = {
 const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function startSessionGatewayForOnboarding(params: {
-  nextConfig: OpenClawConfig;
-  settings: GatewayWizardSettings;
-  resolvedGatewayPassword: string;
+  port: number;
   prompter: WizardPrompter;
-}): Promise<import("../gateway/server.js").GatewayServer | undefined> {
+}): Promise<OnboardingGatewayProcess | undefined> {
   const progress = params.prompter.progress(t("wizard.finalize.sessionGatewayStarting"));
   try {
-    const { startGatewayServer } = await import("../gateway/server.js");
-    const server = await startGatewayServer(params.settings.port, {
-      bind: params.settings.bind,
-      ...(params.settings.bind === "custom" && params.settings.customBindHost
-        ? { host: params.settings.customBindHost }
-        : {}),
-      auth: buildSessionGatewayAuthOverride({
-        nextConfig: params.nextConfig,
-        settings: params.settings,
-        resolvedGatewayPassword: params.resolvedGatewayPassword,
-      }),
-      tailscale: params.nextConfig.gateway?.tailscale,
-    });
+    const server = await startOnboardingGatewayProcess({ port: params.port });
     progress.stop(t("wizard.finalize.sessionGatewayStarted"));
     return server;
   } catch (error) {
@@ -110,11 +99,10 @@ async function startSessionGatewayForOnboarding(params: {
 }
 
 async function closeSessionGatewayForOnboarding(params: {
-  sessionGateway: import("../gateway/server.js").GatewayServer;
+  sessionGateway: OnboardingGatewayProcess;
   runtime: RuntimeEnv;
-  reason: string;
 }): Promise<void> {
-  await params.sessionGateway.close({ reason: params.reason }).catch((error: unknown) => {
+  await params.sessionGateway.close().catch((error: unknown) => {
     params.runtime.error(formatErrorMessage(error));
   });
 }
@@ -452,7 +440,7 @@ export async function finalizeSetupWizard(
   // fail its health check, and the outro must not report plain success then.
   let gatewayHealthCheckFailed = false;
   let resolvedGatewayPassword = "";
-  let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
+  let sessionGateway: OnboardingGatewayProcess | undefined;
 
   const { gateway, containerWithoutUserSystemd } = await ensureGatewayServiceForOnboarding({
     flow,
@@ -485,9 +473,7 @@ export async function finalizeSetupWizard(
 
   if (containerWithoutUserSystemd && !opts.skipUi) {
     sessionGateway = await startSessionGatewayForOnboarding({
-      nextConfig,
-      settings,
-      resolvedGatewayPassword,
+      port: settings.port,
       prompter,
     });
   }
@@ -523,7 +509,7 @@ export async function finalizeSetupWizard(
           ? await probeGatewayReachable(probeOptions)
           : await waitForGatewayReachable({
               ...probeOptions,
-              ...(gateway.status === "ready" && gateway.action !== "reused"
+              ...(sessionGateway || (gateway.status === "ready" && gateway.action !== "reused")
                 ? resolveGatewayStartupTiming()
                 : { deadlineMs: 15_000 }),
             });
@@ -979,7 +965,6 @@ export async function finalizeSetupWizard(
           await closeSessionGatewayForOnboarding({
             sessionGateway,
             runtime,
-            reason: "onboarding tui exited",
           });
           sessionGateway = undefined;
         }
@@ -993,7 +978,6 @@ export async function finalizeSetupWizard(
       await closeSessionGatewayForOnboarding({
         sessionGateway,
         runtime,
-        reason: "onboarding finalize exited",
       });
     }
   }

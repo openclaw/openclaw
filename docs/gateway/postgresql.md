@@ -141,11 +141,13 @@ configured engine before the Gateway starts. Supply the same DSN SecretRef to
 these commands. With PostgreSQL selected, credentials are stored on the server;
 the local database path contains an anchor rather than SQLite application state.
 
-One-shot commands such as non-interactive `onboard`, `agents add`, `models list`,
+Setup commands (`onboard`, `setup --wizard`, and the legacy `crestodian` entry),
+including interactive sessions, and one-shot commands such as `agents add`, `models list`,
 `models status`, `config set`, and `doctor` (including `--fix`) can access
 PostgreSQL synchronously in their own CLI process. The Gateway still requires
-worker access outside synchronous admission and migrations. Interactive setup
-that can host an embedded Gateway keeps the Gateway restriction.
+worker access outside synchronous admission and migrations. Setup starts any
+temporary or foreground Gateway in a separate process with its own admission;
+the setup process keeps its one-shot role throughout.
 
 If the connection SecretRef is unavailable, `config set`, `config patch`, and
 `config unset` can still repair paths under `database` while the Gateway is

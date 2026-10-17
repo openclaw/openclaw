@@ -65,32 +65,40 @@ const recoveryOwnerCommands = [
 ];
 
 describe("one-shot CLI engine selection", () => {
-  it("selects the config-directed target without opening a database", async () => {
-    await withOpenClawTestState(
-      {
-        label: "cli-engine-selection",
-        env: { OPENCLAW_TEST_CLI_DSN: "postgresql://127.0.0.1:1/test" },
-      },
-      async (state) => {
-        const target = state.path("selected.json");
-        await fs.writeFile(target, JSON.stringify({ database, plugins: { enabled: false } }));
-        await state.writeConfig({
-          env: { vars: { OPENCLAW_CONFIG_PATH: target } },
-          plugins: { enabled: false },
-        });
-        delete process.env.OPENCLAW_CONFIG_PATH;
-        await prepareCliDatabaseEngine(["node", "openclaw", "models", "list"]);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(target);
-        expect(getDatabaseEngineSelection()).toMatchObject({
-          effectiveEngines: { state: "postgres", agent: "postgres" },
-          postgres: { connection: "postgresql://127.0.0.1:1/test", schemaPrefix: "cli_selection" },
-        });
-        await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      },
-    );
-  });
+  it.each([["models", "list"], ["onboard"], ["setup", "--wizard"], ["crestodian"], []])(
+    "selects the config-directed target for %j without opening a database",
+    async (...args) => {
+      await withOpenClawTestState(
+        {
+          label: "cli-engine-selection",
+          env: { OPENCLAW_TEST_CLI_DSN: "postgresql://127.0.0.1:1/test" },
+        },
+        async (state) => {
+          const target = state.path("selected.json");
+          await fs.writeFile(target, JSON.stringify({ database, plugins: { enabled: false } }));
+          await state.writeConfig({
+            env: { vars: { OPENCLAW_CONFIG_PATH: target } },
+            plugins: { enabled: false },
+          });
+          delete process.env.OPENCLAW_CONFIG_PATH;
+          await prepareCliDatabaseEngine(["node", "openclaw", ...args]);
+          expect(process.env.OPENCLAW_CONFIG_PATH).toBe(target);
+          expect(getDatabaseEngineSelection()).toMatchObject({
+            effectiveEngines: { state: "postgres", agent: "postgres" },
+            postgres: {
+              connection: "postgresql://127.0.0.1:1/test",
+              schemaPrefix: "cli_selection",
+            },
+          });
+          await expect(
+            fs.access(state.statePath("state", "openclaw.sqlite")),
+          ).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        },
+      );
+    },
+  );
 
   it.each([
     { source: "root", code: "INVALID_CONFIG", heading: "Invalid config at" },

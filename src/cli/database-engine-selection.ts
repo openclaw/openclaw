@@ -3,7 +3,7 @@ import { getFlagValue, hasFlag } from "./argv.js";
 import { resolveCliDatabaseProcessRole } from "./database-process-role.js";
 
 const OWNED_DATABASE_SELECTION = new Set([
-  // The process role includes embedded Gateways; final-target admission owns selection.
+  // Gateway processes own their final-target admission and engine selection.
   "gateway",
   // These commands use no operator database.
   "help",
