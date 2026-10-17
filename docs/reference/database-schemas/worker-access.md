@@ -359,13 +359,15 @@ bodies for turn appends). This count excludes optional initialization headers.
 The reported `phases.sqlMs` includes synchronous JavaScript work inside the
 transaction; it is not a sum of SQLite statement timings.
 
-The model-context reader retains the latest transcript's navigation and exact model
-byte costs on its admitted connection. Appends extend the canonical branch scanner
-from the committed sequence; same-generation metadata rewrites invalidate only the
-affected 512-row pages through writer receipts. Replacement and destructive rewrites
-discard the cached generation. Payloads remain in SQL until context selection, and
-the connection releases navigation on disposal. This trades retained navigation
-metadata for bounded warm reads without changing prompt bytes or window selection.
+Bounded model-context reads retain only the selectable request suffix and current
+model, thinking, and context-boundary markers. Discarded requests contribute exact
+byte totals and compact per-page membership facts. Ordinary appends advance these
+facts; existing rewrite receipts refresh the affected page's costs. Tool-result
+ownership uses the canonical pairing rules with bounded unresolved-call evidence.
+Branch changes, old anchors, reset or compaction, prompt-series restarts, and ambiguous
+displaced results rebuild canonical navigation once and reseed the compact state. Unlimited context
+reads scan transiently and retain no full-history navigation cache. Payload-size
+projections remain in SQL, and the bounded reader's limits and output are unchanged.
 
 Cold input preparation uses the turn planner instead of fetching a full actor
 replica first. The planner carries its recovery expectation into the input
@@ -1957,7 +1959,9 @@ claim historical absence. The versioned hot state carries the entry's lifecycle,
 recovery, and final-delivery fields, transcript watermarks, and complete
 projection facts when available. Anchor and model-context availability remain
 explicit; unavailable context differs from an empty context. Payload history
-keeps its existing reader. Hydration and
+keeps its existing reader. Active transcript accounting reuses complete resident
+context rows and their stored byte counts through the same replica. Partial or
+evicted context and fenced reads retain the bounded history-worker path. Hydration and
 actor reads reuse process-wide schema and integrity admission without new format
 checks or foreign-commit probes.
 
@@ -2387,10 +2391,10 @@ one statement. Later reads reuse admitted version facts. The ACP writer publishe
 bounded complete metadata postimages through the existing database admission exchange,
 including memory-session writes and offline migration/Doctor imports. Managed
 transactions combine their changed keys and publish only after commit; rollback
-retains the previous receipt. Host readers can consume covered committed rows
-and deletions directly. Unknown keys retain the worker read path; read fills stay
-local to their reader and cannot overwrite a newer write receipt. ACP cohorts
-refresh from committed postimages on ACP receipts and invalidate on schema
+retains the previous receipt. Host readers consume covered rows and known absence
+directly. Unknown keys use the worker, which publishes its admitted read cohort
+through the same bounded receipt without overwriting committed writer postimages.
+ACP cohorts refresh from committed postimages on ACP receipts and invalidate on schema
 changes, so unrelated shared-state writes do not discard them. Transactions,
 pinned snapshots, and authorizer-controlled reads keep
 their direct-read contracts.
@@ -6287,6 +6291,14 @@ The manager adopts that receipt before publishing pending-tool changes. Each
 event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
+
+Bulk appends retain attempt recency and projection watermarks in that cursor,
+then flush the index once and fold final recency into the transcript mutation
+write. Rejected identities still update attempt recency without advancing the
+mutation watermark. If an iterator fails, its accepted prefix's index and
+recency settle before the error escapes; the enclosing transaction still owns
+rollback. Identity and foreign-key checks, rewrite generations, stored payloads,
+and commit boundaries are unchanged.
 
 Awaited metadata and compaction retain the database executor without opening a
 native handle on the Gateway thread. The worker prepares storage and publishes

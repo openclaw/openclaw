@@ -104,8 +104,7 @@
   white-space: normal;
 }
 
-.picker-select__option:is(:state(current), :state(selected), [data-active], [aria-selected="true"])
-  .picker-select__description {
+.picker-select__option:is([data-active], [aria-selected="true"]) .picker-select__description {
   color: inherit;
 }
 

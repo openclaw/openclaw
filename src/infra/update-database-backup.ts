@@ -12,6 +12,7 @@ import {
   maintenanceOwnerMayCopySourcesInProcess,
 } from "../state/openclaw-state-maintenance-context.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
@@ -451,14 +452,13 @@ export async function createUpdateDatabaseBackup({
   const controller = new AbortController();
   const { discoverBackupDatabasePaths, readBackupEngine } =
     await prepareUpdateDatabaseBackupRuntime();
-  const prepared =
-    input.config.database?.engine === "postgres"
-      ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
-      : {
-          // Read legacy SQLite registrations from the private inspection copy, before admission.
-          paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
-          pluginOwners: undefined,
-        };
+  const prepared = Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
+    ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
+    : {
+        // Read legacy SQLite registrations from the private inspection copy, before admission.
+        paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
+        pluginOwners: undefined,
+      };
   const postgresPaths = prepared.paths.filter(
     (file) => readBackupEngine(file).engine === "postgres",
   );

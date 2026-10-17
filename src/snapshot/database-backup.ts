@@ -1,9 +1,19 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readEngineAnchor } from "../infra/database-engine/open.js";
+import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
+import {
+  getScopedDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import {
+  readBackupEngine,
+  readBackupEngineImage,
+  type BackupEngine,
+} from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import {
   withDatabasePortPostgres,
@@ -15,13 +25,12 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../infra/database-engine/postgres-catalog.js";
+import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { quoteSqliteIdentifier as quote } from "../infra/sqlite-schema-sql.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   captureDatabaseArtifact,
@@ -37,14 +46,24 @@ import {
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
 export { captureDatabaseArtifact, assertDatabaseArtifact } from "./database-backup-core.worker.js";
 
-export type BackupEngine =
-  | { engine: "sqlite" }
-  | { engine: "postgres"; storeId: string; namespace: string };
+export { readBackupEngine, readBackupEngineImage };
+export type { BackupEngine };
+
+const offlineBackup = new AsyncLocalStorage<{
+  config: OpenClawConfig;
+  assertCurrent: () => void;
+}>();
 
 export async function runOfflineDatabaseBackup<T>(
   sourcePath: string,
   run: (scope: { config: OpenClawConfig; assertCurrent: () => void }) => Promise<T>,
+  prepared?: { config: OpenClawConfig; selection: DatabaseEngineSelection },
 ): Promise<T> {
+  const existing = offlineBackup.getStore();
+  if (existing) {
+    existing.assertCurrent();
+    return run(existing);
+  }
   const { runWithLocalStateOwner } = await import("../cli/local-state-owner.js");
   const { resolveStateDir } = await import("../config/paths.js");
   if (hasActiveGatewayStateOwner(path.join(resolveStateDir(), "state", "openclaw.sqlite"))) {
@@ -52,13 +71,28 @@ export async function runOfflineDatabaseBackup<T>(
       "PostgreSQL backup requires the Gateway stopped; stop through the service owner, then rerun.",
     );
   }
-  return runWithLocalStateOwner({
-    method: "backup.create",
-    params: {},
-    target: sourcePath,
-    onForeignOwner: "refuse",
-    runLocal: run,
-  });
+  const { createConfigIO } = await import("../config/config.js");
+  const config =
+    prepared?.config ??
+    (
+      await createConfigIO({
+        observe: false,
+        pluginValidation: "core-only",
+      }).readConfigFileSnapshot()
+    ).config;
+  const selection = prepared?.selection ?? (await resolveDatabaseEngineSelection(config));
+  return withDatabaseEngineSelection(selection, () =>
+    runWithLocalStateOwner({
+      method: "backup.create",
+      params: {},
+      target: sourcePath,
+      onForeignOwner: "refuse",
+      runLocal: ({ assertCurrent }) => {
+        const scope = { config, assertCurrent };
+        return offlineBackup.run(scope, () => run(scope));
+      },
+    }),
+  );
 }
 
 export async function verifyMatchedPostgresBackup(
@@ -74,36 +108,6 @@ export async function verifyMatchedPostgresBackup(
   }
   await verifyPostgresExportEnvelope(directory, envelope.manifest, inspectHeldAnchor, profile);
   return envelope.manifest;
-}
-
-/** Reads an already captured private image without reacquiring its live source. */
-export function readBackupEngineImage(imagePath: string, sourcePath: string): BackupEngine {
-  using db = openNodeSqliteDatabase(imagePath, { readOnly: true });
-  const rows = readEngineAnchor(db);
-  if (!rows) {
-    return { engine: "sqlite" };
-  }
-  const row = rows[0];
-  if (
-    rows.length !== 1 ||
-    row?.engine !== "postgres" ||
-    typeof row.store_id !== "string" ||
-    typeof row.schema !== "string" ||
-    !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(row.schema)
-  ) {
-    throw new Error(`Invalid PostgreSQL anchor: ${sourcePath}. Restore its matched backup.`);
-  }
-  return { engine: "postgres", storeId: row.store_id, namespace: row.schema };
-}
-
-/** Acquire the private image in a child so source descriptor closes preserve live POSIX locks. */
-export function readBackupEngine(sourcePath: string): BackupEngine {
-  const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
-  try {
-    return readBackupEngineImage(prepared.location, sourcePath);
-  } finally {
-    prepared.cleanup();
-  }
 }
 
 async function inspectHeldAnchor(handle: FileHandle) {
@@ -198,8 +202,7 @@ async function preparePostgresRestoreInWorker(params: {
       pluginOwners: params.pluginOwners,
     });
     const { namespace } = await restorePostgresBackup({ ...params, client, descriptor, manifest });
-    const { resolveDatabaseEngineInput } = await import("../infra/database-engine/config.js");
-    const input = await resolveDatabaseEngineInput(params.config);
+    const input = getScopedDatabaseEngineSelection()?.postgres;
     params.assertCurrent();
     await descriptor.admit?.(params.anchorPath, input);
     if (params.preserveUpdateHistory) {
@@ -272,18 +275,24 @@ async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Pr
   // This one-shot worker is joined before publication; it never survives a runtime swap.
   const { WorkerTaskPool } = await import("../infra/worker-task-pool.js");
   const source = captureRuntimeWorkerSource(new URL(import.meta.url));
-  const pool = new WorkerTaskPool<BackupTask, T>({
-    workerUrl: source.moduleUrl,
-    maxWorkers: 1,
-    workerOptions: { workerData: { openclawDatabaseBackup: true } },
+  const selection =
+    getScopedDatabaseEngineSelection() ??
+    (await resolveDatabaseEngineSelection(task.params.config));
+  assertCurrent();
+  return withDatabaseEngineSelection(selection, async () => {
+    const pool = new WorkerTaskPool<BackupTask, T>({
+      workerUrl: source.moduleUrl,
+      maxWorkers: 1,
+      workerOptions: { workerData: { openclawDatabaseBackup: true } },
+    });
+    try {
+      const result = await pool.run(task, {});
+      assertCurrent();
+      return result;
+    } finally {
+      await pool.close();
+    }
   });
-  try {
-    const result = await pool.run(task, {});
-    assertCurrent();
-    return result;
-  } finally {
-    await pool.close();
-  }
 }
 
 export function capturePostgresBackup(
