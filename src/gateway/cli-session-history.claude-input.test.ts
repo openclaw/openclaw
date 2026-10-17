@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
-import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
+import { buildCronEventPrompt, buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
@@ -37,6 +37,10 @@ const REQUESTER_HINT =
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
 const execPrompt = buildExecEventPrompt(["Exec completed (example, code 0) :: done"]);
+const cronPrompt = buildCronEventPrompt(["Stand-up reminder"]);
+const cronSilentPrompt = buildCronEventPrompt(["Stand-up reminder"], { deliverToUser: false });
+const cronEmptyPrompt = buildCronEventPrompt([]);
+const cronEmptyHeartbeatToolPrompt = buildCronEventPrompt([], { useHeartbeatResponseTool: true });
 
 function merge(localMessages: unknown[], importedMessages: unknown[]) {
   return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
@@ -64,6 +68,10 @@ const internalInputs = [
   ],
   ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
   ["exec", execPrompt],
+  ["cron", cronPrompt],
+  ["cron-silent", cronSilentPrompt],
+  ["cron-no-content", cronEmptyPrompt],
+  ["cron-no-content-heartbeat-tool", cronEmptyHeartbeatToolPrompt],
   [
     "exec-with-queued-system-event",
     `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${execPrompt}`,

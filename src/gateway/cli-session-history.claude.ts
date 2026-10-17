@@ -377,6 +377,18 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
   if (body.startsWith(HEARTBEAT_PROMPT) || body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
     return "heartbeat";
   }
+  // Cron wakes: the reminder form carries the event text between a fixed opening and one of
+  // two fixed closing instructions; the no-content form only has the opening sentence.
+  if (
+    body.startsWith("A scheduled cron event was triggered, but no event content was found. ") ||
+    (body.startsWith("A scheduled reminder has been triggered. The reminder content is:\n\n") &&
+      (body.includes("\n\nPlease relay this reminder to the user in a helpful and friendly way.") ||
+        body.includes(
+          "\n\nHandle this reminder internally. Do not relay it to the user unless explicitly requested.",
+        )))
+  ) {
+    return "cron";
+  }
   // Restart recovery only, by its full opening sentence behind the CLI timestamp envelope;
   // the bare system-turn tag is too easy for a person to type.
   if (
