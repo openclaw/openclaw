@@ -12,6 +12,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+type Player = HTMLElementTagNameMap["openclaw-chat-video-player"];
+async function open(name: string, options: Partial<Player> = {}) {
+  const player = document.createElement("openclaw-chat-video-player");
+  Object.assign(player, {
+    src: `https://example.com/${name}.mp4`,
+    sourceIdentity: `media:${name}`,
+    label: `${name}.mp4`,
+    ...options,
+  });
+  mountSolid(() => player);
+  await player.updateComplete;
+  return player;
+}
+const card = (player: Player, suffix: string) =>
+  player.querySelector(`.chat-assistant-attachment-card${suffix}`);
+const expandButton = (player: Player) =>
+  player.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")!;
+
 describe("ChatVideoPlayer", () => {
   it("starts metadata loading only when the video card reaches the viewport", async () => {
     let intersect: IntersectionObserverCallback | undefined;
@@ -26,21 +44,19 @@ describe("ChatVideoPlayer", () => {
         disconnect = disconnect;
       },
     );
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "https://example.com/clip.mp4";
-    player.sourceIdentity = "media:clip-metadata";
-    player.label = "clip.mp4";
-    mountSolid(() => player);
-    await player.updateComplete;
-
+    const player = await open("clip", { sourceIdentity: "media:clip-metadata" });
     const video = player.querySelector("video");
     expect(video?.preload).toBe("metadata");
     expect(video?.hasAttribute("src")).toBe(false);
 
-    intersect?.(
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      {} as IntersectionObserver,
-    );
+    const enterViewport = () =>
+      intersect?.(
+        // SAFETY: This observer fixture exercises only the visibility field.
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        // SAFETY: The production callback does not inspect its observer argument.
+        {} as IntersectionObserver,
+      );
+    enterViewport();
     await player.updateComplete;
 
     expect(video?.getAttribute("src")).toBe("https://example.com/clip.mp4");
@@ -56,12 +72,7 @@ describe("ChatVideoPlayer", () => {
     const recovered = player.querySelector("video")!;
     expect(recovered).not.toBe(video);
     expect(recovered.hasAttribute("src")).toBe(false);
-    intersect?.(
-      // SAFETY: This observer fixture exercises only the visibility field.
-      [{ isIntersecting: true } as IntersectionObserverEntry],
-      // SAFETY: The production callback does not inspect its observer argument.
-      {} as IntersectionObserver,
-    );
+    enterViewport();
     await player.updateComplete;
     expect(recovered.getAttribute("src")).toBe("https://example.com/recovered.mp4");
     expect(disconnect).toHaveBeenCalledTimes(3);
@@ -73,29 +84,20 @@ describe("ChatVideoPlayer", () => {
   });
 
   it("keeps a loaded preview through rebuffering and applies a renewed ticket on resume", async () => {
-    const player = document.createElement("openclaw-chat-video-player");
-    player.preview = true;
-    player.src = "/media/clip.mp4?mediaTicket=A";
-    player.sourceIdentity = "media:renewing-clip";
-    player.label = "clip.mp4";
-    mountSolid(() => player);
-    await player.updateComplete;
+    const player = await open("clip", {
+      preview: true,
+      src: "/media/clip.mp4?mediaTicket=A",
+      sourceIdentity: "media:renewing-clip",
+    });
     const video = player.querySelector("video")!;
     let readyState = 2;
     let paused = true;
-    let currentTime = 12;
     const play = vi.spyOn(video, "play").mockImplementation(async () => {
       paused = false;
     });
     Object.defineProperties(video, {
       readyState: { configurable: true, get: () => readyState },
-      currentTime: {
-        configurable: true,
-        get: () => currentTime,
-        set: (value: number) => {
-          currentTime = value;
-        },
-      },
+      currentTime: { configurable: true, writable: true, value: 12 },
       paused: { configurable: true, get: () => paused },
     });
 
@@ -116,12 +118,7 @@ describe("ChatVideoPlayer", () => {
   });
 
   it("allows resolved downloads and reveals playback when loadeddata is suppressed", async () => {
-    const player = document.createElement("openclaw-chat-video-player");
-    player.preview = true;
-    player.src = "https://example.com/deferred.mp4";
-    player.label = "deferred.mp4";
-    mountSolid(() => player);
-    await player.updateComplete;
+    const player = await open("deferred", { preview: true, sourceIdentity: "" });
 
     expect(player.querySelector("a[download]")?.getAttribute("href")).toBe(player.src);
     expect(player.querySelector('[aria-busy="true"]')).not.toBeNull();
@@ -137,15 +134,13 @@ describe("ChatVideoPlayer", () => {
       .mockResolvedValueOnce(new Response(null, { status: 202 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket";
-    player.sourceIdentity = "media:clip";
-    player.label = "clip.avi";
-    player.playback = "transcode";
     const onExpand = vi.fn();
-    player.onExpand = onExpand;
-    mountSolid(() => player);
-    await player.updateComplete;
+    const player = await open("clip", {
+      src: "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket",
+      label: "clip.avi",
+      playback: "transcode",
+      onExpand,
+    });
     const video = player.querySelector("video");
     await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
     expect(player.querySelector("video")).toBe(video);
@@ -156,9 +151,7 @@ describe("ChatVideoPlayer", () => {
     expect(player.querySelector("video")).toBe(video);
     expect(video?.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
     const pause = vi.spyOn(video!, "pause").mockImplementation(() => {});
-    const expand = player.querySelector<HTMLButtonElement>(
-      ".chat-assistant-attachment-card__expand",
-    )!;
+    const expand = expandButton(player);
     onExpand.mockImplementation(() => expect(document.activeElement).toBe(expand));
     expand.click();
     expect(pause).toHaveBeenCalledOnce();
@@ -168,16 +161,9 @@ describe("ChatVideoPlayer", () => {
   });
 
   it("does not preserve a previous attachment when a new rendition fails", async () => {
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "https://example.com/first.mp4";
-    player.sourceIdentity = "media:first";
-    player.label = "first.mp4";
     const onExpand = vi.fn();
     const onFallbackExpand = vi.fn();
-    player.onExpand = onExpand;
-    player.onFallbackExpand = onFallbackExpand;
-    mountSolid(() => player);
-    await player.updateComplete;
+    const player = await open("first", { onExpand, onFallbackExpand });
     const failedMedia = player.querySelector("video")!;
     expect(failedMedia.getAttribute("src")).toBe("https://example.com/first.mp4");
 
@@ -189,13 +175,11 @@ describe("ChatVideoPlayer", () => {
     player.playback = "transcode";
     await player.updateComplete;
     expect(player.querySelector("video")?.hasAttribute("src")).toBe(false);
-    await vi.waitFor(() =>
-      expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull(),
-    );
-    expect(player.querySelector(".chat-assistant-attachment-card__reason")).toBeNull();
+    await vi.waitFor(() => expect(card(player, "--compact")).not.toBeNull());
+    expect(card(player, "__reason")).toBeNull();
     expect(player.querySelector("video")).toBeNull();
     expect(failedMedia.isConnected).toBe(false);
-    player.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    expandButton(player).click();
     expect(onFallbackExpand).toHaveBeenCalledOnce();
     expect(onExpand).not.toHaveBeenCalled();
 
@@ -206,7 +190,7 @@ describe("ChatVideoPlayer", () => {
     await player.updateComplete;
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(player.querySelector("video")).toBeNull();
-    expect(player.querySelector(".chat-assistant-attachment-card--compact")).not.toBeNull();
+    expect(card(player, "--compact")).not.toBeNull();
 
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     player.src = "/__openclaw__/assistant-media?source=second.caf&mediaTicket=recovered";
@@ -218,16 +202,11 @@ describe("ChatVideoPlayer", () => {
     );
     expect(player.querySelector("video")).not.toBe(failedMedia);
     expect(player.querySelector("video")?.isConnected).toBe(true);
-    expect(player.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    expect(card(player, "--compact")).toBeNull();
   });
 
   it("pauses and clears the source when disconnected while playing", async () => {
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "https://example.com/playing.mp4";
-    player.sourceIdentity = "media:playing";
-    player.label = "playing.mp4";
-    mountSolid(() => player);
-    await player.updateComplete;
+    const player = await open("playing");
     const video = player.querySelector("video")!;
     let paused = false;
     Object.defineProperty(video, "paused", { configurable: true, get: () => paused });

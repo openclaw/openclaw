@@ -85,6 +85,18 @@ function renderProgress(sessions: readonly GatewaySessionRow[]) {
   return mountProgress({ sessionKey: parentSessionKey, sessions: withSummary(sessions) }).container;
 }
 
+const text = (container: ParentNode, part: string) =>
+  container.querySelector(`.chat-swarm__${part}`)?.textContent;
+const progress = (container: ParentNode) => text(container, "header")?.replace(/\s+/g, " ");
+const taskLabels = (container: ParentNode) =>
+  [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+    row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+  );
+function expectCounts(container: ParentNode, counts: string) {
+  expect(text(container, "counts")).toBe(counts);
+  expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(counts);
+}
+
 afterEach(async () => {
   i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
@@ -113,27 +125,18 @@ describe("chat Swarm progress", () => {
       session({ key: "stopped", status: "killed" }),
     ]);
 
-    expect(
-      container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("2 de 3");
-    expect(container.querySelector(".chat-swarm__header strong")?.textContent).toBe(
-      "Tarefas paralelas",
-    );
-    expect(
-      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
-        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
-      ),
-    ).toEqual(["Em execução", "Concluído", "Falhou ou foi interrompida"]);
+    expect(progress(container)).toContain("2 de 3");
+    expect(text(container, "header strong")).toBe("Tarefas paralelas");
+    expect(taskLabels(container)).toEqual([
+      "Em execução",
+      "Concluído",
+      "Falhou ou foi interrompida",
+    ]);
   });
 
   it("groups live collector children and maps their task states", () => {
     const container = renderProgress([
-      session({
-        key: "queued",
-        label: "Queued child",
-        status: "queued",
-        hasActiveRun: true,
-      }),
+      session({ key: "queued", label: "Queued child", status: "queued", hasActiveRun: true }),
       session({ key: "running", label: "Running child", status: "running" }),
       session({ key: "done", label: "Done child", status: "done" }),
       session({ key: "failed", label: "Timed out child", status: "timeout" }),
@@ -141,7 +144,7 @@ describe("chat Swarm progress", () => {
 
     const group = container.querySelector("[data-swarm-group]");
     expect(group?.getAttribute("data-swarm-group")).toBe(swarmGroupId);
-    expect(group?.querySelector(".chat-swarm__header strong")?.textContent).toBe("Parallel tasks");
+    expect(text(group!, "header strong")).toBe("Parallel tasks");
     expect(group?.textContent).not.toContain(parentRunId);
     expect(group?.textContent?.replace(/\s+/g, " ")).toContain("2 of 4");
     expect(
@@ -152,27 +155,23 @@ describe("chat Swarm progress", () => {
       "chat-swarm__task-icon chat-swarm__task-icon--done",
       "chat-swarm__task-icon chat-swarm__task-icon--failed",
     ]);
-    expect(
-      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
-        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
-      ),
-    ).toEqual(["Queued", "Running", "Completed", "Failed or stopped"]);
+    expect(taskLabels(container)).toEqual(["Queued", "Running", "Completed", "Failed or stopped"]);
   });
 
-  it.each([
-    {
-      name: "key-shaped names",
-      fields: { label: childSessionKey, displayName: childSessionKey },
-      expected: "Subagent",
-    },
-  ])("names a single child from $name without exposing identifiers", ({ fields, expected }) => {
+  it("names a single child from key-shaped names without exposing identifiers", () => {
+    const expected = "Subagent";
     const container = renderProgress([
-      session({ key: childSessionKey, status: "running", ...fields }),
+      session({
+        key: childSessionKey,
+        status: "running",
+        label: childSessionKey,
+        displayName: childSessionKey,
+      }),
     ]);
     const heading = container.querySelector(".chat-swarm__header strong");
     expect(heading?.textContent).toBe(expected);
     expect(heading?.getAttribute("title")).toBe(expected);
-    expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe(expected);
+    expect(text(container, "task-name")).toBe(expected);
     expect(container.textContent).not.toContain(parentRunId);
     expect(container.textContent).not.toContain(childSessionKey);
     expect(container.querySelector("[data-swarm-group]")?.getAttribute("data-swarm-group")).toBe(
@@ -255,59 +254,44 @@ describe("chat Swarm progress", () => {
 
     expect(container.querySelectorAll(".chat-swarm__task")).toHaveLength(64);
     expect(container.querySelector(".chat-swarm__task-icon--running")).not.toBeNull();
-    expect(
-      container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("300 of 301");
+    expect(progress(container)).toContain("300 of 301");
   });
 
-  it.each([{ name: "mixed", statuses: ["failed", "killed", "timeout"], completed: 1 }] as const)(
-    "labels $name outcomes as a combined count through completion",
-    ({ statuses, completed }) => {
-      const terminal = [
-        ...Array.from({ length: completed }, (_, index) =>
-          session({ key: `completed-${index}`, status: "done", hasActiveRun: true }),
-        ),
-        ...statuses.map((status, index) =>
-          session({ key: `unsuccessful-${index}`, status, hasActiveRun: true }),
-        ),
-      ];
-      const { container, update } = mountProgress({
-        sessionKey: parentSessionKey,
-        sessions: withSummary([session({ key: "running", status: "running" }), ...terminal]),
-      });
-      const activeCounts = `1 running · 0 queued · ${statuses.length} failed or stopped`;
+  it("labels mixed outcomes as a combined count through completion", () => {
+    const statuses = ["failed", "killed", "timeout"] as const;
+    const completed = 1;
+    const terminal = [
+      ...Array.from({ length: completed }, (_, index) =>
+        session({ key: `completed-${index}`, status: "done", hasActiveRun: true }),
+      ),
+      ...statuses.map((status, index) =>
+        session({ key: `unsuccessful-${index}`, status, hasActiveRun: true }),
+      ),
+    ];
+    const { container, update } = mountProgress({
+      sessionKey: parentSessionKey,
+      sessions: withSummary([session({ key: "running", status: "running" }), ...terminal]),
+    });
+    const activeCounts = `1 running · 0 queued · ${statuses.length} failed or stopped`;
 
-      expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(activeCounts);
-      expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(
-        activeCounts,
-      );
-      expect(container.querySelectorAll(".chat-swarm__task-icon--running")).toHaveLength(1);
-      expect(container.querySelectorAll(".chat-swarm__task-icon--done")).toHaveLength(completed);
-      expect(container.querySelectorAll(".chat-swarm__task-icon--failed")).toHaveLength(
-        statuses.length,
-      );
+    expectCounts(container, activeCounts);
+    expect(container.querySelectorAll(".chat-swarm__task-icon--running")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-swarm__task-icon--done")).toHaveLength(completed);
+    expect(container.querySelectorAll(".chat-swarm__task-icon--failed")).toHaveLength(
+      statuses.length,
+    );
 
-      update({ sessionKey: parentSessionKey, sessions: withSummary(terminal) });
-      const finishedCounts = `${completed} completed · ${statuses.length} failed or stopped`;
-      expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
-      expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(finishedCounts);
-      expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(
-        finishedCounts,
-      );
-      expect(container.textContent).toContain("Check the conversation for the final response");
-    },
-  );
+    update({ sessionKey: parentSessionKey, sessions: withSummary(terminal) });
+    const finishedCounts = `${completed} completed · ${statuses.length} failed or stopped`;
+    expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
+    expectCounts(container, finishedCounts);
+    expect(container.textContent).toContain("Check the conversation for the final response");
+  });
 
   it("says the parent is processing while child runs are finished but the parent is still active", () => {
     const completed = session({ key: "completed", status: "done", hasActiveRun: true });
-    const parentActive: (typeof completed)[] = [];
-    for (const row of withSummary([completed])) {
-      parentActive.push(
-        row.key === parentSessionKey
-          ? { ...row, status: "running" as const, hasActiveRun: true }
-          : row,
-      );
-    }
+    const parentActive = withSummary([completed]);
+    Object.assign(parentActive[0]!, { status: "running", hasActiveRun: true });
     const { container } = mountProgress({ sessionKey: parentSessionKey, sessions: parentActive });
     expect(container.textContent).toContain("The parent is processing their results");
     expect(container.textContent).not.toContain("Check the conversation for the final response");
@@ -344,8 +328,8 @@ describe("chat Swarm progress", () => {
 
     expect(
       [...container.querySelectorAll(".chat-swarm__task")].map((task) => ({
-        label: task.querySelector(".chat-swarm__task-name")?.textContent,
-        duration: task.querySelector(".chat-swarm__task-duration")?.textContent,
+        label: text(task, "task-name"),
+        duration: text(task, "task-duration"),
       })),
     ).toEqual([
       { label: "Running", duration: "10s" },
@@ -395,8 +379,7 @@ describe("chat Swarm progress", () => {
       sessionKey: parentSessionKey,
       sessions: withSummary([initial]),
     });
-    const duration = (container: HTMLElement) =>
-      container.querySelector(".chat-swarm__task-duration")?.textContent;
+    const duration = (container: HTMLElement) => text(container, "task-duration");
     expect(duration(capable.container)).toBe("6s");
     expect(duration(capable.container)).toBe(duration(legacy.container));
 
@@ -422,7 +405,8 @@ describe("chat Swarm progress", () => {
     }
     expect(reconnect).not.toHaveBeenCalled();
   });
-  it.each(["unknown"])("keeps raw %s owners separate from ordinary qualified keys", (raw) => {
+  it("keeps raw unknown owners separate from ordinary qualified keys", () => {
+    const raw = "unknown";
     const makeParent = (key: string, agentId: string, done: number): GatewaySessionRow => ({
       key,
       agentId,

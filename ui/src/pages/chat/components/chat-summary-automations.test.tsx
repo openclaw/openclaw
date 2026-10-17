@@ -3,7 +3,6 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
-import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
@@ -48,41 +47,65 @@ function page(
   };
 }
 
-function source(request = createGatewayRequestMock(async () => page())) {
-  return {
-    request,
-    ...createApplicationGateway({
-      client: createTestGatewayClient(request),
-      phase: "connected",
-      offlineStable: false,
-      hello: null,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "ops",
-      sessionKey: "agent:ops:task",
-      lastError: null,
-      lastErrorCode: null,
-    }),
-  };
-}
-
 const mounted: HTMLElement[] = [];
 const observers: MutationObserver[] = [];
-function component(gateway: ApplicationGateway, presented = true) {
+type Page = CronJobsListResult<CronCompactJob>;
+function component(
+  request = createGatewayRequestMock(async () => page()),
+  presented = true,
+  offline = false,
+) {
+  const source = createApplicationGateway({
+    client: createTestGatewayClient(request),
+    phase: offline ? "offline" : "connected",
+    offlineStable: false,
+    hello: null,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: "ops",
+    sessionKey: "agent:ops:task",
+    lastError: null,
+    lastErrorCode: null,
+  });
   type Props = Parameters<typeof ChatSummaryAutomations>[0];
   let update!: (next: Partial<Props>) => void;
   const view = mountSolid(() => {
     const [props, setProps] = createSignal<Props>({
-      gateway,
+      gateway: source.gateway,
       sessionKey: "agent:ops:task",
       presented,
     });
-    update = (next) => setProps((current) => ({ ...current, ...next }));
+    update = (next) => {
+      setProps((current) => ({ ...current, ...next }));
+      flush();
+    };
     return <ChatSummaryAutomations {...props()} />;
   });
+  const element = view.container.querySelector<HTMLElement>("openclaw-chat-summary-automations")!;
   return {
+    ...source,
+    request,
     ...view,
-    element: view.container.querySelector<HTMLElement>("openclaw-chat-summary-automations")!,
+    element,
+    find: <T extends HTMLElement = HTMLElement>(selector: string) =>
+      element.querySelector<T>(selector),
+    ready: (text = "Check the task") => textReady(element, text),
+    empty: () =>
+      observe(element, () => element.querySelector(".chat-summary__automations") === null),
+    cron: (action = "updated") =>
+      source.publishEvent({ type: "event", event: "cron", payload: { action } }),
     update,
+  };
+}
+
+function retrying() {
+  const pending = createDeferred<Page>();
+  return {
+    pending,
+    ...component(
+      createGatewayRequestMock()
+        .mockRejectedValueOnce(new Error("private server detail"))
+        .mockReturnValueOnce(pending.promise),
+    ),
   };
 }
 
@@ -127,41 +150,38 @@ afterEach(() => {
 
 describe("Details compact automations", () => {
   it("keeps its initial inventory through unrelated Gateway snapshots", async () => {
-    const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
-    const current = source(
+    const pending = createDeferred<Page>();
+    const current = component(
       createGatewayRequestMock()
-        .mockImplementationOnce(() => pending.promise)
+        .mockReturnValueOnce(pending.promise)
         .mockResolvedValue(page([job()])),
     );
-    const view = component(current.gateway);
-    const { element } = view;
     flush();
     current.publish({ ...current.gateway.snapshot });
     expect(current.request).toHaveBeenCalledTimes(1);
     pending.resolve(page([job()]));
-    await textReady(element, "Check the task");
+    await current.ready();
     current.publish({ ...current.gateway.snapshot });
     expect(current.request).toHaveBeenCalledTimes(1);
-    view.update({ presented: false });
-    flush();
-    view.update({ presented: true });
-    flush();
-    await textReady(element, "Check the task");
+    current.update({ presented: false });
+    current.update({ presented: true });
+    await current.ready();
     expect(current.request).toHaveBeenCalledTimes(2);
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
-    await textReady(element, "Check the task");
+    current.cron();
+    await current.ready();
     expect(current.request).toHaveBeenCalledTimes(3);
   });
 
   it("admits only presented session-scoped reads and uses the existing automation destination", async () => {
-    const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
-    const current = source(createGatewayRequestMock(() => pending.promise));
-    const view = component(current.gateway, false);
-    const { element } = view;
+    const pending = createDeferred<Page>();
+    const current = component(
+      createGatewayRequestMock(() => pending.promise),
+      false,
+    );
+    const { element, find } = current;
     flush();
     expect(current.request).not.toHaveBeenCalled();
-    view.update({ presented: true });
-    flush();
+    current.update({ presented: true });
     expect(element.textContent).toContain("Loading automations…");
     expect(element.textContent).not.toContain("No automations");
     expect(current.request).toHaveBeenCalledWith(
@@ -181,73 +201,63 @@ describe("Details compact automations", () => {
     );
     const fullTitle = "A long automation title that must remain unabridged and accessible";
     pending.resolve(page([job({ name: fullTitle })]));
-    await textReady(element, fullTitle);
-    const link = element.querySelector<HTMLAnchorElement>(".chat-summary__automation")!;
+    await current.ready(fullTitle);
+    const link = find<HTMLAnchorElement>(".chat-summary__automation")!;
     expect(link.getAttribute("href")).toBe("/automations?job=summary-job");
     expect(link.textContent).toContain("Every 10m");
     expect(link.querySelector(".chat-summary__automation-title")?.textContent?.trim()).toBe(
       fullTitle,
     );
-    expect(
-      element.querySelector<HTMLDetailsElement>('[data-details-group="automations"]')?.open,
-    ).toBe(true);
+    expect(find<HTMLDetailsElement>('[data-details-group="automations"]')?.open).toBe(true);
     expect(link.querySelector("svg")).not.toBeNull();
     const onNavigate = vi.fn();
-    view.update({ onNavigate });
-    flush();
+    current.update({ onNavigate });
     link.click();
     expect(onNavigate).toHaveBeenCalledWith("summary-job");
     expect(current.request).toHaveBeenCalledTimes(1);
   });
 
   it("omits confirmed-empty sections and preserves manual collapse until the content disappears", async () => {
-    const current = source(
+    const current = component(
       createGatewayRequestMock()
         .mockResolvedValueOnce(page())
         .mockResolvedValue(page([job()])),
     );
-    const view = component(current.gateway);
-    const { element } = view;
+    const { find } = current;
     flush();
-    await observe(element, () => element.querySelector(".chat-summary__automations") === null);
-    expect(element.querySelector("summary")).toBeNull();
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "added" } });
-    await textReady(element, "Check the task");
-    const group = element.querySelector<HTMLDetailsElement>("details")!;
+    await current.empty();
+    expect(find("summary")).toBeNull();
+    current.cron("added");
+    await current.ready();
+    const group = find<HTMLDetailsElement>("details")!;
     expect(group.open).toBe(true);
     group.open = false;
     group.dispatchEvent(new Event("toggle"));
     flush();
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+    current.cron();
     flush();
-    await textReady(element, "Check the task");
-    expect(element.querySelector("details")).toBe(group);
+    await current.ready();
+    expect(find("details")).toBe(group);
     expect(group.open).toBe(false);
     current.request.mockResolvedValueOnce(page());
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "removed" } });
-    await observe(element, () => element.querySelector(".chat-summary__automations") === null);
-    expect(element.querySelector("summary")).toBeNull();
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "added" } });
-    await textReady(element, "Check the task");
-    expect(element.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
+    current.cron("removed");
+    await current.empty();
+    expect(find("summary")).toBeNull();
+    current.cron("added");
+    await current.ready();
+    expect(find<HTMLDetailsElement>("details")?.open).toBe(true);
   });
 
   it("keeps Retry focused while pending, preserves sibling disclosure, and moves focus only after its own success", async () => {
-    const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
-    const current = source(
-      createGatewayRequestMock()
-        .mockRejectedValueOnce(new Error("private server detail"))
-        .mockImplementationOnce(() => pending.promise),
-    );
-    const view = component(current.gateway);
-    const { element } = view;
+    const current = retrying();
+    const { element, find, pending } = current;
     const sibling = document.createElement("details");
     sibling.open = false;
     mounted.push(sibling);
     document.body.append(sibling);
-    await textReady(element, "Couldn't load automations.");
+    await current.ready("Couldn't load automations.");
     expect(element.textContent).not.toContain("private server detail");
-    const retry = element.querySelector<HTMLButtonElement>(".chat-summary__automation-retry")!;
+    const retry = find<HTMLButtonElement>(".chat-summary__automation-retry")!;
     expect(retry.textContent?.trim()).toBe("Retry");
     retry.focus();
     retry.click();
@@ -257,49 +267,40 @@ describe("Details compact automations", () => {
     retry.click();
     expect(current.request).toHaveBeenCalledTimes(2);
     pending.resolve(page([job()]));
-    await textReady(element, "Check the task");
+    await current.ready();
     flush();
-    expect(document.activeElement).toBe(element.querySelector(".chat-summary__automation"));
+    expect(document.activeElement).toBe(find(".chat-summary__automation"));
     expect(sibling.open).toBe(false);
   });
 
   it("does not steal composer focus when a retry resolves after the user moves away", async () => {
-    const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
-    const current = source(
-      createGatewayRequestMock()
-        .mockRejectedValueOnce(new Error("offline"))
-        .mockImplementationOnce(() => pending.promise),
-    );
-    const view = component(current.gateway);
-    const { element } = view;
-    await textReady(element, "Couldn't load automations.");
-    element.querySelector<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
+    const current = retrying();
+    await current.ready("Couldn't load automations.");
+    current.find<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
     const composer = document.createElement("textarea");
     composer.value = "Keep my draft";
     mounted.push(composer);
     document.body.append(composer);
     composer.focus();
-    pending.resolve(page());
-    await observe(element, () => element.querySelector(".chat-summary__automations") === null);
+    current.pending.resolve(page());
+    await current.empty();
     expect(document.activeElement).toBe(composer);
     expect(composer.value).toBe("Keep my draft");
   });
 
   it("fences late pages on session and same-client reconnect boundaries", async () => {
-    const retired = createDeferred<CronJobsListResult<CronCompactJob>>();
-    const reconnectRetired = createDeferred<CronJobsListResult<CronCompactJob>>();
-    const latest = createDeferred<CronJobsListResult<CronCompactJob>>();
-    const current = source(
+    const retired = createDeferred<Page>();
+    const reconnectRetired = createDeferred<Page>();
+    const latest = createDeferred<Page>();
+    const current = component(
       createGatewayRequestMock()
-        .mockImplementationOnce(() => retired.promise)
-        .mockImplementationOnce(() => reconnectRetired.promise)
-        .mockImplementationOnce(() => latest.promise),
+        .mockReturnValueOnce(retired.promise)
+        .mockReturnValueOnce(reconnectRetired.promise)
+        .mockReturnValueOnce(latest.promise),
     );
-    const view = component(current.gateway);
-    const { element } = view;
+    const { element } = current;
     flush();
-    view.update({ sessionKey: "agent:ops:second" });
-    flush();
+    current.update({ sessionKey: "agent:ops:second" });
     const snapshot = current.gateway.snapshot;
     current.publish({ ...snapshot, phase: "reconnecting" });
     current.publish(snapshot);
@@ -307,7 +308,7 @@ describe("Details compact automations", () => {
     expect(current.request).toHaveBeenCalledTimes(3);
     expect(current.request.mock.calls[2]?.[1]).toMatchObject({ sessionKey: "agent:ops:second" });
     latest.resolve(page([job({ name: "Current session" })]));
-    await textReady(element, "Current session");
+    await current.ready("Current session");
     retired.resolve(page([job({ name: "Wrong session" })]));
     reconnectRetired.resolve(page([job({ name: "Retired connection" })]));
     await retired.promise;
@@ -318,52 +319,43 @@ describe("Details compact automations", () => {
   });
 
   it("coalesces hidden cron publications until presentation and removes subscriptions on unmount", async () => {
-    const current = source(createGatewayRequestMock(async () => page([job()])));
-    const view = component(current.gateway);
-    const { element } = view;
-    await textReady(element, "Check the task");
-    view.update({ presented: false });
-    flush();
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+    const current = component(createGatewayRequestMock(async () => page([job()])));
+    await current.ready();
+    current.update({ presented: false });
+    current.cron();
+    current.cron();
     flush();
     expect(current.request).toHaveBeenCalledTimes(1);
-    view.update({ presented: true });
-    flush();
-    await textReady(element, "Check the task");
+    current.update({ presented: true });
+    await current.ready();
     expect(current.request).toHaveBeenCalledTimes(2);
-    view.unmount();
-    current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+    current.unmount();
+    current.cron();
     current.publish(current.gateway.snapshot);
     flush();
     expect(current.request).toHaveBeenCalledTimes(2);
   });
 
   it("retains same-scope automation facts offline and clears them on session replacement", async () => {
-    const current = source(createGatewayRequestMock(async () => page([job()])));
-    const view = component(current.gateway);
-    const { element } = view;
-    await textReady(element, "Check the task");
+    const current = component(createGatewayRequestMock(async () => page([job()])));
+    const { element } = current;
+    await current.ready();
     current.publish({ ...current.gateway.snapshot, phase: "offline", client: null });
     flush();
     expect(element.textContent).toContain("Check the task");
     expect(element.textContent).not.toContain("Reconnect to load");
-    view.update({ sessionKey: "agent:ops:other" });
-    flush();
+    current.update({ sessionKey: "agent:ops:other" });
     expect(element.textContent).not.toContain("Check the task");
   });
 
   it("does not invent empty inventory offline or for an unresolved session owner", async () => {
-    const current = source();
-    current.publish({ ...current.gateway.snapshot, phase: "offline" });
-    const view = component(current.gateway);
-    const { element } = view;
+    const current = component(undefined, true, true);
+    const { element } = current;
     flush();
     expect(element.textContent).toContain("Offline · last-known automations");
     expect(element.textContent).not.toContain("No automations");
     expect(current.request).not.toHaveBeenCalled();
-    view.update({ sessionKey: "unresolved-session" });
-    flush();
+    current.update({ sessionKey: "unresolved-session" });
     current.publish({ ...current.gateway.snapshot, phase: "connected" });
     flush();
     expect(element.textContent).toContain("Automations unavailable for this session.");
@@ -371,7 +363,7 @@ describe("Details compact automations", () => {
   });
 
   it("uses the inventory continuation rather than silently dropping additional automations", async () => {
-    const current = source(
+    const current = component(
       createGatewayRequestMock()
         .mockResolvedValueOnce(
           page([job({ name: "First automation", enabled: false })], {
@@ -387,12 +379,11 @@ describe("Details compact automations", () => {
           }),
         ),
     );
-    const view = component(current.gateway);
-    const { element } = view;
-    await textReady(element, "First automation");
+    const { element, find } = current;
+    await current.ready("First automation");
     expect(element.textContent).toContain("Paused");
-    element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!.click();
-    await textReady(element, "Second automation");
+    find<HTMLButtonElement>(".chat-summary__automation-more")!.click();
+    await current.ready("Second automation");
     expect(current.request.mock.calls[1]?.[1]).toMatchObject({
       offset: 1,
       sessionKey: "agent:ops:task",
@@ -400,6 +391,6 @@ describe("Details compact automations", () => {
     });
     expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(2);
     expect(element.textContent).toContain("Running");
-    expect(element.querySelector(".chat-summary__automation-more")).toBeNull();
+    expect(find(".chat-summary__automation-more")).toBeNull();
   });
 });

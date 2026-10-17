@@ -23,14 +23,20 @@ afterEach(() => {
   view = undefined;
   releaseChatMediaResourceOwner(update);
   update = undefined;
-  if (container) {
-    container.remove();
-  }
+  container?.remove();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
+function video(url: string, options: Partial<AttachmentItem["attachment"]> = {}): AttachmentItem {
+  return { type: "attachment", attachment: { kind: "video", url, label: "Clip", ...options } };
+}
+const outgoing = () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+const ticket = (source: string, value: string, ttl = 300_000) => ({
+  url: `${source}?mediaTicket=${value}`,
+  expiresAt: new Date(Date.now() + ttl).toISOString(),
+});
 async function open(
   attachment: AttachmentItem,
   resolveArtifactDownload?: () => Promise<{ url: string; expiresAt: string }>,
@@ -77,31 +83,13 @@ async function open(
 
 it("renews a selected video's ticket without interrupting playback and releases renewal on close", async () => {
   vi.useFakeTimers();
-  const source = "/api/chat/media/outgoing/agent%3Amain%3Amain/" + crypto.randomUUID() + "/full";
+  const source = outgoing();
   const resolve = vi
     .fn()
-    .mockResolvedValueOnce({
-      url: source + "?mediaTicket=A",
-      expiresAt: new Date(Date.now() + 31_000).toISOString(),
-    })
-    .mockResolvedValue({
-      url: source + "?mediaTicket=B",
-      expiresAt: new Date(Date.now() + 300_000).toISOString(),
-    });
-  const first: AttachmentItem = {
-    type: "attachment",
-    attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
-  };
-  const next: AttachmentItem = {
-    type: "attachment",
-    attachment: {
-      kind: "video",
-      url: source,
-      artifactId: "synthetic-video",
-      label: "Clip",
-      mimeType: "video/mp4",
-    },
-  };
+    .mockResolvedValueOnce(ticket(source, "A", 31_000))
+    .mockResolvedValue(ticket(source, "B"));
+  const first = video("https://example.com/first.mp4", { label: "First" });
+  const next = video(source, { artifactId: "synthetic-video", mimeType: "video/mp4" });
   const opened = await open(first, resolve, [first, next]);
   const item = await opened.gallery!.items[1]!();
   const media = container!.appendChild(document.createElement("video"));
@@ -141,21 +129,12 @@ it("renews a selected video's ticket without interrupting playback and releases 
 });
 
 it("aborts selected rendition preparation and never assigns a late source after close", async () => {
-  // The inline expansion callback is invoked directly; this test isolates the
-  // modal connection from inline viewport/readiness, covered by player tests.
+  // Direct expansion isolates the modal connection from inline viewport/readiness.
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response(null, { status: 200 })),
   );
-  const item = await open({
-    type: "attachment",
-    attachment: {
-      kind: "video",
-      url: "https://example.com/clip.avi",
-      label: "Clip",
-      playback: "transcode",
-    },
-  });
+  const item = await open(video("https://example.com/clip.avi", { playback: "transcode" }));
   let complete: ((response: Response) => void) | undefined;
   let signal: AbortSignal | null | undefined;
   vi.stubGlobal(
@@ -183,34 +162,23 @@ it("aborts selected rendition preparation and never assigns a late source after 
 });
 
 it("explicit retry clears a cached recoverable neighbor failure through its source owner", async () => {
-  const first: AttachmentItem = {
-    type: "attachment",
-    attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
-  };
-  const url = "/api/chat/media/outgoing/agent%3Amain%3Amain/" + crypto.randomUUID() + "/full";
-  const next: AttachmentItem = {
-    type: "attachment",
-    attachment: { kind: "video", url, artifactId: "synthetic-retry", label: "Next" },
-  };
+  const url = outgoing();
+  const next = video(url, { artifactId: "synthetic-retry", label: "Next" });
   const resolve = vi
     .fn()
     .mockRejectedValueOnce(new Error("Temporary failure"))
-    .mockResolvedValue({
-      url: url + "?mediaTicket=recovered",
-      expiresAt: new Date(Date.now() + 300_000).toISOString(),
-    });
+    .mockResolvedValue(ticket(url, "recovered"));
+  const first = video("https://example.com/first.mp4", { label: "First" });
   const opened = await open(first, resolve, [first, next]);
   const background = vi.fn();
-  const backgroundContainer = document.body.appendChild(document.createElement("div"));
   const options = { resolveArtifactDownload: resolve, mediaOwner: background };
-  const backgroundView = mountSolid(
-    () => createComponent(AssistantAttachments, { attachments: [next], options }),
-    { container: backgroundContainer },
+  const backgroundView = mountSolid(() =>
+    createComponent(AssistantAttachments, { attachments: [next], options }),
   );
   try {
     await vi.waitFor(() =>
       expect(
-        backgroundContainer.querySelector(".chat-assistant-attachment-card__retry"),
+        backgroundView.container.querySelector(".chat-assistant-attachment-card__retry"),
       ).not.toBeNull(),
     );
     const item = await opened.gallery!.items[1]!();
@@ -225,7 +193,6 @@ it("explicit retry clears a cached recoverable neighbor failure through its sour
     expect(resolve).toHaveBeenCalledTimes(2);
   } finally {
     backgroundView.unmount();
-    backgroundContainer.remove();
     releaseChatMediaResourceOwner(background);
   }
 });

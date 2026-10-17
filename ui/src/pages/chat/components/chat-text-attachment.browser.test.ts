@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
@@ -8,6 +9,36 @@ import "./chat-detail-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
+const required = <T extends HTMLElement = HTMLElement>(root: ParentNode, selector: string) =>
+  expectDefined(root.querySelector<T>(selector), selector);
+async function mountAttachment(
+  resolveSource: Extract<SidebarContent, { kind: "attachment" }>["resolveSource"],
+) {
+  const container = document.createElement("div");
+  container.className = "side-panel__panel";
+  container.style.cssText = "display:flex;width:480px;height:600px;";
+  const panel = document.createElement("openclaw-chat-detail-panel");
+  panel.className = "chat-sidebar";
+  panel.content = {
+    kind: "attachment",
+    title: "notes.md",
+    mimeType: "text/markdown",
+    sourceIdentity: "attachment:notes",
+    resolveSource,
+  };
+  container.append(panel);
+  document.body.append(container);
+  await panel.updateComplete;
+  return { container, panel };
+}
+
+async function pageDown(scroller: HTMLElement) {
+  const scrollEnd = new Promise<void>((resolve) => {
+    scroller.addEventListener("scrollend", () => resolve(), { once: true });
+  });
+  await userEvent.keyboard("{PageDown}");
+  await scrollEnd;
+}
 beforeAll(async () => {
   if (browserMode) {
     ({ userEvent } = await import("vitest/browser"));
@@ -33,23 +64,10 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
     vi.stubGlobal("fetch", fetchMock);
     let src = "/notes.md?ticket=first";
     let requestSourceUpdate: (() => void) | undefined;
-    const container = document.createElement("div");
-    container.className = "side-panel__panel";
-    container.style.cssText = "display:flex;width:480px;height:600px;";
-    const panel = document.createElement("openclaw-chat-detail-panel");
-    panel.className = "chat-sidebar";
-    panel.content = {
-      kind: "attachment",
-      title: "notes.md",
-      mimeType: "text/markdown",
-      sourceIdentity: "attachment:notes",
-      resolveSource: (update) => {
-        requestSourceUpdate = update;
-        return { status: "ready", src };
-      },
-    };
-    container.append(panel);
-    document.body.append(container);
+    const { container, panel } = await mountAttachment((update) => {
+      requestSourceUpdate = update;
+      return { status: "ready", src };
+    });
     const keys: { key: string; target: EventTarget | null; trusted: boolean }[] = [];
     const onKey = (event: KeyboardEvent) => {
       keys.push({ key: event.key, target: event.target, trusted: event.isTrusted });
@@ -71,19 +89,12 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       );
       await userEvent.click(raw);
       await expect.poll(() => panel.querySelector("pre")).not.toBeNull();
-      const reader = expectDefined(panel.querySelector("pre"), "Raw reader");
-      const scroller = expectDefined(
-        panel.querySelector<HTMLElement>(".sidebar-content"),
-        "Sidebar scroller",
-      );
+      const reader = required(panel, "pre");
+      const scroller = required(panel, ".sidebar-content");
       expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
       await userEvent.click(reader);
       expect(document.activeElement).toBe(reader);
-      const initialScrollEnd = new Promise<void>((resolve) => {
-        scroller.addEventListener("scrollend", () => resolve(), { once: true });
-      });
-      await userEvent.keyboard("{PageDown}");
-      await initialScrollEnd;
+      await pageDown(scroller);
       expect(scroller.scrollTop).toBeGreaterThan(0);
       expect(keys.at(-1)).toEqual({ key: "PageDown", target: reader, trusted: true });
       expectDefined(requestSourceUpdate, "Source resolution callback")();
@@ -96,11 +107,7 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       expect(reader.isConnected).toBe(true);
       expect(document.activeElement).toBe(reader);
       const beforePendingKey = scroller.scrollTop;
-      const pendingScrollEnd = new Promise<void>((resolve) => {
-        scroller.addEventListener("scrollend", () => resolve(), { once: true });
-      });
-      await userEvent.keyboard("{PageDown}");
-      await pendingScrollEnd;
+      await pageDown(scroller);
       expect(scroller.scrollTop).toBeGreaterThan(beforePendingKey);
       expect(keys.at(-1)).toEqual({ key: "PageDown", target: reader, trusted: true });
       const refreshResponse = new Response(text);
@@ -158,24 +165,10 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       vi.stubGlobal("fetch", fetchMock);
       let source = "/notes.md";
       let requestSourceUpdate: (() => void) | undefined;
-      const container = document.createElement("div");
-      container.className = "side-panel__panel";
-      container.style.cssText = "display:flex;width:480px;height:600px;";
-      const panel = document.createElement("openclaw-chat-detail-panel");
-      panel.className = "chat-sidebar";
-      panel.content = {
-        kind: "attachment",
-        title: "notes.md",
-        mimeType: "text/markdown",
-        sourceIdentity: "attachment:notes",
-        resolveSource: (onSourceChange) => {
-          requestSourceUpdate = onSourceChange;
-          return { status: "ready", src: source };
-        },
-      };
-      container.append(panel);
-      document.body.append(container);
-      await panel.updateComplete;
+      const { container, panel } = await mountAttachment((onSourceChange) => {
+        requestSourceUpdate = onSourceChange;
+        return { status: "ready", src: source };
+      });
       await expect.poll(() => fetchMock.mock.calls.length).toBe(1);
       expect(panel.querySelector(".code-block-wrapper")).toBeNull();
 
@@ -189,18 +182,9 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       await expect
         .poll(() => panel.querySelector(".code-block-wrapper.has-horizontal-overflow"))
         .not.toBeNull();
-      const viewport = expectDefined(
-        panel.querySelector<HTMLElement>(".code-block-viewport"),
-        "Code viewport",
-      );
-      const expand = expectDefined(
-        panel.querySelector<HTMLButtonElement>(".code-block-expand"),
-        "Expand control",
-      );
-      const wrap = expectDefined(
-        panel.querySelector<HTMLButtonElement>(".code-block-wrap"),
-        "Wrap control",
-      );
+      const viewport = required(panel, ".code-block-viewport");
+      const expand = required(panel, ".code-block-expand");
+      const wrap = required(panel, ".code-block-wrap");
       expect(viewport.id).not.toBe("");
       expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
       expand.click();
@@ -210,7 +194,7 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
       expect(wrap.getAttribute("aria-pressed")).toBe("true");
       expect(panel.querySelector(".code-block-wrapper.is-wrapped")).not.toBeNull();
 
-      const reader = expectDefined(panel.querySelector("article"), "Loaded reader");
+      const reader = required(panel, "article");
       let observedViewport = viewport;
       const nextText = change === "contents" ? text.replace("longLine", "updatedLine") : text;
       try {
@@ -254,29 +238,19 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
         await expect
           .poll(() => panel.querySelector("article code")?.textContent)
           .toContain(change === "contents" ? "updatedLine" : "longLine");
-        const nextReader = expectDefined(panel.querySelector("article"), "Refreshed reader");
+        const nextReader = required(panel, "article");
         const retained = change === "transport";
         expect(nextReader === reader).toBe(retained);
-        const nextExpand = expectDefined(
-          nextReader.querySelector<HTMLButtonElement>(".code-block-expand"),
-          "Refreshed expand control",
-        );
-        const nextWrap = expectDefined(
-          nextReader.querySelector<HTMLButtonElement>(".code-block-wrap"),
-          "Refreshed wrap control",
-        );
+        const nextExpand = required(nextReader, ".code-block-expand");
+        const nextWrap = required(nextReader, ".code-block-wrap");
         expect(nextExpand.getAttribute("aria-expanded")).toBe(String(retained));
         expect(nextWrap.getAttribute("aria-pressed")).toBe(String(retained));
-        expect(
-          nextReader.querySelector(".code-block-wrapper")?.classList.contains("is-expanded"),
-        ).toBe(retained);
-        expect(
-          nextReader.querySelector(".code-block-wrapper")?.classList.contains("is-wrapped"),
-        ).toBe(retained);
-        const nextViewport = expectDefined(
-          nextReader.querySelector<HTMLElement>(".code-block-viewport"),
-          "Refreshed code viewport",
-        );
+        const classes = required(nextReader, ".code-block-wrapper").classList;
+        expect([classes.contains("is-expanded"), classes.contains("is-wrapped")]).toEqual([
+          retained,
+          retained,
+        ]);
+        const nextViewport = required(nextReader, ".code-block-viewport");
         observedViewport = nextViewport;
         await expect.poll(() => isObserved(nextViewport)).toBe(true);
         await expect.poll(() => nextViewport.id).not.toBe("");

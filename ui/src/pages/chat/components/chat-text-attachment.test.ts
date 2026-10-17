@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import {
   applicationContext,
   type ApplicationContext,
@@ -10,18 +11,25 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import "./chat-detail-panel.tsx";
 
+type Attachment = Extract<SidebarContent, { kind: "attachment" }>;
+const source = "/__openclaw__/assistant-media?mediaTicket=text-preview";
+const pendingSelector = '[role="status"]:not([hidden])';
+const fetchResponse = (body: BodyInit) =>
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(body)));
+const expectText = (panel: ParentNode, selector: string, text: string) =>
+  vi.waitFor(() => expect(panel.querySelector(selector)?.textContent).toBe(text));
+const expectFallback = (panel: HTMLElement) =>
+  vi.waitFor(() => expect(panel.textContent).toContain("Download it to read the full file"));
+
 async function mountAttachment(
-  overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
+  overrides: Partial<Attachment> = {},
   request = async (_method: string, params: { html: string }) => ({
     html: params.html,
     sandboxUrl: "/mcp-app-sandbox?frames=none",
     sandboxPort: 8444,
   }),
 ) {
-  const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
-    content: SidebarContent;
-    updateComplete: Promise<unknown>;
-  };
+  const panel = document.createElement("openclaw-chat-detail-panel");
   const previewContext = {
     gateway: {
       snapshot: { client: { request }, phase: "connected" },
@@ -44,7 +52,7 @@ async function mountAttachment(
     kind: "attachment",
     attachmentKind: "document",
     title: "notes.txt",
-    src: "/__openclaw__/assistant-media?mediaTicket=text-preview",
+    src: source,
     mimeType: "text/plain",
     ...overrides,
   };
@@ -60,37 +68,30 @@ afterEach(() => {
 });
 
 it("keeps one pending presentation through metadata and text-body loading", async () => {
-  let resolveBody!: (response: Response) => void;
-  const fetchMock = vi.fn<typeof fetch>(
-    () =>
-      new Promise((resolve) => {
-        resolveBody = resolve;
-      }),
-  );
+  const body = createDeferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(body.promise);
   vi.stubGlobal("fetch", fetchMock);
   let pending = true;
   const panel = await mountAttachment({
     src: undefined,
     resolveSource: () => (pending ? { status: "pending" } : { status: "ready", src: "/notes.txt" }),
   });
-  await vi.waitFor(() =>
-    expect(panel.querySelector('[role="status"]:not([hidden])')).not.toBeNull(),
-  );
-  const presentation = panel.querySelector('[role="status"]:not([hidden])');
+  await vi.waitFor(() => expect(panel.querySelector(pendingSelector)).not.toBeNull());
+  const presentation = panel.querySelector(pendingSelector);
   const header = panel.querySelector(".chat-assistant-attachment-card__header");
   expect(fetchMock).not.toHaveBeenCalled();
   pending = false;
   panel.content = { ...panel.content };
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-  expect(panel.querySelector('[role="status"]:not([hidden])')).toBe(presentation);
+  expect(panel.querySelector(pendingSelector)).toBe(presentation);
   expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
-  resolveBody(new Response("Ready text"));
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Ready text"));
-  expect(panel.querySelector('[role="status"]:not([hidden])')).toBeNull();
+  body.resolve(new Response("Ready text"));
+  await expectText(panel, "pre", "Ready text");
+  expect(panel.querySelector(pendingSelector)).toBeNull();
 });
 
 it("retries a source-resolution failure through the attachment owner", async () => {
-  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("Recovered text")));
+  fetchResponse("Recovered text");
   let ready = false;
   const panel = await mountAttachment({
     src: undefined,
@@ -112,7 +113,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
   );
   expect(retry).toBeDefined();
   retry!.click();
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Recovered text"));
+  await expectText(panel, "pre", "Recovered text");
 });
 
 it.each([
@@ -128,11 +129,9 @@ it.each([
   const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(text));
   vi.stubGlobal("fetch", fetchMock);
   const panel = await mountAttachment({ title, mimeType });
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
+  await expectText(panel, "pre", text);
   expect(panel.querySelector("script, iframe, textarea, h1, table")).toBeNull();
-  expect(panel.querySelector<HTMLAnchorElement>("a[download]")?.getAttribute("href")).toBe(
-    "/__openclaw__/assistant-media?mediaTicket=text-preview",
-  );
+  expect(panel.querySelector("a[download]")?.getAttribute("href")).toBe(source);
   expect(fetchMock).toHaveBeenCalledOnce();
   expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
 });
@@ -151,19 +150,13 @@ it.each([
       : kind === "inert"
         ? "# שלום\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))\n\n![tracking](https://example.com/tracking.png)\n"
         : "# Release notes\n\n**Ready** with [details](https://example.com).\n\n- First item\n\n| Feature | State |\n| --- | --- |\n| Sidebar | Ready |\n\n```ts\nconst ready = true;\n```\n";
-  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
+  fetchResponse(text);
   const panel = await mountAttachment({ title, mimeType });
   if (kind === "long") {
-    await vi.waitFor(() =>
-      expect(panel.querySelector("article h2")?.textContent).toBe("Last section"),
-    );
+    await expectText(panel, "article h2", "Last section");
     return;
   }
-  await vi.waitFor(() =>
-    expect(panel.querySelector("article h1")?.textContent).toBe(
-      kind === "inert" ? "שלום" : "Release notes",
-    ),
-  );
+  await expectText(panel, "article h1", kind === "inert" ? "שלום" : "Release notes");
   const reader = panel.querySelector("article");
   if (kind === "inert") {
     expect(reader?.getAttribute("dir")).toBe("rtl");
@@ -195,7 +188,7 @@ it.each([
 
 type RejectedAttachment = {
   failure: "metadata" | "advertised" | "streamed" | "bytes" | "unavailable" | "timeout";
-  content?: Partial<Extract<SidebarContent, { kind: "attachment" }>>;
+  content?: Partial<Attachment>;
   limit?: number;
   bytes?: Uint8Array<ArrayBuffer>;
 };
@@ -262,9 +255,7 @@ it.each<RejectedAttachment>([
       await vi.advanceTimersByTimeAsync(10_000);
       expect(panel.textContent).toContain("Download it to read the full file");
     } else {
-      await vi.waitFor(() =>
-        expect(panel.textContent).toContain("Download it to read the full file"),
-      );
+      await expectFallback(panel);
     }
     if (failure === "metadata") {
       expect(fetchMock).not.toHaveBeenCalled();
@@ -281,15 +272,10 @@ it.each<RejectedAttachment>([
 it.each(["same", "different"])(
   "aborts a superseded read for the %s identity and never displays its late contents",
   async (identity) => {
-    let resolveOld!: (response: Response) => void;
+    const old = createDeferred<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveOld = resolve;
-          }),
-      )
+      .mockReturnValueOnce(old.promise)
       .mockResolvedValueOnce(new Response("Current file"));
     vi.stubGlobal("fetch", fetchMock);
     const panel = await mountAttachment({ sourceIdentity: "attachment:notes" });
@@ -302,9 +288,9 @@ it.each(["same", "different"])(
       mimeType: "text/plain",
       sourceIdentity: identity === "same" ? "attachment:notes" : "attachment:next",
     };
-    await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Current file"));
+    await expectText(panel, "pre", "Current file");
     expect(signal?.aborted).toBe(true);
-    resolveOld(new Response("Old file"));
+    old.resolve(new Response("Old file"));
     await vi.waitFor(() => expect(fetchMock.mock.settledResults[0]?.type).toBe("fulfilled"));
     await panel.querySelector("openclaw-chat-text-attachment")?.updateComplete;
     expect(panel.querySelector("pre")?.textContent).toBe("Current file");
@@ -329,7 +315,7 @@ it("aborts a closed preview and reloads it after remount", async () => {
   panel.remove();
   await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
-  await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Reloaded text"));
+  await expectText(panel, "pre", "Reloaded text");
 });
 
 it.each([
@@ -347,12 +333,10 @@ it.each([
   async ({ fill, suffix, ...content }) => {
     const text =
       fill.repeat((2 * 1024 * 1024) / new TextEncoder().encode(fill).byteLength) + suffix;
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
+    fetchResponse(text);
     const panel = await mountAttachment(content);
     if (suffix) {
-      await vi.waitFor(() =>
-        expect(panel.textContent).toContain("Download it to read the full file"),
-      );
+      await expectFallback(panel);
       expect(panel.querySelector("openclaw-chat-html-preview")).toBeNull();
       expect(panel.textContent).toContain("2 MiB");
     } else {
@@ -379,7 +363,7 @@ it.each([
       sourceIdentity: "retained",
       sizeBytes: text.length,
     });
-    await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
+    await expectText(panel, "pre", text);
     const reader = panel.querySelector("openclaw-chat-text-attachment");
     panel.content = { ...panel.content, ...change };
     await vi.waitFor(() =>
@@ -399,7 +383,7 @@ it.each([
   async (title, mimeType) => {
     const text =
       "\ufeff<!doctype html>\r\n<style>h1{color:red}</style><h1>Rendered page</h1><script>window.ready=true</script>\n";
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
+    fetchResponse(text);
     const request = vi.fn().mockResolvedValue({
       html: text,
       sandboxUrl: "/mcp-app-sandbox?frames=none",
@@ -428,9 +412,7 @@ it.each([
     await panel.querySelector("openclaw-chat-text-attachment")!.updateComplete;
     expect(panel.querySelector("iframe")).toBe(frame);
     expect(request).toHaveBeenCalledOnce();
-    expect(panel.querySelector<HTMLAnchorElement>("a[download]")?.getAttribute("href")).toBe(
-      "/__openclaw__/assistant-media?mediaTicket=text-preview",
-    );
+    expect(panel.querySelector("a[download]")?.getAttribute("href")).toBe(source);
     Reflect.set(panel, "embedSandboxMode", "strict");
     await waitForSolid(() => {
       const current = panel.querySelector("iframe");

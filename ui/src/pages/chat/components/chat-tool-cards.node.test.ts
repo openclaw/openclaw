@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   extractToolCardsCached as extractToolCards,
   isToolCardError,
@@ -10,6 +11,23 @@ import { resolveCanvasIframeUrl } from "../../../lib/chat/tool-display.ts";
 
 function assistantCards(content: unknown[], metadata: Record<string, unknown> = {}) {
   return extractToolCards({ role: "assistant", content, ...metadata });
+}
+
+function expectNoBrowser(card: ToolCard | undefined) {
+  expect(card?.preview).toBeUndefined();
+  expect(card?.browserTab).toBeUndefined();
+}
+
+function activity(toolCallId: string, phase: "start" | "end", summary?: string) {
+  return {
+    itemId: `tool:${toolCallId}`,
+    toolCallId,
+    kind: "tool",
+    name: "bash",
+    phase,
+    title: "Command — outcome unknown",
+    ...(summary ? { summary } : {}),
+  };
 }
 
 describe("tool-card extraction", () => {
@@ -53,8 +71,7 @@ describe("tool-card extraction", () => {
     ]);
     expect(cards).toHaveLength(2);
     expect(cards[1]?.outputText).toBe("unpaired output");
-    expect(cards[1]?.preview).toBeUndefined();
-    expect(cards[1]?.browserTab).toBeUndefined();
+    expectNoBrowser(cards[1]);
   });
 
   it("does not let nested content claim browser origin inside a non-browser tool envelope", () => {
@@ -73,8 +90,7 @@ describe("tool-card extraction", () => {
       });
       expect(card?.name).toBe("browser");
       expect(card?.outputText).toBe("nested output");
-      expect(card?.preview).toBeUndefined();
-      expect(card?.browserTab).toBeUndefined();
+      expectNoBrowser(card);
       const [paired] = extractToolCards({
         role: "toolResult",
         [nameField]: toolName,
@@ -84,16 +100,14 @@ describe("tool-card extraction", () => {
         ],
       });
       expect(paired?.outputText).toBe("nested paired output");
-      expect(paired?.preview).toBeUndefined();
-      expect(paired?.browserTab).toBeUndefined();
+      expectNoBrowser(paired);
     }
   });
 
   it("retains browser envelope origin from tool_name", () => {
-    const nameField = "tool_name";
     const [card] = extractToolCards({
       role: "toolResult",
-      [nameField]: "browser",
+      tool_name: "browser",
       content: [{ type: "tool_result", text: "browser output", details: browserDetails }],
     });
     expect(card?.preview).toEqual({ kind: "browser-tab", ...browserDetails.browserTab });
@@ -126,8 +140,7 @@ describe("tool-card extraction", () => {
     { targetId: "t".repeat(129), profile: "managed", target: "host" },
   ])("ignores malformed browser tabs (%j)", (browserTab) => {
     const [card] = extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } });
-    expect(card?.preview).toBeUndefined();
-    expect(card?.browserTab).toBeUndefined();
+    expectNoBrowser(card);
   });
 
   it("retains exact bounded node identities without provider metadata", () => {
@@ -184,10 +197,9 @@ describe("tool-card extraction", () => {
   });
 
   it("keeps a same-name result with different legacy call IDs separate from an open call", () => {
-    const resultId = { callId: "call-b" };
     const cards = assistantCards([
       { type: "tool_use", id: "call-a", name: "read", input: { path: "a.txt" } },
-      { type: "tool_result", ...resultId, name: "read", text: "B failed", isError: true },
+      { type: "tool_result", callId: "call-b", name: "read", text: "B failed", isError: true },
     ]);
 
     expect(cards).toHaveLength(2);
@@ -291,16 +303,7 @@ describe("tool card outcomes", () => {
       const [card] = assistantCards(
         [{ type: "toolcall", id: "call-live", name: "bash", arguments: { command: "sleep 5" } }],
         {
-          activity: [
-            {
-              itemId: "tool:call-live",
-              toolCallId: "call-live",
-              kind: "tool",
-              name: "bash",
-              phase,
-              title: "Command — outcome unknown",
-            },
-          ],
+          activity: [activity("call-live", phase)],
           __openclawToolStreamLive: true,
           __openclawToolStreamResultReceived: false,
         },
@@ -315,17 +318,7 @@ describe("tool card outcomes", () => {
           { type: "toolresult", id: "call-done", name: "bash", text: "ok" },
         ],
         {
-          activity: [
-            {
-              itemId: "tool:call-done",
-              toolCallId: "call-done",
-              kind: "tool",
-              name: "bash",
-              phase: "end",
-              title: "Command — outcome unknown",
-              summary: "Outcome unknown",
-            },
-          ],
+          activity: [activity("call-done", "end", "Outcome unknown")],
         },
       );
       expect(terminal).toMatchObject({ completed: true, outputText: "ok" });
