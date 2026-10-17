@@ -7,12 +7,22 @@ import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
 let runner: string;
+const engineFiles = [
+  "store.test.ts",
+  "command.integration.test.ts",
+  "nested/new.integration.test.ts",
+];
 
 beforeAll(() => {
   const scripts = path.join(tempDirs.make("database-conformance-"), "scripts");
   mkdirSync(scripts);
   runner = path.join(scripts, "test-database-conformance.mjs");
   copyFileSync("scripts/test-database-conformance.mjs", runner);
+  for (const file of engineFiles) {
+    const target = path.join(scripts, "../src/infra/database-engine", file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, "");
+  }
   for (const file of [
     "tsx.mjs",
     "generate-postgres-schema.mts",
@@ -53,10 +63,12 @@ describe("PostgreSQL conformance shards", () => {
     const full = targets([]);
     const infra = targets(["--shard", "infra"]);
     const integrations = targets(["--shard", "integrations"]);
-    expect(infra).toContain("src/infra/database-engine");
+    expect(infra).toContain("src/infra/database-engine/store.test.ts");
     expect(infra).toContain("src/state/openclaw-state-db.postgres.test.ts");
     expect(integrations).toContain("extensions/workboard");
     expect(integrations).toContain("src/commands/doctor-database-diagnostics.postgres.test.ts");
+    expect(integrations).toContain("src/infra/database-engine/command.integration.test.ts");
+    expect(integrations).toContain("src/infra/database-engine/nested/new.integration.test.ts");
     expect([...infra, ...integrations].toSorted()).toEqual(full.toSorted());
     expect(new Set([...infra, ...integrations]).size).toBe(full.length);
     expect(targets(["--shard", "infra", "--", "--maxWorkers=1"])).toEqual([
@@ -67,6 +79,17 @@ describe("PostgreSQL conformance shards", () => {
       "custom.test.ts",
       "--maxWorkers=1",
     ]);
+  });
+
+  it("lists the selected targets without a database connection or catalog probe", () => {
+    const result = spawnSync(
+      resolveTestNodeExecPath(),
+      [runner, "--engine", "postgres", "--shard", "integrations", "--list"],
+      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual(targets(["--shard", "integrations"]));
   });
 
   it.each([

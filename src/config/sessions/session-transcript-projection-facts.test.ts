@@ -186,6 +186,7 @@ it("keeps transcript receipts through unrelated trajectory append and trim", asy
             events: [{ runId: id, ts: "2026-10-12T00:00:00Z", line: JSON.stringify({ id }) }],
             discardPrevious: true,
           },
+          f.database,
           (_label, write) => f.write(() => write(f.database)),
         );
         expect(f.read(receipt)).toMatchObject({

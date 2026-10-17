@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -23,6 +23,7 @@ import { loadAgentTrajectoryOperations } from "../state/openclaw-agent-execution
 import type { AgentWorkerOperationContext } from "../state/openclaw-agent-operation-context.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { readTrajectoryPayload } from "./runtime-payload.js";
 import {
   beginTrajectoryRuntimeRetention,
   prepareTrajectoryRuntimeRetention,
@@ -108,6 +109,7 @@ function appendManaged(event: TrajectoryEvent, discardPrevious = false) {
       discardPrevious,
       events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
     },
+    openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() }),
     (operationLabel, write) =>
       runOpenClawAgentWriteTransaction(
         write,
@@ -333,9 +335,29 @@ it("keeps the committed append when retention fails and retries retention on the
   });
 });
 
-it.each([0, -1])(
-  "evicts complete runs at the global UTF-8 byte budget (%i-byte adjustment)",
-  async (delta) => {
+it.each(
+  ["UTF-8", "UTF-16le", "UTF-16be"].flatMap((encoding) =>
+    [0, -1].map((delta) => ({ encoding, delta })),
+  ),
+)(
+  "evicts complete runs at the global native-byte budget in $encoding ($delta-byte adjustment)",
+  async ({ encoding, delta }) => {
+    if (encoding !== "UTF-8") {
+      storePath = path.join(tempDir, `${encoding}.sqlite`);
+      const seed = new DatabaseSync(storePath);
+      try {
+        seed.exec(
+          `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
+        );
+      } finally {
+        seed.close();
+      }
+      await replaceSessionEntry(
+        { sessionKey: "agent:main:main", storePath },
+        { sessionId: "session-1", updatedAt: 10 },
+      );
+    }
+    const nativeEncoding = encoding === "UTF-8" ? "utf8" : "utf16le";
     vi.useFakeTimers();
     vi.setSystemTime(now);
     append("session-1", [createTrajectoryEvent({ payloadSize: 200, type: "current-initial" })]);
@@ -351,17 +373,17 @@ it.each([0, -1])(
           sessionId === "middle" || (sessionId === "oldest" && part === 0)
             ? undefined
             : "shared-run";
-        event.data = { payload: "日本語🦞".repeat(40) };
+        event.data = { payload: "日本語🦞".repeat(100) };
         return event;
       });
       append(sessionId, events);
     }
-    const bytesBefore = runtimeBytesBySession();
+    const bytesBefore = runtimeBytesBySession(nativeEncoding);
     const trigger = currentEvent("current-newest", {
       payloadSize: 200,
       ts: new Date(now + 60 * 60 * 1_000).toISOString(),
     });
-    const triggerBytes = Buffer.byteLength(JSON.stringify(trigger), "utf8") + 1;
+    const triggerBytes = Buffer.byteLength(JSON.stringify(trigger), nativeEncoding) + 1;
     const totalBytes = [...bytesBefore.values()].reduce((total, bytes) => total + bytes, 0);
     const evictedBytes = (bytesBefore.get("oldest") ?? 0) + (bytesBefore.get("middle") ?? 0);
     const maxGlobalRuntimeBytes = totalBytes + triggerBytes - evictedBytes + delta;
@@ -640,7 +662,9 @@ function withCompetingSelectionWrite(
 }
 
 function sqlitePath(): string {
-  return path.join(tempDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  return storePath.endsWith(".sqlite")
+    ? storePath
+    : path.join(tempDir, "agents", "main", "agent", "openclaw-agent.sqlite");
 }
 
 async function addSession(sessionId: string): Promise<void> {
@@ -660,16 +684,18 @@ async function expectTypes(expected: Record<string, string[]>) {
   }
 }
 
-function runtimeBytesBySession(): Map<string, number> {
+function runtimeBytesBySession(encoding: BufferEncoding = "utf8"): Map<string, number> {
   const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
   const db = getNodeSqliteKysely<TrajectoryRuntimeTestDatabase>(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("trajectory_runtime_events").select(["session_id", "event_json"]),
+    db
+      .selectFrom("trajectory_runtime_events")
+      .select(["session_id", "event_json", "event_payload", "event_codec", "event_utf8_bytes"]),
   ).rows;
   const bytesBySession = new Map<string, number>();
   for (const row of rows) {
-    const bytes = Buffer.byteLength(row.event_json, "utf8") + 1;
+    const bytes = Buffer.byteLength(readTrajectoryPayload(row), encoding) + 1;
     bytesBySession.set(row.session_id, (bytesBySession.get(row.session_id) ?? 0) + bytes);
   }
   return bytesBySession;

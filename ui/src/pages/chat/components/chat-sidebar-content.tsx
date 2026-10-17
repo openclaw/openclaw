@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, Match, onCleanup, refresh, Show, Switch } from "solid-js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
@@ -49,6 +49,7 @@ import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import "./chat-video-player.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -63,15 +64,14 @@ registerEnglishCatalog(registerFilePreviewEnglish);
 
 type SidebarAttachmentProps = {
   content: Extract<SidebarContent, { kind: "attachment" }>;
-  onRequestUpdate: () => void;
   runtime: AttachmentSidebarRuntime;
   embedSandboxMode: EmbedSandboxMode;
   download?: { pending: boolean; error: string | null; onDownload: () => void };
 };
 
-function prepareAttachment(input: SidebarAttachmentProps) {
+function prepareAttachment(input: SidebarAttachmentProps, onSourceChange: () => void) {
   const content = input.content;
-  const resolution = content.resolveSource?.(input.onRequestUpdate, input.runtime);
+  const resolution = content.resolveSource?.(onSourceChange, input.runtime);
   const source = resolution ? (resolution.status === "ready" ? resolution : null) : content;
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   const kind: NonNullable<SidebarAttachmentProps["content"]["attachmentKind"]> =
@@ -149,7 +149,20 @@ function SidebarAttachment(props: SidebarAttachmentProps) {
 }
 
 function AttachmentPreview(props: SidebarAttachmentProps) {
-  const model = createMemo(() => prepareAttachment(props));
+  const sourceChanged = () => void refresh(model);
+  let resolver: SidebarAttachmentProps["content"]["resolveSource"];
+  let identity: string | undefined;
+  const model = createMemo(() => {
+    const nextResolver = props.content.resolveSource;
+    const nextIdentity = props.content.sourceIdentity ?? props.content.src;
+    if (resolver !== nextResolver || identity !== nextIdentity) {
+      releaseChatMediaResourceOwner(sourceChanged);
+      resolver = nextResolver;
+      identity = nextIdentity;
+    }
+    return prepareAttachment(props, sourceChanged);
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
   return (
     <Switch
       fallback={
@@ -330,7 +343,6 @@ export type SidebarPanelProps = {
   githubRepo?: MarkdownRenderOptions["githubRepo"];
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
-  onAttachmentUpdate: () => void;
   attachmentRuntime: AttachmentSidebarRuntime;
   attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
   onClick: (event: MouseEvent) => void;
@@ -555,7 +567,6 @@ export function SidebarPanel(props: SidebarPanelProps) {
                   <div class="sidebar-attachment-preview">
                     <SidebarAttachment
                       content={content()}
-                      onRequestUpdate={props.onAttachmentUpdate}
                       runtime={props.attachmentRuntime}
                       embedSandboxMode={props.embedSandboxMode ?? "scripts"}
                       download={props.attachmentDownload}

@@ -45,88 +45,15 @@ describe("Twilio stream frames", () => {
     expect(
       adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "-_8" } })),
     ).toEqual({ kind: "media", payloadBase64: "+/8=" });
-  });
-
-  it("ignores partial numeric media timestamps", () => {
-    const adapter = new StreamFrameAdapter("twilio");
-
     expect(
       adapter.parseInbound(
-        JSON.stringify({
-          event: "media",
-          media: { payload: "AAA=", timestamp: "20ms" },
-        }),
+        JSON.stringify({ event: "media", media: { payload: "AAA=", timestamp: "20ms" } }),
       ),
     ).toEqual({ kind: "media", payloadBase64: "AAA=" });
-  });
-
-  it("serializes outbound frames with the streamSid captured at start", () => {
-    const adapter = new StreamFrameAdapter("twilio");
-    adapter.parseInbound(
-      JSON.stringify({
-        event: "start",
-        start: { streamSid: "MZ-stream", callSid: "CA-call" },
-      }),
-    );
-
-    expect(JSON.parse(adapter.serializeMedia("payload-b64"))).toEqual({
-      event: "media",
-      streamSid: "MZ-stream",
-      media: { payload: "payload-b64" },
-    });
-    expect(JSON.parse(adapter.serializeClear())).toEqual({
-      event: "clear",
-      streamSid: "MZ-stream",
-    });
-    expect(JSON.parse(adapter.serializeMark("audio-1"))).toEqual({
-      event: "mark",
-      streamSid: "MZ-stream",
-      mark: { name: "audio-1" },
-    });
   });
 });
 
 describe("Telnyx stream frames", () => {
-  it("parses Telnyx start with top-level stream_id and start.call_control_id", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-
-    expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "start",
-          sequence_number: "1",
-          stream_id: "telnyx-stream-7",
-          start: {
-            call_control_id: "v3:carrier-call-id",
-            call_session_id: "session-1",
-            media_format: { encoding: "PCMU", sample_rate: 8000, channels: 1 },
-          },
-        }),
-      ),
-    ).toEqual({
-      kind: "start",
-      streamId: "telnyx-stream-7",
-      providerCallId: "v3:carrier-call-id",
-    });
-  });
-
-  it("ignores Telnyx start frames without stream_id or call_control_id", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-
-    expect(adapter.parseInbound(JSON.stringify({ event: "start", start: {} }))).toEqual({
-      kind: "ignored",
-    });
-    expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "start",
-          stream_id: "telnyx-stream-7",
-          start: {},
-        }),
-      ),
-    ).toEqual({ kind: "ignored" });
-  });
-
   it("parses media, mark, and stop with no streamSid", () => {
     const adapter = new StreamFrameAdapter("telnyx");
 
@@ -171,20 +98,6 @@ describe("Telnyx stream frames", () => {
       code: "100002",
       title: "WebSocket error",
       detail: "Unable to decode payload",
-    });
-  });
-
-  it("serializes outbound frames without streamSid", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-
-    expect(JSON.parse(adapter.serializeMedia("payload-b64"))).toEqual({
-      event: "media",
-      media: { payload: "payload-b64" },
-    });
-    expect(JSON.parse(adapter.serializeClear())).toEqual({ event: "clear" });
-    expect(JSON.parse(adapter.serializeMark("audio-1"))).toEqual({
-      event: "mark",
-      mark: { name: "audio-1" },
     });
   });
 

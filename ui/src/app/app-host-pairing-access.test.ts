@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "@solidjs/web";
 import { createComponent, onSettled } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -10,6 +11,7 @@ import { createApplicationRouter } from "../app-routes.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -27,6 +29,8 @@ import {
 } from "../test-helpers/application-context.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
 import "../components/app-sidebar.tsx";
+// A preceding shard file can register the palette before the pairing shell mounts.
+import "../components/command-palette.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -114,8 +118,10 @@ function createPairingShell(params: {
     recordedUpdateAttempt: null,
     controlUiRefreshRequired: false,
   };
+  const router = createApplicationRouter();
   const context = {
     ...createContext(gateway.gateway, sessions.sessions),
+    router,
     basePath: "",
     navigation: createNavigationPreferencesFixture(),
     overlays: {
@@ -135,7 +141,6 @@ function createPairingShell(params: {
     },
   } as unknown as ApplicationContext;
   const shell = createShellOwner();
-  const router = createApplicationRouter();
   shell.runtime = {
     context,
     router,
@@ -153,6 +158,12 @@ function createPairingShell(params: {
     location: { pathname: "/chat", search: "", hash: "" },
   };
   const container = shell.element;
+  // Production's application root provides context to independently mounted shell leaves.
+  const disposeProvider = render(
+    () => createComponent(ApplicationProvider, { value: context, host: container }),
+    document.createDocumentFragment(),
+  );
+  onTestFinished(disposeProvider);
   onTestFinished(() => router.stop());
   let mounted = false;
   const refresh = async () => {

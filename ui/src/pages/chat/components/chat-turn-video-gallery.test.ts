@@ -5,7 +5,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
 import * as turnBoundary from "../chat-turn-boundary.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
@@ -170,14 +170,14 @@ it("keeps duplicate video slots and each sibling message's source authority, but
         assistantName: "OpenClaw",
         assistantAvatar: null,
         sessionKey: "agent:main:video-gallery",
-        onRequestUpdate: rerender,
+        mediaOwner: rerender,
         getTurnVideoMessages: () => turn,
         onOpenImage: (item) => {
           opened = item;
         },
       },
     );
-  onTestFinished(() => releaseChatMediaResourceSubscriber(rerender));
+  onTestFinished(() => releaseChatMediaResourceOwner(rerender));
   rerender();
   await vi.advanceTimersByTimeAsync(0);
   const players = [...container.querySelectorAll("openclaw-chat-video-player")];

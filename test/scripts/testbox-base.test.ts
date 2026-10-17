@@ -134,6 +134,15 @@ function runBasePreparation(
 }
 
 describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
+  it("uses two commits for PR preparation and one for a manual shell", () => {
+    const workflow = parse(fs.readFileSync(workflowName, "utf8"));
+    const jobs = Object.values(workflow.jobs) as { steps: Step[] }[];
+    const checkout = jobs.flatMap((job) => job.steps).find((step) => step.name === "Checkout");
+    expect(checkout?.with?.["fetch-depth"]).toBe(
+      "${{ github.event_name == 'pull_request' && '2' || '1' }}",
+    );
+  });
+
   it.each([
     { shape: "merge", branch: "main", depth: 2, passes: true, eventName: "pull_request" },
     ...(workflowName === workflows[0]
@@ -151,7 +160,7 @@ describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
     {
       shape: "manual",
       branch: "feature",
-      depth: workflowName.endsWith("/ci-check-testbox.yml") ? 1 : 0,
+      depth: 1,
       passes: true,
       eventName: "workflow_dispatch",
     },

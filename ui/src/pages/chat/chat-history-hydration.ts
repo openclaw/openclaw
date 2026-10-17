@@ -147,7 +147,6 @@ export async function hydrateChatHistory(
               message: requests.subscriptionError,
               retryable: requests.historyLoad.phase === "failed" && requests.historyLoad.retryable,
             });
-            state.requestUpdate?.();
           }
           return undefined;
         }
@@ -424,7 +423,6 @@ export async function hydrateChatHistory(
         isRetryableChatReadError(err, method) ||
         (err instanceof GatewayRequestError && err.retryable),
     });
-    state.requestUpdate?.();
   } finally {
     if (ownsHistoryRequest(state, ownership)) {
       setChatHistoryRetrying(state, "history", false);

@@ -15,8 +15,10 @@ import {
   createColdPluginHermeticEnv,
 } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveAgentDir } from "../agent-scope.js";
+import { acquireReadOnlyPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
-import { DecisionEvaluateOutput } from "./decision-tool-contract.js";
+import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-contract.js";
 import { createDecisionTool } from "./decision-tool.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -63,13 +65,21 @@ it("returns rich native outcomes through the core tool, registered host and real
                   chat: false,
                   decision: {
                     protocol: "fixture",
-                    input: ["text"],
+                    input: ["text", "image"],
                     questions: {
                       boolean: { probabilities: "none", abstention: true },
                       choice: { probabilities: "none", abstention: true },
                       score: { probabilities: "none", abstention: false },
+                      box: { probabilities: "none", abstention: false },
                     },
-                    limits: { maxQuestions: 8 },
+                    limits: {
+                      maxQuestions: 8,
+                      image: {
+                        maxBytes: 4194304,
+                        mimeTypes: ["image/png", "image/jpeg"],
+                        remoteUrls: false,
+                      },
+                    },
                   },
                 },
               },
@@ -141,7 +151,16 @@ it("returns rich native outcomes through the core tool, registered host and real
       });
       expect(registry.diagnostics.filter((item) => item.level === "error")).toEqual([]);
       expect(registry.decisionProviders).toHaveLength(1);
-      const tool = createDecisionTool("main", { config: cfg });
+      await using prepared = await acquireReadOnlyPreparedModelRuntime({
+        agentId: "main",
+        agentDir: resolveAgentDir(cfg, "main"),
+        workspaceDir: path.join(root, "workspace"),
+        config: cfg,
+      });
+      const tool = createDecisionTool("main", {
+        config: cfg,
+        preparedModelRuntime: prepared.snapshot,
+      });
       expect(tool).not.toBeNull();
       const batch: DecisionBatch = {
         state: { message: "synthetic evidence" },
@@ -190,7 +209,34 @@ it("returns rich native outcomes through the core tool, registered host and real
         ).rejects.toThrow("no evidence was sent");
       }
       expect(trace.calls).toBe(2);
-      await resetPreparedModelRuntimeSnapshotsForTest();
+      const imageBatch: DecisionBatchV2 = {
+        state: { type: "image", dataUri: "data:image/png;base64,AA==", text: "Synthetic square" },
+        questions: { target: { type: "box", instructions: "the square" } },
+      };
+      const nativeInput = { contractVersion: 2, ...imageBatch };
+      trace.outcome = {
+        status: "ok",
+        result: {
+          model: "native",
+          answers: { target: { type: "box", box: { top: 0, bottom: 1, left: 0, right: 1 } } },
+        },
+      };
+      expect(Value.Check(DecisionEvaluateInput, nativeInput)).toBe(true);
+      expect(tool!.description).toContain("box");
+      expect(tool!.description).toContain("Supported input modalities: text, image.");
+      expect(tool!.description).toContain("4194304 decoded bytes in image/png, image/jpeg");
+      const nullBox = {
+        ...nativeInput,
+        questions: { target: { type: "box", instructions: null } },
+      };
+      expect(Value.Check(DecisionEvaluateInput, nullBox)).toBe(false);
+      await expect(tool!.execute("null-box", nullBox)).rejects.toThrow("no evidence was sent");
+      expect(trace.calls).toBe(2);
+      const imageResult = await tool!.execute("native-image", nativeInput);
+      expect(imageResult.details).toMatchObject(trace.outcome);
+      expect(Value.Check(DecisionEvaluateOutput, imageResult.details)).toBe(true);
+      expect(trace.batch).toEqual(imageBatch);
+      expect(trace.calls).toBe(3);
     },
   );
 });

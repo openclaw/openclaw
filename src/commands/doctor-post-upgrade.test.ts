@@ -5,6 +5,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import {
@@ -33,11 +37,15 @@ async function makeFixtureRoot(prefix: string): Promise<string> {
 }
 
 async function cleanupFixtureRoot(root: string): Promise<void> {
+  const databasePath = resolveInstalledPluginIndexStorePath({ stateDir: root });
   clearPluginMetadataLifecycleCaches();
-  await closeOpenClawStateDatabaseByPathAsync(
-    resolveInstalledPluginIndexStorePath({ stateDir: root }),
-  );
+  await closeOpenClawStateDatabaseByPathAsync(databasePath);
+  // Physical admissions outlive handles; retire this fixture before deleting its files.
+  retireSqliteDatabaseAdmissionForPath(databasePath);
   await fs.rm(root, { recursive: true, force: true });
+  expect(captureSqliteDatabaseAdmissions().map(({ location }) => location)).not.toContain(
+    databasePath,
+  );
 }
 
 function createIndex(

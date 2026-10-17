@@ -34,7 +34,11 @@ function installControlUiPaneRuntimeTestAdapter() {
         configurable: true,
         get() {
           const owner = readOwner();
-          return owner && Reflect.get(owner, key);
+          const source =
+            owner && (key === "catalogMessages" || key === "loadingOlder")
+              ? Reflect.get(owner, "history")
+              : owner;
+          return source && Reflect.get(source, key);
         },
       });
     }

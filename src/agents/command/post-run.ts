@@ -240,6 +240,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           body,
           transcriptBody,
           inputProvenance: params.opts.inputProvenance,
+          privateCompletion: params.opts.privateCompletion,
           result,
           sessionId: effectiveSessionId,
           sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,

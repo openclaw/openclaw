@@ -577,10 +577,9 @@ describe("staged chat attachment pane handoff", () => {
   }
 
   function retainedSessions(context: ApplicationContext, ...panes: HTMLElement[]) {
-    const host = Object.assign(document.createElement("div"), { requestUpdate: () => {} });
+    const host = document.createElement("div");
     host.append(...panes);
     return new ChatPageRetainedSessions(host, {
-      invalidate: () => host.requestUpdate(),
       context: () => context,
       presented: () => true,
       routeHref: () => window.location.href,

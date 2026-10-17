@@ -297,6 +297,14 @@ admission tolerate either state without recreating it. Older writable builds may
 rebuild it on downgrade or rollback. Rows and constraints are unchanged; see the
 [storage decision](/reference/database-schemas/storage-changes#memory-chunk-path-index-retirement).
 
+Agent schema 30 adds per-row trajectory payload codecs and nullable compressed
+storage. Old text rows remain readable without a full-table rewrite. Retention
+uses logical bytes, and exports decode transparently. PostgreSQL mirrors the
+columns and keeps native text/TOAST storage. The version fence prevents older
+writers from ignoring compressed payloads; rollback requires the verified
+pre-upgrade backup. See the
+[trajectory storage migration](/reference/database-schemas/agent-schema-history#trajectory-payload-storage).
+
 Trajectory retention replaces the existing `idx_agent_trajectory_runtime_run`
 definition with a full covering index on `(session_id, run_id, created_at,
 octet_length(event_json))`, including null run IDs. Agent schema 24 is unchanged.

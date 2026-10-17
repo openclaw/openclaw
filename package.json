@@ -10,7 +10,7 @@
     "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
     "schemaVersions": {
       "state": 27,
-      "agent": 29
+      "agent": 30
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -473,7 +473,8 @@
     "!dist/plugin-sdk/meeting-config.d.ts",
     "!dist/plugin-sdk/collection-input-runtime.d.ts",
     "!dist/plugin-sdk/http-response-runtime.d.ts",
-    "!dist/plugin-sdk/node-crypto-runtime.d.ts"
+    "!dist/plugin-sdk/node-crypto-runtime.d.ts",
+    "!dist/plugin-sdk/path-existence-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -722,6 +723,9 @@
     },
     "./plugin-sdk/file-access-runtime": {
       "default": "./dist/plugin-sdk/file-access-runtime.js"
+    },
+    "./plugin-sdk/path-existence-runtime": {
+      "default": "./dist/plugin-sdk/path-existence-runtime.js"
     },
     "./plugin-sdk/node-crypto-runtime": {
       "default": "./dist/plugin-sdk/node-crypto-runtime.js"

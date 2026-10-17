@@ -497,13 +497,9 @@ describe("chat transcript replies", () => {
         open,
       };
     }
-    const requestUpdate = () => queueMicrotask(rerender);
     const rerender = () => {
       render(renderTranscriptSearch(paneId), searchContainer);
-      render(
-        renderChatThread({ ...props, onRequestUpdate: requestUpdate }, transcript),
-        threadContainer,
-      );
+      render(renderChatThread(props, transcript), threadContainer);
       transcript.update();
     };
     try {

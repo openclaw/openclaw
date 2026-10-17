@@ -67,6 +67,11 @@
       "import": "./dist/schema.mjs",
       "default": "./dist/schema.mjs"
     },
+    "./session-row-deltas": {
+      "types": "./dist/session-row-deltas.d.mts",
+      "import": "./dist/session-row-deltas.mjs",
+      "default": "./dist/session-row-deltas.mjs"
+    },
     "./startup-unavailable": {
       "types": "./dist/startup-unavailable.d.mts",
       "import": "./dist/startup-unavailable.mjs",

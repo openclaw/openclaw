@@ -84,6 +84,9 @@ async function withStreamingProjection(
     using projection = await createTestProjection({ cfg });
     try {
       await projection.ensureMaterialized();
+      for (const name of ["parent", "stream", "child"]) {
+        projection.describe({ agentId: "main", key: `agent:main:${name}` });
+      }
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await run({
         projection,
@@ -218,6 +221,8 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
     );
     {
       using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      projection.describe(query);
       await withinTest(enriched, signal);
       expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
         displayName: "Existing session setting",
@@ -251,6 +256,54 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
   });
 });
 
+it.for([false, true])(
+  "backfills an unknown assistant fact once and retains it across user appends (assistant: %s)",
+  async (hasAssistant, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:cold-preview",
+        sessionId: "cold-preview",
+      };
+      const query = { agentId: target.agentId, key: target.sessionKey };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await appendTranscript(target, {
+        role: hasAssistant ? "assistant" : "user",
+        content: "Cold message",
+        timestamp: 100,
+      });
+      clearStoredSessionRowTranscriptForTest(target);
+      const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+      using release = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      const published = observeSessionRowBackfill([target.sessionKey], projection, (row) =>
+        row.lastMessagePreview === "Cold message" ? row.key : "",
+      );
+      projection.describe(query);
+      release();
+      await withinTest(published, signal);
+      expect(backfill).toHaveBeenCalledTimes(1);
+      await appendTranscript(
+        target,
+        { role: "user", content: "First followup" },
+        { role: "user", content: "Second followup" },
+      );
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Second followup",
+      );
+      expect(
+        projection.snapshot(query, { includeLastMessage: true }).row?.lastAssistantMessage,
+      ).toEqual(hasAssistant ? { text: "Cold message", timestamp: 100 } : undefined);
+      await nextTurn();
+      expect(backfill).toHaveBeenCalledTimes(1);
+    });
+  },
+);
+
 it("keeps the latest visible assistant preview across user followups and clears replaced sessions", async ({
   signal,
 }) => {
@@ -282,6 +335,8 @@ it("keeps the latest visible assistant preview across user followups and clears 
       );
       const projection = await createTestProjection({ cfg, modelCatalog: [] });
       try {
+        await projection.ensureMaterialized();
+        projection.describe(query);
         await withinTest(published, signal);
         expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
           lastMessagePreview: "Next question",
@@ -311,6 +366,7 @@ it("keeps the latest visible assistant preview across user followups and clears 
               ? row.key
               : "",
           );
+          const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
           await persistSessionTranscriptTurn(target, {
             messages: [{ message: { role: "user", content: "One more question", timestamp: 700 } }],
             touchSessionEntry: false,
@@ -320,6 +376,25 @@ it("keeps the latest visible assistant preview across user followups and clears 
             lastMessagePreview: "One more question",
             lastAssistantMessage: { text: "Latest answer", timestamp: 600 },
           });
+          await nextTurn();
+          expect(backfill).not.toHaveBeenCalled();
+          const batched = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
+            row.lastMessagePreview === "Batched followup" ? row.key : "",
+          );
+          await appendTranscript(
+            target,
+            { role: "assistant", content: "Batched answer", timestamp: 800 },
+            { role: "user", content: "Batched followup", timestamp: 900 },
+          );
+          await withinTest(batched, signal);
+          expect(
+            projection.snapshot(query, { includeLastMessage: true }).row?.lastAssistantMessage,
+          ).toEqual({
+            text: "Batched answer",
+            timestamp: 800,
+          });
+          await nextTurn();
+          expect(backfill).not.toHaveBeenCalled();
           replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
           const replacement = await withReadySessionRows(
             projection,
@@ -464,6 +539,8 @@ it("eventually fills legacy titles and previews without waiting during startup o
     using release = holdForeground();
     using projection = await createTestProjection({ cfg });
     const backfilled = observeSessionRowBackfill([target.sessionKey], projection);
+    await projection.ensureMaterialized();
+    projection.describe(query);
     expect(loadSessionEntry(target)?.displayName).toBeUndefined();
     release();
     await withinTest(backfilled, signal);
@@ -542,6 +619,7 @@ it.each([false, true])(
       const list = () => listSessions({ context, client, request: {} });
       try {
         await projection.ensureMaterialized();
+        await list();
         const before = projection.materializedCount;
         getModelCatalog.mockReturnValue(replacement.promise);
         notifyPreparedModelRuntimePublication({ phase: "catalog-published", modelFactsChanged });
@@ -769,6 +847,8 @@ it("backfills terminal fallback models and clears previews when the newest messa
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     using projection = await createTestProjection({ cfg });
     const query = { agentId: "main", key: target.sessionKey };
+    await projection.ensureMaterialized();
+    projection.describe(query);
 
     const expected = {
       activeModelProvider: "unit-test",

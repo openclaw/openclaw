@@ -5,14 +5,16 @@ import { FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
-import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
 import { computeWorkspaceFileSnapshot } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_FILE_BYTES,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import {
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+} from "./workspace-path-exclusions.js";
 import { readWorkspaceResultGit } from "./workspace-result-git.js";
 
 export function localPath(root: string, relative: string): string {
@@ -175,7 +177,7 @@ export async function directoryContainsOnlyWorkspaceEntries(
   let foundEntry = false;
   for (const name of await fs.readdir(localPath(root, directory))) {
     const child = `${directory}/${name}`;
-    if (isManagedSandboxSkillsPath(child)) {
+    if (isRuntimeOwnedWorkspacePath(child)) {
       return false;
     }
     if (!isDerivedWorkspacePath(child, await isRetainedInput(child))) {
