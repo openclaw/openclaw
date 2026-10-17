@@ -104,16 +104,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "chat-transcript-styles";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "highlight.js") ||
-    moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "dompurify") ||
-    moduleIdIncludesPackage(id, "entities") ||
-    moduleIdIncludesPackage(id, "linkify-it") ||
-    moduleIdIncludesPackage(id, "mdurl") ||
-    moduleIdIncludesPackage(id, "punycode.js") ||
-    moduleIdIncludesPackage(id, "uc.micro")
-  ) {
+  // The composer uses MarkdownIt for synchronous emoji completion, but only
+  // transcript rendering needs highlighting and sanitization.
+  if (moduleIdIncludesPackage(id, "highlight.js") || moduleIdIncludesPackage(id, "dompurify")) {
     return "markdown-runtime";
   }
 

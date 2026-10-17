@@ -162,6 +162,8 @@ describe("Control UI build chunking", () => {
     });
     for (const [id, expected] of [
       ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-runtime"],
+      ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", undefined],
+      ["/repo/ui/node_modules/entities/dist/esm/index.js", undefined],
       [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/dompurify/dist/purify.es.mjs", "markdown-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/zod/v4/core/schemas.js", "config-runtime"],

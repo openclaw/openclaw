@@ -1,8 +1,9 @@
-import { createMemo, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -24,7 +25,6 @@ import { NewSessionDictationView } from "./composer-dictation-view.tsx";
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
@@ -40,6 +40,10 @@ import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 registerNewSessionSetupEnglish();
+
+const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
+  export: "CreationComposer",
+});
 
 export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
   // Instant-thread handoff parks and restores this exact registered host across route roots.
@@ -329,7 +333,17 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           )}
           onOpenImage={owner.setImageLightbox}
         />
-        <CreationComposer composer={creationComposer()} onOpenImage={owner.setImageLightbox} />
+        <Show when={creationComposer()}>
+          {(composer) => (
+            <Errored
+              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
+            >
+              <Loading fallback={<LoadingState />}>
+                <CreationComposer composer={composer()} onOpenImage={owner.setImageLightbox} />
+              </Loading>
+            </Errored>
+          )}
+        </Show>
         <ConnectMachineDialog
           {...page().connectMachine.view(page().place.isAdmin(), () => {
             owner.connectMachine.close();
