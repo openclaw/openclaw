@@ -1,4 +1,3 @@
-// Channels logs tests cover gateway log path resolution and channel log tailing.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,17 +7,13 @@ import { registerSecretValueForRedaction } from "../logging/secret-redaction-reg
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const pluginRegistryMocks = vi.hoisted(() => {
-  const plugins = [{ id: "vendor-external-chat", channels: ["external-chat"] }];
-  return {
-    loadPluginManifestRegistryForPluginRegistry: vi.fn(() => ({ diagnostics: [], plugins })),
-  };
-});
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+const pluginRegistryMocks = vi.hoisted(() => ({
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(() => ({
+    plugins: [{ id: "vendor-external-chat", channels: ["external-chat"] }],
+  })),
 }));
+
+vi.mock("../plugins/plugin-registry.js", () => pluginRegistryMocks);
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(() => {
@@ -29,29 +24,16 @@ vi.mock("../channels/plugins/index.js", () => ({
 import { channelsLogsCommand } from "./channels/logs.js";
 
 const runtime = createTestRuntime();
-function logLine(params: {
-  subsystem?: string;
-  module?: string;
-  plugin?: string;
-  message: string;
-}) {
+function logLine(context: string, message: string, field: "module" | "plugin" = "module") {
   return `${JSON.stringify({
     time: "2026-04-25T12:00:00.000Z",
-    0: params.message,
-    _meta: {
-      logLevelName: "INFO",
-      name: JSON.stringify({
-        ...(params.subsystem ? { subsystem: params.subsystem } : {}),
-        ...(params.module ? { module: params.module } : {}),
-        ...(params.plugin ? { plugin: params.plugin } : {}),
-      }),
-    },
+    0: message,
+    _meta: { logLevelName: "INFO", name: JSON.stringify({ [field]: context }) },
   })}\n`;
 }
 
 function readJsonPayload() {
   return JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
-    file: string;
     channel: string;
     truncated: boolean;
     lines: Array<{ message: string; raw: string }>;
@@ -61,88 +43,68 @@ function readJsonPayload() {
 describe("channelsLogsCommand", () => {
   let tempDir: string;
   let logPath: string;
+  const writeLogs = (...lines: string[]) => fs.writeFile(logPath, lines.join(""));
+  const messages = () => readJsonPayload().lines.map((line) => line.message);
+  const output = () => runtime.log.mock.calls.flat().join("\n");
+  const run = (opts: Parameters<typeof channelsLogsCommand>[0]) =>
+    channelsLogsCommand(opts, runtime);
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-channels-logs-"));
     logPath = path.join(tempDir, "openclaw.log");
     setLoggerOverride({ file: logPath });
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockClear();
+    vi.clearAllMocks();
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
     resetSecretRedactionRegistryForTest();
     setLoggerOverride(null);
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("filters external plugin channel logs from the persisted manifest registry", async () => {
-    await fs.writeFile(
-      logPath,
-      [
-        logLine({ plugin: "vendor-external-chat", message: "external sent" }),
-        logLine({ plugin: "vendor-external-chat-shadow", message: "shadow sent" }),
-        logLine({ module: "gateway/channels/slack/send", message: "slack sent" }),
-      ].join(""),
+    await writeLogs(
+      logLine("vendor-external-chat", "external sent", "plugin"),
+      logLine("vendor-external-chat-shadow", "shadow sent", "plugin"),
+      logLine("gateway/channels/slack/send", "slack sent"),
     );
 
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
+    await run({ channel: "external-chat", json: true });
 
     expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
       includeDisabled: true,
       env: process.env,
     });
-    const payload = readJsonPayload();
-    expect(payload.channel).toBe("external-chat");
-    expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);
+    expect(readJsonPayload().channel).toBe("external-chat");
+    expect(messages()).toEqual(["external sent"]);
   });
 
-  it.each([
-    {
-      label: "nested channel runtime module",
-      channel: "discord",
-      shadow: { module: "channels/discord-archive/send" },
-      match: { module: "channels/discord/send" },
-    },
-  ])("matches channel boundaries and excludes a shadow $label", async (fixture) => {
+  it("matches nested channel module boundaries and redacts secrets", async () => {
     const fixtureCredential = "opaque-registry-value-1234567890";
     registerSecretValueForRedaction(fixtureCredential);
-    await fs.writeFile(
-      logPath,
-      [
-        logLine({ ...fixture.shadow, message: "shadow" }),
-        logLine({ ...fixture.match, message: `match opaque=${fixtureCredential}` }),
-      ].join(""),
+    await writeLogs(
+      logLine("channels/discord-archive/send", "shadow"),
+      logLine("channels/discord/send", `match opaque=${fixtureCredential}`),
     );
 
-    await channelsLogsCommand({ channel: fixture.channel, json: true }, runtime);
+    await run({ channel: "discord", json: true });
 
-    const payload = readJsonPayload();
-    expect(payload.lines.map((line) => line.message)).toEqual(["match opaque=opaque…7890"]);
-    expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
+    expect(messages()).toEqual(["match opaque=opaque…7890"]);
+    expect(JSON.stringify(readJsonPayload())).not.toContain(fixtureCredential);
 
     runtime.log.mockClear();
-    await channelsLogsCommand({ channel: fixture.channel }, runtime);
+    await run({ channel: "discord" });
 
-    const output = runtime.log.mock.calls.flat().join("\n");
-    expect(output).toContain("2026-04-25T12:00:00.000Z info match");
-    expect(output).toContain("opaque=opaque…7890");
-    expect(output).not.toContain(fixtureCredential);
-    expect(output).not.toContain("shadow");
+    expect(output()).toContain("2026-04-25T12:00:00.000Z info match");
+    expect(output()).toContain("opaque=opaque…7890");
+    expect(output()).not.toContain(fixtureCredential);
+    expect(output()).not.toContain("shadow");
   });
 
   it("rejects an unknown explicit channel without widening output", async () => {
-    await fs.writeFile(
-      logPath,
-      logLine({ module: "gateway/channels/slack/send", message: "unrelated message" }),
-    );
+    await writeLogs(logLine("gateway/channels/slack/send", "unrelated message"));
 
-    const error = await channelsLogsCommand({ channel: "slakc", json: true }, runtime).catch(
-      (cause: unknown) => cause,
-    );
+    const error = await run({ channel: "slakc", json: true }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('Unknown channel "slakc". Valid channels: all,');
     expect((error as Error).message).toContain("external-chat");
@@ -154,58 +116,42 @@ describe("channelsLogsCommand", () => {
     { lines: undefined, count: 200 },
     { lines: 2, count: 2 },
   ])("preserves ordering with line limit $lines", async ({ lines, count }) => {
-    const messages = Array.from({ length: 205 }, (_, index) => `message-${index}`);
-    await fs.writeFile(
-      logPath,
-      messages
-        .map((message, index) =>
-          logLine({
-            module: `gateway/channels/${index % 2 ? "external-chat" : "slack"}/send`,
-            message,
-          }),
-        )
-        .join(""),
+    const expected = Array.from({ length: 205 }, (_, index) => `message-${index}`);
+    await writeLogs(
+      ...expected.map((message, index) =>
+        logLine(`gateway/channels/${index % 2 ? "external-chat" : "slack"}/send`, message),
+      ),
     );
 
-    await channelsLogsCommand(
-      { channel: lines === undefined ? undefined : "all", lines, json: true },
-      runtime,
-    );
+    await run({ channel: lines === undefined ? undefined : "all", lines, json: true });
 
-    const payload = readJsonPayload();
-    expect(payload.channel).toBe("all");
-    expect(payload.lines.map((line) => line.message)).toEqual(messages.slice(-count));
+    expect(readJsonPayload().channel).toBe("all");
+    expect(messages()).toEqual(expected.slice(-count));
   });
 
   it("finds sparse channel records beyond the shared 5000-line cap", async () => {
-    const filler = logLine({ module: "gateway/health", message: "ok" });
-    const lines = [
-      logLine({ module: "gateway/channels/slack/send", message: "first match" }),
+    const filler = logLine("gateway/health", "ok");
+    await writeLogs(
+      logLine("gateway/channels/slack/send", "first match"),
       ...Array.from({ length: 5000 }, () => filler),
-      logLine({ module: "gateway/channels/slack/send", message: "second match" }),
-    ];
-    await fs.writeFile(logPath, lines.join(""));
+      logLine("gateway/channels/slack/send", "second match"),
+    );
 
-    await channelsLogsCommand({ channel: "slack", lines: 2000, json: true }, runtime);
+    await run({ channel: "slack", lines: 2000, json: true });
 
-    expect(readJsonPayload().lines.map((line) => line.message)).toEqual([
-      "first match",
-      "second match",
-    ]);
+    expect(messages()).toEqual(["first match", "second match"]);
   });
 
   it("reports when the byte window omits all matching channel records", async () => {
-    const omitted = logLine({ module: "gateway/channels/slack/send", message: "omitted" });
-    const filler = logLine({ module: "gateway/health", message: "x".repeat(1000) });
-    await fs.writeFile(logPath, `${omitted}${filler.repeat(1100)}`);
+    const omitted = logLine("gateway/channels/slack/send", "omitted");
+    const filler = logLine("gateway/health", "x".repeat(1000));
+    await writeLogs(omitted, filler.repeat(1100));
 
-    await channelsLogsCommand({ channel: "slack", json: true }, runtime);
+    await run({ channel: "slack", json: true });
     expect(readJsonPayload()).toMatchObject({ truncated: true, lines: [] });
 
     runtime.log.mockClear();
-    await channelsLogsCommand({ channel: "slack" }, runtime);
-    expect(runtime.log.mock.calls.flat().join("\n")).toContain(
-      "Log tail truncated; earlier entries were omitted.",
-    );
+    await run({ channel: "slack" });
+    expect(output()).toContain("Log tail truncated; earlier entries were omitted.");
   });
 });
