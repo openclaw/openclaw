@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayProtocolSocketHandlers } from "./protocol-client.js";
 import {
   createProtocolHarness,
   receive,
@@ -9,26 +8,27 @@ import {
 } from "./protocol-client.test-support.js";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "./timeouts.js";
 
-type HandshakeConnection = {
-  handlers: GatewayProtocolSocketHandlers;
-  send: ReturnType<typeof vi.fn<(data: string) => void>>;
-  close: ReturnType<typeof vi.fn<(code?: number, reason?: string) => void>>;
-};
+type HandshakeConnection = ReturnType<typeof createProtocolHarness>["connections"][number];
 
 function createHandshakeClient(
   buildConnectPlan: () => Record<string, never> | Promise<Record<string, never>> = () => ({}),
   delayClose = false,
 ) {
-  const onHello = vi.fn();
-  const onConnectHello = vi.fn(() => ({ ignored: true }));
-  const onClose = vi.fn();
-  const onTiming = vi.fn();
-  const onReconnectScheduled = vi.fn<(delayMs: number, signal: AbortSignal) => void>();
+  const spies = {
+    onHello: vi.fn(),
+    onConnectHello: vi.fn(() => ({ ignored: true })),
+    onClose: vi.fn(),
+    onTiming: vi.fn(),
+    onReconnectScheduled: vi.fn<(delayMs: number, signal: AbortSignal) => void>(),
+  };
   const { client, connections } = createProtocolHarness(
-    { buildConnectPlan, onHello, onConnectHello, onClose, onTiming, onReconnectScheduled },
+    { buildConnectPlan, ...spies },
     { delayClose },
   );
-  return { client, connections, onHello, onConnectHello, onClose, onTiming, onReconnectScheduled };
+  client.start();
+  const first = connections[0];
+  assert(first);
+  return { client, connections, first, ...spies };
 }
 
 function receiveConnectChallenge(connection: HandshakeConnection, ts = 1_800_000_000_000): void {
@@ -62,10 +62,8 @@ describe("GatewayProtocolClient connect handshake", () => {
     async ({ retryable, retryAfterMs, delayMs, draw, nextDelayMs }) => {
       vi.useFakeTimers();
       vi.mocked(Math.random).mockReturnValue(draw);
-      const { client, connections, onReconnectScheduled } = createHandshakeClient();
-      client.start();
-      const first = connections[0];
-      assert(first);
+      const { connections, onReconnectScheduled, first } = createHandshakeClient();
+
       receiveConnectChallenge(first);
       const sent = first.send.mock.calls[0];
       assert(sent);
@@ -74,12 +72,7 @@ describe("GatewayProtocolClient connect handshake", () => {
         type: "res",
         id: request.id,
         ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "temporarily unavailable",
-          retryable,
-          retryAfterMs,
-        },
+        error: { code: "UNAVAILABLE", message: "temporarily unavailable", retryable, retryAfterMs },
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(
@@ -110,7 +103,7 @@ describe("GatewayProtocolClient connect handshake", () => {
     "cancels a scheduled retry when its observer stops the client (restart=%s)",
     async (restart) => {
       vi.useFakeTimers();
-      const { client, connections, onReconnectScheduled } = createHandshakeClient();
+      const { client, connections, onReconnectScheduled, first } = createHandshakeClient();
       let timersAtNotification = 0;
       onReconnectScheduled.mockImplementation(() => {
         timersAtNotification = vi.getTimerCount();
@@ -119,9 +112,7 @@ describe("GatewayProtocolClient connect handshake", () => {
           client.start();
         }
       });
-      client.start();
-      const first = connections[0];
-      assert(first);
+
       first.close(1006, "transport unavailable");
       expect(onReconnectScheduled).toHaveBeenCalledOnce();
       expect(timersAtNotification).toBe(1);
@@ -136,11 +127,9 @@ describe("GatewayProtocolClient connect handshake", () => {
     "rejects hello when the connect deadline closes the transport %s",
     async (closingOrder) => {
       vi.useFakeTimers();
-      const { client, connections, onHello, onConnectHello, onClose, onTiming } =
+      const { client, connections, onHello, onConnectHello, onClose, onTiming, first } =
         createHandshakeClient(undefined, true);
-      client.start();
-      const first = connections[0];
-      assert(first);
+
       first.close(1012, "restart");
       first.handlers.close(1012, "restart");
       await vi.advanceTimersByTimeAsync(10);
@@ -152,8 +141,7 @@ describe("GatewayProtocolClient connect handshake", () => {
       if (closingOrder === "before publication") {
         receiveHello(connection);
       }
-      // Advance synchronously so an already-resolved response publishes only
-      // after the deadline has moved the transport into its closing window.
+      // Keep promise publication queued until the deadline closes the transport.
       vi.advanceTimersByTime(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
       expect(connection.close).toHaveBeenCalledExactlyOnceWith(4000, "connect timeout");
       if (closingOrder === "before response") {
@@ -161,8 +149,7 @@ describe("GatewayProtocolClient connect handshake", () => {
       }
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(client.connected).toBe(false);
-      expect(client.connecting).toBe(true);
+      expect(client).toMatchObject({ connected: false, connecting: true });
       expect(onHello).not.toHaveBeenCalled();
       expect(onConnectHello).not.toHaveBeenCalled();
       expect(onTiming.mock.calls.some(([timing]) => timing.phase === "hello")).toBe(false);
@@ -192,8 +179,7 @@ describe("GatewayProtocolClient connect handshake", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(onHello).toHaveBeenCalledExactlyOnceWith({ type: "hello-ok" });
       expect(onConnectHello).toHaveBeenCalledOnce();
-      expect(client.connecting).toBe(false);
-      expect(client.connected).toBe(true);
+      expect(client).toMatchObject({ connecting: false, connected: true });
       await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
       expect(replacement.close).not.toHaveBeenCalled();
       replacement.close(1012, "restart");
@@ -205,10 +191,14 @@ describe("GatewayProtocolClient connect handshake", () => {
 
   it.each([false, true])("suppresses a resolved hello after stop (restart=%s)", async (restart) => {
     vi.useFakeTimers();
-    const { client, connections, onHello, onConnectHello } = createHandshakeClient();
-    client.start();
-    const connection = connections[0];
-    assert(connection);
+    const {
+      client,
+      connections,
+      onHello,
+      onConnectHello,
+      first: connection,
+    } = createHandshakeClient();
+
     receiveConnectChallenge(connection);
     receiveHello(connection);
     client.stop();
@@ -231,10 +221,8 @@ describe("GatewayProtocolClient connect handshake", () => {
   it("does not retain an advertised capability after reconnecting to a different Gateway", async () => {
     vi.useFakeTimers();
     const buildConnectPlan = vi.fn(() => ({}));
-    const { client, connections } = createHandshakeClient(buildConnectPlan);
-    client.start();
-    const first = connections[0];
-    assert.ok(first);
+    const { connections, first } = createHandshakeClient(buildConnectPlan);
+
     first.handlers.open();
     receive(first, {
       type: "event",
@@ -268,16 +256,10 @@ describe("GatewayProtocolClient connect handshake", () => {
     "marks an invalid challenge timestamp as null: %j",
     (payload) => {
       const buildConnectPlan = vi.fn(() => ({}));
-      const { client, connections } = createHandshakeClient(buildConnectPlan);
-      client.start();
-      const first = connections[0];
-      assert(first);
+      const { first } = createHandshakeClient(buildConnectPlan);
+
       first.handlers.open();
-      receive(first, {
-        type: "event",
-        event: "connect.challenge",
-        payload,
-      });
+      receive(first, { type: "event", event: "connect.challenge", payload });
       expect(buildConnectPlan).toHaveBeenLastCalledWith({
         nonce: payload.nonce,
         challengeTs: null,
@@ -292,10 +274,8 @@ describe("GatewayProtocolClient connect handshake", () => {
   it("retires device preparation that outlives the connect handshake", async () => {
     vi.useFakeTimers();
     const plan = createDeferred<Record<string, never>>();
-    const { client, connections } = createHandshakeClient(() => plan.promise);
-    client.start();
-    const connection = connections[0];
-    assert(connection);
+    const { first: connection } = createHandshakeClient(() => plan.promise);
+
     receiveConnectChallenge(connection);
     expect(connection.send).not.toHaveBeenCalled();
 
@@ -305,6 +285,5 @@ describe("GatewayProtocolClient connect handshake", () => {
     plan.resolve({});
     await vi.advanceTimersByTimeAsync(0);
     expect(connection.send).not.toHaveBeenCalled();
-    client.stop();
   });
 });

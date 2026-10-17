@@ -24,11 +24,7 @@ function createSocketFactoryHarness(
       };
     },
   );
-  const client = createProtocolClient({
-    ...options,
-    createSocket,
-    onConnectError,
-  });
+  const client = createProtocolClient({ ...options, createSocket, onConnectError });
   return { client, createSocket, onConnectError };
 }
 
@@ -64,72 +60,53 @@ describe("GatewayProtocolClient socket factory recovery", () => {
         shouldRetrySocketFactoryError: () => true,
       });
 
-      try {
-        client.start();
+      client.start();
 
-        expect(createSocket).toHaveBeenCalledOnce();
-        expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ message: "temporary socket construction failure" }),
-        );
-        expect(vi.getTimerCount()).toBe(1);
+      expect(createSocket).toHaveBeenCalledOnce();
+      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "temporary socket construction failure" }),
+      );
+      expect(vi.getTimerCount()).toBe(1);
 
-        client.start();
-        expect(createSocket).toHaveBeenCalledOnce();
-        expect(vi.getTimerCount()).toBe(1);
+      client.start();
+      expect(createSocket).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(1);
 
-        for (const [index, delay] of delays.entries()) {
-          await vi.advanceTimersByTimeAsync(delay - 1);
-          expect(createSocket).toHaveBeenCalledTimes(index + 1);
-          await vi.advanceTimersByTimeAsync(1);
-          expect(createSocket).toHaveBeenCalledTimes(index + 2);
-        }
-        expect(onConnectError).toHaveBeenCalledTimes(delays.length);
-        expect(client.connected).toBe(true);
-
-        client.resetReconnectBackoff(25);
-        createSocket.mock.calls.at(-1)?.[0].close(1012, "service restart");
-        await vi.advanceTimersByTimeAsync(resetDelay - 1);
-        expect(createSocket).toHaveBeenCalledTimes(delays.length + 1);
+      for (const [index, delay] of delays.entries()) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(createSocket).toHaveBeenCalledTimes(index + 1);
         await vi.advanceTimersByTimeAsync(1);
-        expect(createSocket).toHaveBeenCalledTimes(delays.length + 2);
-      } finally {
-        client.stop();
+        expect(createSocket).toHaveBeenCalledTimes(index + 2);
       }
+      expect(onConnectError).toHaveBeenCalledTimes(delays.length);
+      expect(client.connected).toBe(true);
+
+      client.resetReconnectBackoff(25);
+      createSocket.mock.calls.at(-1)?.[0].close(1012, "service restart");
+      await vi.advanceTimersByTimeAsync(resetDelay - 1);
+      expect(createSocket).toHaveBeenCalledTimes(delays.length + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(createSocket).toHaveBeenCalledTimes(delays.length + 2);
     },
   );
 
-  it("does not schedule a retry when an error callback stops the client", () => {
-    const { client, createSocket } = createSocketFactoryHarness({
-      initialFailures: 1,
-      onConnectError: () => client.stop(),
-      shouldRetrySocketFactoryError: () => true,
-    });
-
-    client.start();
-
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not schedule a retry over a socket restarted by an error callback", async () => {
-    const { client, createSocket } = createSocketFactoryHarness({
-      initialFailures: 1,
-      onConnectError: () => client.start(),
-      shouldRetrySocketFactoryError: () => true,
-    });
-
-    client.start();
-
-    expect(createSocket).toHaveBeenCalledTimes(2);
-    expect(client.connected).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(createSocket).toHaveBeenCalledTimes(2);
-    expect(client.connected).toBe(true);
-
-    client.stop();
-  });
+  it.each([false, true])(
+    "does not retry after an error callback takes ownership (restart=%s)",
+    async (restart) => {
+      const { client, createSocket } = createSocketFactoryHarness({
+        initialFailures: 1,
+        onConnectError: () => (restart ? client.start() : client.stop()),
+        shouldRetrySocketFactoryError: () => true,
+      });
+      client.start();
+      expect(createSocket).toHaveBeenCalledTimes(restart ? 2 : 1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(client.connected).toBe(restart);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(createSocket).toHaveBeenCalledTimes(restart ? 2 : 1);
+      expect(client.connected).toBe(restart);
+    },
+  );
 
   it("does not schedule a retry over a socket restarted by a close callback", async () => {
     let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
@@ -163,8 +140,6 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     );
     await expect(recoveredRequest).resolves.toEqual({ healthy: true });
     expect(client.hasPendingRequests).toBe(false);
-
-    client.stop();
   });
 
   it.each([true, false])(
@@ -202,7 +177,6 @@ describe("GatewayProtocolClient socket factory recovery", () => {
         expect.objectContaining({ message: "loopback proxy policy rejected" }),
       );
       expect(vi.getTimerCount()).toBe(0);
-      client.stop();
     },
   );
 });
@@ -233,29 +207,15 @@ describe("GatewayClient socket factory recovery", () => {
   });
 
   it.each([
-    {
-      label: "insecure remote plaintext",
-      url: "ws://gateway.example:18789",
-      expectedMessage: "SECURITY ERROR",
-    },
-    {
-      label: "malformed gateway URL",
-      url: "not a gateway URL",
-      expectedMessage: "SECURITY ERROR",
-    },
-    {
-      label: "TLS fingerprint on plaintext",
-      url: "ws://127.0.0.1:18789",
-      tlsFingerprint: "deadbeef",
-      expectedMessage: "gateway tls fingerprint requires wss:// gateway url",
-    },
-    {
-      label: "invalid TLS fingerprint",
-      url: "wss://gateway.example:18789",
-      tlsFingerprint: "deadbeef",
-      expectedMessage: "gateway tls fingerprint must be a SHA-256 fingerprint",
-    },
-  ])("does not retry $label", async ({ url, tlsFingerprint, expectedMessage }) => {
+    ["ws://gateway.example:18789", undefined, "SECURITY ERROR"],
+    ["not a gateway URL", undefined, "SECURITY ERROR"],
+    ["ws://127.0.0.1:18789", "deadbeef", "gateway tls fingerprint requires wss:// gateway url"],
+    [
+      "wss://gateway.example:18789",
+      "deadbeef",
+      "gateway tls fingerprint must be a SHA-256 fingerprint",
+    ],
+  ] as const)("does not retry invalid target %s", async (url, tlsFingerprint, expectedMessage) => {
     const beforeConnect = vi.fn();
     const { client, onConnectError } = createNodeClient({
       url,
@@ -272,7 +232,6 @@ describe("GatewayClient socket factory recovery", () => {
     expect(onConnectError).toHaveBeenCalledOnce();
     expect(beforeConnect).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
-    client.stop();
   });
 
   it("releases a loopback proxy bypass when WebSocket construction rejects the URL", () => {
@@ -291,7 +250,6 @@ describe("GatewayClient socket factory recovery", () => {
       expect.objectContaining({ message: "The URL contains a fragment identifier" }),
     );
     expect(vi.getTimerCount()).toBe(0);
-    client.stop();
   });
 
   it("keeps a loopback proxy policy failure terminal and observable", () => {
@@ -306,6 +264,5 @@ describe("GatewayClient socket factory recovery", () => {
     expect(registerGatewayLoopbackBypass).toHaveBeenCalledOnce();
     expect(onConnectError).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-    client.stop();
   });
 });

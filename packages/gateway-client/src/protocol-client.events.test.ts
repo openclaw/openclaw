@@ -52,7 +52,6 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
       expect(firstListener).toHaveBeenCalledTimes(firstListenerCalls);
       expect(staleListener).not.toHaveBeenCalled();
       expect(connection.close).toHaveBeenCalledOnce();
-      client.stop();
     },
   );
 
@@ -88,7 +87,6 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
     receive(connection, { type: "event", event: "board.changed", payload: {}, seq: 3 });
 
     expect(listener).toHaveBeenCalledTimes(2);
-    client.stop();
   });
 
   test.each(["replace", "reconnect"])(
@@ -156,7 +154,6 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
         expect(onEvent).toHaveBeenCalledExactlyOnceWith(fresh);
         expect(listener).toHaveBeenCalledExactlyOnceWith(fresh);
       }
-      client.stop();
     },
   );
 
