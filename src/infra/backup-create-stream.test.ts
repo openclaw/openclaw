@@ -123,7 +123,7 @@ it("preserves a shared abort reason and its numeric code before the output opens
       }),
     controller.signal,
   );
-  const error: unknown = await writing.catch((error: unknown) => error);
+  const error: unknown = await writing.catch((caught: unknown) => caught);
   expect(error).not.toBe(reason);
   expect(error).toMatchObject({
     name: "AbortError",
