@@ -3,11 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { syncControlUiCatalogFallbackBaseline } from "../../scripts/control-ui-i18n-verify.ts";
-import type {
-  LocaleEntry,
-  TranslationMap,
-  TranslationMemoryEntry,
-} from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import type * as I18n from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 
 const fixture = vi.hoisted(() => {
   // Tooling shares a serial module cache; load this owner with this file's input mocks.
@@ -27,7 +23,7 @@ const fixture = vi.hoisted(() => {
     assetsDir: "",
     baselinePath: "",
     writes,
-    loadSource: vi.fn<() => TranslationMap>(),
+    loadSource: vi.fn<() => I18n.TranslationMap>(),
     readSource: vi.fn<() => Promise<string>>(),
   };
 });
@@ -38,10 +34,7 @@ vi.mock("../../scripts/lib/control-ui-i18n-catalog.ts", () => ({
 }));
 
 vi.mock("../../scripts/lib/control-ui-i18n-config.ts", () => ({
-  CONTROL_UI_LOCALE_ENTRIES: [
-    { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
-    { locale: "de", fileName: "de.ts", exportName: "de", languageKey: "de" },
-  ] satisfies LocaleEntry[],
+  CONTROL_UI_LOCALE_ENTRIES: [{ locale: "fr" }, { locale: "de" }],
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -96,10 +89,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const assetsDir = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../ui/src/i18n/.i18n",
-);
+const assetsDir = fileURLToPath(new URL("../../ui/src/i18n/.i18n", import.meta.url));
 const baselinePath = path.join(assetsDir, "catalog-fallbacks.json");
 const memoryPath = (locale: string) => path.join(assetsDir, `${locale}.tm.jsonl`);
 const abcHash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -111,7 +101,7 @@ const sync = (options: Partial<Parameters<typeof syncControlUiCatalogFallbackBas
 const failure = (options: Parameters<typeof sync>[0] = {}) => expect(sync(options)).rejects;
 
 type MemoryRow = Pick<
-  TranslationMemoryEntry,
+  I18n.TranslationMemoryEntry,
   "cache_key" | "segment_id" | "segment_ids" | "text_hash" | "translated"
 >;
 function row(overrides: Partial<MemoryRow> = {}): MemoryRow {

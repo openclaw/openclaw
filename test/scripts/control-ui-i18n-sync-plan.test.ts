@@ -1,33 +1,19 @@
 import { describe, expect, it } from "vitest";
-import {
-  hashControlUiTranslationText,
-  materializeControlUiLocaleCatalog,
-  materializePreparedControlUiLocaleCatalog,
-  mergeControlUiTranslationMaps,
-  prepareControlUiCatalogSource,
-} from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
-import {
-  createControlUiLocaleSyncPlan,
-  flattenTranslations,
-  type LocaleEntry,
-  type LocaleMeta,
-  type TranslationMemoryEntry,
-} from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
-
-const entry: LocaleEntry = { exportName: "fr", fileName: "fr.ts", languageKey: "fr", locale: "fr" };
+import * as values from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
+import * as sync from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 
 const hashText = (text: string) => `hash:${text}`;
 const cacheKeyFor = (key: string, textHash: string) => `cache:${key}:${textHash}`;
-const strings = (values: Record<string, string>) => new Map(Object.entries(values));
-const memoryMap = (...rows: TranslationMemoryEntry[]) =>
+const strings = (entries: Record<string, string>) => new Map(Object.entries(entries));
+const memoryMap = (...rows: sync.TranslationMemoryEntry[]) =>
   new Map(rows.map((row) => [row.cache_key, row]));
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
 function memoryEntry(
-  overrides: Partial<TranslationMemoryEntry> = {},
+  overrides: Partial<sync.TranslationMemoryEntry> = {},
   text = "Shared",
   translated = "Partage",
-): TranslationMemoryEntry {
+): sync.TranslationMemoryEntry {
   return {
     cache_key: "legacy-cache",
     segment_id: "legacy.segment",
@@ -42,7 +28,7 @@ function memoryEntry(
   };
 }
 
-function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
+function localeMeta(overrides: Partial<sync.LocaleMeta> = {}): sync.LocaleMeta {
   return {
     fallbackKeys: [],
     generatedAt: "2026-01-01T00:00:00.000Z",
@@ -55,12 +41,12 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
   };
 }
 
-function createPlan(overrides: Partial<Parameters<typeof createControlUiLocaleSyncPlan>[0]>) {
-  return createControlUiLocaleSyncPlan({
+function createPlan(overrides: Partial<Parameters<typeof sync.createControlUiLocaleSyncPlan>[0]>) {
+  return sync.createControlUiLocaleSyncPlan({
     sourcePath: "ui/src/i18n/locales/fr.ts",
     allowTranslate: false,
     cacheKeyFor,
-    entry,
+    entry: { exportName: "fr", fileName: "fr.ts", languageKey: "fr", locale: "fr" },
     existingFlat: new Map(),
     force: false,
     hashText,
@@ -78,12 +64,15 @@ function render(plan: ReturnType<typeof createPlan>, generatedAt: string) {
 
 function materialize(
   source: ReadonlyMap<string, string>,
-  memory: ReadonlyMap<string, TranslationMemoryEntry>,
+  memory: ReadonlyMap<string, sync.TranslationMemoryEntry>,
 ) {
-  return materializePreparedControlUiLocaleCatalog(prepareControlUiCatalogSource(source), memory);
+  return values.materializePreparedControlUiLocaleCatalog(
+    values.prepareControlUiCatalogSource(source),
+    memory,
+  );
 }
 
-const readMemory = (value: string): TranslationMemoryEntry[] =>
+const readMemory = (value: string): sync.TranslationMemoryEntry[] =>
   value
     .trim()
     .split("\n")
@@ -129,17 +118,19 @@ describe("createControlUiLocaleSyncPlan", () => {
   });
 
   it("refreshes selected keys without replaying cached aliases or dropping normal pending work", () => {
-    const cachedEntry = (key: string, text: string, translated: string, aliases?: string[]) =>
-      memoryEntry(
+    const cachedEntry = (key: string, text: string, translated: string, aliases?: string[]) => {
+      const text_hash = values.hashControlUiTranslationText(text);
+      return memoryEntry(
         {
-          cache_key: cacheKeyFor(key, hashControlUiTranslationText(text)),
+          cache_key: cacheKeyFor(key, text_hash),
           segment_id: key,
           segment_ids: aliases,
-          text_hash: hashControlUiTranslationText(text),
+          text_hash,
         },
         text,
         translated,
       );
+    };
     const sourceFlat = strings({
       refresh: "Shared",
       alias: "Shared",
@@ -149,17 +140,19 @@ describe("createControlUiLocaleSyncPlan", () => {
       otherGroup: "Shared",
       otherAlias: "Shared",
     });
+    const existing = {
+      refresh: "Partage",
+      alias: "Partage",
+      keep: "Conserver",
+      otherGroup: "Autre",
+      otherAlias: "Autre",
+    };
+    const replacements = { refresh: "Corrigé", missing: "Nouveau", changed: "Modifié {new}" };
     const plan = createPlan({
       allowTranslate: true,
-      existingFlat: strings({
-        refresh: "Partage",
-        alias: "Partage",
-        keep: "Conserver",
-        otherGroup: "Autre",
-        otherAlias: "Autre",
-      }),
+      existingFlat: strings(existing),
       refreshKeys: new Set(["refresh"]),
-      hashText: hashControlUiTranslationText,
+      hashText: values.hashControlUiTranslationText,
       sourceFlat,
       sourceHash: "source",
       translationMemory: memoryMap(
@@ -170,29 +163,20 @@ describe("createControlUiLocaleSyncPlan", () => {
           cache_key: "old",
           segment_id: "changed",
           text: "Changed {old}",
-          text_hash: hashControlUiTranslationText("Changed {old}"),
+          text_hash: values.hashControlUiTranslationText("Changed {old}"),
         }),
       ),
     });
     expect(plan.pending.map((item) => item.key)).toEqual(["refresh", "missing", "changed"]);
-    plan.recordTranslations(
-      plan.pending,
-      strings({ refresh: "Corrigé", missing: "Nouveau", changed: "Modifié {new}" }),
-      { sourceLocale: "en", updatedAt: () => "2026-09-06T00:00:00.000Z" },
-    );
-    const rendered = render(plan, "2026-09-06T00:00:00.000Z");
-    expect(Object.fromEntries(rendered.nextFlat)).toEqual({
-      refresh: "Corrigé",
-      alias: "Partage",
-      keep: "Conserver",
-      missing: "Nouveau",
-      changed: "Modifié {new}",
-      otherGroup: "Autre",
-      otherAlias: "Autre",
+    plan.recordTranslations(plan.pending, strings(replacements), {
+      sourceLocale: "en",
+      updatedAt: () => "2026-09-06T00:00:00.000Z",
     });
+    const rendered = render(plan, "2026-09-06T00:00:00.000Z");
+    expect(Object.fromEntries(rendered.nextFlat)).toEqual({ ...existing, ...replacements });
     expect(rendered.fallbackCount).toBe(0);
     const writtenMemory = memoryMap(...readMemory(rendered.translationMemory));
-    expect(materializeControlUiLocaleCatalog(sourceFlat, writtenMemory)).toEqual(
+    expect(values.materializeControlUiLocaleCatalog(sourceFlat, writtenMemory)).toEqual(
       Object.fromEntries(rendered.nextFlat),
     );
   });
@@ -220,9 +204,9 @@ describe("createControlUiLocaleSyncPlan", () => {
       settings: { title: "Settings" },
       updates: { page: { title: "Updates" } },
     };
-    const merged = mergeControlUiTranslationMaps(startup, fragment);
+    const merged = values.mergeControlUiTranslationMaps(startup, fragment);
 
-    expect([...flattenTranslations(merged)]).toEqual([
+    expect([...sync.flattenTranslations(merged)]).toEqual([
       ["updates.before", "Before"],
       ["updates.page.title", "Updates"],
       ["updates.after", "After"],
@@ -311,14 +295,14 @@ describe("createControlUiLocaleSyncPlan", () => {
       translated: "Obsolète",
     });
     const memory = memoryMap(grouped, replacement, stale);
-    const source = flattenTranslations({
+    const source = sync.flattenTranslations({
       group: { first: "abc", second: "abc" },
       changed: "Changed",
       unused: "abc",
     });
     const catalog = materialize(source, memory);
     expect(catalog).toEqual({ group: { first: "Dernier", second: "Partagé" } });
-    expect([...flattenTranslations(catalog)]).toEqual([
+    expect([...sync.flattenTranslations(catalog)]).toEqual([
       ["group.first", "Dernier"],
       ["group.second", "Partagé"],
     ]);
@@ -344,7 +328,7 @@ describe("createControlUiLocaleSyncPlan", () => {
   });
 
   it("preserves generatedAt when semantic metadata is unchanged", () => {
-    const sourceFlat = flattenTranslations({ title: "Titre" });
+    const sourceFlat = sync.flattenTranslations({ title: "Titre" });
     const previousMeta = localeMeta({ sourceHash: "same-source", totalKeys: 1, translatedKeys: 1 });
     const plan = createPlan({
       existingFlat: strings({ title: "Titre" }),

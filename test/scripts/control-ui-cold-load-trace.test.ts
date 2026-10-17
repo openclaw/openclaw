@@ -36,21 +36,11 @@ const singleProfile = (name: string, url: string, delta = 1_000): ColdLoadCpuPro
 });
 const mapProfile = (profile: ColdLoadCpuProfile, assetDirectory: string) =>
   mapColdLoadCpuProfile(profile, { assetBaseUrl, assetDirectory });
-function expectFrame(
-  mapped: Awaited<ReturnType<typeof mapProfile>>,
-  index: number,
-  url: RegExp,
-  lineNumber = 0,
-  columnNumber = 0,
-  functionName?: string,
-) {
-  expect(mapped.profile.nodes[index]?.callFrame).toMatchObject({
-    url: expect.stringMatching(url),
-    lineNumber,
-    columnNumber,
-    ...(functionName ? { functionName } : {}),
-  });
-}
+const sourceLocation = (url: RegExp, lineNumber = 0, columnNumber = 0) => ({
+  url: expect.stringMatching(url),
+  lineNumber,
+  columnNumber,
+});
 async function writeMap(directory: string, file: string, map: object) {
   await writeFile(path.join(directory, `${file}.js.map`), JSON.stringify({ version: 3, ...map }));
 }
@@ -172,7 +162,10 @@ describe("cold-load CPU accounting", () => {
 
       const mapped = await mapProfile(profile, directory);
       expect(mapped).toMatchObject({ mappedFrames: 1, unmappedFrames: 0 });
-      expectFrame(mapped, 0, /node_modules\/@solidjs\/signals\/dist\/prod\.js$/u, 0, 0, "flush");
+      expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
+        functionName: "flush",
+        ...sourceLocation(/node_modules\/@solidjs\/signals\/dist\/prod\.js$/u),
+      });
       expect(summarizeCpuProfile(mapped.profile)).toMatchObject({
         solidFlushSelfMs: 2,
         solidFlushInclusiveMs: 2,
@@ -206,8 +199,14 @@ describe("cold-load CPU accounting", () => {
       },
       directory,
     );
-    expectFrame(mapped, 0, /(?:^|\/)src\/timestamp\.ts$/u, 1, 9);
-    expectFrame(mapped, 1, /(?:^|\/)src\/timestamp\.ts$/u, 0, 7);
+    for (const [index, line, column] of [
+      [0, 1, 9],
+      [1, 0, 7],
+    ] as const) {
+      expect(mapped.profile.nodes[index]?.callFrame).toMatchObject(
+        sourceLocation(/(?:^|\/)src\/timestamp\.ts$/u, line, column),
+      );
+    }
     expect(code.split("\n")[2]).toBe("function runtime() {}");
     expect(mapped).toMatchObject({ mappedFrames: 2, unmappedFrames: 1 });
     expect(mapped.profile.nodes[2]?.callFrame).toEqual(

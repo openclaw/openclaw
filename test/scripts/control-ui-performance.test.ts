@@ -6,24 +6,37 @@ import { build } from "tsdown";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   CONTROL_UI_PERFORMANCE_BUDGETS,
-  collectControlUiPerformanceMetrics,
-  evaluateControlUiPerformanceBudgets,
-  extractControlUiStartupAssetPaths,
-  formatControlUiPerformanceReport,
-  runControlUiPerformanceCheck,
+  collectControlUiPerformanceMetrics as collectMetrics,
+  evaluateControlUiPerformanceBudgets as evaluateBudgets,
+  extractControlUiStartupAssetPaths as extractStartupAssets,
+  formatControlUiPerformanceReport as formatReport,
+  runControlUiPerformanceCheck as checkPerformance,
 } from "../../scripts/check-control-ui-performance.mts";
 
 const tempDirs: string[] = [];
-const preparedScripts = new Map<string, string | Uint8Array>();
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
+const scriptName = "scripts/check-control-ui-performance.mts";
+const baselineName = "config/control-ui-startup-budget-baseline.json";
+const preparedFiles = new Map<string, string | Uint8Array>([
+  ["package.json", '{"type":"module"}\n'],
+  ["scripts/tsx.mjs", `await import(${JSON.stringify(tsxImport)});\n`],
+  ...[
+    scriptName,
+    "src/gateway/control-ui-route-preloads.ts",
+    ...[
+      "check-limits.mts",
+      "control-ui-i18n-config.ts",
+      "control-ui-i18n-config.json",
+      "record-shared.mjs",
+      "regexp.mjs",
+    ].map((name) => `scripts/lib/${name}`),
+  ].map((file): [string, string] => [file, fs.readFileSync(path.resolve(file), "utf8")]),
+]);
 const baselineUpdateCommand =
   'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 const startupHtml =
   '<script type="module" src="./assets/index-a.js"></script>\n<link rel="stylesheet" href="./assets/index-c.css">\n';
-const readBaseline = (configDir: string) =>
-  JSON.parse(
-    fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
-  );
+const readBaseline = (baselinePath: string) => JSON.parse(fs.readFileSync(baselinePath, "utf8"));
 
 function writeAssetAt(assetsDir: string, file: string, raw: number, gzip: number, brotli: number) {
   const assetPath = path.join(assetsDir, file);
@@ -44,12 +57,7 @@ function expectReportText(report: string, ...parts: string[]) {
   }
 }
 
-function runControlUiPerformanceCli(
-  scriptPath: string,
-  args: string[],
-  cwd: string,
-  extraEnv: NodeJS.ProcessEnv = {},
-) {
+function runNode(args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     GITHUB_ACTIONS: "",
@@ -57,7 +65,7 @@ function runControlUiPerformanceCli(
     ...extraEnv,
   };
   delete env.TSX_DISABLE_CACHE;
-  return spawnSync(process.execPath, [fs.realpathSync(scriptPath), ...args], {
+  return spawnSync(process.execPath, args, {
     cwd,
     env,
     encoding: "utf8",
@@ -88,35 +96,13 @@ function createStartupFixture() {
 function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
   tempDirs.push(rootDir);
-  fs.writeFileSync(path.join(rootDir, "package.json"), '{"type":"module"}\n');
-  const scriptsDir = path.join(rootDir, "scripts");
-  const scriptLibDir = path.join(scriptsDir, "lib");
   const configDir = path.join(rootDir, "config");
-  const gatewayDir = path.join(rootDir, "src/gateway");
+  const baselinePath = path.join(rootDir, baselineName);
   const distDir = path.join(rootDir, "dist/control-ui");
   const assetsDir = path.join(distDir, "assets");
-  for (const dir of [scriptLibDir, configDir, gatewayDir, assetsDir]) {
+  for (const dir of [configDir, assetsDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mts");
-  fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mts"), scriptPath);
-  fs.copyFileSync(
-    path.resolve("src/gateway/control-ui-route-preloads.ts"),
-    path.join(gatewayDir, "control-ui-route-preloads.ts"),
-  );
-  for (const file of [
-    "check-limits.mts",
-    "control-ui-i18n-config.ts",
-    "control-ui-i18n-config.json",
-    "record-shared.mjs",
-    "regexp.mjs",
-  ]) {
-    fs.copyFileSync(path.resolve("scripts/lib", file), path.join(scriptLibDir, file));
-  }
-  fs.writeFileSync(
-    path.join(scriptsDir, "tsx.mjs"),
-    `await import(${JSON.stringify(tsxImport)});\n`,
-  );
   fs.writeFileSync(path.join(distDir, "index.html"), startupHtml);
   for (const [file, raw, gzip, brotli] of [
     ["index-a.js", 100, 65, 50],
@@ -125,21 +111,16 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
   ] as const) {
     writeAssetAt(assetsDir, file, raw, gzip, brotli);
   }
-  fs.writeFileSync(
-    path.join(configDir, "control-ui-startup-budget-baseline.json"),
-    JSON.stringify(startupBaseline(65)),
-  );
-  for (const [relative, contents] of preparedScripts) {
+  fs.writeFileSync(baselinePath, JSON.stringify(startupBaseline(65)));
+  for (const [relative, contents] of preparedFiles) {
     const output = path.join(rootDir, relative);
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, contents);
   }
-  if (preparedScripts.size > 0) {
-    fs.copyFileSync(path.join(scriptsDir, "check-control-ui-performance.js"), scriptPath);
-  }
+  const scriptPath = path.join(rootDir, scriptName);
   const run = (args: string[] = [], env: NodeJS.ProcessEnv = {}) =>
-    runControlUiPerformanceCli(scriptPath, args, rootDir, env);
-  return { rootDir, scriptPath, configDir, distDir, run };
+    runNode([fs.realpathSync(scriptPath), ...args], rootDir, env);
+  return { rootDir, baselinePath, distDir, run };
 }
 
 function jsonCli(
@@ -174,7 +155,11 @@ beforeAll(async () => {
   });
   for (const bundle of bundles) {
     for (const output of bundle.chunks) {
-      preparedScripts.set(output.fileName, output.type === "chunk" ? output.code : output.source);
+      const content = output.type === "chunk" ? output.code : output.source;
+      preparedFiles.set(output.fileName, content);
+      if (output.fileName === "scripts/check-control-ui-performance.js") {
+        preparedFiles.set(scriptName, content);
+      }
     }
     await bundle[Symbol.asyncDispose]();
   }
@@ -210,7 +195,7 @@ afterEach(() => {
 describe("Control UI performance budgets", () => {
   it("extracts startup assets across relative and base-prefixed URLs", () => {
     expect(
-      extractControlUiStartupAssetPaths(`
+      extractStartupAssets(`
         <script type="module" src="./assets/index-abc.js?build=1"></script>
         <link rel="modulepreload" href="/control/assets/runtime-def.js">
         <link rel="stylesheet" href="./assets/index-abc.css#theme">
@@ -241,7 +226,7 @@ describe("Control UI performance budgets", () => {
     writeAsset("lazy-g.js", 300, 90, 65);
     fs.writeFileSync(path.join(distDir, "assets/art.webp"), Buffer.alloc(17));
 
-    const metrics = collectControlUiPerformanceMetrics(distDir);
+    const metrics = collectMetrics(distDir);
 
     expect(metrics).toMatchObject({
       startup: {
@@ -261,7 +246,7 @@ describe("Control UI performance budgets", () => {
       total: { js: { requests: 5, rawBytes: 830, gzipBytes: 285 } },
       largest: { js: { file: "assets/lazy-g.js" }, css: { file: "assets/index-c.css" } },
     });
-    const report = formatControlUiPerformanceReport(metrics);
+    const report = formatReport(metrics);
     expectReportText(
       report,
       "startup CSS: 1 request",
@@ -270,15 +255,15 @@ describe("Control UI performance budgets", () => {
       "new boot JS: 3 requests, 125 B gzip",
     );
     writeAsset("chat-d.js", 180, 50, 40);
-    const smaller = collectControlUiPerformanceMetrics(distDir);
-    expect(formatControlUiPerformanceReport(smaller, looseBudgets, null, 512, metrics)).toContain(
+    const smaller = collectMetrics(distDir);
+    expect(formatReport(smaller, looseBudgets, null, 512, metrics)).toContain(
       "chat boot JS gzip vs base: 135 B -> 115 B (-20 B); requests 3 -> 3",
     );
   });
 
   it("returns actionable violations and includes them in the report", () => {
     const { distDir } = createStartupFixture();
-    const metrics = collectControlUiPerformanceMetrics(distDir);
+    const metrics = collectMetrics(distDir);
     const budgets = {
       ...looseBudgets,
       startupJsRequests: 0,
@@ -289,11 +274,13 @@ describe("Control UI performance budgets", () => {
       largestCssGzipBytes: 20,
     };
 
-    expect(
-      evaluateControlUiPerformanceBudgets(metrics, budgets).map((entry) => entry.metric),
-    ).toEqual(["startup JS requests", "startup JS gzip", "largest JS gzip"]);
+    expect(evaluateBudgets(metrics, budgets).map((entry) => entry.metric)).toEqual([
+      "startup JS requests",
+      "startup JS gzip",
+      "largest JS gzip",
+    ]);
     expectReportText(
-      formatControlUiPerformanceReport(metrics, budgets),
+      formatReport(metrics, budgets),
       "startup JS gzip: 40 B exceeds 30 B",
       "route boot accounting: unavailable (build has no route preload templates)",
     );
@@ -305,13 +292,13 @@ describe("Control UI performance budgets", () => {
     writeHtml(startupHtml + routeTemplate("chat", [preload("mermaid.min-a.js")]));
     writeAsset("lazy-b.js", 200, 70, 55);
     writeAsset("mermaid.min-a.js", 200, 200_000, 100);
-    const metrics = collectControlUiPerformanceMetrics(distDir);
-    expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual([
+    const metrics = collectMetrics(distDir);
+    expect(evaluateBudgets(metrics).map((entry) => entry.metric)).toEqual([
       "startup Mermaid JS assets",
     ]);
     expect(metrics.total.js.gzipBytes).toBe(200_110);
     expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
-    expect(formatControlUiPerformanceReport(metrics)).toContain("isolated Mermaid JS:");
+    expect(formatReport(metrics)).toContain("isolated Mermaid JS:");
   });
 
   it("retains the ordinary chunk cap beside locale pairs", () => {
@@ -319,13 +306,11 @@ describe("Control UI performance budgets", () => {
     writeAsset("lazy-b.js", 200, 215 * 1024 + 1, 55);
     writeAsset("ru-a.js", 200, 100_000, 100);
     writeAsset("locale-config-hints-ru-a.js", 200, 100_000, 100);
-    const metrics = collectControlUiPerformanceMetrics(distDir);
-    expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual([
-      "largest JS gzip",
-    ]);
+    const metrics = collectMetrics(distDir);
+    expect(evaluateBudgets(metrics).map((entry) => entry.metric)).toEqual(["largest JS gzip"]);
     expect(metrics.total.js.gzipBytes).toBe(420_201);
     expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
-    expect(formatControlUiPerformanceReport(metrics)).toContain("locale catalog JS:");
+    expect(formatReport(metrics)).toContain("locale catalog JS:");
   });
 
   it("reports a 17-byte startup CSS target excess without failing the check", () => {
@@ -359,10 +344,10 @@ describe("Control UI performance budgets", () => {
   it.each(["size", "baseline"])(
     "warns about %s growth in Actions while local CI stays strict",
     (kind) => {
-      const { rootDir, run, configDir } = createCliFixture(kind === "size" ? 51_201 : 15);
+      const { rootDir, run, baselinePath } = createCliFixture(kind === "size" ? 51_201 : 15);
       if (kind === "baseline") {
         fs.writeFileSync(
-          path.join(configDir, "control-ui-startup-budget-baseline.json"),
+          baselinePath,
           JSON.stringify(startupBaseline(CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes + 1)),
         );
       }
@@ -381,51 +366,40 @@ describe("Control UI performance budgets", () => {
     },
   );
 
-  it.each(["chat", "new"] as const)("enforces the %s boot request limit in Actions", (route) => {
+  it.each([
+    ["chat", "requests"],
+    ["new", "requests"],
+    ["chat", "gzip"],
+    ["new", "gzip"],
+  ] as const)("enforces the %s boot %s limit in Actions", (route, metric) => {
     const fixture = createCliFixture();
     const { distDir } = fixture;
-    const limit = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsRequests`];
-    const links = Array.from({ length: limit }, (_, index) => {
-      const file = `route-${index}.js`;
-      writeAssetAt(path.join(distDir, "assets"), file, 1, 1, 1);
-      return preload(file);
-    });
-    const indexPath = path.join(distDir, "index.html");
-    const initial = fs.readFileSync(indexPath, "utf8");
-    const writeRoute = (count: number) =>
-      fs.writeFileSync(indexPath, initial + routeTemplate(route, links.slice(0, count)));
-    writeRoute(limit);
-    const actions = { GITHUB_ACTIONS: "true" };
-    expect(jsonCli(fixture, [], 1, actions).violations).toEqual([
-      expect.objectContaining({ metric: `${route} boot JS requests`, actual: limit + 1, limit }),
-    ]);
-    jsonCli(fixture, ["--report-only"], 0, actions);
-    writeRoute(limit - 1);
-    expect(jsonCli(fixture, [], 0, actions).violations).toEqual([]);
-  });
-
-  it.each(["chat", "new"] as const)("enforces the %s boot byte limit in Actions", (route) => {
-    const fixture = createCliFixture();
-    const { distDir } = fixture;
-    const limit = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsGzipBytes`];
-    const initialBytes = collectControlUiPerformanceMetrics(distDir).startup.js.gzipBytes;
+    const requests = metric === "requests";
+    const limit =
+      CONTROL_UI_PERFORMANCE_BUDGETS[`${route}${requests ? "BootJsRequests" : "BootJsGzipBytes"}`];
     const links: string[] = [];
-    let remaining = limit - initialBytes;
+    let remaining = requests ? limit : limit - collectMetrics(distDir).startup.js.gzipBytes;
     for (let index = 0; remaining > 0; index++) {
       const file = `route-${index}.js`;
-      const bytes = Math.min(200_000, remaining);
+      const bytes = requests ? 1 : Math.min(200_000, remaining);
       remaining -= bytes;
       writeAssetAt(path.join(distDir, "assets"), file, bytes, bytes, bytes);
       links.push(preload(file));
     }
     const indexPath = path.join(distDir, "index.html");
-    fs.appendFileSync(indexPath, routeTemplate(route, links));
+    const initial = fs.readFileSync(indexPath, "utf8");
+    const writeRoute = (count: number) =>
+      fs.writeFileSync(indexPath, initial + routeTemplate(route, links.slice(0, count)));
+    writeRoute(links.length - Number(requests));
     const actions = { GITHUB_ACTIONS: "true" };
     expect(jsonCli(fixture, [], 0, actions).violations).toEqual([]);
-
-    fs.appendFileSync(path.join(distDir, "assets/route-0.js.gz"), "x");
+    if (requests) {
+      writeRoute(links.length);
+    } else {
+      fs.appendFileSync(path.join(distDir, "assets/route-0.js.gz"), "x");
+    }
     expect(jsonCli(fixture, [], 1, actions).violations).toEqual([
-      expect.objectContaining({ metric: `${route} boot JS gzip`, actual: limit + 1, limit }),
+      expect.objectContaining({ metric: `${route} boot JS ${metric}`, actual: limit + 1, limit }),
     ]);
     jsonCli(fixture, ["--report-only"], 0, actions);
   });
@@ -435,10 +409,10 @@ describe("Control UI performance budgets", () => {
     const baselinePath = path.join(distDir, "baseline.json");
     fs.writeFileSync(baselinePath, '{"startupJsGzipBytes":"not-a-number"}\n');
 
-    expect(() => runControlUiPerformanceCheck(distDir, looseBudgets, baselinePath)).toThrow(
+    expect(() => checkPerformance(distDir, looseBudgets, baselinePath)).toThrow(
       /Cannot read Control UI startup budget baseline .*--update-baseline/u,
     );
-    expect(() => runControlUiPerformanceCheck(distDir, looseBudgets, baselinePath)).toThrow(
+    expect(() => checkPerformance(distDir, looseBudgets, baselinePath)).toThrow(
       `Regenerate it with ${baselineUpdateCommand}.`,
     );
   });
@@ -451,17 +425,17 @@ describe("Control UI performance budgets", () => {
       JSON.stringify(startupBaseline(CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes + 1)),
     );
 
-    expect(runControlUiPerformanceCheck(distDir, undefined, baselinePath).violations).toEqual([
+    expect(checkPerformance(distDir, undefined, baselinePath).violations).toEqual([
       expect.objectContaining({ metric: "startup JS gzip baseline" }),
     ]);
   });
 
   it("updates the baseline from generated or explicitly measured metrics", () => {
-    const { run, configDir, distDir } = createCliFixture();
+    const { run, baselinePath, distDir } = createCliFixture();
     const update = (args: string[] = []) => {
       const result = run(["--update-baseline", ...args]);
       expect(result.status, result.stderr).toBe(0);
-      return readBaseline(configDir);
+      return readBaseline(baselinePath);
     };
     expect(update()).toEqual({
       startupJsGzipBytes: 65,
@@ -487,7 +461,7 @@ describe("Control UI performance budgets", () => {
     expect(beyondRatchetResult.stderr).toContain(
       "4418 B differs from current baseline 321 B by 4097 B, exceeding the 4096 B ratchet",
     );
-    expect(readBaseline(configDir)).toMatchObject({
+    expect(readBaseline(baselinePath)).toMatchObject({
       startupJsGzipBytes: 321,
       reason: "explicit measurement",
     });
@@ -498,8 +472,7 @@ describe("Control UI performance budgets", () => {
     { name: "malformed", baseline: '{"startupJsGzipBytes":"not-a-number"}\n', exitCode: 1 },
     { name: "missing", baseline: null, exitCode: 1 },
   ])("executes the $name baseline hint with the canonical preload", ({ baseline, exitCode }) => {
-    const { rootDir, run, configDir } = createCliFixture();
-    const baselinePath = path.join(configDir, "control-ui-startup-budget-baseline.json");
+    const { rootDir, run, baselinePath } = createCliFixture();
     if (baseline === null) {
       fs.unlinkSync(baselinePath);
     } else {
@@ -517,15 +490,8 @@ describe("Control UI performance budgets", () => {
       .slice("node ".length)
       .split(" ")
       .map((arg) => (arg === '"<reason>"' ? reason : arg));
-    const env = { ...process.env };
-    delete env.TSX_DISABLE_CACHE;
     const beforeDate = new Date().toISOString().slice(0, 10);
-    const update = spawnSync(process.execPath, args, {
-      cwd: rootDir,
-      env,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
+    const update = runNode(args, rootDir);
     expect(update.status, update.stderr).toBe(0);
     expect(update.stdout).toBe(
       `Updated config/control-ui-startup-budget-baseline.json to 65 B (${reason}).\n`,
