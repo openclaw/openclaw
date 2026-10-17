@@ -8,7 +8,6 @@ import {
   createFileOps,
   extractFileOpsFromMessage,
   formatFileOperations,
-  MAX_FILE_OPS_SECTION_CHARS,
   mergeSummaryFileOperations,
   serializeConversation,
 } from "./utils.js";
@@ -334,7 +333,7 @@ describe("formatFileOperations bounds", () => {
 
     // File lists ratchet across compactions; the model-visible section must
     // stay bounded no matter how many paths accumulated.
-    expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
+    expect(section.length).toBeLessThanOrEqual(2_000);
     expect(section).toContain("more");
   });
 });
