@@ -36,6 +36,12 @@ import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import * as sessionReads from "./session-utils-store-lookup.js";
 
 const key = "agent:main:session-1";
+const initialEntry = { sessionId: "session-id", lifecycleRevision: "life-a", updatedAt: 1 };
+
+function traceSql() {
+  const trace = observeMainThreadSql();
+  return { ...trace, [Symbol.dispose]: () => trace.restore() };
+}
 
 function send(
   observer: ReturnType<typeof createSessionObserver>,
@@ -94,24 +100,18 @@ async function withObserver(
     closeDatabase: () => ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync>;
     advanceClock: () => void;
     watch: (enabled: boolean) => void;
-    enableModel: () => void;
   }) => Promise<void>,
   persistDigests = false,
   useDefaultStore = false,
 ) {
   await withOpenClawTestState({ label: "observer-worker" }, async ({ env, path }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    writeSessionEntry(database, key, {
-      sessionId: "session-id",
-      lifecycleRevision: "life-a",
-      updatedAt: 1,
-    });
+    writeSessionEntry(database, key, initialEntry);
     const peer = new DatabaseSync(database.path);
     const subscribers = createSessionMessageSubscriberRegistry();
     subscribers.subscribe("viewer", key)?.commit();
     const broadcast = vi.fn();
     const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
-    let utilityModelRef: string | undefined;
     let now = 1_000;
     const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
     const observer = createSessionObserver({
@@ -120,7 +120,7 @@ async function withObserver(
       subscribers,
       broadcastToConnIds: broadcast,
       ...(persistDigests ? {} : { persistDigest: persisted }),
-      resolveUtilityModelRef: () => utilityModelRef,
+      resolveUtilityModelRef: () => undefined,
       prepareModel: async () => preparedModel(),
       completeModel: async () =>
         modelMessage({ headline: "Completed observation", health: "done" }),
@@ -135,7 +135,7 @@ async function withObserver(
         storePath: database.path,
         rewriteLifecycle: () => {
           writeSessionEntry(database, key, {
-            sessionId: "session-id",
+            ...initialEntry,
             lifecycleRevision: "life-b",
             updatedAt: 2,
           });
@@ -150,15 +150,12 @@ async function withObserver(
         resetLifecycle: async () => {
           await replaceSessionEntry(
             { agentId: "main", sessionKey: key, storePath: database.path, env },
-            { sessionId: "session-id", lifecycleRevision: "life-b", updatedAt: 2 },
+            { ...initialEntry, lifecycleRevision: "life-b", updatedAt: 2 },
           );
         },
         closeDatabase: () => closeOpenClawAgentDatabaseByPathAsync(database.path),
         advanceClock: () => {
           now += 2_000;
-        },
-        enableModel: () => {
-          utilityModelRef = "openai/gpt-test";
         },
         watch: (enabled) => {
           if (enabled) {
@@ -171,11 +168,7 @@ async function withObserver(
           const storePath = path("replacement.sqlite");
           await replaceSessionEntry(
             { agentId: "main", sessionKey: key, storePath, env },
-            {
-              sessionId: "session-id",
-              lifecycleRevision: "life-a",
-              updatedAt: 1,
-            },
+            initialEntry,
           );
           cfg.session.store = storePath;
         },
@@ -222,8 +215,8 @@ it("moves observer admission, publication, terminal and companion reads off the 
         }
         return result;
       });
-      const sql = observeMainThreadSql();
-      try {
+      {
+        using sql = traceSql();
         observer.handleEvent(start);
         sql.expectIdle();
         sql.clear();
@@ -256,29 +249,23 @@ it("moves observer admission, publication, terminal and companion reads off the 
         advanceClock();
         inventories = 0;
         entries = 0;
-        const fresh = observeMainThreadSql();
-        try {
+        {
+          using fresh = traceSql();
           await sendPreamble(observer, "Retired observation", "worker-run");
           expect(inventories).toBe(0);
           expect(entries).toBeGreaterThan(0);
           expect(broadcast).toHaveBeenCalledTimes(1);
           fresh.expectIdle();
-        } finally {
-          fresh.restore();
         }
         await resetLifecycle();
-        const after = observeMainThreadSql();
-        try {
+        {
+          using after = traceSql();
           expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
           await send(observer, "lifecycle", { phase: "end" }, "worker-run");
           await observer.disposeAsync();
           expect(broadcast).toHaveBeenCalledTimes(1);
           after.expectIdle();
-        } finally {
-          after.restore();
         }
-      } finally {
-        sql.restore();
       }
     },
     false,

@@ -1,13 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import "../agents/utility-completion.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import {
-  createHarness,
+  advanceAndFlush as advance,
+  useObserverSuite,
+} from "./session-observer-suite.test-support.js";
+import {
   event,
   flushObserver,
   preparedModel,
-  resetSessionObserverEventSequence,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
@@ -25,202 +27,154 @@ vi.mock("../agents/isolated-completion.js", () => ({
   runIsolatedCompletion: runtimeMocks.completeIsolated,
 }));
 
-beforeEach(() => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-});
+const { createHarness } = useObserverSuite();
 
-async function advance(ms = 12_000) {
-  await vi.advanceTimersByTimeAsync(ms);
-  await flushObserver();
-}
-
-function endRun(harness: ReturnType<typeof createHarness>) {
-  harness.observer.handleEvent(
-    event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
-  );
-  return flushObserver();
-}
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  resetSessionObserverEventSequence();
-});
-
-describe("session observer model preparation", () => {
-  it.each(["claude-cli", "anthropic"])(
-    "publishes a digest from a runtime-owned %s utility completion after empty output without API auth",
-    async (provider) => {
-      const config = {
-        agents: {
-          defaults: {
-            utilityModel: `${provider}/claude-sonnet-4-6`,
-            models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } } },
-          },
+it.each(["claude-cli", "anthropic"])(
+  "publishes a digest from a runtime-owned %s utility completion after empty output without API auth",
+  async (provider) => {
+    const config = {
+      agents: {
+        defaults: {
+          utilityModel: `${provider}/claude-sonnet-4-6`,
+          models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } } },
         },
-      };
-      const prepared = {
-        config,
-        provider,
-        model: "claude-sonnet-4-6",
-        agentId: "main",
-        agentDir: "/tmp/agent",
-      };
-      runtimeMocks.completeDirect
-        .mockReset()
-        .mockRejectedValue(new Error("HTTP 401 invalid credential"));
-      runtimeMocks.selectModel.mockReturnValue({
-        provider,
-        modelId: prepared.model,
-        agentDir: prepared.agentDir,
-      });
-      const completion = {
-        text: JSON.stringify({ headline: "Reviewing the implementation", health: "on-track" }),
-        provider: "anthropic",
-        model: prepared.model,
-        owner: { kind: "cli", id: "claude-cli" },
-      };
-      runtimeMocks.completeIsolated
-        .mockReset()
-        .mockImplementationOnce(async (request) => {
-          // The isolated owner rejects empty output unless its caller owns visible-text recovery.
-          if (request.outputTextPolicy !== "strict-visible") {
-            throw new Error("Isolated completion returned empty output.");
-          }
-          return { ...completion, text: "" };
-        })
-        .mockResolvedValueOnce(completion);
-      const harness = createHarness({
-        config,
-        utilityModelRef: config.agents.defaults.utilityModel,
-        prepareModel: vi.fn(defaultPrepareModel),
-        completeModel: vi.fn(defaultCompleteModel),
-      });
-      startAndAddToolNotes(harness.observer);
-      await vi.advanceTimersByTimeAsync(12_000);
-      await vi.dynamicImportSettled();
-      await flushObserver();
-
-      expect(runtimeMocks.completeDirect).not.toHaveBeenCalled();
-      expect(runtimeMocks.completeIsolated).toHaveBeenCalledTimes(2);
-      expect(runtimeMocks.completeIsolated).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...prepared,
-          purpose: "session-observer",
-          timeoutMs: 30_000,
-          abortSignal: expect.any(AbortSignal),
-        }),
-      );
-      expect(runtimeMocks.completeIsolated.mock.calls[0]?.[0]).not.toHaveProperty("auth");
-      expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-        "session.observer",
-        expect.objectContaining({ headline: "Reviewing the implementation", health: "on-track" }),
-        expect.any(Set),
-        expect.anything(),
-      );
-      harness.observer.dispose();
-    },
-  );
-
-  it("does not start completion after observation ends during model preparation", async () => {
-    const preparation = createDeferred<ReturnType<typeof preparedModel>>();
-    const prepareModel = vi.fn(() => preparation.promise);
-    const harness = createHarness({ prepareModel });
+      },
+    };
+    const prepared = {
+      config,
+      provider,
+      model: "claude-sonnet-4-6",
+      agentId: "main",
+      agentDir: "/tmp/agent",
+    };
+    runtimeMocks.completeDirect
+      .mockReset()
+      .mockRejectedValue(new Error("HTTP 401 invalid credential"));
+    runtimeMocks.selectModel.mockReturnValue({
+      provider,
+      modelId: prepared.model,
+      agentDir: prepared.agentDir,
+    });
+    const completion = {
+      text: JSON.stringify({ headline: "Reviewing the implementation", health: "on-track" }),
+      provider: "anthropic",
+      model: prepared.model,
+      owner: { kind: "cli", id: "claude-cli" },
+    };
+    runtimeMocks.completeIsolated
+      .mockReset()
+      .mockImplementationOnce(async (request) => {
+        // The isolated owner rejects empty output unless its caller owns visible-text recovery.
+        if (request.outputTextPolicy !== "strict-visible") {
+          throw new Error("Isolated completion returned empty output.");
+        }
+        return { ...completion, text: "" };
+      })
+      .mockResolvedValueOnce(completion);
+    const harness = createHarness({
+      config,
+      utilityModelRef: config.agents.defaults.utilityModel,
+      prepareModel: vi.fn(defaultPrepareModel),
+      completeModel: vi.fn(defaultCompleteModel),
+    });
     startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
-    expect(prepareModel).toHaveBeenCalledOnce();
-
-    harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
-    preparation.resolve(preparedModel());
+    await vi.dynamicImportSettled();
     await flushObserver();
 
-    expect(harness.completeModel).not.toHaveBeenCalled();
-    harness.observer.dispose();
-  });
+    expect(runtimeMocks.completeDirect).not.toHaveBeenCalled();
+    expect(runtimeMocks.completeIsolated).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.completeIsolated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...prepared,
+        purpose: "session-observer",
+        timeoutMs: 30_000,
+        abortSignal: expect.any(AbortSignal),
+      }),
+    );
+    expect(runtimeMocks.completeIsolated.mock.calls[0]?.[0]).not.toHaveProperty("auth");
+    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
+      "session.observer",
+      expect.objectContaining({ headline: "Reviewing the implementation", health: "on-track" }),
+      expect.any(Set),
+      expect.anything(),
+    );
+  },
+);
 
-  it("times out stalled model preparation without starting another preparation", async ({
-    signal,
-  }) => {
+it.for(["observation ends", "preparation times out"] as const)(
+  "does not start completion or another preparation when %s",
+  async (outcome, { signal }) => {
     const preparation = createDeferred<ReturnType<typeof preparedModel>>();
     const prepareModel = vi.fn(() => preparation.promise);
     const harness = createHarness({ prepareModel });
     try {
       startAndAddToolNotes(harness.observer);
-
-      await advance(42_000);
-
+      await advance(outcome === "observation ends" ? 12_000 : 42_000);
       expect(prepareModel).toHaveBeenCalledOnce();
+      if (outcome === "observation ends") {
+        harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
+        preparation.resolve(preparedModel());
+        await flushObserver();
+      }
       expect(harness.completeModel).not.toHaveBeenCalled();
     } finally {
       const disposal = harness.observer.disposeAsync();
       preparation.resolve(preparedModel());
       await withinTest(disposal, signal);
     }
-  });
+  },
+);
 
-  it("retries after a rejected preparation", async () => {
-    const prepareModel = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporary preparation failure"))
-      .mockResolvedValue(preparedModel());
-    const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+it("retries after a rejected preparation", async () => {
+  const prepareModel = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("temporary preparation failure"))
+    .mockResolvedValue(preparedModel());
+  const harness = createHarness({ prepareModel });
+  startAndAddToolNotes(harness.observer);
 
-    await advance(24_000);
+  await advance(24_000);
 
-    expect(prepareModel).toHaveBeenCalledTimes(2);
-    expect(harness.completeModel).toHaveBeenCalledOnce();
-    expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
-    harness.observer.dispose();
-  });
+  expect(prepareModel).toHaveBeenCalledTimes(2);
+  expect(harness.completeModel).toHaveBeenCalledOnce();
+  expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
+});
 
-  it.each([
-    ["claude-cli", 2],
-    [undefined, 1],
-  ] as const)(
-    "runtime override %s prepares %i times across digests",
-    async (override, preparations) => {
-      const prepareModel = vi.fn(async () => ({
-        ...preparedModel(),
-        ...(override ? { agentHarnessRuntimeOverride: override } : {}),
-      }));
-      const harness = createHarness({ prepareModel });
-      startAndAddToolNotes(harness.observer);
-
-      await vi.advanceTimersByTimeAsync(12_000);
-      expect(prepareModel).toHaveBeenCalledOnce();
-      expect(harness.completeModel).toHaveBeenCalledOnce();
-
-      await endRun(harness);
-
-      expect(harness.completeModel).toHaveBeenCalledTimes(2);
-      expect(prepareModel).toHaveBeenCalledTimes(preparations);
-      harness.observer.dispose();
-    },
-  );
-
-  it("routes the next digest over HTTP once a credential arrives mid-run", async () => {
-    let credentialPresent = false;
+it.each([
+  ["claude-cli", "claude-cli", 2],
+  [undefined, undefined, 1],
+  ["claude-cli", undefined, 2],
+] as const)(
+  "runtime override %s -> %s prepares %i times across digests",
+  async (initial, next, preparations) => {
+    let override = initial;
     const prepareModel = vi.fn(async () => ({
       ...preparedModel(),
-      ...(credentialPresent ? {} : { agentHarnessRuntimeOverride: "claude-cli" }),
+      ...(override ? { agentHarnessRuntimeOverride: override } : {}),
     }));
     const harness = createHarness({ prepareModel });
     startAndAddToolNotes(harness.observer);
 
     await vi.advanceTimersByTimeAsync(12_000);
-    expect(harness.completeModel.mock.calls[0]?.[0]).toMatchObject({
-      agentHarnessRuntimeOverride: "claude-cli",
-    });
-
-    credentialPresent = true;
-    await endRun(harness);
-
-    expect(prepareModel).toHaveBeenCalledTimes(2);
-    expect(harness.completeModel.mock.calls[1]?.[0]).not.toHaveProperty(
-      "agentHarnessRuntimeOverride",
+    expect(prepareModel).toHaveBeenCalledOnce();
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+    if (initial) {
+      expect(harness.completeModel.mock.calls[0]?.[0]).toMatchObject({
+        agentHarnessRuntimeOverride: initial,
+      });
+    }
+    override = next;
+    harness.observer.handleEvent(
+      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
     );
-    harness.observer.dispose();
-  });
-});
+    await flushObserver();
+    expect(harness.completeModel).toHaveBeenCalledTimes(2);
+    expect(prepareModel).toHaveBeenCalledTimes(preparations);
+    if (!next) {
+      expect(harness.completeModel.mock.calls[1]?.[0]).not.toHaveProperty(
+        "agentHarnessRuntimeOverride",
+      );
+    }
+  },
+);

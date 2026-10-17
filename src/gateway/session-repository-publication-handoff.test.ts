@@ -447,19 +447,12 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       await import("./worker-environments/placement-test-fixtures.js");
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: "handoff-worker",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 1,
-    });
-    const active = await seedActivePlacement(placements, {
-      environmentId: "handoff-worker",
-      ownerEpoch: 1,
-    });
+    const owner = { environmentId: "handoff-worker", ownerEpoch: 1 };
+    seedAttachedPlacementEnvironment(database, { ...owner, sessionId: REQUEST.sessionId });
+    const active = await seedActivePlacement(placements, owner);
     const draining = await placements.startDrain({
+      ...owner,
       sessionId: REQUEST.sessionId,
-      environmentId: "handoff-worker",
-      ownerEpoch: 1,
       expectedGeneration: active.generation,
     });
     if (draining.state !== "draining") {
