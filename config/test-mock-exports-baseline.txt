@@ -483,7 +483,6 @@
 ["extensions/discord/src/monitor/provider.startup.test.ts","./gateway-supervisor.js","a207fb9ca53938bcab1eb9174aeee961c6ec1649b4be55f733e4a6fe1d723207",1]
 ["extensions/discord/src/monitor/provider.startup.test.ts","./listeners.js","aa9ef010f89ed89cc5e126314b8d3c31725c8a62b9f80f7880339fa07ccd91af",1]
 ["extensions/discord/src/monitor/provider.startup.test.ts","openclaw/plugin-sdk/dangerous-name-runtime","ab5ed6f1419ee89fc7168f872376050d585389cfe0c3516736269c7a0e7434bb",1]
-["extensions/discord/src/monitor/provider.test.ts","../probe.js","37b13858fb4a20c515efb79fe06b1429dafd854aa8f02dd152622e0486676fca",1]
 ["extensions/discord/src/monitor/provider.test.ts","../token.js","cebd5925afb15201f56cb535d322f0c634b8460f6ab632d36d3e1e82d8e2ab82",1]
 ["extensions/discord/src/monitor/provider.test.ts","../voice/voice-runtime.js","81a1e33010181a1074301a44ba0273e8abb494b8b4a656fdbcaa15cb1a62ea47",1]
 ["extensions/discord/src/monitor/thread-bindings.lifecycle.test-support.ts","../send.messages.js","2680aa91a08cc8fbda3f62cce88b90b584d169b7a9d5218f91a635482123f03a",1]
