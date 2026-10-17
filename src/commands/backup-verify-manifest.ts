@@ -13,10 +13,11 @@ import {
   resolvePortableArchivePathKey,
   type BackupSymbolicLink,
 } from "../infra/backup-archive-path-policy.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
 const recoveryPath = z
   .string()
@@ -581,8 +582,55 @@ export type NormalizedArchiveEntry = {
   type?: string;
 };
 
+type ArchiveEntry = NormalizedArchiveEntry & {
+  linkpath?: string;
+};
+
+export async function listBackupArchiveEntries(archivePath: string) {
+  const entries: ArchiveEntry[] = [];
+  let invalidReason: string | undefined;
+  let pathError: Error | undefined;
+  let manifestContent: Promise<string | Error> | undefined;
+  await tar.t({
+    file: archivePath,
+    gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
+    onwarn: (code, message) => {
+      // tar skips invalid headers; a readable remainder is not a complete backup.
+      if (code === "TAR_BAD_ARCHIVE" || code === "TAR_ENTRY_INVALID") {
+        invalidReason ??= formatErrorMessage(message);
+      }
+    },
+    onReadEntry: (entry) => {
+      if (pathError) {
+        return;
+      }
+      let normalized: string;
+      try {
+        normalized = normalizeArchivePath(entry.path, "Archive entry");
+      } catch (error) {
+        pathError ??= toStringifiedError(error);
+        return;
+      }
+      entries.push({
+        raw: entry.path,
+        normalized,
+        ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
+        ...(Number.isSafeInteger(entry.size) && entry.size >= 0 ? { size: entry.size } : {}),
+        ...(entry.type ? { type: entry.type } : {}),
+      });
+      // tar resumes the entry after this callback. Capture only one bounded body;
+      // duplicate manifests are rejected after the entire archive has drained.
+      if (!manifestContent && isRootBackupManifestEntry(normalized)) {
+        manifestContent = readBackupManifestEntry(entry);
+      }
+    },
+  });
+  return { entries, invalidReason, pathError, manifestContent };
+}
+
 /** Collect during listing; defer content errors until the complete entry inventory is checked. */
-export async function readBackupManifestEntry(entry: tar.ReadEntry): Promise<string | Error> {
+async function readBackupManifestEntry(entry: tar.ReadEntry): Promise<string | Error> {
   const sizeError = backupManifestSizeError(entry.size);
   if (sizeError) {
     return sizeError;

@@ -30,7 +30,7 @@ import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup
 import {
   type BackupManifest,
   type NormalizedArchiveEntry,
-  readBackupManifestEntry,
+  listBackupArchiveEntries,
   isRegularArchiveFile,
   isRootBackupManifestEntry,
   parseBackupManifest,
@@ -44,56 +44,9 @@ const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
 type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
 
-type ArchiveEntry = NormalizedArchiveEntry & {
-  linkpath?: string;
-};
-
 type SqliteSnapshotIdentity = { role: "global" } | { role: "agent"; agentId: string };
 
 type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotOwner;
-
-async function listArchiveEntries(archivePath: string) {
-  const entries: ArchiveEntry[] = [];
-  let invalidReason: string | undefined;
-  let pathError: unknown;
-  let manifestContent: Promise<string | Error> | undefined;
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
-    onwarn: (code, message) => {
-      // tar skips invalid headers; a readable remainder is not a complete backup.
-      if (code === "TAR_BAD_ARCHIVE" || code === "TAR_ENTRY_INVALID") {
-        invalidReason ??= formatErrorMessage(message);
-      }
-    },
-    onReadEntry: (entry) => {
-      if (pathError) {
-        return;
-      }
-      let normalized: string;
-      try {
-        normalized = normalizeArchivePath(entry.path, "Archive entry");
-      } catch (error) {
-        pathError ??= error;
-        return;
-      }
-      entries.push({
-        raw: entry.path,
-        normalized,
-        ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
-        ...(Number.isSafeInteger(entry.size) && entry.size >= 0 ? { size: entry.size } : {}),
-        ...(entry.type ? { type: entry.type } : {}),
-      });
-      // tar resumes the entry after this callback. Capture only one bounded body;
-      // duplicate manifests are rejected after the entire archive has drained.
-      if (!manifestContent && isRootBackupManifestEntry(normalized)) {
-        manifestContent = readBackupManifestEntry(entry);
-      }
-    },
-  });
-  return { entries, invalidReason, pathError, manifestContent };
-}
 
 function formatResult(result: BackupVerifyResult): string {
   return [
@@ -553,7 +506,7 @@ async function verifyResolvedBackupArchive(
     );
   }
 
-  const listing = await listArchiveEntries(archivePath).catch((error: unknown) => {
+  const listing = await listBackupArchiveEntries(archivePath).catch((error: unknown) => {
     throw new Error(
       `Archive could not be read or parsed. ${formatErrorMessage(error)} Check the file permissions and archive integrity, then try again.`,
     );
