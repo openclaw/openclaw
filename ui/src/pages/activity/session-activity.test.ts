@@ -11,6 +11,7 @@ import {
   projectSessionActivity,
   reconcileSessionActivityRead,
   sessionActivityLocation,
+  sessionActivityOwner,
 } from "./session-activity.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
@@ -63,6 +64,27 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("session activity projection", () => {
+  it.each(["main", "codex"])("does not invent an avatar for ownerless %s sessions", (agentId) => {
+    expect(sessionActivityOwner({ key: `agent:${agentId}:main`, kind: "direct", agentId })).toEqual(
+      { id: agentId, name: agentId, avatarUrl: undefined, watchedSessions: [] },
+    );
+  });
+
+  it("uses the advertised owner's avatar instead of the creator's avatar", () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:work",
+      kind: "direct",
+      agentId: "main",
+      createdActor: { type: "agent", id: "main", avatarUrl: "/avatar/main?v=1" },
+      owner: { actor: { type: "agent", id: "codex", label: "Codex" } },
+    };
+    expect(sessionActivityOwner(row).avatarUrl).toBeUndefined();
+    row.owner!.actor.avatarUrl = "/avatar/codex?v=2";
+    expect(sessionActivityOwner(row).avatarUrl).toBe("/avatar/codex?v=2");
+    delete row.owner;
+    expect(sessionActivityOwner(row).avatarUrl).toBe("/avatar/main?v=1");
+  });
+
   it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
     const personId = "12345678-abcd-4123-8123-123456789abc";
     const legacy = {

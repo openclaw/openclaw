@@ -402,7 +402,7 @@ describe("session activity semantics", () => {
 
   it("renders agent-owned sessions and profile pictures without making agents or channels people", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test");
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = input instanceof Request ? input.url : input.toString();
       return new Response(new Uint8Array([1, 2, 3]), {
         headers: {
@@ -441,7 +441,7 @@ describe("session activity semantics", () => {
       row("Unattributed session", agent, Date.now() - 2, {
         owner: undefined,
         createdActor: undefined,
-        agentId: "research",
+        agentId: "codex",
       }),
       row("Channel session", channel, Date.now() - 3, {
         owner: { actor: channel },
@@ -478,12 +478,11 @@ describe("session activity semantics", () => {
       ).toBe("blob:human");
       expect(container.querySelector('[data-activity-person="research"]')).toBeNull();
       expect(container.querySelector('[data-activity-session="Channel session"] img')).toBeNull();
-      expect(
-        container
-          .querySelector('[data-activity-session="Unattributed session"] img')
-          ?.getAttribute("src"),
-      ).toBe("blob:agent");
     });
+    const unattributed = container.querySelector('[data-activity-session="Unattributed session"]');
+    expect(unattributed?.querySelector("img")).toBeNull();
+    expect(unattributed?.querySelector(".viewer-avatar__initials")?.textContent).toBe("C");
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
   });
 
   it("keeps human attribution beside the session agent's configured avatar and name", async () => {

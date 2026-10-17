@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
@@ -9,7 +8,6 @@ import {
   activityPersonLocation,
   pathForRoute,
 } from "../../app-route-paths.ts";
-import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { canApplySessionListSnapshot } from "../../lib/sessions/session-list-query.ts";
@@ -181,15 +179,10 @@ export function reconcileSessionActivity(
 export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
   const agentId = normalizeOptionalString(row.agentId);
-  const { resourceBasePath } = readAvatarGatewayContext();
   return {
     id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
     name: normalizeOptionalString(actor?.label) ?? agentId,
-    avatarUrl: actor
-      ? normalizeOptionalString(actor.avatarUrl)
-      : agentId
-        ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)
-        : undefined,
+    avatarUrl: normalizeOptionalString(actor?.avatarUrl),
     watchedSessions: [],
   };
 }
