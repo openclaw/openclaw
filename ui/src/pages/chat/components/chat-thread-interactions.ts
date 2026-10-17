@@ -79,7 +79,6 @@ export type ChatThreadState = {
   searchReturnFocusOwner: HTMLElement | null;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    onRequestUpdate?: () => void;
     turnVideoMessages?: ReadonlyMap<
       string,
       readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]

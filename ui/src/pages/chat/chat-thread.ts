@@ -69,6 +69,7 @@ const chatItemsGenerations = new WeakMap<readonly RenderChatItem[], number>();
 const toolCardStateBySession = new Map<string, ToolCardExpansionState>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
+const expansionListeners = new WeakMap<ReadonlyMap<string, unknown>, Set<() => void>>();
 
 export function resetChatThreadState(paneId?: string): void {
   if (paneId) {
@@ -456,17 +457,36 @@ export function getExpansionStateVersion(values: ReadonlyMap<string, unknown>): 
   return expansionMapVersions.get(values) ?? 0;
 }
 
+export function subscribeExpansionState(
+  values: ReadonlyMap<string, unknown>,
+  notify: () => void,
+): () => void {
+  const listeners = expansionListeners.get(values) ?? new Set<() => void>();
+  expansionListeners.set(values, listeners);
+  listeners.add(notify);
+  return () => {
+    listeners.delete(notify);
+  };
+}
+
+function publishExpansionState(values: ReadonlyMap<string, unknown>): void {
+  expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  for (const notify of expansionListeners.get(values) ?? []) {
+    notify();
+  }
+}
+
 export function setExpansionState<T>(values: Map<string, T>, key: string, value: T): void {
   if (values.has(key) && values.get(key) === value) {
     return;
   }
   values.set(key, value);
-  expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  publishExpansionState(values);
 }
 
 function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
   if (values.delete(key)) {
-    expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    publishExpansionState(values);
   }
 }
 

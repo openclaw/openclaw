@@ -977,15 +977,26 @@ describe("chat transcript invalidation", () => {
       "false",
     ]);
     expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
-    await renderToolVisibility();
+    await waitForSolid(() =>
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]),
+    );
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    await renderToolVisibility();
+    await waitForSolid(() =>
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "true",
+      ]),
+    );
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    await renderToolVisibility();
-    expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-      "true",
-      "false",
-    ]);
+    await waitForSolid(() =>
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]),
+    );
 
     await renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });
     expect(disclosureButtons()).toHaveLength(0);

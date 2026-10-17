@@ -179,7 +179,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       toolCardId,
       !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
     );
-    state.transcriptRenderContext.onRequestUpdate?.();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
     const key = recoveryKey(messageId);
@@ -191,7 +190,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     const revision = (current?.revision ?? 0) + 1;
     const pending = { status: "loading", revision } as const;
     setExpansionState(expandedAssistantMessages, key, pending);
-    requestUpdate();
     const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
       // A reset or source replacement can reuse both message id and revision.
       // Only the exact pending entry may publish into this presentation.
@@ -209,7 +207,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
           ? { status: "error", revision: revision + 1 }
           : { status: "loaded", markdown, message: result?.message, revision: revision + 1 },
       );
-      requestUpdate();
     };
     void loader({
       sessionKey: props.sessionKey,
@@ -365,7 +362,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
       onToggleUserMessageExpanded: (messageId: string) => {
         setExpansionState(expandedUserMessages, messageId, !expandedUserMessages.get(messageId));
-        requestUpdate();
       },
       loadFullAssistantMessage: props.loadFullAssistantMessage ?? undefined,
       getAssistantMessageExpansion: (messageId: string) =>
@@ -650,8 +646,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
-  // Rebind disclosures to the current pane without repainting unchanged rows.
-  state.transcriptRenderContext.onRequestUpdate = props.onRequestUpdate;
   const unfilteredItems = () =>
     buildCachedChatItems(
       { ...chatItemsInput, searchOpen: false, searchQuery: "", messageRecovery: undefined },
