@@ -23,6 +23,9 @@ import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
 import * as ownerLease from "./gateway-owner-lease.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const lockOptions = { allowInTests: true, timeoutMs: 0 };
+const recoveryOptions = { method: "database.port", params: {}, target: "synthetic workboard" };
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -52,15 +55,13 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
         (await runStartupConfigPreflight({ gateway: true, observe: false })).snapshot.valid,
       ).toBe(true);
       expect(countReads()).toBe(1);
-      const lock = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
+      const lock = await acquireGatewayLock(lockOptions);
       expect(lock).not.toBeNull();
       await lock?.release();
       expect(countReads()).toBe(2);
       writeDatabasePortManifest(stateDir, makeDatabasePortManifest(stateDir), () => {});
       const beforeNewAdmission = countReads();
-      await expect(acquireGatewayLock({ allowInTests: true, timeoutMs: 0 })).rejects.toThrow(
-        fixedPath,
-      );
+      await expect(acquireGatewayLock(lockOptions)).rejects.toThrow(fixedPath);
       expect(countReads() - beforeNewAdmission).toBe(1);
     });
   });
@@ -91,14 +92,13 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       await fs.writeFile(intent.manifestPath, "{broken");
       const reader = vi.spyOn(snapshots, "createConfigPreflightSnapshotReader");
       const lease = vi.spyOn(ownerLease, "assertGatewayOwnerLeaseStopped");
-      const options = { allowInTests: true, timeoutMs: 0 };
       const attempt =
         entry === "CLI preflight"
           ? runStartupConfigPreflight({ gateway: true })
           : entry === "direct Gateway"
-            ? acquireGatewayLock(options)
+            ? acquireGatewayLock(lockOptions)
             : acquireEmbeddedStateLock({
-                options: { ...options, timeoutMs: 1000 },
+                options: { ...lockOptions, timeoutMs: 1000 },
                 formatActiveGatewayRefusal: () => "unexpected live Gateway",
               });
       await expect(attempt).rejects.toThrow(intent.manifestPath);
@@ -121,9 +121,7 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       });
       await expect(
         runWithLocalStateOwner({
-          method: "database.port",
-          params: {},
-          target: "synthetic workboard",
+          ...recoveryOptions,
           databasePortRecovery: { ...intent, action },
           runLocal,
         }),
@@ -148,13 +146,7 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       }
       const runLocal = vi.fn(async () => {});
       await expect(
-        runWithLocalStateOwner({
-          method: "database.port",
-          params: {},
-          target: "synthetic workboard",
-          databasePortRecovery: intent,
-          runLocal,
-        }),
+        runWithLocalStateOwner({ ...recoveryOptions, databasePortRecovery: intent, runLocal }),
       ).rejects.toThrow("Database port recovery required");
       expect(runLocal).not.toHaveBeenCalled();
     },
@@ -177,8 +169,7 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       acquireGatewayLock({
         env,
         role: "agent-embedded",
-        allowInTests: true,
-        timeoutMs: 0,
+        ...lockOptions,
         databasePortRecovery: intent,
         readProcessStartTime: () => 123,
       }),
@@ -189,7 +180,7 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
   it("refuses hosted recovery before running either a local or foreign-owner callback", async () => {
     const { intent, manifest, stateDir } = await fixture();
     await fs.unlink(intent.manifestPath);
-    const owner = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
+    const owner = await acquireGatewayLock(lockOptions);
     if (!owner) {
       throw new Error("Expected retained Gateway ownership");
     }
@@ -199,12 +190,10 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
     try {
       await expect(
         runWithLocalStateOwner({
-          method: "database.port",
-          params: {},
-          target: "synthetic workboard",
+          ...recoveryOptions,
           databasePortRecovery: intent,
-          onForeignOwner,
           runLocal,
+          onForeignOwner,
         }),
       ).rejects.toThrow("exclusive offline ownership");
       expect(runLocal).not.toHaveBeenCalled();

@@ -1,8 +1,7 @@
-// Tests Control UI asset discovery and expected bundled files.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -35,6 +34,10 @@ function sourceCheckout(relativePath: string) {
   return root;
 }
 
+const uiIndex = (root: string) => path.join(root, "dist", "control-ui", "index.html");
+const buildFailure = (message: string, built = false) => ({ ok: false, built, message });
+const buildExit = (stderr: string) => ({ ...successfulBuild, code: 1, stderr });
+
 vi.mock("./openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => null),
   resolveOpenClawPackageRootSync: vi.fn(() => null),
@@ -46,27 +49,22 @@ vi.mock("../process/exec.js", () => ({
 const { runCommandWithTimeout: runRealCommandWithTimeout } =
   await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
 
-let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
-let inspectControlUiRootAssets: typeof import("./control-ui-assets.js").inspectControlUiRootAssets;
-let resolveControlUiAssetHealth: typeof import("./control-ui-assets.js").resolveControlUiAssetHealth;
-let isPackageProvenControlUiRootSync: typeof import("./control-ui-assets.js").isPackageProvenControlUiRootSync;
-let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
-let resolveControlUiRootSync: typeof import("./control-ui-assets.js").resolveControlUiRootSync;
-let openclawRoot: typeof import("./openclaw-root.js");
+const {
+  ensureControlUiAssetsBuilt,
+  inspectControlUiRootAssets,
+  resolveControlUiAssetHealth,
+  isPackageProvenControlUiRootSync,
+  resolveControlUiRootOverrideSync,
+  resolveControlUiRootSync,
+} = await import("./control-ui-assets.js");
+const openclawRoot = await import("./openclaw-root.js");
+
+const expectBuildFailure = (root: string, message: string, built = false) =>
+  expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual(
+    buildFailure(message, built),
+  );
 
 describe("control UI assets helpers", () => {
-  beforeAll(async () => {
-    ({
-      ensureControlUiAssetsBuilt,
-      inspectControlUiRootAssets,
-      resolveControlUiAssetHealth,
-      isPackageProvenControlUiRootSync,
-      resolveControlUiRootOverrideSync,
-      resolveControlUiRootSync,
-    } = await import("./control-ui-assets.js"));
-    openclawRoot = await import("./openclaw-root.js");
-  });
-
   beforeEach(() => {
     fixtureRoot = tempDirs.make("openclaw-control-ui-assets-");
     state.runCommandWithTimeout.mockReset();
@@ -76,7 +74,7 @@ describe("control UI assets helpers", () => {
 
   it("distinguishes unresolved, missing, incomplete, and ready startup bundles", async () => {
     const root = abs("fixtures/health");
-    const indexPath = path.join(root, "dist", "control-ui", "index.html");
+    const indexPath = uiIndex(root);
 
     await expect(resolveControlUiAssetHealth({ argv1: "" })).resolves.toEqual({
       kind: "missing-index",
@@ -128,11 +126,7 @@ describe("control UI assets helpers", () => {
     const indexPath = path.join(root, "index.html");
     const reference = '<link rel="modulepreload" href="./assets/startup.js">';
     const route = (name: string, count: number) =>
-      '<template data-openclaw-route-preloads="' +
-      name +
-      '">' +
-      reference.repeat(count) +
-      "</template>";
+      `<template data-openclaw-route-preloads="${name}">${reference.repeat(count)}</template>`;
     setFile(path.join(root, "assets", "startup.js"));
     setFile(indexPath, reference + route("chat", 90) + route("new", 90));
     expect(inspectControlUiRootAssets(root).kind).toBe("ready");
@@ -166,73 +160,29 @@ describe("control UI assets helpers", () => {
   });
 
   it("keeps a truncated build failure diagnostic within its UTF-16 limit", async () => {
-    const root = abs("fixtures/build-failure");
-    const argv1 = path.join(root, "src", "index.ts");
-    const originalArgv1 = process.argv[1];
-    setFile(path.join(root, "package.json"), '{"name":"openclaw"}\n');
-    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
-    setFile(path.join(root, "scripts", "ui.js"), "");
-    vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReturnValue(root);
-    state.runCommandWithTimeout.mockResolvedValueOnce({
-      stdout: "",
-      stderr: `${"y".repeat(238)}🚀xx`,
-      code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-    process.argv[1] = argv1;
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const root = sourceCheckout("fixtures/build-failure");
+    state.runCommandWithTimeout.mockResolvedValueOnce(buildExit(`${"y".repeat(238)}🚀xx`));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const onBuildStart = vi.fn();
 
-    try {
-      const result = await ensureControlUiAssetsBuilt(runtime, { root, onBuildStart });
-
-      expect(result).toEqual({
-        ok: false,
-        built: false,
-        message: `Control UI build failed: ${"y".repeat(238)}…`,
-      });
-      expect(onBuildStart).toHaveBeenCalledOnce();
-      expect(runtime.log).not.toHaveBeenCalled();
-    } finally {
-      if (originalArgv1 === undefined) {
-        process.argv.splice(1, 1);
-      } else {
-        process.argv[1] = originalArgv1;
-      }
-    }
+    const result = await ensureControlUiAssetsBuilt(runtime, { root, onBuildStart });
+    expect(result).toEqual(buildFailure(`Control UI build failed: ${"y".repeat(238)}…`));
+    expect(onBuildStart).toHaveBeenCalledOnce();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it.each([{ name: "empty terminal output", stderr: "\u001b[0m\n\u0007\r\n", summary: "exit 1" }])(
-    "preserves $name in build failures",
-    async ({ stderr, summary }) => {
-      const root = abs("fixtures/build-diagnostic");
-      setFile(path.join(root, "ui", "vite.config.ts"));
-      setFile(path.join(root, "scripts", "ui.js"));
-      state.runCommandWithTimeout.mockResolvedValueOnce({
-        stdout: "unrelated standard output",
-        stderr,
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+  it("preserves empty terminal output in build failures", async () => {
+    const root = sourceCheckout("fixtures/build-diagnostic");
+    state.runCommandWithTimeout.mockResolvedValueOnce({
+      ...buildExit("\u001b[0m\n\u0007\r\n"),
+      stdout: "unrelated standard output",
+    });
 
-      await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
-        ok: false,
-        built: false,
-        message: `Control UI build failed: ${summary}`,
-      });
-    },
-  );
+    await expectBuildFailure(root, "Control UI build failed: exit 1");
+  });
 
-  it.each([1])("reports the real build process outcome for exit %i", async (code) => {
-    const root = abs("fixtures/build-process");
+  it("reports the real build process outcome for exit 1", async () => {
+    const root = sourceCheckout("fixtures/build-process");
     const diagnostic = 'Error: Cannot resolve package entry "example-package/missing"';
     const stderr = [
       ...Array.from({ length: 15 }, () => "warning: error reporting is enabled"),
@@ -245,28 +195,18 @@ describe("control UI assets helpers", () => {
       "  }\u001b[0m",
     ].join("\r\n");
     setFile(path.join(root, "package.json"), '{"type":"commonjs"}');
-    setFile(path.join(root, "ui", "vite.config.ts"));
     setFile(
       path.join(root, "scripts", "ui.js"),
-      `const fs = require("node:fs");
-process.stderr.write(${JSON.stringify(stderr)});
-process.exitCode = ${code};
-if (process.exitCode === 0) {
-  fs.mkdirSync("dist/control-ui", { recursive: true });
-  fs.writeFileSync("dist/control-ui/index.html", "<html></html>");
-}
+      `process.stderr.write(${JSON.stringify(stderr)});
+process.exitCode = 1;
 `,
     );
     state.runCommandWithTimeout.mockImplementationOnce(runRealCommandWithTimeout);
 
     const result = await ensureControlUiAssetsBuilt(undefined, { root });
 
-    expect(result.ok).toBe(code === 0);
-    if (result.ok) {
-      expect(result).toMatchObject({ ok: true, built: true });
-      expect(result).not.toHaveProperty("message");
-    } else {
-      expect(result).toMatchObject({ ok: false, built: false });
+    expect(result).toMatchObject({ ok: false, built: false });
+    if (!result.ok) {
       expect(result.message).toMatch(`Control UI build failed: error during build: ${diagnostic}`);
       const summary = result.message.slice("Control UI build failed: ".length);
       expect(summary).toHaveLength(240);
@@ -277,21 +217,21 @@ if (process.exitCode === 0) {
 
   it("tells packaged installs to reinstall when their bundled assets are missing", async () => {
     const root = abs("fixtures/packaged-missing");
-    const indexPath = path.join(root, "dist", "control-ui", "index.html");
+    const indexPath = uiIndex(root);
 
     await expect(
       ensureControlUiAssetsBuilt(undefined, { root, argv1: path.join(root, "dist", "entry.js") }),
-    ).resolves.toEqual({
-      ok: false,
-      built: false,
-      message: `Missing Control UI assets at ${indexPath}. Reinstall OpenClaw to restore bundled Control UI assets.`,
-    });
+    ).resolves.toEqual(
+      buildFailure(
+        `Missing Control UI assets at ${indexPath}. Reinstall OpenClaw to restore bundled Control UI assets.`,
+      ),
+    );
   });
 
   it("ignores inline and external startup references in otherwise valid first-party HTML", async () => {
     const root = abs("fixtures/packaged-inline");
     setFile(
-      path.join(root, "dist", "control-ui", "index.html"),
+      uiIndex(root),
       [
         "<script>console.log('inline')</script>",
         '<script src="https://example.invalid/assets/external.js"></script>',
@@ -314,12 +254,10 @@ if (process.exitCode === 0) {
 
     setFile(path.join(uiRoot, "index.html"), "x".repeat(256 * 1024 + 1));
 
-    await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-        message: expect.stringContaining("index.html exceeds its size limit"),
-      }),
-    );
+    await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining("index.html exceeds its size limit"),
+    });
   });
 
   it("enforces the index limit when the file grows after metadata admission", () => {
@@ -364,7 +302,7 @@ if (process.exitCode === 0) {
   it("builds the source checkout selected by canonical package-root discovery", async () => {
     const packagedRoot = abs("fixtures/package-owner");
     const checkoutRoot = sourceCheckout("fixtures/checkout-owner");
-    const indexPath = path.join(checkoutRoot, "dist", "control-ui", "index.html");
+    const indexPath = uiIndex(checkoutRoot);
     vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockImplementation((options) =>
       options.moduleUrl ? packagedRoot : checkoutRoot,
     );
@@ -395,9 +333,8 @@ if (process.exitCode === 0) {
 
   it("forces a rebuild of an existing source bundle and forwards cancellation", async () => {
     const root = sourceCheckout("fixtures/force-build");
-    const indexPath = path.join(root, "dist", "control-ui", "index.html");
     const controller = new AbortController();
-    setFile(indexPath);
+    setFile(uiIndex(root));
     state.runCommandWithTimeout.mockResolvedValueOnce(successfulBuild);
 
     await expect(
@@ -413,11 +350,7 @@ if (process.exitCode === 0) {
     const root = sourceCheckout("fixtures/build-rejection");
     state.runCommandWithTimeout.mockRejectedValueOnce(new Error("details\nspawn ENOENT"));
 
-    await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
-      ok: false,
-      built: false,
-      message: "Control UI build failed: details spawn ENOENT",
-    });
+    await expectBuildFailure(root, "Control UI build failed: details spawn ENOENT");
   });
 
   it.each([
@@ -426,19 +359,14 @@ if (process.exitCode === 0) {
   ] as const)("normalizes $termination build termination", async ({ termination, message }) => {
     const root = sourceCheckout(`fixtures/build-${termination}`);
     state.runCommandWithTimeout.mockResolvedValueOnce({
-      stdout: "",
-      stderr: "",
+      ...successfulBuild,
       code: null,
       signal: termination === "signal" ? "SIGTERM" : null,
       killed: true,
       termination,
     });
 
-    await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
-      ok: false,
-      built: false,
-      message,
-    });
+    await expectBuildFailure(root, message);
   });
 
   it("does not launch a build after its signal has already been canceled", async () => {
@@ -448,7 +376,7 @@ if (process.exitCode === 0) {
 
     await expect(
       ensureControlUiAssetsBuilt(undefined, { root, signal: controller.signal }),
-    ).resolves.toEqual({ ok: false, built: false, message: "Control UI build canceled." });
+    ).resolves.toEqual(buildFailure("Control UI build canceled."));
     expect(state.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
@@ -456,26 +384,25 @@ if (process.exitCode === 0) {
     const root = sourceCheckout("fixtures/build-without-output");
     state.runCommandWithTimeout.mockResolvedValueOnce(successfulBuild);
 
-    await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
-      ok: false,
-      built: true,
-      message: `Control UI build completed but ${path.join(root, "dist", "control-ui", "index.html")} is still missing.`,
-    });
+    await expectBuildFailure(
+      root,
+      `Control UI build completed but ${uiIndex(root)} is still missing.`,
+      true,
+    );
   });
 
   it("rejects a successful build that leaves a referenced startup asset missing", async () => {
     const root = sourceCheckout("fixtures/build-missing-startup");
-    const indexPath = path.join(root, "dist", "control-ui", "index.html");
     state.runCommandWithTimeout.mockImplementationOnce(async () => {
-      setFile(indexPath, '<html><script src="./assets/main.js"></script></html>');
+      setFile(uiIndex(root), '<html><script src="./assets/main.js"></script></html>');
       return successfulBuild;
     });
 
-    await expect(ensureControlUiAssetsBuilt(undefined, { root })).resolves.toEqual({
-      ok: false,
-      built: true,
-      message: "Control UI build completed but startup asset assets/main.js is missing.",
-    });
+    await expectBuildFailure(
+      root,
+      "Control UI build completed but startup asset assets/main.js is missing.",
+      true,
+    );
   });
 
   it("resolves control-ui root from override file or directory", () => {
@@ -497,12 +424,10 @@ if (process.exitCode === 0) {
     const uiDir = path.join(pkgRoot, "dist", "control-ui");
     setFile(path.join(uiDir, "index.html"), "<html></html>\n");
 
-    // argv1Dir candidate: <argv1Dir>/control-ui
     expect(resolveControlUiRootSync({ argv1: path.join(pkgRoot, "dist", "bundle.js") })).toBe(
       uiDir,
     );
 
-    // moduleUrl candidate: <moduleDir>/control-ui
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
   });

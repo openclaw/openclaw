@@ -5,46 +5,25 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { fetchClawHubJson } from "./clawhub-client.js";
+import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js";
 import { fetchClawHubSkillVerification, searchClawHubSkills } from "./clawhub-skills.js";
 
-function createStalledBodyResponse(params: {
-  headers: HeadersInit;
-  firstChunk: Uint8Array;
-  status?: number;
-  statusText?: string;
-}): {
-  response: Response;
-  cancel: ReturnType<typeof vi.fn>;
-} {
+function search(options: ClawHubFetchOptions) {
+  return searchClawHubSkills({ query: "calendar", ...options });
+}
+
+function createStalledBodyResponse(firstChunk: string, init: ResponseInit = {}) {
   const cancel = vi.fn();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(params.firstChunk);
+      controller.enqueue(new TextEncoder().encode(firstChunk));
     },
-    cancel(reason) {
-      cancel(reason);
-    },
+    cancel,
   });
   return {
-    response: new Response(body, {
-      status: params.status ?? 200,
-      statusText: params.statusText,
-      headers: params.headers,
-    }),
+    response: new Response(body, init),
     cancel,
   };
-}
-
-function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
-  const prefixBytes = new TextEncoder().encode(prefix);
-  const suffixBytes = new TextEncoder().encode(suffix);
-  const buffer = new ArrayBuffer(prefixBytes.byteLength + 1 + suffixBytes.byteLength);
-  const bytes = new Uint8Array(buffer);
-  bytes.set(prefixBytes);
-  bytes[prefixBytes.byteLength] = 0xff;
-  bytes.set(suffixBytes, prefixBytes.byteLength + 1);
-  return buffer;
 }
 
 async function writeConfigFile(configPath: string, contents: string) {
@@ -71,22 +50,14 @@ describe("clawhub client", () => {
   async function searchAuthorizationHeader(): Promise<string | null> {
     let authorization: string | null = null;
     await expect(
-      searchClawHubSkills({
-        query: "calendar",
+      search({
         fetchImpl: async (_input, init) => {
           authorization = new Headers(init?.headers).get("Authorization");
-          return new Response(JSON.stringify({ results: [] }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
+          return Response.json({ results: [] });
         },
       }),
     ).resolves.toStrictEqual([]);
     return authorization;
-  }
-
-  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
-    await expect(searchAuthorizationHeader()).resolves.toBe(`Bearer ${expectedToken}`);
   }
 
   afterEach(() => {
@@ -130,7 +101,7 @@ describe("clawhub client", () => {
           try {
             await writeConfigFile(configPath, JSON.stringify({ token: "fixture-xdg-token" }));
 
-            await expectSearchUsesAuthToken("fixture-xdg-token");
+            await expect(searchAuthorizationHeader()).resolves.toBe("Bearer fixture-xdg-token");
           } finally {
             homedirSpy.mockRestore();
           }
@@ -142,8 +113,7 @@ describe("clawhub client", () => {
   it("uses a valid Retry-After hint when RateLimit-Reset is malformed", async () => {
     process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
     await expect(
-      searchClawHubSkills({
-        query: "calendar",
+      search({
         fetchImpl: async () =>
           new Response("Rate limit exceeded", {
             status: 429,
@@ -194,26 +164,30 @@ describe("clawhub client", () => {
 
   it("rejects malformed UTF-8 in otherwise valid ClawHub JSON", async () => {
     await expect(
-      searchClawHubSkills({
-        query: "calendar",
+      search({
         fetchImpl: async () =>
-          new Response(malformedUtf8('{"results":[{"slug":"', '"}]}'), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
+          new Response(
+            Buffer.concat([
+              Buffer.from('{"results":[{"slug":"'),
+              Buffer.from([0xff]),
+              Buffer.from('"}]}'),
+            ]),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
       }),
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
   it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
-    const stalled = createStalledBodyResponse({
-      firstChunk: new TextEncoder().encode('{"results":['),
+    const stalled = createStalledBodyResponse('{"results":[', {
       headers: { "content-type": "application/json" },
     });
 
     await expect(
-      searchClawHubSkills({
-        query: "calendar",
+      search({
         timeoutMs: 5,
         fetchImpl: async () => stalled.response,
       }),
@@ -226,12 +200,10 @@ describe("clawhub client", () => {
     const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
     await expect(
-      searchClawHubSkills({
-        query: "calendar",
+      search({
         timeoutMs: 5,
         fetchImpl: async () => {
-          const stalled = createStalledBodyResponse({
-            firstChunk: new TextEncoder().encode("partial error"),
+          const stalled = createStalledBodyResponse("partial error", {
             headers: { "content-type": "text/plain", "retry-after": "0" },
             status: 500,
             statusText: "Server Error",
@@ -248,46 +220,37 @@ describe("clawhub client", () => {
     expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
-  it.each([{ kind: "verification", maxMiB: 64, requestPath: "/api/v1/skills/weather/verify" }])(
-    "bounds oversized $kind JSON and cancels the stream",
-    async ({ kind, maxMiB, requestPath }) => {
-      const cancel = vi.fn();
-      const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
-      let emitted = 0;
-      const body = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (emitted >= (maxMiB + 1) * 2) {
-            controller.close();
-            return;
-          }
-          emitted += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          cancel();
-        },
-      });
-      const fetchImpl = async () =>
-        new Response(body, { status: 200, headers: { "content-type": "application/json" } });
-      const result =
-        kind === "verification"
-          ? fetchClawHubSkillVerification({ slug: "weather", fetchImpl })
-          : searchClawHubSkills({ query: "calendar", fetchImpl });
+  it("bounds oversized verification JSON and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= 65 * 2) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+      cancel,
+    });
+    const fetchImpl = async () =>
+      new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    const result = fetchClawHubSkillVerification({ slug: "weather", fetchImpl });
 
-      await expect(result).rejects.toThrow(
-        `ClawHub ${requestPath} response exceeded ${maxMiB * 1024 * 1024} bytes`,
-      );
-      // Cancel at the cap before allocating a contiguous copy of the oversized body.
-      expect(cancel).toHaveBeenCalledTimes(1);
-    },
-  );
+    await expect(result).rejects.toThrow(
+      `ClawHub /api/v1/skills/weather/verify response exceeded ${64 * 1024 * 1024} bytes`,
+    );
+    // Cancel at the cap before allocating a contiguous copy of the oversized body.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
 
   it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
     const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body
     let error: unknown;
     try {
-      await searchClawHubSkills({
-        query: "calendar",
+      await search({
         fetchImpl: async () =>
           new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
       });
