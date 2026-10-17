@@ -109,7 +109,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
-  readConfigSnapshotBeforeEngineSelection: mocks.readConfigFileSnapshot,
+  readConfigSnapshotBeforeEngineSelection: async () => ({
+    issues: [],
+    ...(await mocks.readConfigFileSnapshot()),
+  }),
 }));
 
 vi.mock("../cli/database-engine-selection.js", async (importOriginal) => ({
@@ -387,7 +390,7 @@ describe("setupWizardCommand", () => {
     expect(mocks.handleReset).not.toHaveBeenCalled();
   });
 
-  it("requires an explicit workspace for a full reset when config is unreadable", async () => {
+  it("refuses a full state reset when config is unreadable", async () => {
     const runtime = makeRuntime();
     // readConfigFileSnapshot always returns a sourceConfig object, so an
     // unreadable config is only recognizable through readError.
@@ -402,7 +405,7 @@ describe("setupWizardCommand", () => {
     await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+      "Cannot determine the source database from an unreadable config. Repair the config before resetting state, or use --reset-scope config to remove only the config file.",
     );
     expect(mocks.handleReset).not.toHaveBeenCalled();
   });

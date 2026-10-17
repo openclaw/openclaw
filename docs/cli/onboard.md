@@ -267,7 +267,11 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
-Session reset permanently removes stored SQLite history and its owned archive
+Stateful reset requires readable configuration so it can identify the source
+database. Repair an unreadable config first, or use `--reset-scope config` to
+remove only the config file without accessing the old database or credentials.
+
+Session reset permanently removes stored history from the configured database and its owned archive
 files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
 auth profiles and unrelated database state. Stop any running Gateway first;
 onboarding refuses session cleanup while another process owns the state directory.

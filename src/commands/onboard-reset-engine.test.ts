@@ -54,3 +54,32 @@ it.each([
     },
   );
 });
+
+it.each(["config+creds+sessions", "full", "config"] as const)(
+  "preserves unreadable source state during a %s reset",
+  async (scope) => {
+    resetDatabaseEngineSelectionForTest();
+    await withOpenClawTestState({ label: "onboard-reset-unreadable" }, async (state) => {
+      const malformed = '{ database: { engine: "postgres",';
+      await fs.writeFile(state.configPath, malformed);
+      vi.spyOn(interactive, "hasInteractiveOnboardingTty").mockReturnValue(true);
+      const cleanup = vi.spyOn(helpers, "handleReset").mockImplementation(async () => {
+        await fs.unlink(state.configPath);
+      });
+      const setup = vi.spyOn(guided, "runGuidedOnboarding").mockResolvedValue(undefined);
+      const runtime = createTestRuntime();
+      await setupWizardCommand({ reset: true, resetScope: scope }, runtime);
+      if (scope === "config") {
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(setup).toHaveBeenCalledOnce();
+      } else {
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(setup).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Cannot determine the source database"),
+        );
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(malformed);
+      }
+    });
+  },
+);

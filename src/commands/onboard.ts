@@ -7,6 +7,7 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayPort } from "../config/config.js";
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, isValidEnvSecretRefId } from "../config/types.secrets.js";
@@ -599,6 +600,16 @@ export async function setupWizardCommand(
         isolateEnv: false,
       });
       const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
+      if (
+        resetScope !== "config" &&
+        (isConfigReadFailure(snapshot) ||
+          snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID"))
+      ) {
+        reject(
+          "Cannot determine the source database from an unreadable config. Repair the config before resetting state, or use --reset-scope config to remove only the config file.",
+        );
+        return;
+      }
       const reset = async () => {
         const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
         // Every reset scope removes the config file. Validate setup against the
@@ -607,21 +618,6 @@ export async function setupWizardCommand(
         const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
         const configuredWorkspace: unknown =
           normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
-        if (
-          resetScope === "full" &&
-          normalizedOpts.workspace === undefined &&
-          snapshot.exists &&
-          !snapshot.valid &&
-          // A snapshot always carries a sourceConfig object (empty on failure), so
-          // only readError distinguishes "config could not be read" from "config
-          // parsed but configures no workspace", where the default is correct.
-          snapshot.readError !== undefined
-        ) {
-          reject(
-            "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
-          );
-          return false;
-        }
         if (
           resetScope === "full" &&
           configuredWorkspace !== undefined &&
