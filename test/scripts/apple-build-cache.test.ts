@@ -213,7 +213,7 @@ echo built >> "$FIXTURE_BUILDS"
     for (const [file, jobName, buildName] of [
       ["ios-periphery.yml", "scan", "Run Periphery"],
       ["shared-openclawkit-periphery.yml", "scan-ios", "Build iOS consumer index"],
-    ]) {
+    ] as const) {
       const steps = parse(readFileSync(`.github/workflows/${file}`, "utf8")).jobs[jobName].steps;
       const identify = steps.findIndex(
         (step: { name?: string }) => step.name === "Identify Watch RTC cache inputs",
