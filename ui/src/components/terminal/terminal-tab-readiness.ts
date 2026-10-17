@@ -1,4 +1,4 @@
-import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
+import type { TerminalPanelTab } from "./terminal-panel-tabs.tsx";
 
 export type TerminalTabReadinessState = {
   awaitFirstOutput: boolean;

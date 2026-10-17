@@ -8,7 +8,6 @@ import {
   cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnvBase,
   prepareConfigRuntimeEnvLoad,
-  type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
@@ -128,44 +127,14 @@ export function captureRuntimeConfigAsyncReader(options?: {
 export function captureRuntimeConfigAsyncReader(
   options: { assertCurrent?: () => void; capture?: boolean; skipPluginValidation?: boolean } = {},
 ): RuntimeConfigAsyncReader<OpenClawConfig | CapturedRuntimeConfigRead> {
-  const sourceEnv = process.env;
   const cwd = tryProcessCwd();
-  const readSelectors = () =>
-    new Map([...GATEWAY_CONFIG_SELECTION_ENV_KEYS].map((key) => [key, sourceEnv[key]]));
-  let selectors = readSelectors();
   const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
   // Legacy cold IO chooses the root config path before dotenv changes the environment.
   const io = createConfigIO({
     env: stage.env,
     ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
   });
-  const assertCurrent = () => {
-    options.assertCurrent?.();
-    if (
-      process.env !== sourceEnv ||
-      tryProcessCwd() !== cwd ||
-      [...selectors].some(([key, value]) => sourceEnv[key] !== value)
-    ) {
-      throw new Error("Runtime config source changed during asynchronous preparation");
-    }
-  };
-  const preparePublication = (prepared: PreparedConfigRuntimeEnv): PreparedConfigRuntimeEnv => ({
-    env: prepared.env,
-    publish: () => {
-      assertCurrent();
-      const previousSelectors = selectors;
-      const publication = prepared.publish();
-      // Only this canonical publication may advance the captured selector facts.
-      selectors = readSelectors();
-      return Object.assign(
-        () => {
-          publication();
-          selectors = previousSelectors;
-        },
-        { commit: () => publication.commit() },
-      );
-    },
-  });
+  const assertCurrent = () => options.assertCurrent?.();
   let pending: Promise<OpenClawConfig | CapturedRuntimeConfigRead> | undefined;
   const read = () => {
     assertCurrent();
@@ -180,10 +149,10 @@ export function captureRuntimeConfigAsyncReader(
         assertPinned();
         const config = await io.loadConfigAsync({ assertCurrent: assertPinned });
         assertPinned();
-        return { config, runtimeEnv: preparePublication(stage.prepare(config)) };
+        return { config, runtimeEnv: stage.prepare(config) };
       } catch (error) {
         assertPinned();
-        const publication = preparePublication(stage.prepareFailure()).publish();
+        const publication = stage.prepareFailure().publish();
         publication.commit();
         throw error;
       }

@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import "./onboarding-memory-import.ts";
+import "./onboarding-memory-import-solid.tsx";
 
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
