@@ -1,12 +1,17 @@
 // Program nodes media e2e tests cover media-oriented node commands through the full CLI program.
 import * as fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
 import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
+
+const camera = { id: "front", name: "Front Camera", position: "front" };
+const malformedDevices = [null, 7, "invalid", []];
+function cameraArgs(command: string, ...extra: string[]) {
+  return ["nodes", "camera", command, "--node", "ios-node", ...extra];
+}
 
 function getFirstRuntimeLogLine(): string {
   const first = runtime.log.mock.calls[0]?.[0];
@@ -51,11 +56,7 @@ function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
   });
 }
 
-function nodeInvokeCalls(): Array<{
-  method?: unknown;
-  params: Record<string, unknown>;
-  commandParams: Record<string, unknown>;
-}> {
+function nodeInvokeCalls() {
   return programGatewayCallMock.mock.calls
     .map((call) => call[0] as { method?: unknown; params?: Record<string, unknown> })
     .filter((call) => call.method === "node.invoke")
@@ -64,22 +65,6 @@ function nodeInvokeCalls(): Array<{
       const commandParams = (params.params ?? {}) as Record<string, unknown>;
       return { method: call.method, params, commandParams };
     });
-}
-
-function latestNodeInvokeCall() {
-  const call = nodeInvokeCalls().at(-1);
-  if (!call) {
-    throw new Error("expected node.invoke gateway call");
-  }
-  return call;
-}
-
-function expectUuidString(value: unknown) {
-  expect(value).toEqual(
-    expect.stringMatching(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    ),
-  );
 }
 
 describe("cli program (nodes media)", () => {
@@ -97,59 +82,31 @@ describe("cli program (nodes media)", () => {
     await program.parseAsync(argv, { from: "user" });
   }
 
-  async function expectCameraSnapParseFailure(args: string[], expectedError: RegExp) {
-    mockNodeGateway();
-
-    const parseProgram = new Command();
-    parseProgram.exitOverride();
-    await registerNodesCli(parseProgram);
-    runtime.error.mockClear();
-
-    await expect(parseProgram.parseAsync(args, { from: "user" })).rejects.toThrow(/exit/i);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringMatching(expectedError));
-  }
-
-  async function runAndExpectUrlPayloadMediaFile(params: {
-    command: "camera.snap" | "camera.clip";
-    payload: Record<string, unknown>;
-    argv: string[];
-    expectedPathPattern: RegExp;
-  }) {
-    mockNodeGateway(params.command, params.payload);
-    await runNodesCommand(params.argv);
-    await expectLoggedSingleMediaFile({
-      expectedPathPattern: params.expectedPathPattern,
-      expectedContent: "url-content",
-    });
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("keeps valid cameras when a node also reports malformed device records", async () => {
-    const camera = { id: "front", name: "Front Camera", position: "front" };
-    mockNodeGateway("camera.list", { devices: [null, 7, "invalid", [], camera] });
+    mockNodeGateway("camera.list", { devices: [...malformedDevices, camera] });
 
-    await runNodesCommand(["nodes", "camera", "list", "--node", "ios-node"]);
+    await runNodesCommand(cameraArgs("list"));
 
     expect(runtime.log.mock.calls.flat().join("\n")).toContain("Front Camera");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("omits malformed camera device records from JSON output", async () => {
-    const camera = { id: "front", name: "Front Camera", position: "front" };
-    mockNodeGateway("camera.list", { devices: [null, 7, "invalid", [], camera] });
+    mockNodeGateway("camera.list", { devices: [...malformedDevices, camera] });
 
-    await runNodesCommand(["nodes", "camera", "list", "--node", "ios-node", "--json"]);
+    await runNodesCommand(cameraArgs("list", "--json"));
 
     expect(runtime.writeJson).toHaveBeenCalledWith([camera]);
   });
 
   it("reports no cameras when every returned device record is malformed", async () => {
-    mockNodeGateway("camera.list", { devices: [null, 7, "invalid", []] });
+    mockNodeGateway("camera.list", { devices: malformedDevices });
 
-    await runNodesCommand(["nodes", "camera", "list", "--node", "ios-node"]);
+    await runNodesCommand(cameraArgs("list"));
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No cameras reported."));
   });
@@ -157,7 +114,7 @@ describe("cli program (nodes media)", () => {
   it("runs one default snap and two explicitly requested facing snaps", async () => {
     mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
-    await runNodesCommand(["nodes", "camera", "snap", "--node", "ios-node"]);
+    await runNodesCommand(cameraArgs("snap"));
 
     const defaultInvokeCalls = nodeInvokeCalls();
     expect(defaultInvokeCalls).toHaveLength(1);
@@ -167,7 +124,7 @@ describe("cli program (nodes media)", () => {
     });
 
     programGatewayCallMock.mockClear();
-    await runNodesCommand(["nodes", "camera", "snap", "--node", "ios-node", "--facing", "both"]);
+    await runNodesCommand(cameraArgs("snap", "--facing", "both"));
 
     const invokeCalls = nodeInvokeCalls();
     const facings = invokeCalls
@@ -176,30 +133,16 @@ describe("cli program (nodes media)", () => {
       .toSorted((a, b) => a.localeCompare(b));
     expect(facings).toEqual(["back", "front"]);
 
-    const out = getFirstRuntimeLogLine();
-    const mediaPaths: string[] = [];
-    for (const line of out.split("\n")) {
-      const mediaPath = line.trim();
-      if (!mediaPath) {
-        continue;
-      }
-      if (mediaPath.length > 0) {
-        mediaPaths.push(mediaPath);
-      }
-    }
+    const mediaPaths = getFirstRuntimeLogLine()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
     expect(mediaPaths).toHaveLength(2);
-    expect(mediaPaths[0]).toContain("openclaw-camera-snap-");
-    expect(mediaPaths[1]).toContain("openclaw-camera-snap-");
-
     try {
-      // Content bytes are covered by single-output camera/file tests; here we
-      // only verify dual snapshot behavior and that both paths were written.
-      expect(
-        (await fs.stat(expectDefined(mediaPaths[0], "mediaPaths[0] test invariant"))).isFile(),
-      ).toBe(true);
-      expect(
-        (await fs.stat(expectDefined(mediaPaths[1], "mediaPaths[1] test invariant"))).isFile(),
-      ).toBe(true);
+      for (const mediaPath of mediaPaths) {
+        expect(mediaPath).toContain("openclaw-camera-snap-");
+        expect((await fs.stat(mediaPath)).isFile()).toBe(true);
+      }
     } finally {
       await Promise.all(mediaPaths.map((p) => fs.unlink(p).catch(() => {})));
     }
@@ -213,45 +156,42 @@ describe("cli program (nodes media)", () => {
       hasAudio: false,
     });
 
-    await runNodesCommand([
-      "nodes",
-      "camera",
-      "clip",
-      "--node",
-      "ios-node",
-      "--duration",
-      "3000",
-      "--no-audio",
-      "--device-id",
-      "cam-123",
-    ]);
+    await runNodesCommand(
+      cameraArgs("clip", "--duration", "3000", "--no-audio", "--device-id", "cam-123"),
+    );
 
-    const invoke = latestNodeInvokeCall();
-    expect(invoke.method).toBe("node.invoke");
-    expect(invoke.params.nodeId).toBe("ios-node");
-    expect(invoke.params.command).toBe("camera.clip");
-    expect(invoke.params.timeoutMs).toBe(90000);
-    expectUuidString(invoke.params.idempotencyKey);
-    expect(invoke.commandParams.includeAudio).toBe(false);
-    expect(invoke.commandParams.deviceId).toBe("cam-123");
+    const invoke = nodeInvokeCalls().at(-1);
+    expect(invoke).toMatchObject({
+      method: "node.invoke",
+      params: {
+        nodeId: "ios-node",
+        command: "camera.clip",
+        timeoutMs: 90000,
+      },
+      commandParams: { includeAudio: false, deviceId: "cam-123" },
+    });
+    expect(invoke?.params.idempotencyKey).toEqual(
+      expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    );
 
     await expectLoggedSingleMediaFile();
   });
 
   it("fails nodes camera snap when --facing both and --device-id are combined", async () => {
-    await expectCameraSnapParseFailure(
-      [
-        "nodes",
-        "camera",
-        "snap",
-        "--node",
-        "ios-node",
-        "--facing",
-        "both",
-        "--device-id",
-        "cam-123",
-      ],
-      /facing=both is not allowed when --device-id is set/i,
+    mockNodeGateway();
+    const parseProgram = new Command();
+    parseProgram.exitOverride();
+    await registerNodesCli(parseProgram);
+    runtime.error.mockClear();
+    await expect(
+      parseProgram.parseAsync(cameraArgs("snap", "--facing", "both", "--device-id", "cam-123"), {
+        from: "user",
+      }),
+    ).rejects.toThrow(/exit/i);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/facing=both is not allowed when --device-id is set/i),
     );
   });
 
@@ -283,7 +223,7 @@ describe("cli program (nodes media)", () => {
           width: 640,
           height: 480,
         },
-        argv: ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "front"],
+        argv: cameraArgs("snap", "--facing", "front"),
         expectedPathPattern: /openclaw-camera-snap-front-.*\.jpg$/,
       },
       {
@@ -295,15 +235,15 @@ describe("cli program (nodes media)", () => {
           durationMs: 5000,
           hasAudio: true,
         },
-        argv: ["nodes", "camera", "clip", "--node", "ios-node", "--duration", "5000"],
+        argv: cameraArgs("clip", "--duration", "5000"),
         expectedPathPattern: /openclaw-camera-clip-front-.*\.mp4$/,
       },
     ])("$label", async ({ command, payload, argv, expectedPathPattern }) => {
-      await runAndExpectUrlPayloadMediaFile({
-        command,
-        payload,
-        argv,
+      mockNodeGateway(command, payload);
+      await runNodesCommand(argv);
+      await expectLoggedSingleMediaFile({
         expectedPathPattern,
+        expectedContent: "url-content",
       });
     });
   });

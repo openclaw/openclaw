@@ -14,11 +14,49 @@ type GatewayCallRequest = {
   clientName?: string;
   method?: string;
   mode?: string;
-  scopes?: unknown;
+  scopes?: string[];
   useStoredDeviceAuth?: boolean;
   requiredStoredDeviceAuthScopes?: unknown;
   requireLocalBackendSharedAuth?: boolean;
 };
+
+const pairingScopes = ["operator.read", "operator.pairing"];
+function mockGateway(reply: (request: GatewayCallRequest) => unknown) {
+  programGatewayCallMock.mockImplementation(async (...args: unknown[]) =>
+    reply((args[0] ?? {}) as GatewayCallRequest),
+  );
+}
+function nodeResponse(nodeId: string, displayName: string, extra = {}) {
+  return { nodes: [{ nodeId, displayName, paired: true, connected: false, ...extra }] };
+}
+function gatewayError(message: string, name: string, extra = {}) {
+  return Object.assign(new Error(message), { name, ...extra });
+}
+function requestError(message: string, code: string, detailsCode: string, extra = {}) {
+  return gatewayError(message, "GatewayClientRequestError", {
+    gatewayCode: code,
+    details: { code: detailsCode, ...extra },
+  });
+}
+function expectBackendRequest(request: GatewayCallRequest | undefined) {
+  expect(request).toMatchObject({
+    scopes: pairingScopes,
+    clientName: "gateway-client",
+    mode: "backend",
+    requireLocalBackendSharedAuth: true,
+  });
+}
+function pushResult(overrides: Partial<PushTestResult> = {}): PushTestResult {
+  return {
+    ok: true,
+    status: 200,
+    tokenSuffix: "1234abcd",
+    topic: "ai.openclaw.ios",
+    environment: "sandbox",
+    transport: "direct",
+    ...overrides,
+  };
+}
 
 describe("cli program (nodes diagnostics auth)", () => {
   let program: Command;
@@ -45,36 +83,21 @@ describe("cli program (nodes diagnostics auth)", () => {
   });
 
   it("falls back to read-only node status when pairing diagnostics are unavailable", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        scopes?: string[];
-        useStoredDeviceAuth?: boolean;
-      };
+    mockGateway((opts) => {
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("stored device auth unavailable"), {
-          name: "GatewayCredentialsRequiredError",
-        });
+        throw gatewayError("stored device auth unavailable", "GatewayCredentialsRequiredError");
       }
       if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
-        throw Object.assign(new Error("unauthorized: pairing scope unavailable"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-          details: { code: "AUTH_SCOPE_MISMATCH" },
-        });
+        throw requestError(
+          "unauthorized: pairing scope unavailable",
+          "INVALID_REQUEST",
+          "AUTH_SCOPE_MISMATCH",
+        );
       }
       if (opts.method === "node.list") {
         return {
           ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "read-only-node",
-              displayName: "Read Only Node",
-              approvalState: "approved",
-              paired: true,
-              connected: false,
-            },
-          ],
+          ...nodeResponse("read-only-node", "Read Only Node", { approvalState: "approved" }),
         };
       }
       return { ok: true };
@@ -85,46 +108,28 @@ describe("cli program (nodes diagnostics auth)", () => {
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
     expect(requests).toHaveLength(3);
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual([
-      "operator.read",
-      "operator.pairing",
-    ]);
-    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.clientName).toBe("gateway-client");
-    expect(requests[1]?.mode).toBe("backend");
-    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
+    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual(pairingScopes);
+    expectBackendRequest(requests[1]);
     expect(requests[2]?.useStoredDeviceAuth).toBeUndefined();
     expect(requests[2]?.scopes).toBeUndefined();
     expect(getRuntimeOutput()).toContain("Read Only Node");
   });
 
   it("keeps remote explicit diagnostic credentials on the read-only path", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        requireLocalBackendSharedAuth?: boolean;
-        useStoredDeviceAuth?: boolean;
-      };
+    mockGateway((opts) => {
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("stored device auth disabled for explicit credentials"), {
-          name: "GatewayStoredDeviceAuthUnavailableError",
-        });
+        throw gatewayError(
+          "stored device auth disabled for explicit credentials",
+          "GatewayStoredDeviceAuthUnavailableError",
+        );
       }
       if (opts.method === "node.list" && opts.requireLocalBackendSharedAuth) {
-        throw Object.assign(new Error("local backend shared auth unavailable for remote target"), {
-          name: "GatewayLocalBackendSharedAuthUnavailableError",
-        });
+        throw gatewayError(
+          "local backend shared auth unavailable for remote target",
+          "GatewayLocalBackendSharedAuthUnavailableError",
+        );
       }
-      return {
-        nodes: [
-          {
-            nodeId: "remote-read-only-node",
-            displayName: "Remote Read Only Node",
-            paired: true,
-            connected: false,
-          },
-        ],
-      };
+      return nodeResponse("remote-read-only-node", "Remote Read Only Node");
     });
 
     await runProgram([
@@ -139,14 +144,8 @@ describe("cli program (nodes diagnostics auth)", () => {
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
     expect(requests).toHaveLength(3);
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual([
-      "operator.read",
-      "operator.pairing",
-    ]);
-    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.clientName).toBe("gateway-client");
-    expect(requests[1]?.mode).toBe("backend");
-    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
+    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual(pairingScopes);
+    expectBackendRequest(requests[1]);
     expect(requests[2]?.scopes).toBeUndefined();
     expect(getRuntimeOutput()).toContain("Remote Read Only Node");
   });
@@ -176,11 +175,7 @@ describe("cli program (nodes diagnostics auth)", () => {
 
   it.each([
     new Error("connect ECONNREFUSED 127.0.0.1:4242"),
-    Object.assign(new Error("unauthorized: token mismatch"), {
-      name: "GatewayClientRequestError",
-      gatewayCode: "INVALID_REQUEST",
-      details: { code: "AUTH_TOKEN_MISMATCH" },
-    }),
+    requestError("unauthorized: token mismatch", "INVALID_REQUEST", "AUTH_TOKEN_MISMATCH"),
   ])("keeps non-credential node failures distinct: $message", async (error) => {
     programGatewayCallMock.mockRejectedValue(error);
 
@@ -199,26 +194,16 @@ describe("cli program (nodes diagnostics auth)", () => {
   });
 
   it("falls back to configured auth after stored device auth is rejected", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string; useStoredDeviceAuth?: boolean };
+    mockGateway((opts) => {
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("unauthorized: device token mismatch"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-          details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
-        });
+        throw requestError(
+          "unauthorized: device token mismatch",
+          "INVALID_REQUEST",
+          "AUTH_DEVICE_TOKEN_MISMATCH",
+        );
       }
       if (opts.method === "node.list") {
-        return {
-          nodes: [
-            {
-              nodeId: "configured-auth-node",
-              displayName: "Configured Auth Node",
-              paired: true,
-              connected: false,
-            },
-          ],
-        };
+        return nodeResponse("configured-auth-node", "Configured Auth Node");
       }
       return { ok: true };
     });
@@ -233,34 +218,15 @@ describe("cli program (nodes diagnostics auth)", () => {
   });
 
   it("falls back to configured auth when stored device auth lacks read scope", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        scopes?: string[];
-        useStoredDeviceAuth?: boolean;
-      };
+    mockGateway((opts) => {
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("permission denied"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "FORBIDDEN",
-          details: {
-            code: "MISSING_SCOPE",
-            missingScope: "operator.read",
-            requiredScopes: ["operator.read"],
-          },
+        throw requestError("permission denied", "FORBIDDEN", "MISSING_SCOPE", {
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
         });
       }
       if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
-        return {
-          nodes: [
-            {
-              nodeId: "shared-auth-node",
-              displayName: "Shared Auth Node",
-              paired: true,
-              connected: false,
-            },
-          ],
-        };
+        return nodeResponse("shared-auth-node", "Shared Auth Node");
       }
       return { nodes: [] };
     });
@@ -269,10 +235,7 @@ describe("cli program (nodes diagnostics auth)", () => {
 
     const requests = gatewayRequests().filter((request) => request.method === "node.list");
     expect(requests).toHaveLength(2);
-    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.clientName).toBe("gateway-client");
-    expect(requests[1]?.mode).toBe("backend");
-    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
+    expectBackendRequest(requests[1]);
     expect(getRuntimeOutput()).toContain("Shared Auth Node");
   });
 
@@ -280,30 +243,19 @@ describe("cli program (nodes diagnostics auth)", () => {
     { label: "unfiltered", argv: ["nodes", "list"] },
     { label: "filtered", argv: ["nodes", "list", "--connected"] },
   ])("reads the $label nodes list through node diagnostics auth", async ({ argv }) => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        requireLocalBackendSharedAuth?: boolean;
-        useStoredDeviceAuth?: boolean;
-      };
+    mockGateway((opts) => {
       if (opts.method === "node.pair.list") {
         return { pending: [], paired: [{ nodeId: "live-node", displayName: "Stale paired name" }] };
       }
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("stored device auth unavailable"), {
-          name: "GatewayCredentialsRequiredError",
-        });
+        throw gatewayError("stored device auth unavailable", "GatewayCredentialsRequiredError");
       }
       if (opts.method === "node.list" && opts.requireLocalBackendSharedAuth) {
         return { nodes: [{ nodeId: "live-node", displayName: "Live Node", connected: true }] };
       }
       if (opts.method === "node.list") {
         // A plain CLI read is capped by the operator device pairing scopes.
-        throw Object.assign(new Error("scope upgrade pending approval"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "NOT_PAIRED",
-          details: { code: "PAIRING_REQUIRED" },
-        });
+        throw requestError("scope upgrade pending approval", "NOT_PAIRED", "PAIRING_REQUIRED");
       }
       return { ok: true };
     });
@@ -324,8 +276,7 @@ describe("cli program (nodes push)", () => {
   let previousArgv: string[];
 
   function mockPushResult(result: PushTestResult) {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
+    mockGateway((opts) => {
       if (opts.method === "node.list") {
         return createIosNodeListResponse();
       }
@@ -369,14 +320,7 @@ describe("cli program (nodes push)", () => {
   ])(
     "rejects environment $environment before lookup (JSON: $json)",
     async ({ environment, json }) => {
-      mockPushResult({
-        ok: true,
-        status: 200,
-        tokenSuffix: "1234abcd",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-        transport: "direct",
-      });
+      mockPushResult(pushResult());
       const invalidEnvironment = "invalid --environment (use sandbox|production)";
       await expect(
         runPush(["--environment", environment, ...(json ? ["--json"] : [])]),
@@ -396,15 +340,7 @@ describe("cli program (nodes push)", () => {
   );
 
   it("sets a failing exit code after rendering an APNs push failure", async () => {
-    mockPushResult({
-      ok: false,
-      status: 400,
-      reason: "BadDeviceToken",
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      transport: "direct",
-    });
+    mockPushResult(pushResult({ ok: false, status: 400, reason: "BadDeviceToken" }));
 
     await runPush();
 
@@ -415,15 +351,13 @@ describe("cli program (nodes push)", () => {
   });
 
   it("preserves parseable JSON before setting a failing APNs push exit code", async () => {
-    const result: PushTestResult = {
+    const result = pushResult({
       ok: false,
       status: 410,
       reason: "Unregistered",
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
       environment: "production",
       transport: "relay",
-    };
+    });
     mockPushResult(result);
 
     await runPush(["--json"]);
@@ -457,15 +391,7 @@ describe("cli program (nodes push)", () => {
       title = "OpenClaw",
       body = "Push test for node ios-node",
     }) => {
-      const result: PushTestResult = {
-        ok: true,
-        status: 200,
-        apnsId: "apns-id",
-        tokenSuffix: "1234abcd",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-        transport: "direct",
-      };
+      const result = pushResult({ apnsId: "apns-id" });
       mockPushResult(result);
 
       await runPush(extraArgs);

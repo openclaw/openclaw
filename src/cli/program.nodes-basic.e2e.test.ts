@@ -11,6 +11,11 @@ import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
+function connectedNode(nodeId: string, displayName: string, details: Record<string, unknown>) {
+  return { nodeId, displayName, paired: true, connected: true, ...details };
+}
+const statusColumns = ["Detail", "Status", "Caps", "camera", "canvas"];
+
 type GatewayCallRequest = {
   clientName?: string;
   method?: string;
@@ -25,11 +30,24 @@ type GatewayCallRequest = {
 describe("cli program (nodes basics)", () => {
   let program: Command;
 
-  async function createProgram() {
-    const next = new Command();
-    next.exitOverride();
-    await registerNodesCli(next);
-    return next;
+  function mockGateway(responses: Record<string, unknown>) {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const { method = "" } = (args[0] ?? {}) as GatewayCallRequest;
+      const response = responses[method] ?? { ok: true };
+      if (response instanceof Error) {
+        throw response;
+      }
+      return response;
+    });
+  }
+
+  function expectOutput(output: string, included: string[], excluded: string[] = []) {
+    for (const value of included) {
+      expect(output).toContain(value);
+    }
+    for (const value of excluded) {
+      expect(output).not.toContain(value);
+    }
   }
 
   async function runProgram(argv: string[]) {
@@ -63,79 +81,76 @@ describe("cli program (nodes basics)", () => {
   }
 
   function mockGatewayWithIosNodeListAnd(method: "node.describe" | "node.invoke", result: unknown) {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.list") {
-        return createIosNodeListResponse();
-      }
-      if (opts.method === method) {
-        return result;
-      }
-      return { ok: true };
+    mockGateway({ "node.list": createIosNodeListResponse(), [method]: result });
+  }
+
+  function mockApproval(pendingDetails: Record<string, unknown>) {
+    mockGateway({
+      "node.pair.list": {
+        pending: [{ requestId: "r1", nodeId: "n1", ts: Date.now(), ...pendingDetails }],
+        paired: [],
+      },
+      "node.pair.approve": { requestId: "r1", node: { nodeId: "n1", token: "t1" } },
     });
   }
 
   beforeEach(async () => {
     vi.clearAllMocks();
     ({ registerNodesCli } = await import("./nodes-cli.js"));
-    program = await createProgram();
+    program = new Command();
+    program.exitOverride();
+    await registerNodesCli(program);
   });
 
   it("runs nodes list with the effective paired node view while preserving paired metadata", async () => {
     const now = Date.now();
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [{ requestId: "r1", nodeId: "pending-node", ts: now - 10_000 }],
-          paired: [
-            {
-              nodeId: "paired-store",
-              displayName: "Stale paired name",
-              remoteIp: "10.0.0.1",
-              token: "paired-token",
-              lastConnectedAtMs: now - 5_000,
-            },
-            {
-              nodeId: "pair-only",
-              displayName: "Pair Only",
-              token: "pair-only-token",
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.list") {
-        return {
-          nodes: [
-            {
-              nodeId: "paired-store",
-              displayName: "Effective paired name",
-              remoteIp: "10.0.0.2",
-              connected: true,
-              connectedAtMs: now - 1_000,
-            },
-            {
-              nodeId: "catalog-only",
-              displayName: "Catalog Only",
-              remoteIp: "10.0.0.3",
-              paired: true,
-              connected: false,
-            },
-            {
-              nodeId: "effective-only-unknown",
-              displayName: "Effective Only Unknown",
-              connected: true,
-            },
-            {
-              nodeId: "unpaired-live",
-              displayName: "Unpaired Live",
-              paired: false,
-              connected: true,
-            },
-          ],
-        };
-      }
-      return { ok: true };
+    mockGateway({
+      "node.pair.list": {
+        pending: [{ requestId: "r1", nodeId: "pending-node", ts: now - 10_000 }],
+        paired: [
+          {
+            nodeId: "paired-store",
+            displayName: "Stale paired name",
+            remoteIp: "10.0.0.1",
+            token: "paired-token",
+            lastConnectedAtMs: now - 5_000,
+          },
+          {
+            nodeId: "pair-only",
+            displayName: "Pair Only",
+            token: "pair-only-token",
+          },
+        ],
+      },
+      "node.list": {
+        nodes: [
+          {
+            nodeId: "paired-store",
+            displayName: "Effective paired name",
+            remoteIp: "10.0.0.2",
+            connected: true,
+            connectedAtMs: now - 1_000,
+          },
+          {
+            nodeId: "catalog-only",
+            displayName: "Catalog Only",
+            remoteIp: "10.0.0.3",
+            paired: true,
+            connected: false,
+          },
+          {
+            nodeId: "effective-only-unknown",
+            displayName: "Effective Only Unknown",
+            connected: true,
+          },
+          {
+            nodeId: "unpaired-live",
+            displayName: "Unpaired Live",
+            paired: false,
+            connected: true,
+          },
+        ],
+      },
     });
 
     await runProgram(["nodes", "list", "--json"]);
@@ -147,88 +162,57 @@ describe("cli program (nodes basics)", () => {
       paired?: Array<Record<string, unknown>>;
     };
     expect(json.pending).toEqual([{ requestId: "r1", nodeId: "pending-node", ts: now - 10_000 }]);
-    expect(
-      json.paired?.map((node) => ({
-        nodeId: node.nodeId,
-        displayName: node.displayName,
-        remoteIp: node.remoteIp,
-        lastConnectedAtMs: node.lastConnectedAtMs,
-        connected: node.connected,
-        paired: node.paired,
-      })),
-    ).toEqual([
-      {
-        nodeId: "paired-store",
-        displayName: "Effective paired name",
-        remoteIp: "10.0.0.2",
-        lastConnectedAtMs: now - 5_000,
-        connected: true,
-        paired: undefined,
-      },
-      {
-        nodeId: "catalog-only",
-        displayName: "Catalog Only",
-        remoteIp: "10.0.0.3",
-        lastConnectedAtMs: undefined,
-        connected: false,
-        paired: true,
-      },
-      {
-        nodeId: "pair-only",
-        displayName: "Pair Only",
-        remoteIp: undefined,
-        lastConnectedAtMs: undefined,
-        connected: undefined,
-        paired: undefined,
-      },
+    const fields = [
+      "nodeId",
+      "displayName",
+      "remoteIp",
+      "lastConnectedAtMs",
+      "connected",
+      "paired",
+    ];
+    expect(json.paired?.map((node) => fields.map((field) => node[field]))).toEqual([
+      ["paired-store", "Effective paired name", "10.0.0.2", now - 5_000, true, undefined],
+      ["catalog-only", "Catalog Only", "10.0.0.3", undefined, false, true],
+      ["pair-only", "Pair Only", undefined, undefined, undefined, undefined],
     ]);
-    expect(JSON.stringify(json)).not.toContain("paired-token");
-    expect(JSON.stringify(json)).not.toContain("pair-only-token");
+    expectOutput(JSON.stringify(json), [], ["paired-token", "pair-only-token"]);
     const output = getRuntimeOutput();
     expect(output).toMatch(/^\{/);
-    expect(output).not.toContain("Pending: 1 · Paired: 3");
-    expect(output).not.toContain("Effective Only Unknown");
-    expect(output).not.toContain("unpaired-live");
+    expectOutput(output, [], ["Pending: 1 · Paired: 3", "Effective Only Unknown", "unpaired-live"]);
   });
 
   it("sanitizes untrusted nodes list table fields while preserving JSON values", async () => {
     const now = Date.now();
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [
-            {
-              requestId: "request\u001b[2K-1",
-              nodeId: "pending-node",
-              displayName: "Pending\u001b[1A\nNode",
-              remoteIp: "10.0.0.4\rrewritten",
-              ts: now - 1_000,
-            },
-          ],
-          paired: [
-            {
-              nodeId: "paired-node",
-              displayName: "Paired\u001b[2K\nNode",
-              remoteIp: "10.0.0.5\rrewritten",
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.list") {
-        throw new Error("older gateway");
-      }
-      return { ok: true };
+    mockGateway({
+      "node.pair.list": {
+        pending: [
+          {
+            requestId: "request\u001b[2K-1",
+            nodeId: "pending-node",
+            displayName: "Pending\u001b[1A\nNode",
+            remoteIp: "10.0.0.4\rrewritten",
+            ts: now - 1_000,
+          },
+        ],
+        paired: [
+          {
+            nodeId: "paired-node",
+            displayName: "Paired\u001b[2K\nNode",
+            remoteIp: "10.0.0.5\rrewritten",
+          },
+        ],
+      },
+      "node.list": new Error("older gateway"),
     });
 
     await runProgram(["nodes", "list"]);
 
     const output = getRuntimeOutput();
-    expect(output).not.toContain("\u001b");
-    expect(output).not.toContain("[2K");
-    expect(output).toContain("Pending\\nNode");
-    expect(output).toContain("Paired\\nNode");
-    expect(output).toContain("10.0.0.5\\rrewritten");
+    expectOutput(
+      output,
+      ["Pending\\nNode", "Paired\\nNode", "10.0.0.5\\rrewritten"],
+      ["\u001b", "[2K"],
+    );
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("live node view unavailable"),
     );
@@ -241,45 +225,43 @@ describe("cli program (nodes basics)", () => {
       pending?: Array<Record<string, unknown>>;
       paired?: Array<Record<string, unknown>>;
     };
-    expect(json.pending?.[0]?.requestId).toBe("request\u001b[2K-1");
-    expect(json.pending?.[0]?.displayName).toBe("Pending\u001b[1A\nNode");
-    expect(json.paired?.[0]?.nodeId).toBe("paired-node");
-    expect(json.paired?.[0]?.displayName).toBe("Paired\u001b[2K\nNode");
-    expect(json.paired?.[0]?.remoteIp).toBe("10.0.0.5\rrewritten");
+    expect(json.pending?.[0]).toMatchObject({
+      requestId: "request\u001b[2K-1",
+      displayName: "Pending\u001b[1A\nNode",
+    });
+    expect(json.paired?.[0]).toMatchObject({
+      nodeId: "paired-node",
+      displayName: "Paired\u001b[2K\nNode",
+      remoteIp: "10.0.0.5\rrewritten",
+    });
   });
 
   it("runs nodes list --connected and filters to connected nodes", async () => {
     const now = Date.now();
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [
-            {
-              nodeId: "n1",
-              displayName: "One",
-              remoteIp: "10.0.0.1",
-              lastConnectedAtMs: now - 1_000,
-            },
-            {
-              nodeId: "n2",
-              displayName: "Two",
-              remoteIp: "10.0.0.2",
-              lastConnectedAtMs: now - 1_000,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.list") {
-        return {
-          nodes: [
-            { nodeId: "n1", connected: true },
-            { nodeId: "n2", connected: false },
-          ],
-        };
-      }
-      return { ok: true };
+    mockGateway({
+      "node.pair.list": {
+        pending: [],
+        paired: [
+          {
+            nodeId: "n1",
+            displayName: "One",
+            remoteIp: "10.0.0.1",
+            lastConnectedAtMs: now - 1_000,
+          },
+          {
+            nodeId: "n2",
+            displayName: "Two",
+            remoteIp: "10.0.0.2",
+            lastConnectedAtMs: now - 1_000,
+          },
+        ],
+      },
+      "node.list": {
+        nodes: [
+          { nodeId: "n1", connected: true },
+          { nodeId: "n2", connected: false },
+        ],
+      },
     });
     await runProgram(["nodes", "list", "--connected"]);
 
@@ -372,72 +354,53 @@ describe("cli program (nodes basics)", () => {
   it.each([
     {
       label: "paired node details",
-      node: {
-        nodeId: "ios-node",
-        displayName: "iOS Node",
+      node: connectedNode("ios-node", "iOS Node", {
         remoteIp: "192.168.0.88",
         deviceFamily: "iPad",
         modelIdentifier: "iPad16,6",
         caps: ["canvas", "camera"],
-        paired: true,
-        connected: true,
-      },
+      }),
       expectedOutput: [
         "Known: 1 · Paired: 1 · Connected: 1",
         "iOS Node",
-        "Detail",
+        ...statusColumns,
         "device: iPad",
         "hw: iPad16,6",
-        "Status",
         "paired",
-        "Caps",
-        "camera",
-        "canvas",
       ],
     },
     {
       label: "unpaired node details",
-      node: {
-        nodeId: "android-node",
-        displayName: "Peter's Tab S10 Ultra",
+      node: connectedNode("android-node", "Peter's Tab S10 Ultra", {
         remoteIp: "192.168.0.99",
         deviceFamily: "Android",
         modelIdentifier: "samsung SM-X926B",
         caps: ["canvas", "camera"],
         paired: false,
-        connected: true,
-      },
+      }),
       expectedOutput: [
         "Known: 1 · Paired: 0 · Connected: 1",
         "Peter's Tab",
         "S10 Ultra",
-        "Detail",
+        ...statusColumns,
         "device: Android",
         "hw:",
         "samsung",
         "SM-X926B",
-        "Status",
         "unpaired",
         "connected",
-        "Caps",
-        "camera",
-        "canvas",
       ],
     },
     {
       label: "pending first node approval",
-      node: {
-        nodeId: "pending-node",
-        displayName: "Pending Node",
+      node: connectedNode("pending-node", "Pending Node", {
         caps: [],
         commands: [],
         approvalState: "pending-approval",
         pendingRequestId: "request-approval",
         pendingDeclaredCaps: ["system"],
         pendingDeclaredCommands: ["system.run"],
-        paired: true,
-        connected: true,
-      },
+      }),
       expectedOutput: [
         "Pending Node",
         "approval pending",
@@ -447,19 +410,15 @@ describe("cli program (nodes basics)", () => {
     },
     {
       label: "pending node reapproval",
-      node: {
-        nodeId: "pending-reapproval-node",
-        displayName: "Pending Reapproval Node",
+      node: connectedNode("pending-reapproval-node", "Pending Reapproval Node", {
         caps: ["camera"],
         commands: ["camera.snap"],
         approvalState: "pending-reapproval",
         pendingRequestId: "request-reapproval",
         pendingDeclaredCaps: ["camera", "system"],
         pendingDeclaredCommands: ["camera.snap", "system.run"],
-        paired: true,
-        connected: true,
         connectedAtMs: Date.now() - 60_000,
-      },
+      }),
       expectedOutput: [
         "Pending Reapproval Node",
         "reapproval pending",
@@ -505,14 +464,10 @@ describe("cli program (nodes basics)", () => {
     programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [
-        {
-          nodeId: `${fixture.platform}-node`,
-          displayName: `${fixture.platform} node`,
+        connectedNode(`${fixture.platform}-node`, `${fixture.platform} node`, {
           platform: fixture.platform,
           pathEnv: fixture.pathEnv,
-          paired: true,
-          connected: true,
-        },
+        }),
       ],
     });
 
@@ -546,26 +501,30 @@ describe("cli program (nodes basics)", () => {
     const describeRequest = gatewayRequests().find(
       (candidate) => candidate.method === "node.describe",
     );
-    expect(describeRequest?.clientName).toBe("cli");
-    expect(describeRequest?.mode).toBe("cli");
-    expect(describeRequest?.useStoredDeviceAuth).toBe(true);
+    expect(describeRequest).toMatchObject({
+      clientName: "cli",
+      mode: "cli",
+      useStoredDeviceAuth: true,
+    });
 
     const out = getRuntimeOutput();
-    expect(out).toContain("Commands");
-    expect(out).toContain("camera.snap\\neffective-spoof");
-    expect(out).not.toContain("\neffective-spoof");
-    expect(out).toContain("Approval");
-    expect(out).toContain("reapproval pending");
-    expect(out).toContain("Pending request");
-    expect(out).toContain("request-approval");
-    expect(out).toContain("Pending caps");
-    expect(out).toContain("canvas");
-    expect(out).toContain("Pending commands");
-    expect(out).toContain("canvas.eval");
-    expect(out).toContain("openclaw nodes approve request-approval");
-    expect(out).not.toContain("\u001b");
-    expect(out).not.toContain("[2K");
-    expect(out).not.toContain("[2J");
+    expectOutput(
+      out,
+      [
+        "Commands",
+        "camera.snap\\neffective-spoof",
+        "Approval",
+        "reapproval pending",
+        "Pending request",
+        "request-approval",
+        "Pending caps",
+        "canvas",
+        "Pending commands",
+        "canvas.eval",
+        "openclaw nodes approve request-approval",
+      ],
+      ["\neffective-spoof", "\u001b", "[2K", "[2J"],
+    );
 
     await runProgram(["nodes", "describe", "--node", "ios-node", "--json"]);
 
@@ -578,14 +537,10 @@ describe("cli program (nodes basics)", () => {
     programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [
-        {
-          nodeId: "pending-node",
-          displayName: "Pending Node",
+        connectedNode("pending-node", "Pending Node", {
           approvalState: "pending-reapproval",
           pendingRequestId: "request-reapproval",
-          paired: true,
-          connected: true,
-        },
+        }),
       ],
     });
 
@@ -605,18 +560,12 @@ describe("cli program (nodes basics)", () => {
       "openclaw --profile work nodes approve request-reapproval --timeout 3000",
     );
     expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
-    expect(output).not.toContain("gateway-user");
-    expect(output).not.toContain("url-secret");
-    expect(output).not.toContain("gateway.example");
-    expect(output).not.toContain("secret-token");
+    expectOutput(output, [], ["gateway-user", "url-secret", "gateway.example", "secret-token"]);
   });
 
   it("describes nodes through the paired-node fallback on older gateways", async () => {
     programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        params?: { nodeId?: string };
-      };
+      const opts = (args[0] ?? {}) as { method?: string; params?: { nodeId?: string } };
       if (opts.method === "node.list") {
         throw new GatewayClientRequestError({
           code: "INVALID_REQUEST",
@@ -624,10 +573,7 @@ describe("cli program (nodes basics)", () => {
         });
       }
       if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [{ nodeId: "legacy-node", displayName: "Legacy Node" }],
-        };
+        return { pending: [], paired: [{ nodeId: "legacy-node", displayName: "Legacy Node" }] };
       }
       if (opts.method === "node.describe" && opts.params?.nodeId === "legacy-node") {
         return {
@@ -659,36 +605,19 @@ describe("cli program (nodes basics)", () => {
     await runProgram(["nodes", "describe", "--node", "ios-node", "--token", "secret-token"]);
 
     const output = getRuntimeOutput();
-    expect(output).toContain("stale-request");
-    expect(output).not.toContain("openclaw nodes approve stale-request");
-    expect(output).not.toContain("Reuse the same --token option when rerunning.");
-    expect(output).not.toContain("secret-token");
+    expectOutput(
+      output,
+      ["stale-request"],
+      [
+        "openclaw nodes approve stale-request",
+        "Reuse the same --token option when rerunning.",
+        "secret-token",
+      ],
+    );
   });
 
   it("runs nodes approve with the pending request approval scopes", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [
-            {
-              requestId: "r1",
-              nodeId: "n1",
-              ts: Date.now(),
-              requiredApproveScopes: ["operator.pairing", "operator.admin"],
-            },
-          ],
-          paired: [],
-        };
-      }
-      if (opts.method === "node.pair.approve") {
-        return {
-          requestId: "r1",
-          node: { nodeId: "n1", token: "t1" },
-        };
-      }
-      return { ok: true };
-    });
+    mockApproval({ requiredApproveScopes: ["operator.pairing", "operator.admin"] });
 
     await runProgram(["nodes", "approve", "r1"]);
     expectGatewayRequest("node.pair.list", {});
@@ -699,37 +628,16 @@ describe("cli program (nodes basics)", () => {
     const approveRequest = gatewayRequests().find(
       (candidate) => candidate.method === "node.pair.approve",
     );
-    expect(listRequest?.clientName).toBe("gateway-client");
-    expect(listRequest?.mode).toBe("backend");
-    expect(approveRequest?.scopes).toEqual(["operator.pairing", "operator.admin"]);
-    expect(approveRequest?.clientName).toBe("gateway-client");
-    expect(approveRequest?.mode).toBe("backend");
+    expect(listRequest).toMatchObject({ clientName: "gateway-client", mode: "backend" });
+    expect(approveRequest).toMatchObject({
+      scopes: ["operator.pairing", "operator.admin"],
+      clientName: "gateway-client",
+      mode: "backend",
+    });
   });
 
   it("falls back to command-derived nodes approve scopes", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [
-            {
-              requestId: "r1",
-              nodeId: "n1",
-              ts: Date.now(),
-              commands: ["system.run"],
-            },
-          ],
-          paired: [],
-        };
-      }
-      if (opts.method === "node.pair.approve") {
-        return {
-          requestId: "r1",
-          node: { nodeId: "n1", token: "t1" },
-        };
-      }
-      return { ok: true };
-    });
+    mockApproval({ commands: ["system.run"] });
 
     await runProgram(["nodes", "approve", "r1"]);
 
@@ -754,23 +662,15 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes remove and calls node.pair.remove", async () => {
-    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string };
-      if (opts.method === "node.list") {
-        return {
-          nodes: [{ nodeId: "ios-node", displayName: "iOS Node", paired: true }],
-        };
-      }
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [{ nodeId: "ios-node", displayName: "iOS Node" }],
-        };
-      }
-      if (opts.method === "node.pair.remove") {
-        return { nodeId: "ios-node" };
-      }
-      return { ok: true };
+    mockGateway({
+      "node.list": {
+        nodes: [{ nodeId: "ios-node", displayName: "iOS Node", paired: true }],
+      },
+      "node.pair.list": {
+        pending: [],
+        paired: [{ nodeId: "ios-node", displayName: "iOS Node" }],
+      },
+      "node.pair.remove": { nodeId: "ios-node" },
     });
 
     await runProgram(["nodes", "remove", "--node", "iOS Node"]);
