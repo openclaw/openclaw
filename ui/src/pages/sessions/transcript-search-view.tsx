@@ -91,7 +91,11 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
         ref={(element) => (trigger = element)}
         class="btn btn--xs btn--icon sessions-toolbar__icon sessions-transcript-search__trigger"
         type="submit"
-        aria-label={t("sessionsView.transcriptSearchTitle")}
+        aria-label={
+          props.transcriptSearchAvailable
+            ? t("sessionsView.transcriptSearchTitle")
+            : t("sessionsView.transcriptSearchUnavailable")
+        }
         aria-controls="sessions-transcript-search-input"
         aria-expanded={expanded() ? "true" : "false"}
         disabled={!props.transcriptSearchAvailable || loading()}

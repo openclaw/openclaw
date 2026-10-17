@@ -39,9 +39,14 @@ describe("sessions transcript search view", () => {
       );
       expect(rosterFilter?.value).toBe("agent label");
       expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-      expect(transcriptTrigger?.getAttribute("aria-label")).toBe("Search transcripts");
+      expect(transcriptTrigger?.getAttribute("aria-label")).toBe(
+        available ? "Search transcripts" : "Connect to the Gateway to search transcripts.",
+      );
       expect(transcriptTrigger?.disabled).toBe(!available);
       expect(container.querySelector(".sessions-transcript-search__input input")).toBeNull();
+      expect(container.querySelector('.settings-section__desc [role="status"]')?.textContent).toBe(
+        available ? undefined : "Connect to the Gateway to search transcripts.",
+      );
       if (available) {
         transcriptTrigger!.click();
         await Promise.resolve();
@@ -63,6 +68,23 @@ describe("sessions transcript search view", () => {
       expect(onTranscriptSearch).toHaveBeenCalledTimes(available ? 1 : 0);
     },
   );
+
+  it("removes the connection explanation when transcript search becomes available", async () => {
+    const container = document.createElement("div");
+    const props = buildProps(buildMultiResult([]));
+    renderSessionsView({ ...props, transcriptSearchAvailable: false }, container);
+    await Promise.resolve();
+    expect(container.querySelector('.settings-section__desc [role="status"]')?.textContent).toBe(
+      "Connect to the Gateway to search transcripts.",
+    );
+
+    renderSessionsView({ ...props, transcriptSearchAvailable: true }, container);
+    await Promise.resolve();
+    expect(container.querySelector('.settings-section__desc [role="status"]')).toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger")?.disabled,
+    ).toBe(false);
+  });
 
   it("renders transcript provenance and opens the matching session", async () => {
     const container = document.createElement("div");

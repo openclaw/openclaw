@@ -117,6 +117,11 @@ export function SessionsView(props: SessionsProps) {
       ) : undefined}
       <SettingsSection
         title={t("sessionsView.title")}
+        description={
+          !props.transcriptSearchAvailable ? (
+            <span role="status">{t("sessionsView.transcriptSearchUnavailable")}</span>
+          ) : undefined
+        }
         actions={
           <>
             <TranscriptSearchForm {...props} />
