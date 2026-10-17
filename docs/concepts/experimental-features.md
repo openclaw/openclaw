@@ -236,15 +236,15 @@ record; existing logging and trace-correlation controls apply.
 ## Advisor
 
 Advisor is an experimental bundled plugin that is off by default. It watches
-user-directed work and steps in when the agent goes off course: repeating
-failing steps, waiting on finished work, stopping at a blocker it could fix,
+user-directed work and steps in while the agent goes off course: repeating
+failing steps, waiting on finished work, working around a blocker it could fix,
 drifting beyond what you asked, or claiming results the tools do not show.
 
 A review forks the conversation on the session's own model and asks whether the
-agent is on track. When it is not, Advisor sends one short correction. An active
-run is steered directly; if the run already ended, Advisor starts a follow-up
-turn so the agent acts on the correction right away. When the agent is on
-track, nothing happens.
+agent is on track. When it is not, Advisor steers the active run with one short
+correction, which the agent sees before its next step under the run's own
+permissions. If the run already ended, the correction is dropped. When the agent
+is on track, nothing happens.
 
 Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
 button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
@@ -270,24 +270,21 @@ you set the options below. Or use config:
 - `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
   definition of "off course". Changes apply to the next review.
 
-Advisor also reviews once at the end of every run that used tools, because
-agents often stop at a fixable blocker before any interval fills. Set both
-triggers to `0` to turn reviews off.
+Set both triggers to `0` to turn reviews off.
 
 Behavior and limits:
 
 - Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
-  runs, including Advisor's own follow-up turns, are not.
-- Each conversation has at most one review in flight. A new user message, an
-  aborted run, session reset, plugin disable, or service stop cancels it.
+  runs are not.
+- Each conversation has at most one review in flight. The run ending, a new user
+  message, session reset, plugin disable, or service stop cancels it.
 - Reviews use the session's model, context and credentials. The fork cannot run
   tools or send replies. Corrections are labeled as advice the agent must check
   before acting.
-- Follow-up turns announce the agent's reply to the conversation's last channel.
 - Advisor needs conversation access and prompt injection permission through
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
 - Gateway info logs record review token usage and whether a correction steered
-  the run or started a follow-up turn.
+  the run.
 
 ## Local model lean mode
 

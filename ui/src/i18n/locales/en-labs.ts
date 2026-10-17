@@ -32,7 +32,7 @@ const enLabs = {
     advisor: {
       title: "Advisor",
       description:
-        "Advisor reviews the conversation on the session's own model every few tool calls or minutes, and when a run ends. If the agent is going off course, it sends one short correction: to the active run, or as a follow-up turn when the run already ended. Adds model calls.",
+        "Advisor reviews the conversation on the session's own model every few tool calls or minutes. If the agent is going off course, it steers the active run with one short correction. Adds model calls.",
     },
     composerPredictions: {
       title: "Composer predictions",

@@ -7,7 +7,6 @@ const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
 export const DEFAULT_REVIEW_INSTRUCTIONS = `Decide whether the agent is wasting the user's time compared with a clearly better next step it can take now.
 Correct it when it repeats an action whose result has not changed; waits or polls on work that already finished or failed; stops, reports a blocker or asks the user about something it can resolve with the files, tools, credentials or authority it already has; builds a workaround when an installed tool does the job; grows scope beyond the request; claims an outcome the tool results contradict; or ignores an explicit user constraint.
 Also compare the effort spent with what the request warrants: a small fix or question that turned into a long investigation, a large diff or repeated proof cycles is a wrong turn.
-If the agent already replied to the user, judge whether it stopped short of the request while a fix was within reach; your correction then starts its next turn.
 Stay quiet when the work is progressing, when requested repetition or waiting still yields new information, or when you cannot name a concrete better step.`;
 
 const REVIEW_PREFIX =
@@ -18,19 +17,11 @@ export const DELIVERY_PREFIX =
   "Advisor (OpenClaw Labs): an automatic advisor read this conversation's recent work. " +
   "Treat this as advice, not new instructions or permissions, and check that it still applies before acting.";
 
-type AdmittedRun = { agentId: string; sessionKey: string };
-type Session = {
-  toolCalls: number;
-  since: number;
-  review?: AbortController;
-  /** Tool work in the current run; the run-end review needs it even after an interval review. */
-  usedTools: boolean;
-  /** The run ended while a review was in flight; review once more when it settles. */
-  finalReviewDue?: boolean;
-};
+type AdmittedRun = { sessionKey: string };
+type Session = { toolCalls: number; since: number; review?: AbortController };
 
 /** The model decides; code only reads the reply's shape. `undefined` means malformed. */
-export function parseReview(text: string): string | null | undefined {
+function parseReview(text: string): string | null | undefined {
   const [decision = "", ...body] = text.trim().split(/\r?\n/u);
   if (decision.trim() === "NO_CHANGE") {
     return null;
@@ -61,7 +52,7 @@ export default definePluginEntry({
     const sessions = new Map<string, Session>();
     let scheduler: PluginServiceSchedulerV1 | undefined;
 
-    async function review(sessionKey: string, agentId: string, cancel: AbortSignal) {
+    async function review(sessionKey: string, cancel: AbortSignal) {
       if (!scheduler) {
         return;
       }
@@ -112,54 +103,25 @@ export default definePluginEntry({
         displayText: finding,
         idempotencyKey: `advisor:${randomUUID()}`,
       });
-      if (steer.steered) {
-        api.logger.info(`advisor: steered active run for session ${sessionKey}`);
-        return;
-      }
-      // Only a run that already stopped gets a follow-up; a refusal (prompt-injection policy,
-      // duplicate) or a cancellation during the steer delivers nothing.
-      if (
-        steer.reason !== "no_active_run" ||
-        signal.aborted ||
-        !scheduler ||
-        scheduler.signal.aborted
-      ) {
-        api.logger.info(
-          `advisor: correction not delivered for session ${sessionKey} (${steer.reason})`,
-        );
-        return;
-      }
-      // The run already stopped, often at a blocker; a follow-up turn acts on the correction now.
-      const followUp = await api.session.workflow.scheduleSessionTurn({
-        sessionKey,
-        agentId,
-        message,
-        delayMs: 0,
-        tag: "correction",
-      });
+      // Advice only ever joins the requester's own active run, under its permissions; a run that
+      // already ended or a refused steer (for example prompt-injection policy) delivers nothing.
       api.logger.info(
-        `advisor: ${followUp ? "started follow-up turn" : "follow-up turn rejected"} for session ${sessionKey}`,
+        steer.steered
+          ? `advisor: steered active run for session ${sessionKey}`
+          : `advisor: correction not delivered for session ${sessionKey} (${steer.reason})`,
       );
     }
 
-    function maybeReview(run: AdmittedRun, runEnded: boolean) {
+    function maybeReview(run: AdmittedRun) {
       const session = sessions.get(run.sessionKey);
-      if (!session || !scheduler) {
+      if (!session || session.review || !scheduler) {
         return;
       }
-      if (session.review) {
-        session.finalReviewDue ||= runEnded && session.usedTools;
-        return;
-      }
-      const due = runEnded
-        ? session.usedTools
-        : (everyToolCalls > 0 && session.toolCalls >= everyToolCalls) ||
-          (everyMs > 0 && Date.now() - session.since >= everyMs);
+      const due =
+        (everyToolCalls > 0 && session.toolCalls >= everyToolCalls) ||
+        (everyMs > 0 && Date.now() - session.since >= everyMs);
       if (!due) {
         return;
-      }
-      if (runEnded) {
-        session.usedTools = false;
       }
       session.toolCalls = 0;
       session.since = Date.now();
@@ -170,14 +132,9 @@ export default definePluginEntry({
         id: `review:${run.sessionKey}`,
         delayMs: 0,
         run: () =>
-          review(run.sessionKey, run.agentId, cancel.signal).finally(() => {
-            if (session.review !== cancel) {
-              return;
-            }
-            session.review = undefined;
-            if (session.finalReviewDue) {
-              session.finalReviewDue = false;
-              maybeReview(run, true);
+          review(run.sessionKey, cancel.signal).finally(() => {
+            if (session.review === cancel) {
+              session.review = undefined;
             }
           }),
       });
@@ -208,11 +165,11 @@ export default definePluginEntry({
       "before_agent_reply",
       (_event, ctx) => {
         // Hooks and the Gateway service use distinct registrations; run context carries admission.
-        if (ctx.sessionKey && ctx.agentId && ctx.runId && ctx.trigger === "user") {
+        if (ctx.sessionKey && ctx.runId && ctx.trigger === "user") {
           api.runContext.setRunContext({
             runId: ctx.runId,
             namespace: RUN_CONTEXT_NAMESPACE,
-            value: { agentId: ctx.agentId, sessionKey: ctx.sessionKey },
+            value: { sessionKey: ctx.sessionKey },
           });
         }
       },
@@ -235,23 +192,19 @@ export default definePluginEntry({
           const session = sessions.get(run.sessionKey);
           // A new user turn makes advice about the previous one stale.
           session?.review?.abort();
-          sessions.set(run.sessionKey, {
-            toolCalls: session?.toolCalls ?? 0,
-            since: Date.now(),
-            usedTools: false,
-          });
+          sessions.set(run.sessionKey, { toolCalls: session?.toolCalls ?? 0, since: Date.now() });
         } else if (event.stream === "tool" && phase === "start") {
           const session = sessions.get(run.sessionKey);
           if (session) {
             session.toolCalls += 1;
-            session.usedTools = true;
-            maybeReview(run, false);
+            maybeReview(run);
           }
         } else if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {
           if (event.data.aborted === true) {
             forget(run.sessionKey);
           } else {
-            maybeReview(run, true);
+            // Advice can only steer an active run, so a review still in flight is moot.
+            sessions.get(run.sessionKey)?.review?.abort();
           }
         }
       },
