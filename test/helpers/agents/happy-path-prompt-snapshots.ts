@@ -5,7 +5,6 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildSourceConversationContext,
-  buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
 import {
@@ -647,7 +646,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: discordGroupCtx,
-        chatContext: buildGroupChatContext({
+        chatContext: buildSourceConversationContext({
           sessionCtx: discordGroupCtx,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
