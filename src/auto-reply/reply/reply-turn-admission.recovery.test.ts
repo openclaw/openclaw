@@ -15,7 +15,8 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
+import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -50,12 +51,11 @@ function createRecoveryGatewayContext(storePath?: string) {
     waitForAgent: vi.fn(),
     sendRecoveryNotice: vi.fn(),
   };
-  // The recovery boundary supplies execution; admission consumes these capabilities.
-  return {
-    getRuntimeConfig: () => (storePath ? { session: { store: storePath } } : {}),
-    recoveryRuntime,
-    workerSessionPlacementService: { getMany: () => new Map() },
-  } as GatewayRequestContext;
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = () => (storePath ? { session: { store: storePath } } : {});
+  context.recoveryRuntime = recoveryRuntime;
+  context.workerSessionPlacementService = { getMany: () => new Map() };
+  return context;
 }
 function complete(result: Admission | undefined) {
   if (result?.status === "owned") {
