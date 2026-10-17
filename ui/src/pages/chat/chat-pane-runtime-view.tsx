@@ -116,6 +116,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
     const boardProvider = createMemo(() => {
@@ -181,6 +182,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       read: () => {
         revision();
         progress.read();
+        composerCapabilities.read();
         projects.read();
         discussion.read();
         board().forEach((source) => source.read());
