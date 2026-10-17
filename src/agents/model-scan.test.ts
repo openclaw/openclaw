@@ -1,28 +1,18 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
-function createFetchFixture(payload: unknown): typeof fetch {
-  return withFetchPreconnect(
-    async () =>
-      new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-  );
-}
+const jsonResponse = (body: BodyInit) =>
+  new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+const createFetchFixture = (payload: unknown): typeof fetch =>
+  withFetchPreconnect(async () => jsonResponse(JSON.stringify(payload)));
 
 const scan = (data: unknown[], options: Parameters<typeof scanOpenRouterModels>[0] = {}) =>
   scanOpenRouterModels({ fetchImpl: createFetchFixture({ data }), probe: false, ...options });
 
 describe("scanOpenRouterModels", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -40,20 +30,9 @@ describe("scanOpenRouterModels", () => {
         pricing: { prompt: "0", completion: "0", request: "0", image: "0" },
         created_at: 1_700_000_000,
       },
-      {
-        id: "acme/free-by-suffix:free",
-        name: "Free By Suffix",
-        context_length: 8_192,
-        supported_parameters: [],
-        modality: "text",
-        pricing: { prompt: "0", completion: "0" },
-      },
+      { id: "acme/free-by-suffix:free" },
       {
         id: "acme/paid",
-        name: "Paid",
-        context_length: 4_096,
-        supported_parameters: ["tools"],
-        modality: "text",
         pricing: { prompt: "0.000001", completion: "0.000002" },
       },
     ]);
@@ -100,14 +79,8 @@ describe("scanOpenRouterModels", () => {
     const [result] = await scan([
       {
         id: "acme/provider-limited:free",
-        name: "Provider Limited",
         context_length: 32_768,
-        top_provider: {
-          context_length: 16_384,
-          max_completion_tokens: 4096,
-        },
-        supported_parameters: [],
-        pricing: { prompt: "0", completion: "0" },
+        top_provider: { context_length: 16_384, max_completion_tokens: 4096 },
       },
     ]);
     expect(result).toMatchObject({ contextLength: 16_384, maxCompletionTokens: 4096 });
@@ -115,14 +88,7 @@ describe("scanOpenRouterModels", () => {
 
   it("drops out-of-range OpenRouter created_at timestamps", async () => {
     const [result] = await scan([
-      {
-        id: "acme/free-invalid-created:free",
-        name: "Free Invalid Created",
-        context_length: 16_384,
-        supported_parameters: [],
-        modality: "text",
-        created_at: 8_640_000_000_000_001,
-      },
+      { id: "acme/free-invalid-created:free", created_at: 8_640_000_000_000_001 },
     ]);
 
     expect(result?.createdAtMs).toBeNull();
@@ -143,22 +109,20 @@ describe("scanOpenRouterModels", () => {
     const cancel = vi.fn(async () => undefined);
     let pullCount = 0;
     const chunk = new Uint8Array(64 * 1024).fill(0x20); // 64 KiB of spaces
-    const fetchImpl = withFetchPreconnect(
-      async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              // Valid JSON array prefix so the body would parse if ever read in full.
-              controller.enqueue(new TextEncoder().encode('{"data":['));
-            },
-            pull(controller) {
-              pullCount += 1;
-              controller.enqueue(chunk);
-            },
-            cancel,
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+    const fetchImpl = withFetchPreconnect(async () =>
+      jsonResponse(
+        new ReadableStream({
+          start(controller) {
+            // Valid JSON array prefix so the body would parse if ever read in full.
+            controller.enqueue(new TextEncoder().encode('{"data":['));
+          },
+          pull(controller) {
+            pullCount += 1;
+            controller.enqueue(chunk);
+          },
+          cancel,
+        }),
+      ),
     );
 
     await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
@@ -170,27 +134,12 @@ describe("scanOpenRouterModels", () => {
     expect(pullCount).toBeLessThan(16 * 1024 * 1024); // nowhere near draining forever
   });
 
-  it("rejects a malformed catalog success body", async () => {
-    const fetchImpl = withFetchPreconnect(
-      async () =>
-        new Response("not json at all", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-
-    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
-      /OpenRouter \/models: malformed JSON response/,
-    );
-  });
-
-  it("rejects a malformed catalog envelope", async () => {
-    await expect(
-      scanOpenRouterModels({
-        fetchImpl: createFetchFixture({}),
-        probe: false,
-      }),
-    ).rejects.toThrow(/OpenRouter \/models.*malformed JSON response/);
+  it.each([
+    ["body", "not json at all", /OpenRouter \/models: malformed JSON response/],
+    ["envelope", "{}", /OpenRouter \/models.*malformed JSON response/],
+  ] as const)("rejects a malformed catalog %s", async (_kind, body, error) => {
+    const fetchImpl = withFetchPreconnect(async () => jsonResponse(body));
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(error);
   });
 
   it("requires an API key when probing", async () => {
@@ -209,11 +158,7 @@ describe("scanOpenRouterModels", () => {
       });
 
     const pending = expect(
-      scanOpenRouterModels({
-        fetchImpl,
-        probe: false,
-        timeoutMs: 1,
-      }),
+      scanOpenRouterModels({ fetchImpl, probe: false, timeoutMs: 1 }),
     ).rejects.toThrow(/OpenRouter model scan timed out/);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -235,7 +180,7 @@ describe("scanOpenRouterModels", () => {
       }
       let interval: ReturnType<typeof setInterval> | undefined;
       let completionTimer: ReturnType<typeof setTimeout> | undefined;
-      return new Response(
+      return jsonResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(encoder.encode('{"data":['));
@@ -264,7 +209,6 @@ describe("scanOpenRouterModels", () => {
             clearTimeout(completionTimer);
           },
         }),
-        { status: 200, headers: { "content-type": "application/json" } },
       );
     });
 
@@ -273,13 +217,11 @@ describe("scanOpenRouterModels", () => {
     ).rejects.toThrow(/timed out/i);
 
     await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-    expect(chunkCount).toBe(3);
-    expect(abortCount).toBe(0);
+    expect({ chunkCount, abortCount }).toEqual({ chunkCount: 3, abortCount: 0 });
 
     await vi.advanceTimersByTimeAsync(chunkIntervalMs + 1);
     await pending;
-    expect(abortCount).toBe(1);
-    expect(vi.getTimerCount()).toBe(0);
+    expect({ abortCount, timers: vi.getTimerCount() }).toEqual({ abortCount: 1, timers: 0 });
   });
 
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
@@ -291,24 +233,10 @@ describe("scanOpenRouterModels", () => {
 
   it("does not match provider filters across provider id variants", async () => {
     const results = await scan(
-      [
-        {
-          id: "z.ai/glm-5",
-          name: "GLM-5",
-          context_length: 128_000,
-          supported_parameters: [],
-          modality: "text",
-          pricing: { prompt: "0", completion: "0" },
-        },
-        {
-          id: "openai/gpt-5",
-          name: "GPT-5",
-          context_length: 128_000,
-          supported_parameters: [],
-          modality: "text",
-          pricing: { prompt: "0", completion: "0" },
-        },
-      ],
+      ["z.ai/glm-5", "openai/gpt-5"].map((id) => ({
+        id,
+        pricing: { prompt: "0", completion: "0" },
+      })),
       { providerFilter: "z-ai" },
     );
 

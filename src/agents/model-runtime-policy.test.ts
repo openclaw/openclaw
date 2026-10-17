@@ -240,55 +240,19 @@ describe("resolveModelRuntimePolicy", () => {
     expect(parse.mock.calls.length).toBeLessThanOrEqual(models.length * 2);
   });
 
-  it("ignores the QA force-runtime override when the private QA gate is unset", () => {
-    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", undefined);
-    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
-
-    expect(
-      resolveModelRuntimePolicy({
-        config: qaConfig(),
-        provider: "openai",
-        modelId: "gpt-5.5",
-      }),
-    ).toEqual({
-      policy: { id: "codex" },
-      source: "provider",
-    });
-  });
-
-  it("respects the QA force-runtime override when the private QA gate is set", () => {
-    // The force-runtime override is intentionally gated to private QA builds so
-    // normal users cannot accidentally change model runtime selection via env.
-    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
-    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
-
-    expect(
-      resolveModelRuntimePolicy({
-        config: qaConfig(),
-        provider: "openai",
-        modelId: "gpt-5.5",
-      }),
-    ).toEqual({
-      policy: { id: "openclaw" },
-      source: "model",
-      forcedByEnvironment: true,
-    });
-  });
-
-  it("ignores invalid QA force-runtime values even when the private QA gate is set", () => {
-    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
-    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "bogus");
-
-    expect(
-      resolveModelRuntimePolicy({
-        config: qaConfig(),
-        provider: "openai",
-        modelId: "gpt-5.5",
-      }),
-    ).toEqual({
-      policy: { id: "codex" },
-      source: "provider",
-    });
+  it.each([
+    ["unset gate", undefined, "openclaw", { policy: { id: "codex" }, source: "provider" }],
+    [
+      "enabled gate",
+      "1",
+      "openclaw",
+      { policy: { id: "openclaw" }, source: "model", forcedByEnvironment: true },
+    ],
+    ["invalid override", "1", "bogus", { policy: { id: "codex" }, source: "provider" }],
+  ] as const)("gates the private QA runtime override: %s", (_name, gate, runtime, expected) => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", gate);
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", runtime);
+    expectPolicy({ config: qaConfig(), provider: "openai", modelId: "gpt-5.5" }, expected);
   });
 
   it("honors provider wildcard agent model runtime policy entries", () => {

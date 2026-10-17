@@ -4,6 +4,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { prepareModelChoice } from "./model-runtime-choice.js";
@@ -19,38 +20,108 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
+function currentOwner() {
+  if (!published.owner) {
+    throw new Error("No published test model owner");
+  }
+  return published.owner;
+}
 vi.mock("./prepared-model-catalog.js", () => ({
   getPublishedPreparedModelCatalogOwnerSnapshot: () => published.owner,
   materializePreparedModelCatalogOwner: (owner: PreparedModelRuntimeSnapshot) => owner,
-  loadProviderScopedThinkingCatalog: async () => {
-    if (!published.owner) {
-      throw new Error("No published test model owner");
-    }
-    return published.owner.modelCatalog.entries;
-  },
+  loadProviderScopedThinkingCatalog: async () => currentOwner().modelCatalog.entries,
   withPreparedModelCatalogOwner: async <T>(
     _params: unknown,
     read: (owner: PreparedModelRuntimeSnapshot) => T | Promise<T>,
   ) => {
-    if (!published.owner) {
-      throw new Error("No published test model owner");
-    }
-    return await read(published.owner);
+    return await read(currentOwner());
   },
 }));
 
 const cfg: OpenClawConfig = { plugins: { enabled: false } };
+const xaiUrl = "https://api.x.ai/v1";
+const unavailable = (error?: string) => ({
+  kind: "unavailable",
+  ...(error ? { error: expect.stringContaining(error) } : {}),
+});
+const xaiPlugin: Parameters<typeof metadata>[number] = {
+  id: "xai",
+  providers: ["xai"],
+  providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+};
+function providerRegistry(id: string, hooks: Partial<ProviderPlugin>, label = "Fixture") {
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: id,
+    source: "test",
+    provider: { id, label, auth: [], ...hooks },
+  });
+  return registry;
+}
+function buildModel(provider: string, id: string, baseUrl: string, api = "openai-responses") {
+  return makeProviderModelFixture({ provider, id, baseUrl, api });
+}
+function modelDefinition(id: string): ModelProviderConfig["models"][number] {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    maxTokens: 4096,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+}
+function configuredModel(provider: string, id: string, baseUrl: string, api?: string) {
+  return [{ provider, modelId: id, model: buildModel(provider, id, baseUrl, api) }];
+}
 const selection = { agentId: "main", raw: "fixture/new-model", source: "override" as const };
 type ChoiceOptions = Partial<Parameters<typeof prepareModelChoice>[0]>;
 const chooseModel = (config: OpenClawConfig, options: ChoiceOptions = {}) =>
   prepareModelChoice({ ...selection, cfg: config, ...options });
+const expectChoice = async (config: OpenClawConfig, options: ChoiceOptions, expected: object) =>
+  expect(await chooseModel(config, options)).toMatchObject(expected);
+const modelCatalog = (row: PreparedModelRuntimeSnapshot["modelCatalog"]["entries"][number]) => ({
+  entries: [row],
+  routeVariants: [row],
+});
+const runtimeConfig = (raw: string, runtime?: string): OpenClawConfig => ({
+  agents: {
+    defaults: { model: raw, models: { [raw]: runtime ? { agentRuntime: { id: runtime } } : {} } },
+  },
+});
 function metadata(
   ...plugins: NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]>["plugins"]
 ) {
   return createPluginMetadataSnapshotFixture({ plugins });
 }
-function providerConfig(provider: string, value: ModelProviderConfig): OpenClawConfig {
-  return { ...cfg, models: { providers: { [provider]: value } } };
+function nativeSuppression(reason: string, replacedBy: string) {
+  return {
+    provider: "xai",
+    model: "auto",
+    reason,
+    retirement: { replacedBy },
+    when: { baseUrlHosts: ["api.x.ai"] },
+  };
+}
+function bindProfiles(
+  owner: PreparedModelRuntimeSnapshot,
+  profiles: NonNullable<Parameters<typeof bindPreparedModelRuntimeAuth>[1]["store"]>["profiles"],
+) {
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles } });
+}
+function providerConfig(
+  provider: string,
+  value: ModelProviderConfig | string,
+  base: OpenClawConfig = cfg,
+): OpenClawConfig {
+  const config =
+    typeof value === "string"
+      ? { api: "openai-responses" as const, baseUrl: value, models: [] }
+      : value;
+  return {
+    ...base,
+    models: { ...base.models, providers: { ...base.models?.providers, [provider]: config } },
+  };
 }
 function spawnFixture(config: OpenClawConfig) {
   const callGateway = vi.fn(async () => {
@@ -84,21 +155,13 @@ function renderPublishedAliases(owner: PreparedModelRuntimeSnapshot) {
   const { authStorage, modelRegistry } = owner.createStores();
   const configuredModelAliases = prepareConfiguredModelAliases(
     {
-      input: {
-        config: owner.config,
-        agentId: owner.agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-      },
+      input: owner,
       env: {},
       authStore,
       templateAuthStorage: authStorage,
       credentials: {},
       providerIds: [...new Set(owner.configuredRuntimeModels.map(({ provider }) => provider))],
-      configuredModelRefs: owner.configuredRuntimeModels.map(({ provider, modelId }) => ({
-        provider,
-        modelId,
-      })),
+      configuredModelRefs: owner.configuredRuntimeModels,
       configuredRuntimeModels: owner.configuredRuntimeModels,
       runtimeCapabilityModels: [],
       configuredGeneratedCatalogPluginIds: [],
@@ -133,71 +196,50 @@ describe("prepared model support admission", () => {
     agents: { defaults: { modelPolicy: { allow: ["fixture/manual-only"] } } },
   };
   const inheritedRef = { provider: "fixture", model: "fixture/custom-model" };
-  it.each([
-    {
-      name: "preserves an inherited provider-prefixed model id",
-      current: true,
-      config: custom,
-      request: {
+  it.each<[string, ChoiceOptions, object, OpenClawConfig?, boolean?]>([
+    [
+      "inherited provider-prefixed id",
+      {
         raw: "fixture/fixture/custom-model",
-        source: "automatic" as const,
+        source: "automatic",
         resolvedRef: inheritedRef,
       },
-      expected: {
+      {
         kind: "resolved",
         ref: inheritedRef,
         model: { id: inheritedRef.model, baseUrl: "https://custom.invalid/v1" },
       },
-    },
-    {
-      name: "applies manual override policy",
-      current: true,
-      config: manualPolicy,
-      request: { source: "override" as const },
-      expected: { kind: "unavailable", error: "model not allowed: fixture/new-model" },
-    },
-    {
-      name: "does not replace a missing pinned account with the shared account",
-      current: true,
-      config: custom,
-      request: { raw: "fixture/new-model@missing" },
-      expected: { kind: "unavailable", error: expect.stringContaining("selected account") },
-    },
-    {
-      name: "does not publish a choice from a replaced generation",
-      current: false,
-      config: custom,
-      request: {},
-      expected: { kind: "unavailable", error: expect.stringContaining("changed during selection") },
-    },
-  ])("$name", async ({ current, config, request, expected }) => {
+    ],
+    [
+      "manual override policy",
+      {},
+      { kind: "unavailable", error: "model not allowed: fixture/new-model" },
+      manualPolicy,
+    ],
+    [
+      "missing pinned account",
+      { raw: "fixture/new-model@missing" },
+      unavailable("selected account"),
+    ],
+    ["replaced generation", {}, unavailable("changed during selection"), custom, false],
+  ])("checks %s", async (_name, request, expected, config = custom, current = true) => {
     publish(() => current, config);
     expect(await chooseModel(config, request)).toMatchObject(expected);
   });
 
   it("rejects an unsupported explicit selection even with a viable fallback", async () => {
-    const config: OpenClawConfig = {
-      ...cfg,
-      models: {
-        providers: {
-          ...custom.models?.providers,
-          xai: { api: "openai-responses", baseUrl: "https://api.x.ai/v1", models: [] },
-        },
-      },
-    };
+    const config = providerConfig("xai", xaiUrl, custom);
     publish(() => true, config, {
-      metadataSnapshot: metadata({
-        id: "xai",
-        providers: ["xai"],
-        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
-      }),
+      metadataSnapshot: metadata(xaiPlugin),
     });
-    expect(
-      await chooseModel(config, {
+    await expectChoice(
+      config,
+      {
         raw: "xai/nonexistent-native-fixture",
         fallbacks: ["fixture/custom-unlisted"],
-      }),
-    ).toMatchObject({ kind: "unavailable", error: expect.stringContaining("Unknown model") });
+      },
+      unavailable("Unknown model"),
+    );
   });
 
   it.each([
@@ -209,37 +251,29 @@ describe("prepared model support admission", () => {
     "checks the native donor before visible alias creation: $model/$ambiguous/$authored",
     async (testCase) => {
       await withTestDir({ prefix: "openclaw-native-alias-" }, async (dir) => {
-        const config: OpenClawConfig = {
+        const personal: ModelProviderConfig = {
+          api: "openai-responses",
+          baseUrl: xaiUrl,
+          models: testCase.authored
+            ? [
+                {
+                  ...modelDefinition(testCase.model),
+                  compat: { codeMode: "capable" },
+                  cost: { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 },
+                },
+              ]
+            : [],
+        };
+        const config = providerConfig("personal", personal, {
           agents: {
             entries: { main: { workspace: dir } },
             defaults: { modelPolicy: { allow: [] } },
           },
           session: { store: path.join(dir, "sessions.json") },
-          models: {
-            providers: {
-              personal: {
-                api: "openai-responses",
-                baseUrl: "https://api.x.ai/v1",
-                models: testCase.authored
-                  ? [
-                      {
-                        id: testCase.model,
-                        name: "Authored model",
-                        reasoning: false,
-                        input: ["text"],
-                        maxTokens: 4096,
-                        compat: { codeMode: "capable" },
-                        cost: { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 },
-                      },
-                    ]
-                  : [],
-              },
-            },
-          },
-        };
+        });
         const catalog = {
           api: "openai-responses" as const,
-          baseUrl: "https://api.x.ai/v1",
+          baseUrl: xaiUrl,
           models: [
             { id: "current", name: "Current", compat: { codeMode: "preferred" as const } },
             { id: "auto", name: "Retired" },
@@ -250,21 +284,11 @@ describe("prepared model support admission", () => {
           workspaceDir: dir,
           metadataSnapshot: metadata(
             {
-              id: "xai",
-              providers: ["xai"],
-              providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+              ...xaiPlugin,
               modelCatalog: {
                 discovery: { xai: "static" },
                 providers: { xai: catalog },
-                suppressions: [
-                  {
-                    provider: "xai",
-                    model: "auto",
-                    reason: "Retired selector",
-                    retirement: { replacedBy: "current" },
-                    when: { baseUrlHosts: ["api.x.ai"] },
-                  },
-                ],
+                suppressions: [nativeSuppression("Retired selector", "current")],
               },
             },
             ...(testCase.ambiguous
@@ -281,11 +305,8 @@ describe("prepared model support admission", () => {
               : []),
           ),
         });
-        bindPreparedModelRuntimeAuth(owner, {
-          store: {
-            version: 1,
-            profiles: { personal: { provider: "personal", type: "api_key", key: "synthetic-key" } },
-          },
+        bindProfiles(owner, {
+          personal: { provider: "personal", type: "api_key", key: "synthetic-key" },
         });
         const { callGateway, tool } = spawnFixture(config);
         const model = `personal/${testCase.model}`;
@@ -314,11 +335,7 @@ describe("prepared model support admission", () => {
   );
 
   it("does not lend a native descriptor to another native endpoint", async () => {
-    const config = providerConfig("fixture", {
-      api: "openai-responses",
-      baseUrl: "https://b.native.invalid/v1",
-      models: [],
-    });
+    const config = providerConfig("fixture", "https://b.native.invalid/v1");
     publish(() => true, config, {
       metadataSnapshot: metadata({
         id: "fixture",
@@ -328,21 +345,7 @@ describe("prepared model support admission", () => {
           { endpointClass: "groq-native", hosts: ["b.native.invalid"] },
         ],
       }),
-      configuredRuntimeModels: [
-        {
-          provider: "fixture",
-          modelId: "model",
-          model: makeProviderModelFixture({
-            provider: "fixture",
-            id: "model",
-            name: "Native A model",
-            api: "openai-responses",
-            baseUrl: "https://a.native.invalid/v1",
-            contextWindow: 4096,
-            maxTokens: 1024,
-          }),
-        },
-      ],
+      configuredRuntimeModels: configuredModel("fixture", "model", "https://a.native.invalid/v1"),
     });
     expect(await chooseModel(config, { raw: "fixture/model" })).toMatchObject({
       kind: "unavailable",
@@ -399,35 +402,19 @@ describe("prepared model support admission", () => {
         }),
       ),
     ).toMatchObject({ ambiguous: true });
-    expect(
-      await chooseModel(config, {
-        raw: `${provider}/deployment`,
-        source: "automatic",
-      }),
-    ).toMatchObject({ kind: "unavailable" });
+    await expectChoice(
+      config,
+      { raw: `${provider}/deployment`, source: "automatic" },
+      unavailable(),
+    );
     expect(renderPublishedAliases(owner)).not.toContain(`- Azure: ${provider}/deployment`);
   });
 
   it("defers unobserved dynamic models but keeps known suppressions final", async () => {
     const config: OpenClawConfig = {};
-    const dynamicModel = makeProviderModelFixture({
-      provider: "fixture",
-      id: "new-model",
-      api: "openai-responses",
-      baseUrl: "https://dynamic.invalid/v1",
-    });
+    const dynamicModel = buildModel("fixture", "new-model", "https://dynamic.invalid/v1");
     const prepareDynamicModel = vi.fn(async () => dynamicModel);
-    const registry = createEmptyPluginRegistry();
-    registry.providers.push({
-      pluginId: "fixture",
-      source: "test",
-      provider: {
-        id: "fixture",
-        label: "Fixture",
-        auth: [],
-        prepareDynamicModel,
-      },
-    });
+    const registry = providerRegistry("fixture", { prepareDynamicModel });
     const owner = publish(() => true, config, {
       pluginRegistry: registry,
       metadataSnapshot: metadata({
@@ -444,15 +431,11 @@ describe("prepared model support admission", () => {
       kind: "pending",
       ref: { provider: "fixture", model: "new-model" },
     });
-    expect(
-      await chooseModel(config, {
-        source: "automatic",
-        raw: "fixture/retired",
-      }),
-    ).toMatchObject({
-      kind: "unavailable",
-      error: expect.stringContaining("Retired fixture model"),
-    });
+    await expectChoice(
+      config,
+      { source: "automatic", raw: "fixture/retired" },
+      unavailable("Retired fixture model"),
+    );
     expect(prepareDynamicModel).not.toHaveBeenCalled();
     expect(await chooseModel(config, {})).toMatchObject({
       kind: "resolved",
@@ -460,80 +443,50 @@ describe("prepared model support admission", () => {
       model: dynamicModel,
     });
     expect(prepareDynamicModel).toHaveBeenCalledOnce();
-    const incompleteConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "https://dynamic.invalid/v1",
-            models: [
-              {
-                id: "retired",
-                name: "Retired fixture",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 1024,
-              },
-            ],
-          },
-        },
+    const incompleteConfig = providerConfig(
+      "fixture",
+      {
+        baseUrl: "https://dynamic.invalid/v1",
+        models: [{ ...modelDefinition("retired"), maxTokens: 1024 }],
       },
-    };
+      {},
+    );
     publish(() => true, incompleteConfig, {
       pluginRegistry: registry,
       metadataSnapshot: owner.metadataSnapshot,
     });
-    expect(
-      await chooseModel(incompleteConfig, {
-        source: "automatic",
-        raw: "fixture/retired",
-      }),
-    ).toMatchObject({
-      kind: "unavailable",
-      error: expect.stringContaining("Retired fixture model"),
-    });
+    await expectChoice(
+      incompleteConfig,
+      { source: "automatic", raw: "fixture/retired" },
+      unavailable("Retired fixture model"),
+    );
     expect(prepareDynamicModel).toHaveBeenCalledOnce();
   });
 
   function retiredXaiOwner(
-    modelBaseUrl = "https://api.x.ai/v1",
+    modelBaseUrl = xaiUrl,
     facts: Partial<
       Pick<PreparedModelRuntimeSnapshot, "pluginRegistry" | "agentDir" | "workspaceDir">
     > = {},
   ) {
-    const model = makeProviderModelFixture<"openai-responses">({
-      provider: "xai",
-      id: "auto",
-      api: "openai-responses",
-      baseUrl: modelBaseUrl,
-    });
+    const descriptor = buildModel("xai", "auto", modelBaseUrl);
     const config: OpenClawConfig = {
       ...custom,
       agents: { defaults: { models: { "xai/auto": { alias: "Grok" } } } },
       models: {
         providers: {
           ...custom.models?.providers,
-          xai: { api: "openai-responses", baseUrl: "https://api.x.ai/v1", models: [model] },
+          xai: { api: "openai-responses", baseUrl: xaiUrl, models: [descriptor] },
         },
       },
     };
     return publish(() => true, config, {
       ...facts,
-      configuredRuntimeModels: [{ provider: "xai", modelId: "auto", model }],
+      configuredRuntimeModels: [{ provider: "xai", modelId: "auto", model: descriptor }],
       metadataSnapshot: metadata({
-        id: "xai",
-        providers: ["xai"],
-        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+        ...xaiPlugin,
         modelCatalog: {
-          suppressions: [
-            {
-              provider: "xai",
-              model: "auto",
-              reason: "Retired native selector",
-              retirement: { replacedBy: "grok-4.6" },
-              when: { baseUrlHosts: ["api.x.ai"] },
-            },
-          ],
+          suppressions: [nativeSuppression("Retired native selector", "grok-4.6")],
         },
       }),
     });
@@ -543,43 +496,30 @@ describe("prepared model support admission", () => {
     const owner = retiredXaiOwner();
     const raw = "xai/auto";
     const ref = { provider: "xai", model: "auto" };
-    expect(
-      await chooseModel(owner.config, {
-        raw,
-        source: "automatic",
-        fallbacks: ["fixture/custom-unlisted"],
-      }),
-    ).toMatchObject({ kind: "automatic", ref });
-    expect(
-      await chooseModel(owner.config, {
-        raw,
-        source: "automatic",
-        fallbacks: ["xai/auto"],
-      }),
-    ).toMatchObject({ kind: "unavailable" });
+    const request = { raw, source: "automatic" as const };
+    await expectChoice(
+      owner.config,
+      { ...request, fallbacks: ["fixture/custom-unlisted"] },
+      {
+        kind: "automatic",
+        ref,
+      },
+    );
+    await expectChoice(
+      owner.config,
+      { ...request, fallbacks: ["xai/auto"] },
+      {
+        kind: "unavailable",
+      },
+    );
   });
 
   it("admits a visible spawn past a retired runtime-preferred fallback", async () => {
     await withTestDir({ prefix: "openclaw-retired-spawn-fallback-" }, async (dir) => {
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: "xai",
-        source: "test",
-        provider: {
-          id: "xai",
-          label: "Fixture",
-          auth: [],
-          preferRuntimeResolvedModel: ({ modelId }) => modelId === "auto",
-          resolveDynamicModel: ({ modelId }) =>
-            modelId === "auto"
-              ? makeProviderModelFixture({
-                  provider: "xai",
-                  id: modelId,
-                  api: "openai-responses",
-                  baseUrl: "https://api.x.ai/v1",
-                })
-              : undefined,
-        },
+      const registry = providerRegistry("xai", {
+        preferRuntimeResolvedModel: ({ modelId }) => modelId === "auto",
+        resolveDynamicModel: ({ modelId }) =>
+          modelId === "auto" ? buildModel("xai", modelId, xaiUrl) : undefined,
       });
       const owner = retiredXaiOwner(undefined, {
         pluginRegistry: registry,
@@ -617,50 +557,37 @@ describe("prepared model support admission", () => {
   });
 
   it("uses provider transport normalization for explicit, automatic and published aliases without discovery", async () => {
-    const model = makeProviderModelFixture({
-      provider: "xai",
-      id: "grok-4.6",
-      api: "openai-responses",
-      baseUrl: "https://api.x.ai/v1",
-    });
+    const descriptor = buildModel("xai", "grok-4.6", xaiUrl);
     const config: OpenClawConfig = {
       agents: { defaults: { models: { "xai/grok-4.6": { alias: "Grok" } } } },
       models: {
-        providers: { xai: { api: "openai-completions", baseUrl: model.baseUrl, models: [] } },
+        providers: { xai: { api: "openai-completions", baseUrl: descriptor.baseUrl, models: [] } },
       },
     };
-    const registry = createEmptyPluginRegistry();
     const prepareDynamicModel = vi.fn(async () => undefined);
-    registry.providers.push({
-      pluginId: "xai",
-      source: "test",
-      provider: {
-        id: "xai",
-        label: "xAI",
-        auth: [],
+    const registry = providerRegistry(
+      "xai",
+      {
         prepareDynamicModel,
-        normalizeTransport: () => ({ api: "openai-responses", baseUrl: model.baseUrl }),
+        normalizeTransport: () => ({ api: "openai-responses", baseUrl: descriptor.baseUrl }),
       },
-    });
+      "xAI",
+    );
     const owner = publish(() => true, config, {
       pluginRegistry: registry,
-      configuredRuntimeModels: [{ provider: "xai", modelId: model.id, model }],
-      metadataSnapshot: metadata({
-        id: "xai",
-        providers: ["xai"],
-        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
-      }),
+      configuredRuntimeModels: [{ provider: "xai", modelId: descriptor.id, model: descriptor }],
+      metadataSnapshot: metadata(xaiPlugin),
     });
     const choice = { ...selection, cfg: config, raw: "xai/grok-4.6" };
     expect(await prepareModelChoice({ ...choice, source: "automatic" })).toMatchObject({
       kind: "resolved",
-      model: { api: "openai-responses", baseUrl: model.baseUrl },
+      model: { api: "openai-responses", baseUrl: descriptor.baseUrl },
     });
     expect(renderPublishedAliases(owner)).toContain("- Grok: xai/grok-4.6");
     expect(prepareDynamicModel).not.toHaveBeenCalled();
     expect(await prepareModelChoice(choice)).toMatchObject({
       kind: "resolved",
-      model: { api: "openai-responses", baseUrl: model.baseUrl },
+      model: { api: "openai-responses", baseUrl: descriptor.baseUrl },
     });
   });
 
@@ -678,26 +605,22 @@ describe("prepared model support admission", () => {
       baseUrl: "https://api.openai.com/v1",
     };
     const owner = publish(() => true, config, {
-      modelCatalog: { entries: [row], routeVariants: [row] },
+      modelCatalog: modelCatalog(row),
     });
-    bindPreparedModelRuntimeAuth(owner, {
-      store: {
-        version: 1,
-        profiles: {
-          oauth: {
-            provider: "openai",
-            type: "oauth",
-            access: "synthetic-access",
-            refresh: "synthetic-refresh",
-            expires: 9_999_999_999_999,
-          },
-        },
+    bindProfiles(owner, {
+      oauth: {
+        provider: "openai",
+        type: "oauth",
+        access: "synthetic-access",
+        refresh: "synthetic-refresh",
+        expires: 9_999_999_999_999,
       },
     });
-    expect(await chooseModel(config, { raw: "openai/chat-latest@oauth" })).toMatchObject({
-      kind: "unavailable",
-      error: expect.stringContaining("only through OpenAI Platform"),
-    });
+    await expectChoice(
+      config,
+      { raw: "openai/chat-latest@oauth" },
+      unavailable("only through OpenAI Platform"),
+    );
   });
 
   const nativeRow = {
@@ -712,15 +635,18 @@ describe("prepared model support admission", () => {
   // owner's native load can register its replacement and return a renewed catalog.
   function publishNativeRenewal(
     config: OpenClawConfig,
-    { isCurrent = () => true, row = nativeRow }: { isCurrent?: () => boolean; row?: object } = {},
+    {
+      isCurrent = () => true,
+      row = nativeRow,
+    }: {
+      isCurrent?: () => boolean;
+      row?: Parameters<typeof modelCatalog>[0];
+    } = {},
   ) {
     const state = {
       registered: true,
       renewalRegisters: true,
-      renewed: {
-        entries: [row],
-        routeVariants: [row],
-      } as PreparedModelRuntimeSnapshot["modelCatalog"],
+      renewed: modelCatalog(row),
     };
     const reload = vi.fn(async () => {
       state.registered = state.renewalRegisters;
@@ -746,29 +672,13 @@ describe("prepared model support admission", () => {
       pluginRegistry: registry,
       loadNativeModelCatalog: reload,
       modelCatalog: state.renewed,
-      configuredRuntimeModels: [
-        {
-          provider: "fixture",
-          modelId: "native",
-          model: makeProviderModelFixture({
-            provider: "fixture",
-            id: "native",
-            name: "Native model",
-            api: "openai-responses",
-            baseUrl: "https://native.invalid/v1",
-            contextWindow: 4096,
-            maxTokens: 1024,
-          }),
-        },
-      ],
+      configuredRuntimeModels: configuredModel("fixture", "native", "https://native.invalid/v1"),
     });
-    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    bindProfiles(owner, {});
     return { state, reload };
   }
   // The runtime comes from the catalog row, so only the renewed catalog decides admission.
-  const implicitNative: OpenClawConfig = {
-    agents: { defaults: { model: "fixture/native", models: { "fixture/native": {} } } },
-  };
+  const implicitNative = runtimeConfig("fixture/native");
 
   it.each(["anthropic", "claude-cli"])(
     "rechecks recovered native auth before admitting %s without a catalog refresh",
@@ -785,29 +695,16 @@ describe("prepared model support admission", () => {
       });
       try {
         const raw = `${provider}/claude-opus-5-5`;
-        const config: OpenClawConfig = {
-          agents: {
-            defaults: { model: raw, models: { [raw]: { agentRuntime: { id: "claude-cli" } } } },
-          },
-        };
+        const config = runtimeConfig(raw, "claude-cli");
         const row = { provider, id: "claude-opus-5-5", name: "Claude" };
         const owner = publish(() => true, config, {
-          modelCatalog: { entries: [row], routeVariants: [row] },
-          configuredRuntimeModels: [
-            {
-              provider,
-              modelId: row.id,
-              model: makeProviderModelFixture({
-                provider,
-                id: row.id,
-                name: row.name,
-                api: "anthropic-messages",
-                baseUrl: "https://api.anthropic.com",
-                contextWindow: 200_000,
-                maxTokens: 8192,
-              }),
-            },
-          ],
+          modelCatalog: modelCatalog(row),
+          configuredRuntimeModels: configuredModel(
+            provider,
+            row.id,
+            "https://api.anthropic.com",
+            "anthropic-messages",
+          ),
           metadataSnapshot: metadata({
             id: "anthropic",
             providers: ["anthropic"],
@@ -820,7 +717,6 @@ describe("prepared model support admission", () => {
         });
         Object.assign(owner, { recheckNativeLogin });
         const result = await chooseModel(config, { raw });
-        expect(result.kind, JSON.stringify(result)).toBe("resolved");
         expect(result).toMatchObject({
           kind: "resolved",
           ref: { provider, model: "claude-opus-5-5" },
@@ -840,14 +736,7 @@ describe("prepared model support admission", () => {
     async ({ ownership, source }) => {
       const configured = ownership === "configured";
       const config: OpenClawConfig = configured
-        ? {
-            agents: {
-              defaults: {
-                model: "fixture/native",
-                models: { "fixture/native": { agentRuntime: { id: "native-test" } } },
-              },
-            },
-          }
+        ? runtimeConfig("fixture/native", "native-test")
         : implicitNative;
       // Configured ownership must renew without a row-owned runtime.
       const { nativeRuntime: _, ...configuredRow } = nativeRow;
@@ -863,9 +752,7 @@ describe("prepared model support admission", () => {
       state.registered = false;
       state.renewalRegisters = false;
       expect(await choose()).toMatchObject(
-        configured
-          ? { kind: "unavailable" }
-          : { kind: "unavailable", error: expect.stringContaining("Restore that account") },
+        configured ? unavailable() : unavailable("Restore that account"),
       );
       expect(reload).toHaveBeenCalledTimes(2);
       if (configured) {
@@ -879,7 +766,7 @@ describe("prepared model support admission", () => {
       state.registered = false;
       state.renewalRegisters = true;
       const moved = { ...nativeRow, nativeRuntime: "native-retired" };
-      state.renewed = { entries: [moved], routeVariants: [moved] };
+      state.renewed = modelCatalog(moved);
       expect(await choose()).toMatchObject({ kind: "unavailable" });
       expect(reload).toHaveBeenCalledTimes(3);
       // A failed load is the rejection's cause; a missing account is not implied.
@@ -917,12 +804,11 @@ describe("prepared model support admission", () => {
           return state.renewed;
         });
       }
-      expect(
-        await chooseModel(implicitNative, {
-          source,
-          raw: "fixture/native",
-        }),
-      ).toMatchObject({ kind: "unavailable" });
+      await expectChoice(
+        implicitNative,
+        { source, raw: "fixture/native" },
+        { kind: "unavailable" },
+      );
       expect(reload).toHaveBeenCalledExactlyOnceWith(nativeRenewal);
     },
   );
