@@ -19,10 +19,7 @@ import {
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
-import {
-  backupManifestSizeError,
-  type BackupManifest,
-} from "../commands/backup-verify-manifest.js";
+import { encodeBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -670,24 +667,13 @@ async function createBackupArchiveInScope(
                     ? { sourcePath: snapshot.sourcePath, role: "agent", agentId: snapshot.agentId }
                     : { sourcePath: snapshot.sourcePath, role: "global" },
                 );
-                manifest.postgresSnapshots = stateSqliteBackup.postgresSnapshots;
-                const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
-                const sizeError = backupManifestSizeError(contents.length);
-                if (sizeError) {
-                  throw sizeError;
-                }
-                const header = Buffer.alloc(512);
-                new tar.Header({
-                  path: archiveRoot + "/manifest.json",
-                  type: "File",
-                  mode: 0o644,
-                  size: contents.length,
-                }).encode(header);
-                return Buffer.concat([
-                  header,
-                  contents,
-                  Buffer.alloc(((512 - (contents.length % 512)) % 512) + 1024),
-                ]);
+                manifest.postgresSnapshots = stateSqliteBackup.postgresSnapshots.map(
+                  (snapshot) => ({
+                    archivePath: `${buildBackupArchivePath(archiveRoot, snapshot.sourcePath)}.postgres`,
+                    manifestSha256: snapshot.manifestSha256,
+                  }),
+                );
+                return encodeBackupManifest(manifest);
               },
             ),
           onPartialArchive: (partialArchive) => {

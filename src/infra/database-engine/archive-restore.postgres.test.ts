@@ -1,6 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -9,6 +9,7 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../../commands/backup-restore.js";
 import { buildBackupArchivePath } from "../../commands/backup-shared.js";
+import { verifyBackupArchive } from "../../commands/backup-verify.js";
 import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,7 +21,7 @@ import {
 import { resetLogger } from "../../logging/logger.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { clearSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
-import { readBackupEngine } from "../../snapshot/database-backup.js";
+import { capturePostgresBackup, readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -50,7 +51,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
     },
     {
       scenario: "compatibility",
-      name: "restores legacy plugin archives and cleans failed provider restores",
+      name: "preserves unlisted legacy exports and cleans failed provider restores",
     },
   ])(
     "$name",
@@ -85,7 +86,10 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     },
                   },
                 },
-                agents: { entries: { main: {} } },
+                agents: {
+                  ...(sqliteAgent ? { defaults: { workspace: state.path("workspace") } } : {}),
+                  entries: { main: {} },
+                },
                 plugins: {
                   entries: {
                     workboard: { enabled: false },
@@ -182,7 +186,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   scenario === "all" ||
                   (scenario === "mixed"
                     ? family === "state" || family === "agent"
-                    : family === "workboard" || family === "logbook"),
+                    : family === "state" || family === "workboard"),
               );
               const descriptors = new Map(
                 await Promise.all(
@@ -281,9 +285,27 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                 }
                 resetDatabaseEngineSelectionForTest();
                 clearRuntimeConfigSnapshot();
+                const userExportPath = state.path("workspace", "copied.sqlite");
+                const userFiles = new Map<string, Buffer>();
+                if (sqliteAgent) {
+                  await fs.mkdir(path.dirname(userExportPath), { recursive: true });
+                  await capturePostgresBackup({
+                    sourcePath: stores[0]!.file,
+                    directory: `${userExportPath}.postgres`,
+                  });
+                  await fs.copyFile(`${userExportPath}.postgres/anchor.sqlite`, userExportPath);
+                  for (const file of [
+                    userExportPath,
+                    ...["manifest.json", "anchor.sqlite", "database.sqlite"].map(
+                      (name) => `${userExportPath}.postgres/${name}`,
+                    ),
+                  ]) {
+                    userFiles.set(file, await fs.readFile(file));
+                  }
+                }
                 const backup = await createBackupArchive({
                   output: state.path("archive.tar.gz"),
-                  includeWorkspace: false,
+                  includeWorkspace: sqliteAgent,
                 });
                 const capturedIdentities = new Map(
                   stores.map((store) => [store.file, readBackupEngine(store.file)]),
@@ -356,6 +378,25 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     publication.mockRestore();
                   }
                   expect(selectionPublished).toBe(true);
+                  for (const [file, bytes] of userFiles) {
+                    expect(
+                      await fs.readFile(
+                        path.join(targetPath, buildBackupArchivePath(backup.archiveRoot, file)),
+                      ),
+                    ).toEqual(bytes);
+                  }
+                  expect(
+                    (
+                      await recovery.query(
+                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                      )
+                    ).rows,
+                  ).toEqual([
+                    {
+                      count: stores.filter((store) => !sqliteAgent || store.family !== "agent")
+                        .length,
+                    },
+                  ]);
                   for (const store of stores) {
                     const anchor = readBackupEngine(
                       path.join(
@@ -416,16 +457,15 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
 
                   expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
 
-                  // Activate the restored anchors where this synthetic installation expects them.
-                  for (const store of stores) {
-                    await fs.copyFile(
-                      path.join(
-                        targetPath,
-                        buildBackupArchivePath(restored.archiveRoot, store.file),
-                      ),
-                      store.file,
-                    );
-                  }
+                  // Activate the entire restored state asset, including any retained capsule directories.
+                  await fs.cp(
+                    path.join(
+                      targetPath,
+                      buildBackupArchivePath(backup.archiveRoot, state.stateDir),
+                    ),
+                    state.stateDir,
+                    { recursive: true },
+                  );
                   const gatewayConfig: OpenClawConfig = {
                     ...config,
                     plugins: { enabled: false },
@@ -490,6 +530,27 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                       }
                     },
                   );
+                  if (scenario === "all") {
+                    clearRuntimeConfigSnapshot();
+                    resetDatabaseEngineSelectionForTest();
+                    const next = await createBackupArchive({
+                      output: state.path("after-restore.tar.gz"),
+                      includeWorkspace: false,
+                    });
+                    await expect(verifyBackupArchive(next.archivePath)).resolves.toMatchObject({
+                      ok: true,
+                    });
+                    const nextRoot = state.path("next-capture");
+                    await fs.mkdir(nextRoot);
+                    await tar.x({ file: next.archivePath, cwd: nextRoot });
+                    const nextManifest = JSON.parse(
+                      await fs.readFile(
+                        path.join(nextRoot, next.archiveRoot, "manifest.json"),
+                        "utf8",
+                      ),
+                    );
+                    expect(nextManifest.postgresSnapshots).toHaveLength(stores.length);
+                  }
                 } else {
                   const capturedRoot = state.path("captured-archive");
                   await fs.mkdir(capturedRoot);
@@ -497,55 +558,32 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   const plugin = stores.find((store) => store.family === "workboard")!;
                   const legacyRoot = state.path("legacy-archive");
                   const pluginEntry = buildBackupArchivePath(backup.archiveRoot, plugin.file);
+                  await fs.cp(capturedRoot, legacyRoot, { recursive: true });
                   const legacyAnchor = path.join(legacyRoot, pluginEntry);
-                  await fs.mkdir(path.dirname(legacyAnchor), { recursive: true });
-                  await fs.copyFile(path.join(capturedRoot, pluginEntry), legacyAnchor);
-                  await fs.cp(
-                    path.join(capturedRoot, `${pluginEntry}.postgres`),
-                    `${legacyAnchor}.postgres`,
-                    { recursive: true },
-                  );
                   await fs.writeFile(
                     path.join(`${legacyAnchor}.postgres`, "operator-note.txt"),
                     "retain this user file\n",
                   );
-                  await fs.writeFile(
-                    path.join(legacyRoot, backup.archiveRoot, "manifest.json"),
-                    JSON.stringify({
-                      schemaVersion: 1,
-                      archiveRoot: backup.archiveRoot,
-                      createdAt: backup.createdAt,
-                      platform: process.platform,
-                      assets: [
-                        {
-                          kind: "state",
-                          sourcePath: path.dirname(plugin.file),
-                          archivePath: buildBackupArchivePath(
-                            backup.archiveRoot,
-                            path.dirname(plugin.file),
-                          ),
-                        },
-                      ],
-                    }),
-                  );
-                  const legacyConfig = path.join(
-                    legacyRoot,
-                    buildBackupArchivePath(backup.archiveRoot, state.configPath),
-                  );
-                  await fs.mkdir(path.dirname(legacyConfig), { recursive: true });
-                  await fs.writeFile(legacyConfig, JSON.stringify(config));
                   const legacyManifestPath = path.join(
                     legacyRoot,
                     backup.archiveRoot,
                     "manifest.json",
                   );
                   const legacyManifest = JSON.parse(await fs.readFile(legacyManifestPath, "utf8"));
-                  legacyManifest.assets.push({
-                    kind: "config",
-                    sourcePath: state.configPath,
-                    archivePath: buildBackupArchivePath(backup.archiveRoot, state.configPath),
-                  });
+                  delete legacyManifest.postgresSnapshots;
                   await fs.writeFile(legacyManifestPath, JSON.stringify(legacyManifest));
+                  const legacyFiles = new Map<string, Buffer>();
+                  for (const entryPath of [
+                    pluginEntry,
+                    ...[
+                      "manifest.json",
+                      "anchor.sqlite",
+                      "database.sqlite",
+                      "operator-note.txt",
+                    ].map((name) => `${pluginEntry}.postgres/${name}`),
+                  ]) {
+                    legacyFiles.set(entryPath, await fs.readFile(path.join(legacyRoot, entryPath)));
+                  }
                   const legacyArchive = state.path("legacy.tar.gz");
                   await tar.c({ file: legacyArchive, cwd: legacyRoot, gzip: true }, [
                     backup.archiveRoot,
@@ -553,46 +591,68 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   const legacyTarget = state.path("legacy-restored");
                   resetDatabaseEngineSelectionForTest();
                   clearRuntimeConfigSnapshot();
-                  await backupRestoreCommand(createTestRuntime(), {
+                  const legacyResult = await backupRestoreCommand(createTestRuntime(), {
                     archive: legacyArchive,
                     target: legacyTarget,
                   });
-                  const legacy = readBackupEngine(path.join(legacyTarget, pluginEntry));
+                  expect(legacyResult.warnings).toContainEqual(
+                    expect.stringContaining("Re-run backup with this version"),
+                  );
+                  for (const [name, bytes] of legacyFiles) {
+                    expect(await fs.readFile(path.join(legacyTarget, name))).toEqual(bytes);
+                  }
+                  const global = stores.find((store) => store.family === "state")!;
+                  const legacy = readBackupEngine(
+                    path.join(
+                      legacyTarget,
+                      buildBackupArchivePath(backup.archiveRoot, global.file),
+                    ),
+                  );
                   assert(legacy.engine === "postgres");
                   expect(
                     (
                       await recovery.query(
-                        `SELECT name FROM "${legacy.namespace}".workboard_boards`,
+                        `SELECT display_name FROM "${legacy.namespace}".user_profiles`,
                       )
                     ).rows,
-                  ).toEqual([{ name: plugin.value }]);
+                  ).toEqual([{ display_name: global.value }]);
                   expect(
-                    await fs.readFile(
-                      path.join(legacyTarget, `${pluginEntry}.postgres`, "operator-note.txt"),
-                      "utf8",
-                    ),
-                  ).toBe("retain this user file\n");
+                    (
+                      await recovery.query(
+                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                      )
+                    ).rows,
+                  ).toEqual([{ count: 1 }]);
 
                   // A later unavailable provider must clean namespaces already prepared for earlier stores.
                   const corruptRoot = state.path("corrupt");
                   await fs.mkdir(corruptRoot);
                   await tar.x({ file: backup.archivePath, cwd: corruptRoot });
+                  const archiveManifestPath = path.join(
+                    corruptRoot,
+                    backup.archiveRoot,
+                    "manifest.json",
+                  );
                   const archiveManifest = JSON.parse(
-                    await fs.readFile(
-                      path.join(corruptRoot, backup.archiveRoot, "manifest.json"),
-                      "utf8",
-                    ),
-                  ) as { postgresSnapshots: Array<{ sourcePath: string }> };
-                  const lastPath = archiveManifest.postgresSnapshots.at(-1)!.sourcePath;
+                    await fs.readFile(archiveManifestPath, "utf8"),
+                  ) as {
+                    postgresSnapshots: Array<{ archivePath: string; manifestSha256: string }>;
+                  };
+                  const lastCapture = archiveManifest.postgresSnapshots.at(-1)!;
+                  const originalHash = lastCapture.manifestSha256;
                   const corruptManifest = path.join(
                     corruptRoot,
-                    `${buildBackupArchivePath(backup.archiveRoot, lastPath)}.postgres`,
+                    lastCapture.archivePath,
                     "manifest.json",
                   );
                   const originalManifest = await fs.readFile(corruptManifest, "utf8");
                   const unavailableProvider = JSON.parse(originalManifest);
                   unavailableProvider.source.owner = "missing-backup-owner";
                   await fs.writeFile(corruptManifest, JSON.stringify(unavailableProvider));
+                  lastCapture.manifestSha256 = createHash("sha256")
+                    .update(await fs.readFile(corruptManifest))
+                    .digest("hex");
+                  await fs.writeFile(archiveManifestPath, JSON.stringify(archiveManifest));
                   const corruptArchive = state.path("corrupt.tar.gz");
                   await tar.c({ file: corruptArchive, cwd: corruptRoot, gzip: true }, [
                     backup.archiveRoot,
@@ -619,6 +679,8 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   ).toEqual(before);
 
                   await fs.writeFile(corruptManifest, originalManifest);
+                  lastCapture.manifestSha256 = originalHash;
+                  await fs.writeFile(archiveManifestPath, JSON.stringify(archiveManifest));
                   await fs.unlink(
                     path.join(
                       corruptRoot,

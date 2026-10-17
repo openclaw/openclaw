@@ -280,22 +280,27 @@ describe("standalone backup database completeness", () => {
     { name: "non-array", value: {}, error: "postgresSnapshots must be an array" },
     {
       name: "relative path",
-      value: [{ sourcePath: "plugin.sqlite" }],
-      error: "must be absolute and normalized",
+      value: [{ archivePath: "plugin.sqlite.postgres", manifestSha256: "0".repeat(64) }],
+      error: "outside payload root",
     },
     {
       name: "duplicate path",
-      value: [{ sourcePath: "/plugin.sqlite" }, { sourcePath: "/PLUGIN.sqlite" }],
+      value: [
+        { archivePath: "backup/payload/plugin.sqlite.postgres", manifestSha256: "0".repeat(64) },
+        { archivePath: "backup/payload/PLUGIN.sqlite.postgres", manifestSha256: "0".repeat(64) },
+      ],
       error: "duplicate PostgreSQL snapshot paths",
     },
     {
-      name: "extra identity",
-      value: [{ sourcePath: "/plugin.sqlite", namespace: "unknown" }],
+      name: "invalid hash",
+      value: [{ archivePath: "backup/payload/plugin.sqlite.postgres", manifestSha256: "unknown" }],
       error: "invalid PostgreSQL snapshot",
     },
     {
       name: "missing capsule",
-      value: [{ sourcePath: "/plugin.sqlite" }],
+      value: [
+        { archivePath: "backup/payload/plugin.sqlite.postgres", manifestSha256: "0".repeat(64) },
+      ],
       error: "missing a regular matched artifact",
     },
   ])("rejects $name PostgreSQL inventory", async ({ value, error }) => {
@@ -311,12 +316,13 @@ describe("archive PostgreSQL capsule verification", () => {
     "inner anchor",
     "outer anchor",
     "pending capture",
-    "inventory omission",
+    "manifest binding",
+    "unowned anchor",
   ])(
     "rejects incomplete or damaged plugin-only PostgreSQL archives (%s) before restore",
     async (damage) => {
       const sourcePath = "/synthetic/plugins/workboard.sqlite";
-      const fixture = await writeSmallArchive([], [{ sourcePath }]);
+      const fixture = await writeSmallArchive([], []);
       const anchorPath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
       const directoryPath = `${anchorPath}.postgres`;
       const directory = path.join(fixture.root, directoryPath);
@@ -368,6 +374,13 @@ describe("archive PostgreSQL capsule verification", () => {
       const archiveManifestPath = path.join(fixture.root, fixture.archiveRoot, "manifest.json");
       const manifest: BackupManifest = JSON.parse(await fs.readFile(archiveManifestPath, "utf8"));
       delete manifest.paths;
+      const captureHash = async () =>
+        createHash("sha256")
+          .update(await fs.readFile(manifestPath))
+          .digest("hex");
+      manifest.postgresSnapshots = [
+        { archivePath: directoryPath, manifestSha256: await captureHash() },
+      ];
       manifest.assets = [
         {
           kind: "plugin",
@@ -379,8 +392,14 @@ describe("archive PostgreSQL capsule verification", () => {
       await expect(
         verifyBackupArchive(await repack(fixture.root, fixture.archiveRoot, "valid")),
       ).resolves.toMatchObject({ ok: true });
-      if (damage === "inventory omission") {
+      if (damage === "manifest binding") {
+        manifest.postgresSnapshots[0]!.manifestSha256 = "0".repeat(64);
+        await fs.writeFile(archiveManifestPath, JSON.stringify(manifest));
+      } else if (damage === "unowned anchor") {
         manifest.postgresSnapshots = [];
+        manifest.sqliteSnapshots = [{ sourcePath, role: "agent", agentId: "main" }];
+        manifest.paths = { stateDir: "/synthetic" };
+        manifest.assets[0]!.kind = "state";
         await fs.writeFile(archiveManifestPath, JSON.stringify(manifest));
       } else if (damage === "pending capture") {
         await fs.writeFile(path.join(directory, ".pending"), "");
@@ -397,26 +416,16 @@ describe("archive PostgreSQL capsule verification", () => {
         if (damage === "inner anchor") {
           envelope.artifacts["anchor.sqlite"] = await artifact("anchor.sqlite");
           await fs.writeFile(manifestPath, JSON.stringify(envelope));
+          manifest.postgresSnapshots[0]!.manifestSha256 = await captureHash();
+          await fs.writeFile(archiveManifestPath, JSON.stringify(manifest));
         }
       }
       const damaged = await repack(fixture.root, fixture.archiveRoot, "damaged");
-      const error =
-        damage === "inventory omission"
-          ? /inventory omits PostgreSQL capsule/
-          : /verification failed/;
-      await expect.soft(verifyBackupArchive(damaged)).rejects.toThrow(error);
-      if (damage === "inventory omission") {
-        await withOpenClawTestState(
-          { prefix: "backup-omitted-postgres-", scenario: "minimal" },
-          async (state) => {
-            const target = state.path("restored");
-            await expect
-              .soft(backupRestoreCommand(createTestRuntime(), { archive: damaged, target }))
-              .rejects.toThrow(error);
-            await expect.soft(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
-          },
-        );
-      }
+      await expect(verifyBackupArchive(damaged)).rejects.toThrow(
+        damage === "manifest binding"
+          ? /does not match its capture inventory/
+          : /verification failed/,
+      );
     },
   );
 });

@@ -5,12 +5,16 @@ import type { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
 import {
   recordArchiveSymbolicLink,
+  resolvePortableArchivePathKey,
+  findPortableArchiveEntryPathCollision,
   type BackupSymbolicLink,
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
 } from "../infra/backup-archive-path-policy.js";
+import { readEngineAnchor } from "../infra/database-engine/open.js";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
+import { sha256File } from "../infra/directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -87,26 +91,8 @@ function formatResult(result: BackupVerifyResult): string {
     result.sqliteInventoryVerified
       ? "SQLite database inventory verified."
       : "SQLite database coverage unknown: this legacy archive has no database inventory.",
+    ...(result.warnings ?? []),
   ].join("\n");
-}
-
-function resolvePortableArchivePathKey(value: string): string {
-  return value.normalize("NFC").toLowerCase();
-}
-
-function findPortableArchiveEntryPathCollision(
-  entries: Array<{ normalized: string }>,
-): { first: string; second: string } | undefined {
-  const seen = new Map<string, string>();
-  for (const entry of entries) {
-    const key = resolvePortableArchivePathKey(entry.normalized);
-    const first = seen.get(key);
-    if (first && first !== entry.normalized) {
-      return { first, second: entry.normalized };
-    }
-    seen.set(key, entry.normalized);
-  }
-  return undefined;
 }
 
 function resolveExtractionBytes(
@@ -344,7 +330,7 @@ async function extractDatabaseArtifacts(
 async function verifyPostgresSnapshots(
   archivePath: string,
   entries: NormalizedArchiveEntry[],
-  captures: Awaited<ReturnType<typeof resolvePostgresRestoreEntries>>,
+  captures: ReturnType<typeof resolvePostgresRestoreEntries>["captures"],
 ): Promise<void> {
   if (!captures.length) {
     return;
@@ -365,7 +351,13 @@ async function verifyPostgresSnapshots(
     await extractDatabaseArtifacts(archivePath, tempDir, artifacts);
     const { readBackupEngineImage, verifyMatchedPostgresBackup } =
       await import("../snapshot/database-backup.js");
-    for (const { directoryPath, anchorPath } of captures) {
+    for (const { directoryPath, anchorPath, manifestSha256 } of captures) {
+      const manifestPath = path.join(tempDir, directoryPath, "manifest.json");
+      if (manifestSha256 && (await sha256File(manifestPath)).digest !== manifestSha256) {
+        throw new Error(
+          `PostgreSQL capsule does not match its capture inventory: ${directoryPath}`,
+        );
+      }
       const anchor = readBackupEngineImage(path.join(tempDir, anchorPath), anchorPath);
       if (anchor.engine !== "postgres") {
         throw new Error(`PostgreSQL backup has an invalid outer anchor: ${anchorPath}`);
@@ -447,6 +439,11 @@ async function verifySqliteSnapshots(params: {
             allowExtension: true,
             readOnly: true,
           });
+          if (readEngineAnchor(database)) {
+            throw new Error(
+              "PostgreSQL anchor has no owned matched capsule. Re-run backup with this version on the source installation.",
+            );
+          }
           database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
           await loadSqliteVecExtension({ db: database });
           assertSqliteIntegrity(database, entry.normalized);
@@ -667,8 +664,7 @@ async function verifyResolvedBackupArchive(
   ) {
     throw new Error("Backup manifest external symbolic links do not match archive entries.");
   }
-  const databaseRestoreCandidates = await resolvePostgresRestoreEntries(
-    archivePath,
+  const { captures: databaseRestoreCandidates, warnings } = resolvePostgresRestoreEntries(
     entries,
     manifest,
   );
@@ -691,6 +687,7 @@ async function verifyResolvedBackupArchive(
     entryCount: rawEntries.length,
     symlinkCount: symbolicLinks.length,
     sqliteInventoryVerified: manifest.sqliteSnapshots !== undefined,
+    ...(warnings.length ? { warnings } : {}),
     ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };
 

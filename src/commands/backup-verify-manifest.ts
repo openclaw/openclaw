@@ -247,8 +247,8 @@ export type BackupManifest = {
   }>;
   /** Capture-time canonical database inventory; absent in legacy archives. */
   sqliteSnapshots?: BackupManifestSqliteSnapshot[];
-  /** Physical PostgreSQL captures; absent in legacy archives. */
-  postgresSnapshots?: Array<{ sourcePath: string }>;
+  /** Producer-generated capsules, bound to their captured manifests; absent in legacy archives. */
+  postgresSnapshots?: Array<{ archivePath: string; manifestSha256: string }>;
   externalSymbolicLinks?: BackupSymbolicLink[];
   skipped?: Array<{
     kind?: string;
@@ -257,6 +257,27 @@ export type BackupManifest = {
     coveredBy?: string;
   }>;
 };
+
+/** Encode the bounded root manifest as the archive's final tar member. */
+export function encodeBackupManifest(manifest: BackupManifest): Buffer {
+  const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
+  const sizeError = backupManifestSizeError(contents.length);
+  if (sizeError) {
+    throw sizeError;
+  }
+  const header = Buffer.alloc(512);
+  new tar.Header({
+    path: manifest.archiveRoot + "/manifest.json",
+    type: "File",
+    mode: 0o644,
+    size: contents.length,
+  }).encode(header);
+  return Buffer.concat([
+    header,
+    contents,
+    Buffer.alloc(((512 - (contents.length % 512)) % 512) + 1024),
+  ]);
+}
 
 function parseBackupManifestSourcePath(value: unknown, label: string): string {
   if (typeof value !== "string" || value.includes("\0")) {
@@ -358,9 +379,7 @@ function parseBackupManifestSqliteSnapshots(
   });
 }
 
-function parseBackupManifestPostgresSnapshots(
-  value: unknown,
-): Array<{ sourcePath: string }> | undefined {
+function parseBackupManifestPostgresSnapshots(value: unknown): BackupManifest["postgresSnapshots"] {
   if (value === undefined) {
     return undefined;
   }
@@ -371,18 +390,27 @@ function parseBackupManifestPostgresSnapshots(
   return value.map((snapshot) => {
     if (
       !isRecord(snapshot) ||
-      Object.keys(snapshot).length !== 1 ||
-      !Object.hasOwn(snapshot, "sourcePath")
+      Object.keys(snapshot).length !== 2 ||
+      typeof snapshot.archivePath !== "string"
     ) {
       throw new Error("Backup manifest contains an invalid PostgreSQL snapshot.");
     }
-    const sourcePath = parseBackupManifestSourcePath(snapshot.sourcePath, "PostgreSQL snapshot");
-    const key = sourcePath.replaceAll("\\", "/").normalize("NFC").toLowerCase();
+    const digest = recoveryDigest.safeParse(snapshot.manifestSha256);
+    if (!digest.success) {
+      throw new Error("Backup manifest contains an invalid PostgreSQL snapshot hash.");
+    }
+    const archivePath = normalizeArchivePath(snapshot.archivePath, "PostgreSQL capsule path");
+    if (archivePath !== snapshot.archivePath || !archivePath.endsWith(".postgres")) {
+      throw new Error(
+        "Backup manifest PostgreSQL capsule path must be normalized and end in .postgres.",
+      );
+    }
+    const key = archivePath.normalize("NFC").toLowerCase();
     if (paths.has(key)) {
       throw new Error("Backup manifest contains duplicate PostgreSQL snapshot paths.");
     }
     paths.add(key);
-    return { sourcePath };
+    return { archivePath, manifestSha256: digest.data };
   });
 }
 
@@ -577,48 +605,33 @@ export function isRegularArchiveFile(entryType: string | undefined): boolean {
   return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
 }
 
-export async function resolvePostgresRestoreEntries(
-  archivePath: string,
+export function resolvePostgresRestoreEntries(
   entries: NormalizedArchiveEntry[],
   manifest: BackupManifest,
-): Promise<Array<{ directoryPath: string; anchorPath: string }>> {
-  const captures = (manifest.postgresSnapshots ?? []).map(({ sourcePath }) => {
-    const anchorPath = buildBackupArchivePath(manifest.archiveRoot, sourcePath);
-    return { anchorPath, directoryPath: `${anchorPath}.postgres` };
-  });
-  const declaredDirectories = new Set(captures.map(({ directoryPath }) => directoryPath));
-  const { parsePostgresEnvelope } = await import("../snapshot/export-envelope.js");
-  for (const entry of entries) {
-    if (
-      !isRegularArchiveFile(entry.type) ||
-      !entry.normalized.endsWith(".postgres/manifest.json")
-    ) {
-      continue;
-    }
-    const directoryPath = path.posix.dirname(entry.normalized);
-    if (declaredDirectories.has(directoryPath)) {
-      continue;
-    }
-    let envelope;
-    try {
-      const value: unknown = JSON.parse(
-        await extractManifest({ archivePath, manifestEntryPath: entry.raw }),
-      );
-      envelope = parsePostgresEnvelope(value, path.posix.basename(directoryPath));
-    } catch {
-      // Ordinary user files may share this name; only PG envelopes claim a store.
-      continue;
-    }
-    if (envelope.profile === "user-backup") {
-      if (manifest.postgresSnapshots !== undefined) {
-        throw new Error(`Backup inventory omits PostgreSQL capsule: ${directoryPath}`);
-      }
-      // Older archives record PG identity only inside the generated capsule.
-      captures.push({ directoryPath, anchorPath: directoryPath.slice(0, -".postgres".length) });
-    }
-  }
+): {
+  captures: Array<{ directoryPath: string; anchorPath: string; manifestSha256?: string }>;
+  warnings: string[];
+} {
+  const captures =
+    manifest.postgresSnapshots?.map(({ archivePath, manifestSha256 }) => ({
+      directoryPath: archivePath,
+      anchorPath: archivePath.slice(0, -".postgres".length),
+      manifestSha256,
+    })) ??
+    (manifest.sqliteSnapshots ?? []).flatMap(({ sourcePath }) => {
+      const anchorPath = buildBackupArchivePath(manifest.archiveRoot, sourcePath);
+      const directoryPath = `${anchorPath}.postgres`;
+      // Legacy ownership comes from the outer core inventory, never a capsule's shape.
+      return entries.some((entry) => isArchivePathWithin(entry.normalized, directoryPath))
+        ? [{ anchorPath, directoryPath }]
+        : [];
+    });
   const byPath = new Map(entries.map((entry) => [entry.normalized, entry]));
+  const payloadRoot = path.posix.join(normalizeArchiveRoot(manifest.archiveRoot), "payload");
   for (const { directoryPath, anchorPath } of captures) {
+    if (!isArchivePathWithin(directoryPath, payloadRoot)) {
+      throw new Error(`PostgreSQL capsule path is outside payload root: ${directoryPath}`);
+    }
     for (const required of [
       anchorPath,
       ...["manifest.json", "anchor.sqlite", "database.sqlite"].map((name) =>
@@ -631,5 +644,20 @@ export async function resolvePostgresRestoreEntries(
       }
     }
   }
-  return captures;
+  const declaredDirectories = new Set(captures.map(({ directoryPath }) => directoryPath));
+  const hasUnlistedLegacyCapsules =
+    manifest.postgresSnapshots === undefined &&
+    entries.some(
+      (entry) =>
+        entry.normalized.endsWith(".postgres/manifest.json") &&
+        !declaredDirectories.has(path.posix.dirname(entry.normalized)),
+    );
+  return {
+    captures,
+    warnings: hasUnlistedLegacyCapsules
+      ? [
+          "This legacy archive has no PostgreSQL capsule ownership inventory. Unlisted exports are preserved as files, not imported. Re-run backup with this version on the source installation to recover plugin PostgreSQL stores automatically.",
+        ]
+      : [],
+  };
 }

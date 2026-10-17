@@ -357,9 +357,10 @@ backup. Neither a server dump alone nor a copied anchor covers the installation.
 
 ### Restore all PostgreSQL stores
 
-`openclaw backup verify <archive>` checks every PostgreSQL capsule’s manifest,
-artifact hashes, and binding to its captured anchor, including plugin stores and
-retained Matrix roots.
+`openclaw backup verify <archive>` checks the PostgreSQL capsules declared by the
+backup producer, including plugin stores and retained Matrix roots. The archive
+records each generated capsule's archive path and manifest hash; verification
+checks that binding, its artifact hashes, and its matching anchor.
 
 `openclaw backup restore <archive> --target <directory>` verifies and extracts
 into a fresh staging directory, then imports every captured PostgreSQL store into
@@ -368,13 +369,18 @@ retained Matrix roots. It publishes matching anchors only after all stores pass
 their providers' verification. A failed restore discards its new namespaces and
 cleans the incomplete staging tree. Original namespaces are left untouched.
 
-New archives record their PostgreSQL stores explicitly. Verification rejects
-valid PostgreSQL capsules missing from that inventory. Older archives are
-restored from their matched PostgreSQL export manifests; a legacy archive whose
-entire export is missing cannot identify that missing store. Restore consumes
-the generated export files after publishing their verified anchors, so a later
-backup does not rediscover the import artifacts as stores. Unmanaged SQLite
-files remain opaque and are copied without opening them.
+Restore imports and consumes only producer-declared capsules. A copied export
+in a workspace or another archived directory is ordinary user data: restore
+preserves it without importing it or deleting its members. Consuming generated
+capsules after successful import lets a restored installation create another
+full backup without colliding with the previous exports.
+
+Older archives without the capsule inventory can automatically recover only the
+global and agent snapshots declared by their existing database inventory. Other
+exports remain unchanged as files. Verification and restore warn when an older
+archive contains unlisted exports: re-run backup with this version on the source
+installation to capture plugin PostgreSQL stores with ownership metadata before
+activating a full recovery. Unmanaged SQLite files also remain opaque.
 
 Archive restore validates its captured configuration under offline custody and
 uses its family selections. Supply the captured configuration's external
