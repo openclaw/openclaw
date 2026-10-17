@@ -303,6 +303,16 @@ Enable `cua-computer` on the Gateway host, verify the focused artifact check, an
 
 If you intended to control a paired desktop, select `target: "node"` and its `node` explicitly. An unavailable Gateway target never redirects a possibly completed action to a different computer.
 
+### Gateway computer busy
+
+`COMPUTER_HOST_BUSY: another execution owns the Gateway computer` means a Computer Use execution already holds the Gateway computer. One execution owns it at a time, so a second owner, or the same owner with a different `executionId`, is refused instead of sharing the desktop. Retrying the action does not clear it; the owning execution has to end first. It ends when:
+
+- the owner closes it (`__close_execution`, which the built-in `computer` tool sends on completion),
+- its agent run ends or its delegated authority is revoked, or
+- it goes idle: five minutes after the last action on an open execution, one minute when only discovery has run.
+
+If the host helper's physical cleanup fails, the Gateway keeps that execution's ownership instead of releasing a desktop whose custody is unproven, and the idle lifetime does not apply in that state. Cleanup is retried when the same owner closes the execution again; until that succeeds, every other owner keeps receiving `COMPUTER_HOST_BUSY`. The underlying failure is in the Gateway logs under `gateway/computer`.
+
 ### CUA Driver error codes
 
 The `cua-computer` fulfiller surfaces typed error codes in the tool result and the selected host's logs. Common ones:
