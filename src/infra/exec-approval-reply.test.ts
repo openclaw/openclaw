@@ -1,32 +1,12 @@
-// Tests execution approval reply text and decision formatting.
 import { describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import { listNativeExecApprovalClientLabels } from "./exec-approval-surface.js";
 
 vi.mock("./exec-approval-surface.js", () => ({
   describeNativeExecApprovalClientSetup: vi.fn(
-    (params: {
-      channel?: string | null;
-      channelLabel?: string | null;
-      accountId?: string | null;
-    }) => {
-      const channel = (params.channel ?? "").trim().toLowerCase();
-      const label = params.channelLabel ?? channel;
-      const accountId = params.accountId?.trim();
-      const accountPrefix =
-        accountId && accountId !== "default"
-          ? `channels.${channel}.accounts.${accountId}`
-          : `channels.${channel}`;
-      if (!["matrix", "discord", "slack", "telegram"].includes(channel)) {
-        return null;
-      }
-      const owner =
-        channel === "matrix" ? `${accountPrefix}.dm.allowFrom` : "commands.ownerAllowFrom";
-      const enabled = ["discord", "slack"].includes(channel)
-        ? `set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`
-        : `leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-      return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${owner}\`; ${enabled}`;
-    },
+    ({ channel, accountId }: { channel?: string; accountId?: string }) =>
+      channel === "matrix"
+        ? `Configure \`channels.matrix.accounts.${accountId}.dm.allowFrom\`.`
+        : null,
   ),
   listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
   supportsNativeExecApprovalClient: vi.fn((channel?: string | null) =>
@@ -43,6 +23,19 @@ import {
   getExecApprovalReplyMetadata,
   parseExecApprovalCommandText,
 } from "./exec-approval-reply.js";
+
+type PendingOptions = Partial<Parameters<typeof buildExecApprovalPendingReplyPayload>[0]>;
+const pendingOptions = (options: PendingOptions) => ({
+  approvalId: "req-1",
+  approvalSlug: "slug-1",
+  command: "echo ok",
+  host: "gateway" as const,
+  ...options,
+});
+const typedPending = (options: PendingOptions) =>
+  buildTypedExecApprovalPendingReplyPayload(pendingOptions(options));
+const metadata = (execApproval: unknown) =>
+  getExecApprovalReplyMetadata({ channelData: { execApproval } });
 
 function approvalButtons(approvalId: string, always = true) {
   const buttons = [
@@ -65,18 +58,6 @@ function approvalButtons(approvalId: string, always = true) {
 }
 
 describe("exec approval reply helpers", () => {
-  const invalidReplyMetadataCases = [
-    { name: "null execApproval", payload: { channelData: { execApproval: null } } },
-    {
-      name: "blank approval slug",
-      payload: { channelData: { execApproval: { approvalId: "req-1", approvalSlug: "  " } } },
-    },
-    {
-      name: "blank approval id",
-      payload: { channelData: { execApproval: { approvalId: "  ", approvalSlug: "slug-1" } } },
-    },
-  ] as const;
-
   const unavailableReasonCases = [
     {
       reason: "initiating-platform-disabled" as const,
@@ -92,16 +73,13 @@ describe("exec approval reply helpers", () => {
     },
   ] as const;
 
-  it.each([{ clients: [] }])(
-    "only suggests exec-capable recovery surfaces with clients $clients",
-    ({ clients }) => {
-      vi.mocked(listNativeExecApprovalClientLabels).mockReturnValueOnce(clients);
-      const text = buildExecApprovalUnavailableReplyPayload({ reason: "no-approval-route" }).text;
+  it("only suggests exec-capable recovery surfaces without native clients", () => {
+    vi.mocked(listNativeExecApprovalClientLabels).mockReturnValueOnce([]);
+    const text = buildExecApprovalUnavailableReplyPayload({ reason: "no-approval-route" }).text;
 
-      expect(text).toContain("Approve it from the Web UI");
-      expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
-    },
-  );
+    expect(text).toContain("Approve it from the Web UI");
+    expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
+  });
 
   it("distinguishes node approval-inbox access from policy inspection", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
@@ -134,25 +112,20 @@ describe("exec approval reply helpers", () => {
     expect(text).not.toContain("`channels.matrix.dm.allowFrom`");
   });
 
-  it.each(invalidReplyMetadataCases)(
-    "returns null for invalid reply metadata payload: $name",
-    ({ payload }) => {
-      expect(getExecApprovalReplyMetadata(payload as ReplyPayload)).toBeNull();
-    },
-  );
+  it.each([
+    null,
+    { approvalId: "req-1", approvalSlug: "  " },
+    { approvalId: "  ", approvalSlug: "slug-1" },
+  ])("returns null for invalid reply metadata %j", (value) => expect(metadata(value)).toBeNull());
 
   it("normalizes reply metadata and filters invalid decisions", () => {
     expect(
-      getExecApprovalReplyMetadata({
-        channelData: {
-          execApproval: {
-            approvalId: " req-1 ",
-            approvalSlug: " slug-1 ",
-            agentId: " agent-1 ",
-            allowedDecisions: ["allow-once", "bad", "deny", "allow-always", 3],
-            sessionKey: " session-1 ",
-          },
-        },
+      metadata({
+        approvalId: " req-1 ",
+        approvalSlug: " slug-1 ",
+        agentId: " agent-1 ",
+        allowedDecisions: ["allow-once", "bad", "deny", "allow-always", 3],
+        sessionKey: " session-1 ",
       }),
     ).toEqual({
       approvalId: "req-1",
@@ -165,13 +138,9 @@ describe("exec approval reply helpers", () => {
   });
 
   it("builds pending reply payloads with trimmed warning text and slug fallback", () => {
-    const payload = buildTypedExecApprovalPendingReplyPayload({
+    const payload = typedPending({
       warningText: "  Heads up.  ",
-      approvalId: "req-1",
-      approvalSlug: "slug-1",
-      command: "echo ok",
       cwd: "/tmp/work",
-      host: "gateway",
       nodeId: "node-1",
       agentId: "ops-agent",
       sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
@@ -201,26 +170,45 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Full id: `req-1`");
   });
 
-  it("compacts structured cwd paths in pending reply payloads", () => {
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "req-home",
-      approvalSlug: "slug-home",
-      command: "pwd",
-      cwd: "C:\\Users\\alice\\project",
-      host: "gateway",
-    });
-
-    expect(payload.text).toContain("CWD: ~/project");
-    expect(payload.text).not.toContain("C:\\Users\\alice");
+  it.each([
+    {
+      name: "compact cwd",
+      options: { command: "pwd", cwd: "C:\\Users\\alice\\project" },
+      contains: ["CWD: ~/project"],
+      excludes: ["C:\\Users\\alice"],
+    },
+    {
+      name: "backtick fences",
+      options: { approvalCommandId: " req-cmd-2 ", command: "echo ```danger```", host: "sandbox" },
+      contains: ["```txt\n/approve req-cmd-2 allow-once\n```", "````sh\necho ```danger```\n````"],
+      excludes: ["Expires in:"],
+    },
+    {
+      name: "minute expiry",
+      options: { command: "echo later", expiresAtMs: 1_801_000, nowMs: 1_000 },
+      contains: ["Expires in: 30m"],
+      excludes: [],
+    },
+  ] satisfies Array<{
+    name: string;
+    options: PendingOptions;
+    contains: string[];
+    excludes: string[];
+  }>)("formats pending replies: $name", ({ options, contains, excludes }) => {
+    const { text } = buildExecApprovalPendingReplyPayload(pendingOptions(options));
+    for (const expected of contains) {
+      expect(text).toContain(expected);
+    }
+    for (const forbidden of excludes) {
+      expect(text).not.toContain(forbidden);
+    }
   });
 
   it("omits allow-always actions when the effective policy requires approval every time", () => {
-    const payload = buildTypedExecApprovalPendingReplyPayload({
+    const payload = typedPending({
       approvalId: "req-ask-always",
       approvalSlug: "slug-always",
       ask: "always",
-      command: "echo ok",
-      host: "gateway",
     });
 
     expect(payload.channelData).toEqual({
@@ -238,55 +226,20 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
-  it("uses a longer fence for commands containing triple backticks", () => {
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "req-2",
-      approvalSlug: "slug-2",
-      approvalCommandId: " req-cmd-2 ",
-      command: "echo ```danger```",
-      host: "sandbox",
-    });
-
-    expect(payload.text).toContain("```txt\n/approve req-cmd-2 allow-once\n```");
-    expect(payload.text).toContain("````sh\necho ```danger```\n````");
-    expect(payload.text).not.toContain("Expires in:");
-  });
-
-  it("formats longer approval windows in minutes", () => {
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "req-30m",
-      approvalSlug: "slug-30m",
-      command: "echo later",
-      host: "gateway",
-      expiresAtMs: 1_801_000,
-      nowMs: 1_000,
-    });
-
-    expect(payload.text).toContain("Expires in: 30m");
-  });
-
   it.each([".", "broken-\uD800"])("refuses malformed typed approval identity %j", (approvalId) => {
+    const denied = { approvalKind: "exec" as const, allowedDecisions: ["deny"] as const };
     expect(
       buildTypedApprovalActionDescriptors({
         approvalCommandId: approvalId,
-        approvalKind: "exec",
-        allowedDecisions: ["deny"],
+        ...denied,
       }),
     ).toEqual([]);
+    expect(buildTypedApprovalPresentation({ approvalId, ...denied })).toBeUndefined();
     expect(
-      buildTypedApprovalPresentation({
-        approvalId,
-        approvalKind: "exec",
-        allowedDecisions: ["deny"],
-      }),
-    ).toBeUndefined();
-    expect(
-      buildTypedExecApprovalPendingReplyPayload({
+      typedPending({
         approvalId,
         approvalSlug: "safe-slug",
         allowedDecisions: ["deny"],
-        command: "echo safe",
-        host: "gateway",
       }).presentation,
     ).toBeUndefined();
   });

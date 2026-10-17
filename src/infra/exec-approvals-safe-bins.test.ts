@@ -24,7 +24,7 @@ function evaluateSafeBinApproval(
   } & Partial<
     Pick<
       Parameters<typeof evaluateExecAllowlist>[0],
-      "safeBins" | "platform" | "trustedSafeBinDirs" | "safeBinProfiles"
+      "safeBins" | "platform" | "trustedSafeBinDirs" | "safeBinProfiles" | "cwd"
     >
   >,
 ): boolean {
@@ -89,26 +89,13 @@ describe("exec approvals safe bins", () => {
       executableName: "head",
     };
     const params = { argv: ["head", "-n", "1"], resolution, safeBins: resolveSafeBins(["head"]) };
-    expect(
-      evaluateSafeBinApproval({
-        ...params,
-        trustedSafeBinDirs: new Set(["/opt/homebrew/bin"]),
-      }),
-    ).toBe(false);
-    expect(
-      evaluateSafeBinApproval({
-        ...params,
-        trustedSafeBinDirs: getTrustedSafeBinDirs({
-          extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"],
-        }),
-      }),
-    ).toBe(true);
-    expect(
-      evaluateSafeBinApproval({
-        ...params,
-        trustedSafeBinDirs: new Set(["/tmp/other-bin"]),
-      }),
-    ).toBe(false);
+    for (const [trustedSafeBinDirs, expected] of [
+      [new Set(["/opt/homebrew/bin"]), false],
+      [getTrustedSafeBinDirs({ extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"] }), true],
+      [new Set(["/tmp/other-bin"]), false],
+    ] as const) {
+      expect(evaluateSafeBinApproval({ ...params, trustedSafeBinDirs })).toBe(expected);
+    }
   });
 
   it("supports injected platform for deterministic safe-bin checks", () => {
@@ -136,8 +123,7 @@ describe("exec approvals safe bins", () => {
       safeBins: resolveSafeBins(["python3"]),
       cwd: "/tmp",
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(false);
+    expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: false });
   });
 
   it("allows caller-defined custom safe-bin profiles", () => {
@@ -166,34 +152,21 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const analysis = {
-      ok: true as const,
-      segments: [
-        {
-          raw: "head -n 1",
-          argv: ["head", "-n", "1"],
-          resolution: makeMockCommandResolution({
-            execution: makeMockExecutableResolution({
-              rawExecutable: "head",
-              resolvedPath: "/custom/bin/head",
-              executableName: "head",
-            }),
-          }),
-        },
-      ],
+    const params = {
+      argv: ["head", "-n", "1"],
+      cwd: "/tmp",
+      resolution: makeMockExecutableResolution({
+        rawExecutable: "head",
+        resolvedPath: "/custom/bin/head",
+        executableName: "head",
+      }),
     };
-    const params = { analysis, allowlist: [], safeBins: resolveSafeBins(["head"]), cwd: "/tmp" };
-    const denied = evaluateExecAllowlist({
-      ...params,
-      trustedSafeBinDirs: new Set(["/usr/bin"]),
-    });
-    expect(denied.allowlistSatisfied).toBe(false);
-
-    const allowed = evaluateExecAllowlist({
-      ...params,
-      trustedSafeBinDirs: new Set(["/custom/bin"]),
-    });
-    expect(allowed.allowlistSatisfied).toBe(true);
+    expect(evaluateSafeBinApproval({ ...params, trustedSafeBinDirs: new Set(["/usr/bin"]) })).toBe(
+      false,
+    );
+    expect(
+      evaluateSafeBinApproval({ ...params, trustedSafeBinDirs: new Set(["/custom/bin"]) }),
+    ).toBe(true);
   });
 
   it("does not auto-trust PATH-shadowed safe bins without explicit trusted dirs", async () => {
@@ -214,9 +187,11 @@ describe("exec approvals safe bins", () => {
       env: makePathEnv(fakeDir),
       cwd: tmp,
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expect(result).toMatchObject({
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segmentSatisfiedBy: [null],
+    });
     expect(result.segments[0]?.resolution?.execution.resolvedPath).toBe(fakeHead);
   });
 
@@ -231,9 +206,11 @@ describe("exec approvals safe bins", () => {
       cwd: "/tmp",
       platform: process.platform,
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expect(result).toMatchObject({
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segmentSatisfiedBy: [null],
+    });
     expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
   });
 });

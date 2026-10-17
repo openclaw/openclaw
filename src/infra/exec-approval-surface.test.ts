@@ -11,7 +11,6 @@ import {
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
-const listChannelPluginsMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 
@@ -43,7 +42,6 @@ vi.mock("../channels/plugins/index.js", async () => {
   return {
     ...actual,
     getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-    listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
   };
 });
 
@@ -57,7 +55,6 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     getChannelPluginMock.mockReset();
-    listChannelPluginsMock.mockReset();
     isDeliverableMessageChannelMock.mockReset();
     normalizeMessageChannelMock.mockReset();
     normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
@@ -78,69 +75,41 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
     );
   });
 
-  it("prefers exec-initiating-surface state over generic approval availability", async () => {
-    const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "disabled" as const }));
-    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
-    plugin("Matrix", {
-      native: {},
-      getExecInitiatingSurfaceState,
-      getActionAvailabilityState,
-    });
-
-    expect(
-      await resolveExecApprovalInitiatingSurfaceStateAsync({
-        channel: "matrix",
-        accountId: "default",
-        cfg: {} as never,
-      }),
-    ).toEqual(surface("disabled", "matrix", "Matrix", "default"));
-    expect(getExecInitiatingSurfaceState).toHaveBeenCalledWith({
-      cfg: {} as never,
-      accountId: "default",
-      action: "approve",
-    });
-    expect(getActionAvailabilityState).not.toHaveBeenCalled();
-  });
-
-  it("uses generic approval availability for plugin initiating surfaces", async () => {
+  it.each([
+    ["exec", "matrix", "Matrix"],
+    ["plugin", "whatsapp", "WhatsApp"],
+  ] as const)("selects the %s availability owner", async (approvalKind, channel, label) => {
     const request = {
       id: "plugin:calendar",
-      request: {
-        title: "Review",
-        description: "Calendar tool",
-        policySubject: { pluginKey: "calendar" },
-      },
+      request: { title: "Review", description: "Tool", policySubject: { pluginKey: "calendar" } },
       createdAtMs: 0,
       expiresAtMs: 1,
     };
-    const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
+    const getExecInitiatingSurfaceState = vi.fn(() => ({
+      kind: approvalKind === "exec" ? ("disabled" as const) : ("enabled" as const),
+    }));
     const getActionAvailabilityState = vi.fn(
-      ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
-        approvalKind === "plugin" ? { kind: "disabled" as const } : { kind: "enabled" as const },
+      ({ approvalKind: kind }: { approvalKind?: ChannelApprovalKind }) =>
+        kind === "plugin" ? { kind: "disabled" as const } : { kind: "enabled" as const },
     );
-    plugin("WhatsApp", {
-      native: {},
-      getExecInitiatingSurfaceState,
-      getActionAvailabilityState,
-    });
-
-    expect(
-      await resolveApprovalInitiatingSurfaceStateAsync({
-        channel: "whatsapp",
-        accountId: "default",
-        cfg: {} as never,
-        approvalKind: "plugin",
-        request,
-      }),
-    ).toEqual(surface("disabled", "whatsapp", "WhatsApp", "default"));
-    expect(getExecInitiatingSurfaceState).not.toHaveBeenCalled();
-    expect(getActionAvailabilityState).toHaveBeenCalledWith({
-      cfg: {} as never,
+    plugin(label, { native: {}, getExecInitiatingSurfaceState, getActionAvailabilityState });
+    const params = { channel, accountId: "default", cfg: {} };
+    const result =
+      approvalKind === "exec"
+        ? await resolveExecApprovalInitiatingSurfaceStateAsync(params)
+        : await resolveApprovalInitiatingSurfaceStateAsync({ ...params, approvalKind, request });
+    expect(result).toEqual(surface("disabled", channel, label, "default"));
+    const [called, unused] =
+      approvalKind === "exec"
+        ? [getExecInitiatingSurfaceState, getActionAvailabilityState]
+        : [getActionAvailabilityState, getExecInitiatingSurfaceState];
+    expect(called).toHaveBeenCalledWith({
+      cfg: {},
       accountId: "default",
       action: "approve",
-      approvalKind: "plugin",
-      request,
+      ...(approvalKind === "plugin" ? { approvalKind, request } : {}),
     });
+    expect(unused).not.toHaveBeenCalled();
   });
 
   it("awaits native availability instead of selecting a synchronous fallback", async () => {

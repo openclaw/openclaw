@@ -32,33 +32,17 @@ function expectInlineEval(segments: Parameters<typeof detectInlineEvalInSegments
 }
 
 describe("authorization-backed exec allowlist", () => {
-  it("keeps later inline-eval segments visible when durable planning fails", async () => {
+  it.each([
+    { command: `echo "$HOME"; python3 -c 'print(1)'`, analysisOk: false, first: ["echo", "$HOME"] },
+    { command: `sh -c 'echo ok; python3 -c "print(1)"'`, analysisOk: true, first: ["echo", "ok"] },
+  ])("keeps inline-eval segments visible for $command", async ({ command, analysisOk, first }) => {
     if (process.platform === "win32") {
       return;
     }
-
-    const result = await evaluate(`echo "$HOME"; python3 -c 'print(1)'`);
-
-    expect(result.analysisOk).toBe(false);
-    expect(result.allowlistSatisfied).toBe(false);
+    const result = await evaluate(command);
+    expect(result).toMatchObject({ analysisOk, allowlistSatisfied: false });
     expect(result.segments.map((segment) => segment.argv)).toEqual([
-      ["echo", "$HOME"],
-      ["python3", "-c", "print(1)"],
-    ]);
-    expectInlineEval(result.segments);
-  });
-
-  it("keeps risky shell-wrapper payload segments visible when persistence is blocked", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const result = await evaluate(`sh -c 'echo ok; python3 -c "print(1)"'`);
-
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segments.map((segment) => segment.argv)).toEqual([
-      ["echo", "ok"],
+      first,
       ["python3", "-c", "print(1)"],
     ]);
     expectInlineEval(result.segments);
@@ -80,8 +64,7 @@ describe("authorization-backed exec allowlist", () => {
       env,
     });
 
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(true);
+    expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
     expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
     expectInlineEval(result.segments);
 
@@ -112,8 +95,7 @@ describe("authorization-backed exec allowlist", () => {
 
     const result = await evaluate(`./sh -c 'git status'`, { safeBins: new Set(["git"]) });
 
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(false);
+    expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: false });
     expect(result.segments.map((segment) => segment.argv)).toEqual([["./sh", "-c", "git status"]]);
     expect(result.segmentSatisfiedBy).toEqual([null]);
   });
@@ -127,8 +109,7 @@ describe("authorization-backed exec allowlist", () => {
       safeBins: new Set(["sleep", "echo"]),
     });
 
-    expect(result.analysisOk).toBe(false);
-    expect(result.allowlistSatisfied).toBe(false);
+    expect(result).toMatchObject({ analysisOk: false, allowlistSatisfied: false });
     expect(result.segments.map((segment) => segment.argv)).toEqual([
       ["sleep", "10"],
       ["echo", "done"],
@@ -175,18 +156,10 @@ describe("authorization-backed exec allowlist", () => {
 
     const result = await evaluate("tr x\n\\id", { safeBins: new Set(["tr"]) });
 
-    expect(result.analysisOk).toBe(false);
-    expect(result.allowlistSatisfied).toBe(false);
+    expect(result).toMatchObject({ analysisOk: false, allowlistSatisfied: false });
     expect(result.authorizationPlan).toEqual(
       expect.objectContaining({ ok: false, reason: "line-continuation" }),
     );
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: result.analysisOk,
-        allowlistSatisfied: result.allowlistSatisfied,
-      }),
-    ).toBe(true);
+    expect(requiresExecApproval({ ask: "on-miss", security: "allowlist", ...result })).toBe(true);
   });
 });
