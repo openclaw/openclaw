@@ -76,7 +76,7 @@ export function normalizeMinimaxHexAudio(data: string, label: string): string {
 
 function resolveMinimaxGuardedRequestOptions(
   policy: MinimaxRequestPolicy,
-): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {
+): Parameters<typeof fetchWithTimeoutGuarded>[4] {
   return policy.allowPrivateNetwork || policy.dispatcherPolicy
     ? {
         ...(policy.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
