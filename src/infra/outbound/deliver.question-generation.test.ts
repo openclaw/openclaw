@@ -11,12 +11,12 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
 } from "../question-channel-runtime.js";
+import { installQueueTestPlugin } from "./deliver.custody.test-support.js";
 import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
@@ -97,18 +97,7 @@ function installQuestionAdapter(manager: QuestionManager) {
       reactions.register({ questionId: id, optionValues: ["Staging", "Production"] }, messageId);
     },
   );
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: createOutboundTestPlugin({
-          id: "matrix",
-          outbound: { ...matrixOutboundForQueueTest, afterDeliverPayload },
-        }),
-      },
-    ]),
-  );
+  installQueueTestPlugin({ outbound: { ...matrixOutboundForQueueTest, afterDeliverPayload } });
   return {
     afterDeliverPayload,
     finalized,
@@ -123,7 +112,12 @@ function installQuestionAdapter(manager: QuestionManager) {
   };
 }
 
-const destination = { channel: "matrix", to: "!room:example", queuePolicy: "required" } as const;
+const destination = {
+  cfg: {},
+  channel: "matrix",
+  to: "!room:example",
+  queuePolicy: "required",
+} as const;
 const unavailable = "Unavailable: request a new question.";
 
 async function assertStaleReaction(
@@ -167,6 +161,8 @@ async function assertFreshReaction(
 
 describe("generic outbound question generation", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
+  let manager: QuestionManager;
+  let adapter: ReturnType<typeof installQuestionAdapter>;
 
   beforeAll(async () => {
     ({ runOutboundDeliveryInternal } = await import("./deliver-queue.js"));
@@ -176,9 +172,13 @@ describe("generic outbound question generation", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     scheduler = createTestGatewayScheduler("fake-timers");
+    manager = new QuestionManager(scheduler);
+    adapter = installQuestionAdapter(manager);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    manager.close();
+    await drainGlobalSingletonLifecycleState("restart");
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.unstubAllEnvs();
@@ -203,8 +203,6 @@ describe("generic outbound question generation", () => {
   ])(
     "keeps old reactions inert for a held $delivery send after $retention",
     async ({ reuseAfterMs, skipQueue, statusLine }) => {
-      const manager = new QuestionManager(scheduler);
-      const adapter = installQuestionAdapter(manager);
       const sendEntered = createDeferredCore();
       const releaseSend = createDeferredCore();
       const sendMatrix = vi
@@ -216,7 +214,6 @@ describe("generic outbound question generation", () => {
         });
       const send = () =>
         runOutboundDeliveryInternal({
-          cfg: {},
           ...destination,
           payloads: [payload],
           deps: { matrix: sendMatrix },
@@ -240,8 +237,6 @@ describe("generic outbound question generation", () => {
       } finally {
         releaseSend.resolve();
         await Promise.allSettled([firstSend]);
-        manager.close();
-        await drainGlobalSingletonLifecycleState("restart");
       }
     },
   );
@@ -250,8 +245,6 @@ describe("generic outbound question generation", () => {
     "does not bind %s to a newer question generation, while a fresh send still binds",
     async (custody) => {
       const stableIntent = custody === "restored stable-intent custody";
-      const manager = new QuestionManager(scheduler);
-      const adapter = installQuestionAdapter(manager);
       const deliveryId = "question-generation-recovery";
       const oldPayload = stableIntent
         ? { ...payload, text: "Original deployment question" }
@@ -265,58 +258,52 @@ describe("generic outbound question generation", () => {
         .mockResolvedValueOnce({ messageId: oldMessageId });
       const send = (deliveryIntentId?: string) =>
         runOutboundDeliveryInternal({
-          cfg: {},
           ...destination,
           payloads: [newPayload],
           deps: { matrix: sendMatrix },
           ...(stableIntent ? { deliveryIntentId, reusePendingDeliveryIntent: true } : {}),
         });
-      try {
-        request(manager, 50);
-        await expect(
-          enqueueDeliveryOnce(
-            { ...destination, payloads: [oldPayload] },
-            deliveryId,
-            fixtures.tmpDir(),
-          ),
-        ).resolves.toEqual({ id: deliveryId, created: true });
-        await expireAndReuse(manager);
-        if (stableIntent) {
-          await expect(send(deliveryId)).resolves.toMatchObject([{ messageId: oldMessageId }]);
-          expect(sendMatrix).toHaveBeenCalledExactlyOnceWith(
-            "!room:example",
-            oldPayload.text,
-            expect.any(Object),
-          );
-        } else {
-          const deliver = vi.fn<DeliverFn>(async (params) =>
-            runOutboundDeliveryInternal({ ...params, deps: { matrix: sendMatrix } }),
-          );
-          await drainMatrixReconnect({ deliver, stateDir: fixtures.tmpDir() });
-          expect(deliver).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
-          );
-          expect(sendMatrix).toHaveBeenCalledOnce();
-        }
-        expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-        await assertStaleReaction(manager, adapter, oldMessageId, unavailable, true);
-        await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
-          { messageId: "message-b" },
-        ]);
-        if (stableIntent) {
-          expect(sendMatrix).toHaveBeenNthCalledWith(
-            2,
-            "!room:example",
-            newPayload.text,
-            expect.any(Object),
-          );
-        }
-        await assertFreshReaction(manager, adapter, oldMessageId, unavailable);
-        expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-      } finally {
-        manager.close();
-        await drainGlobalSingletonLifecycleState("restart");
+      request(manager, 50);
+      await expect(
+        enqueueDeliveryOnce(
+          { ...destination, payloads: [oldPayload] },
+          deliveryId,
+          fixtures.tmpDir(),
+        ),
+      ).resolves.toEqual({ id: deliveryId, created: true });
+      await expireAndReuse(manager);
+      if (stableIntent) {
+        await expect(send(deliveryId)).resolves.toMatchObject([{ messageId: oldMessageId }]);
+        expect(sendMatrix).toHaveBeenCalledExactlyOnceWith(
+          "!room:example",
+          oldPayload.text,
+          expect.any(Object),
+        );
+      } else {
+        const deliver = vi.fn<DeliverFn>(async (params) =>
+          runOutboundDeliveryInternal({ ...params, deps: { matrix: sendMatrix } }),
+        );
+        await drainMatrixReconnect({ deliver, stateDir: fixtures.tmpDir() });
+        expect(deliver).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
+        );
+        expect(sendMatrix).toHaveBeenCalledOnce();
       }
+      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+      await assertStaleReaction(manager, adapter, oldMessageId, unavailable, true);
+      await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
+        { messageId: "message-b" },
+      ]);
+      if (stableIntent) {
+        expect(sendMatrix).toHaveBeenNthCalledWith(
+          2,
+          "!room:example",
+          newPayload.text,
+          expect.any(Object),
+        );
+      }
+      await assertFreshReaction(manager, adapter, oldMessageId, unavailable);
+      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
     },
   );
 });

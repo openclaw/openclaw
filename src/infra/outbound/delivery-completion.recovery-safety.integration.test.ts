@@ -12,9 +12,8 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
-import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
+import { installQueueTestPlugin } from "./deliver.custody.test-support.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
@@ -40,15 +39,7 @@ describe("recovered requester receipt safety", () => {
   beforeEach(() => {
     tmpDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-        },
-      ]),
-    );
+    installQueueTestPlugin();
   });
   afterEach(() => {
     resetPluginRuntimeStateForTest();
@@ -56,8 +47,24 @@ describe("recovered requester receipt safety", () => {
     vi.unstubAllEnvs();
   });
 
+  function recovery(
+    send: NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["matrix"],
+  ) {
+    return () =>
+      recoverPendingDeliveries({
+        cfg: {},
+        stateDir: tmpDir,
+        log: createRecoveryLog(),
+        deliver: (params) => deliverOutboundPayloads({ ...params, deps: { matrix: send } }),
+      });
+  }
+
   async function prepare(
-    options: { refreshSuccessor?: boolean; payloads?: Array<{ text: string }> } = {},
+    options: {
+      refreshSuccessor?: boolean;
+      payloads?: Array<{ text: string }>;
+      second?: boolean;
+    } = {},
   ) {
     const scope = {
       agentId: "main",
@@ -122,13 +129,33 @@ describe("recovered requester receipt safety", () => {
     } finally {
       admission.close();
     }
+    const completion = resolvePendingFinalDeliveryCompletion(payloads);
+    if (options.second) {
+      await patchSessionEntryCore(scope, (current) => ({
+        pendingFinalDelivery: {
+          ...current.pendingFinalDelivery!,
+          deliveries: [
+            ...current.pendingFinalDelivery!.deliveries!,
+            { id: "second", state: "prepared" },
+          ],
+        },
+      }));
+    }
     return {
       scope,
       context,
       payloads,
       marker,
-      completion: resolvePendingFinalDeliveryCompletion(payloads),
+      completion,
     };
+  }
+
+  async function prepareDelivery(options: Parameters<typeof prepare>[0] = {}) {
+    const fixture = await prepare(options);
+    if (!fixture.completion) {
+      throw new Error("missing completion");
+    }
+    return { ...fixture, completion: fixture.completion };
   }
 
   it("does not bind finishing A to a refreshed same-session same-route successor B", async () => {
@@ -144,19 +171,7 @@ describe("recovered requester receipt safety", () => {
   it.each(["missing-identity", "wrong-target", "wrong-channel", "not-sent"] as const)(
     "requires evidence for earlier logical members: %s then valid",
     async (invalid) => {
-      const { scope, context, completion } = await prepare();
-      if (!completion) {
-        throw new Error("missing completion");
-      }
-      await patchSessionEntryCore(scope, (entry) => ({
-        pendingFinalDelivery: {
-          ...entry.pendingFinalDelivery!,
-          deliveries: [
-            ...entry.pendingFinalDelivery!.deliveries!,
-            { id: "second", state: "prepared" },
-          ],
-        },
-      }));
+      const { scope, context, completion } = await prepareDelivery({ second: true });
       const first: OutboundDeliveryResult = {
         channel: invalid === "wrong-channel" ? "discord" : "matrix",
         messageId: invalid === "missing-identity" ? "" : "first",
@@ -185,30 +200,12 @@ describe("recovered requester receipt safety", () => {
   it.each(["recovery", "live"] as const)(
     "does not acknowledge invalid-first valid-last logical sends through %s custody",
     async (mode) => {
-      const { scope, context, completion } = await prepare();
-      if (!completion) {
-        throw new Error("missing completion");
-      }
-      await patchSessionEntryCore(scope, (entry) => ({
-        pendingFinalDelivery: {
-          ...entry.pendingFinalDelivery!,
-          deliveries: [
-            ...entry.pendingFinalDelivery!.deliveries!,
-            { id: "second", state: "prepared" },
-          ],
-        },
-      }));
+      const { scope, context, completion } = await prepareDelivery({ second: true });
       const send = vi.fn(async (_to: string, text: string) => ({
         messageId: text + "-id",
         target: { kind: "room", id: text === "first" ? "!other:example" : context.to },
       }));
-      const recover = () =>
-        recoverPendingDeliveries({
-          cfg: {},
-          stateDir: tmpDir,
-          log: createRecoveryLog(),
-          deliver: (params) => deliverOutboundPayloads({ ...params, deps: { matrix: send } }),
-        });
+      const recover = recovery(send);
       for (const [text, deliveryId] of [
         ["first", completion.deliveryId],
         ["second", "second"],
@@ -253,24 +250,15 @@ describe("recovered requester receipt safety", () => {
   )(
     "requires all physical command payloads ($mode, partial suppression: $suppressFirst)",
     async ({ mode, suppressFirst }) => {
-      const { scope, context, payloads, completion } = await prepare({
+      const { scope, context, payloads, completion } = await prepareDelivery({
         payloads: [{ text: "first" }, { text: "second" }],
       });
-      if (!completion) {
-        throw new Error("missing completion");
-      }
       const send = vi.fn(async (_to: string, text: string) =>
         suppressFirst && text === "first"
           ? { messageId: "", outcome: "not_sent" }
           : { messageId: text + "-id" },
       );
-      const recover = () =>
-        recoverPendingDeliveries({
-          cfg: {},
-          stateDir: tmpDir,
-          log: createRecoveryLog(),
-          deliver: (params) => deliverOutboundPayloads({ ...params, deps: { matrix: send } }),
-        });
+      const recover = recovery(send);
       if (mode === "live") {
         await deliverOutboundPayloads({
           cfg: {},
@@ -316,10 +304,7 @@ describe("recovered requester receipt safety", () => {
     "normalized",
     "metadata-omitted",
   ] as const)("validates physical receipt routing through queue delivery: %s", async (variant) => {
-    const { scope, context, payloads, completion } = await prepare();
-    if (!completion) {
-      throw new Error("missing completion");
-    }
+    const { scope, context, payloads, completion } = await prepareDelivery();
     const part = {
       platformMessageId: "first-id",
       kind: "text" as const,
@@ -369,13 +354,7 @@ describe("recovered requester receipt safety", () => {
           ? { messageId: "first-id" }
           : { messageId: "first-id", target: { kind: "room", id: context.to }, receipt },
       );
-    const recover = () =>
-      recoverPendingDeliveries({
-        cfg: {},
-        stateDir: tmpDir,
-        log: createRecoveryLog(),
-        deliver: (params) => deliverOutboundPayloads({ ...params, deps: { matrix: send } }),
-      });
+    const recover = recovery(send);
     await recover();
     const evidence = getRestartRecoveryTerminalDeliveryEvidence(
       loadSessionEntry(scope),
@@ -393,12 +372,9 @@ describe("recovered requester receipt safety", () => {
   it.each([1, 2])(
     "does not infer complete physical batches from reconciliation (%s payloads)",
     async (count) => {
-      const { scope, context, payloads, completion } = await prepare({
+      const { scope, context, payloads, completion } = await prepareDelivery({
         payloads: Array.from({ length: count }, (_, index) => ({ text: "part-" + index })),
       });
-      if (!completion) {
-        throw new Error("missing completion");
-      }
       const reconcile = vi.fn(async () => ({
         status: "sent" as const,
         receipt: {
@@ -408,29 +384,20 @@ describe("recovered requester receipt safety", () => {
           sentAt: 1,
         },
       }));
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: {
-              ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-              message: {
-                id: "matrix",
-                send: {
-                  text: async () => {
-                    throw new Error("reconciliation must not send again");
-                  },
-                },
-                durableFinal: {
-                  capabilities: { reconcileUnknownSend: true },
-                  reconcileUnknownSend: reconcile,
-                },
-              },
+      installQueueTestPlugin({
+        message: {
+          id: "matrix",
+          send: {
+            text: async () => {
+              throw new Error("reconciliation must not send again");
             },
           },
-        ]),
-      );
+          durableFinal: {
+            capabilities: { reconcileUnknownSend: true },
+            reconcileUnknownSend: reconcile,
+          },
+        },
+      });
       await enqueueDeliveryOnce(
         { ...context, payloads, deliveryCompletion: completion },
         completion.deliveryId,

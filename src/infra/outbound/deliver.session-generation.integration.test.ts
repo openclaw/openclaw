@@ -6,13 +6,10 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
-import {
-  drainMatrixReconnect,
-  matrixOutboundForQueueTest,
-} from "./deliver.queue-integration.test-support.js";
+import { installQueueTestPlugin } from "./deliver.custody.test-support.js";
+import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
@@ -43,15 +40,7 @@ function fixture() {
       { agentId: "main", storePath: database.path, sessionKey },
       { ...entry, lifecycleRevision: revision, updatedAt: 2, label: "unrelated later turn" },
     );
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-      },
-    ]),
-  );
+  installQueueTestPlugin();
   return { generation, update };
 }
 

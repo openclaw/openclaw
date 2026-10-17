@@ -37,6 +37,27 @@ type PreparationFixture = {
 
 type ImageProjectionFixture = Pick<PreparationFixture, "setTestOutbound" | "hookMocks">;
 
+function prepare(
+  operation: "raw" | "structured",
+  params: Parameters<typeof prepareOutboundPayloadBatch>[0],
+) {
+  return operation === "structured"
+    ? prepareStructuredOutboundPayloadBatch(
+        params,
+        createStructuredOutboundPayloadPlan(params.payloads),
+      )
+    : prepareOutboundPayloadBatch(params);
+}
+
+function acceptedEntry(batch: Awaited<ReturnType<typeof prepareOutboundPayloadBatch>>) {
+  const [entry] = batch.entries;
+  expect(entry?.status).toBe("accepted");
+  if (!entry || entry.status !== "accepted") {
+    throw new Error("expected accepted payload");
+  }
+  return entry;
+}
+
 // Keep registration in deliver.test.ts so its hoisted queue/hooks and per-case registry reset apply.
 export function registerOutboundPreparationMetadataTests({
   matrixChunkConfig,
@@ -95,18 +116,7 @@ export function registerOutboundPreparationMetadataTests({
         payloads: [sourcePayload],
         deps: { matrix: vi.fn() },
       };
-      const batch =
-        operation === "structured"
-          ? await prepareStructuredOutboundPayloadBatch(
-              params,
-              createStructuredOutboundPayloadPlan([sourcePayload]),
-            )
-          : await prepareOutboundPayloadBatch(params);
-      const [entry] = batch.entries;
-      expect(entry?.status).toBe("accepted");
-      if (!entry || entry.status !== "accepted") {
-        throw new Error("expected prepared payload");
-      }
+      const entry = acceptedEntry(await prepare(operation, params));
       expect(entry.payload.text).toBe("after modifier");
       const metadata = getReplyPayloadMetadata(entry.payload);
       expect(metadata).toHaveProperty("assistantMessageIndex", undefined);
@@ -148,16 +158,13 @@ export function registerOutboundImageProjectionTests({
     );
   }
 
-  it.each([
-    { operation: "raw", extractMarkdownImages: true },
-    { operation: "structured", extractMarkdownImages: true },
-  ] as const)(
-    "projects hook-added channel images ($operation; enabled=$extractMarkdownImages)",
-    async ({ operation, extractMarkdownImages }) => {
+  it.each(["raw", "structured"] as const)(
+    "projects hook-added channel images (%s)",
+    async (operation) => {
       const { telegramOutbound } = await loadBundledPluginFacade<{
         telegramOutbound: ChannelOutboundAdapter;
       }>({ pluginId: "telegram", artifactBasename: "api.js" });
-      setTestOutbound({ ...telegramOutbound, extractMarkdownImages }, "telegram");
+      setTestOutbound({ ...telegramOutbound, extractMarkdownImages: true }, "telegram");
       const explicitUrl = "https://example.com/explicit.png";
       const originalUrl = "https://example.com/original.png";
       const replyUrl = "https://example.com/reply.png";
@@ -200,39 +207,22 @@ export function registerOutboundImageProjectionTests({
           context: { channelId: "telegram", conversationId: "12345" },
         },
       };
-      const batch =
-        operation === "structured"
-          ? await prepareStructuredOutboundPayloadBatch(
-              params,
-              createStructuredOutboundPayloadPlan(payloads),
-            )
-          : await prepareOutboundPayloadBatch(params);
-
-      const mediaBeforeMessage = extractMarkdownImages
-        ? [explicitUrl, originalUrl, replyUrl]
-        : [explicitUrl];
+      const batch = await prepare(operation, params);
+      const mediaBeforeMessage = [explicitUrl, originalUrl, replyUrl];
       expect(messageHook).toHaveBeenCalledWith(
         expect.objectContaining({
-          content: extractMarkdownImages ? "Reply caption." : replyText,
+          content: "Reply caption.",
           metadata: expect.objectContaining({ mediaUrls: mediaBeforeMessage }),
         }),
         expect.objectContaining({ channelId: "telegram", conversationId: "12345" }),
       );
-      const entry = batch.entries[0];
       expect(batch.entries).toHaveLength(1);
-      expect(entry?.status).toBe("accepted");
-      if (!entry || entry.status !== "accepted") {
-        throw new Error("expected accepted image payload");
-      }
-      const expectedMedia = extractMarkdownImages
-        ? [...mediaBeforeMessage, messageUrl]
-        : mediaBeforeMessage;
+      const entry = acceptedEntry(batch);
+      const expectedMedia = [...mediaBeforeMessage, messageUrl];
       expect(entry.preparedMediaCount).toBe(expectedMedia.length);
       expect(entry.payload.mediaUrls ?? [entry.payload.mediaUrl]).toEqual(expectedMedia);
       expect(entry.payload.text).toBe(
-        extractMarkdownImages
-          ? `Keep  prose. Use \`a  b\`.  \r\nChart  \r\nLeft caption.\r\n  Prefix.\r\nLeft right\r\nNext\r\n${literalText}\r\nAfter  \r\n`
-          : messageText,
+        `Keep  prose. Use \`a  b\`.  \r\nChart  \r\nLeft caption.\r\n  Prefix.\r\nLeft right\r\nNext\r\n${literalText}\r\nAfter  \r\n`,
       );
       expect(entry.payload.replyToId).toBe("123");
       expect(entry.payload.audioAsVoice).toBeUndefined();

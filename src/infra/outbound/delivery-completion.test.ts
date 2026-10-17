@@ -107,6 +107,26 @@ describe("pending-final delivery completion", () => {
     storePath: "",
   };
 
+  const read = () => loadSessionEntry({ sessionKey, storePath });
+  const deliveries = (state: "prepared" | "queued" | "delivered" | "unknown" | "suppressed") => [
+    { id: completion.deliveryId, state },
+  ];
+  async function expectSettlement(
+    state: Parameters<typeof settlePendingFinalDelivery>[1],
+    expectedStates?: Parameters<typeof settlePendingFinalDelivery>[2],
+    options?: Parameters<typeof settlePendingFinalDelivery>[3],
+  ) {
+    await expect(
+      settlePendingFinalDelivery(completion, state, expectedStates, options),
+    ).resolves.toEqual({ state });
+  }
+
+  function expectPendingWithoutNotice(state: Parameters<typeof deliveries>[0]) {
+    const entry = read();
+    expect(entry?.pendingDeliveryNotice).toBeUndefined();
+    expect(entry?.pendingFinalDelivery).toMatchObject({ deliveries: deliveries(state) });
+  }
+
   beforeEach(async () => {
     vi.clearAllMocks();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-delivery-completion-"));
@@ -127,7 +147,7 @@ describe("pending-final delivery completion", () => {
         text: "durable final",
         createdAt: Date.now(),
         intentId: completion.intentId,
-        deliveries: [{ id: completion.deliveryId, state: "prepared" }],
+        deliveries: deliveries("prepared"),
       },
     };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
@@ -143,9 +163,7 @@ describe("pending-final delivery completion", () => {
 
     const sql = observeHostDataSql();
     try {
-      await expect(settlePendingFinalDelivery(completion, "delivered")).resolves.toEqual({
-        state: "delivered",
-      });
+      await expectSettlement("delivered");
       expect(
         sql.queries.filter((query) =>
           /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(query),
@@ -155,10 +173,10 @@ describe("pending-final delivery completion", () => {
       sql.restore();
     }
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+    expect(read()).toMatchObject({
       mainRestartRecovery: { revision: 2 },
       pendingFinalDelivery: {
-        deliveries: [{ id: completion.deliveryId, state: "delivered" }],
+        deliveries: deliveries("delivered"),
       },
     });
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith({
@@ -167,11 +185,9 @@ describe("pending-final delivery completion", () => {
       storePath,
     });
     recoveryMocks.scheduleMainSessionRecoveryPendingTarget.mockClear();
-    const completed = loadSessionEntry({ sessionKey, storePath });
-    await expect(settlePendingFinalDelivery(completion, "delivered")).resolves.toEqual({
-      state: "delivered",
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(completed);
+    const completed = read();
+    await expectSettlement("delivered");
+    expect(read()).toEqual(completed);
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
     await expect(
       commitMainSessionRecovery({
@@ -209,7 +225,7 @@ describe("pending-final delivery completion", () => {
           text: "private final",
           createdAt: 1,
           intentId: completion.intentId,
-          deliveries: [{ id: completion.deliveryId, state: "prepared" }],
+          deliveries: deliveries("prepared"),
         },
       });
       await expect(
@@ -267,9 +283,7 @@ describe("pending-final delivery completion", () => {
       expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
 
       failCommit = false;
-      await expect(
-        settlePendingFinalDelivery(completion, "delivered", ["prepared"], options),
-      ).resolves.toEqual({ state: "delivered" });
+      await expectSettlement("delivered", ["prepared"], options);
       const settled = loadSessionEntry(scope);
       expect(settled?.pendingFinalDelivery).toBeUndefined();
       expect(settled?.label).toBe("committed while delivery settled");
@@ -315,9 +329,7 @@ describe("pending-final delivery completion", () => {
       return actor;
     });
     try {
-      await expect(
-        settlePendingFinalDelivery(completion, "delivered", ["queued"]),
-      ).resolves.toEqual({ state: "delivered" });
+      await expectSettlement("delivered", ["queued"]);
       await Promise.all(competingWrites);
       expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
         { id: completion.deliveryId, state: "delivered" },
@@ -377,7 +389,7 @@ describe("pending-final delivery completion", () => {
             label: "foreign metadata",
             mainRestartRecovery: { revision: 2 },
             pendingFinalDelivery: {
-              deliveries: [{ id: completion.deliveryId, state: "queued" }],
+              deliveries: deliveries("queued"),
             },
           });
         } else {
@@ -393,7 +405,7 @@ describe("pending-final delivery completion", () => {
   const noticeContext = { channel: "telegram", to: "chat-1", accountId: "default" };
 
   async function installContextOnPendingFinal() {
-    const entry = loadSessionEntry({ sessionKey, storePath })!;
+    const entry = read()!;
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -473,7 +485,7 @@ describe("pending-final delivery completion", () => {
       ]);
       expect(owed).toHaveBeenLastCalledWith(claim, expect.objectContaining(initial!));
       expect(loadSessionEntry(scope)).toMatchObject({
-        pendingFinalDelivery: { deliveries: [{ id: completion.deliveryId, state: "delivered" }] },
+        pendingFinalDelivery: { deliveries: deliveries("delivered") },
         restartRecoveryTerminalDeliveryEvidence: [
           {
             harnessCompletion: claim,
@@ -494,18 +506,16 @@ describe("pending-final delivery completion", () => {
   it("owes a notice at direct admission and preserves it when ambiguity is affirmed", async () => {
     await installContextOnPendingFinal();
     await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
-    const notice = loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice;
+    const notice = read()?.pendingDeliveryNotice;
     expect(notice).toMatchObject({
       intentId: completion.intentId,
       state: "owed",
       context: noticeContext,
     });
 
-    await expect(
-      settlePendingFinalDelivery(completion, "unknown", ["queued", "unknown"]),
-    ).resolves.toEqual({ state: "unknown" });
+    await expectSettlement("unknown", ["queued", "unknown"]);
 
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toEqual(notice);
+    expect(read()?.pendingDeliveryNotice).toEqual(notice);
   });
 
   it("does not owe a notice for the pre-dispatch claim or terminal outcomes", async () => {
@@ -514,26 +524,16 @@ describe("pending-final delivery completion", () => {
     await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
     await settlePendingFinalDelivery(completion, "delivered");
 
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.pendingDeliveryNotice).toBeUndefined();
-    expect(entry?.pendingFinalDelivery).toMatchObject({
-      deliveries: [{ id: completion.deliveryId, state: "delivered" }],
-    });
+    expectPendingWithoutNotice("delivered");
   });
 
   it("restores prepared custody for a retryable no-send so recovery can replay", async () => {
     await installContextOnPendingFinal();
     await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
 
-    await expect(
-      settlePendingFinalDelivery(completion, "prepared", ["queued", "unknown"]),
-    ).resolves.toEqual({ state: "prepared" });
+    await expectSettlement("prepared", ["queued", "unknown"]);
 
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.pendingDeliveryNotice).toBeUndefined();
-    expect(entry?.pendingFinalDelivery).toMatchObject({
-      deliveries: [{ id: completion.deliveryId, state: "prepared" }],
-    });
+    expectPendingWithoutNotice("prepared");
   });
 
   it("settles a proven pre-dispatch rejection as suppressed without notice debt", async () => {
@@ -544,18 +544,14 @@ describe("pending-final delivery completion", () => {
       settleDurableDelivery(completion, { rejectionError: "payload rejected" }),
     ).resolves.toEqual({ state: "suppressed" });
 
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.pendingDeliveryNotice).toBeUndefined();
-    expect(entry?.pendingFinalDelivery).toMatchObject({
-      deliveries: [{ id: completion.deliveryId, state: "suppressed" }],
-    });
+    expectPendingWithoutNotice("suppressed");
   });
 
   it.each(["owed", "unresolved", "acknowledged"] as const)(
     "preserves %s notice history while another delivery remains unknown",
     async (noticeState) => {
       await installContextOnPendingFinal();
-      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      const entry = read()!;
       await replaceSessionEntry(
         { sessionKey, storePath },
         {
@@ -576,22 +572,18 @@ describe("pending-final delivery completion", () => {
         },
       );
       await settlePendingFinalDelivery({ ...completion, deliveryId: "delivery-2" }, "delivered");
-      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
-        noticeState,
-      );
+      expect(read()?.pendingDeliveryNotice?.state).toBe(noticeState);
       await settlePendingFinalDelivery(completion, "unknown");
-      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
-        noticeState,
-      );
+      expect(read()?.pendingDeliveryNotice?.state).toBe(noticeState);
       await settlePendingFinalDelivery(completion, "delivered");
-      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+      expect(read()?.pendingDeliveryNotice?.state).toBe(
         noticeState === "acknowledged" ? "acknowledged" : undefined,
       );
     },
   );
 
   it("carries the custom queue root when a terminal sibling wakes recovery", async () => {
-    const entry = loadSessionEntry({ sessionKey, storePath })!;
+    const entry = read()!;
     const customStorePath = path.join(tmpDir, "custom-agent.sqlite");
     const customScope = {
       sessionKey,
@@ -630,6 +622,6 @@ describe("pending-final delivery completion", () => {
       { id: completion.deliveryId, state: "delivered" },
       { id: "delivery-2", state: "queued" },
     ]);
-    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(entry);
+    expect(read()).toEqual(entry);
   });
 });
