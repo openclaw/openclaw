@@ -80,6 +80,44 @@ function keepSessionRunning(options: SessionOptions) {
   });
 }
 
+type OffsetState = {
+  store: typeof OffsetStore;
+  queue: ReturnType<typeof createChannelIngressQueueForTests>;
+  offsets: Map<string, unknown>;
+  beforeLookup?: () => Promise<void>;
+  beforeRegister?: () => void;
+};
+async function withOffsetStore(prefix: string, run: (state: OffsetState) => Promise<void>) {
+  await withStateDirEnv(prefix, async ({ stateDir }) => {
+    const state: OffsetState = {
+      store: await vi.importActual<typeof OffsetStore>("./update-offset-store.js"),
+      queue: createChannelIngressQueueForTests({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      }),
+      offsets: new Map(),
+    };
+    mocks.runtime.mockReturnValue({
+      state: {
+        openChannelIngressQueue: () => state.queue,
+        openKeyedStore: () => ({
+          lookup: async (key: string) => {
+            await state.beforeLookup?.();
+            return state.offsets.get(key);
+          },
+          register: async (key: string, value: unknown) => {
+            state.beforeRegister?.();
+            state.offsets.set(key, value);
+          },
+        }),
+      },
+    });
+    mocks.prepareAccount.mockImplementation(state.store.prepareTelegramAccount);
+    await run(state);
+  });
+}
+
 describe("monitorTelegramProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -100,31 +138,15 @@ describe("monitorTelegramProvider", () => {
   });
 
   it("retries an interrupted identity reset before polling and preserves same-bot pending work", async () => {
-    const offsets = new Map<string, unknown>();
     let interruptReset = false;
-    await withStateDirEnv("telegram-rotation-", async ({ stateDir }) => {
-      const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
-      const queue = createChannelIngressQueueForTests({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      mocks.runtime.mockReturnValue({
-        state: {
-          openChannelIngressQueue: () => queue,
-          openKeyedStore: () => ({
-            lookup: async (key: string) => offsets.get(key),
-            register: async (key: string, value: unknown) => {
-              if (interruptReset) {
-                interruptReset = false;
-                throw new Error("interrupted reset");
-              }
-              offsets.set(key, value);
-            },
-          }),
-        },
-      });
-      mocks.prepareAccount.mockImplementation(store.prepareTelegramAccount);
+    await withOffsetStore("telegram-rotation-", async (state) => {
+      const { store, queue } = state;
+      state.beforeRegister = () => {
+        if (interruptReset) {
+          interruptReset = false;
+          throw new Error("interrupted reset");
+        }
+      };
       await queue.enqueue("1", { text: "bot A" });
       await queue.complete("1");
       await store.writeTelegramUpdateOffset({
@@ -167,20 +189,15 @@ describe("monitorTelegramProvider", () => {
   it.each(["lookup", "purge-admission", "purge"])(
     "preserves replacement rows and the offset when aborted during %s",
     async (phase) => {
-      await withStateDirEnv("telegram-aborted-reset-", async ({ stateDir }) => {
-        const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
+      await withOffsetStore("telegram-aborted-reset-", async (state) => {
+        const { store, queue } = state;
         const paused = createDeferred<void>();
         const resume = createDeferred<void>();
-        let storedOffset: unknown = {
+        state.offsets.set("default", {
           version: 3,
           botId: "111111",
           tokenFingerprint: "old",
           lastUpdateId: 1,
-        };
-        const queue = createChannelIngressQueueForTests({
-          channelId: "telegram",
-          accountId: "default",
-          stateDir,
         });
         if (phase !== "lookup") {
           const purge = queue.purge?.bind(queue);
@@ -200,24 +217,12 @@ describe("monitorTelegramProvider", () => {
             return count;
           };
         }
-        mocks.runtime.mockReturnValue({
-          state: {
-            openChannelIngressQueue: () => queue,
-            openKeyedStore: () => ({
-              lookup: async () => {
-                if (phase === "lookup") {
-                  paused.resolve();
-                  await resume.promise;
-                }
-                return storedOffset;
-              },
-              register: async (_key: string, value: unknown) => {
-                storedOffset = value;
-              },
-            }),
-          },
-        });
-        mocks.prepareAccount.mockImplementation(store.prepareTelegramAccount);
+        state.beforeLookup = async () => {
+          if (phase === "lookup") {
+            paused.resolve();
+            await resume.promise;
+          }
+        };
         const monitor = startMonitor({ token: "222222:token-b" });
         try {
           await paused.promise;
@@ -252,26 +257,9 @@ describe("monitorTelegramProvider", () => {
     },
     { name: "unknown identity", version: 3, botId: null, tokenFingerprint: null },
   ])("keeps queue rows for $name", async (identity) => {
-    await withStateDirEnv("telegram-same-bot-", async ({ stateDir }) => {
-      const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
-      let storedOffset: unknown = { ...identity, lastUpdateId: 2 };
-      const queue = createChannelIngressQueueForTests({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      mocks.runtime.mockReturnValue({
-        state: {
-          openChannelIngressQueue: () => queue,
-          openKeyedStore: () => ({
-            lookup: async () => storedOffset,
-            register: async (_key: string, value: unknown) => {
-              storedOffset = value;
-            },
-          }),
-        },
-      });
-      mocks.prepareAccount.mockImplementation(store.prepareTelegramAccount);
+    await withOffsetStore("telegram-same-bot-", async (state) => {
+      const { queue } = state;
+      state.offsets.set("default", { ...identity, lastUpdateId: 2 });
       await queue.enqueue("1", { text: "pending" });
       await queue.enqueue("2", { text: "delivered" });
       await queue.complete("2");
@@ -280,7 +268,7 @@ describe("monitorTelegramProvider", () => {
 
       expect(await queue.listPending()).toMatchObject([{ id: "1", payload: { text: "pending" } }]);
       expect(await queue.enqueue("2", { text: "duplicate" })).toMatchObject({ kind: "completed" });
-      expect(storedOffset).toMatchObject({ botId: "111111", lastUpdateId: null });
+      expect(state.offsets.get("default")).toMatchObject({ botId: "111111", lastUpdateId: null });
       expect(mocks.sessions[0]?.getCommittedUpdateId()).toBeNull();
     });
   });
