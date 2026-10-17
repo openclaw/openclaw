@@ -53,7 +53,8 @@ vi.mock("./setup.migration-import.js", () => ({
   runSetupMigrationImport: vi.fn(),
 }));
 
-vi.mock("./setup.model-auth.js", () => ({
+vi.mock("./setup.model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup.model-auth.js")>()),
   runSetupModelAuthStep: mocks.modelAuth,
 }));
 
