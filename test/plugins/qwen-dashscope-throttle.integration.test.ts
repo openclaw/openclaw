@@ -1,16 +1,16 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
-import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { beforeAll, describe, expect, it } from "vitest";
 import { readPersistedAuthProfileStateRaw } from "../../src/agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../src/agents/auth-profiles/store-runtime.js";
+import type { AuthProfileState } from "../../src/agents/auth-profiles/types.js";
 import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.js";
 import { handleEmbeddedAssistantFailure } from "../../src/agents/embedded-agent-runner/run/assistant-failure.js";
 import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embedded-agent-runner/run/failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
 import { makeEmbeddedRunnerAttempt } from "../../src/agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { createPluginMetadataSnapshot } from "../../src/config/plugin-auto-enable.test-helpers.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistryCore } from "../../src/plugins/manifest-registry.js";
@@ -25,22 +25,24 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../src/test-utils/plugin-registration.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "../helpers/gateway-integration-fixtures.js";
 
 const MODEL_ID = "qwen3.8-max";
 const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
 
-const model = {
+const model = makeProviderModelFixture<"openai-completions">({
   id: MODEL_ID,
   name: "Qwen fixture",
   api: "openai-completions",
   provider: QWEN_TOKEN_PLAN_PROVIDER_ID,
   baseUrl: "",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 32_000,
   maxTokens: 2_048,
-} satisfies Model<"openai-completions">;
+});
 
 const registeredProviders = new Map<string, ProviderPlugin[]>();
 let availabilitySnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
@@ -73,14 +75,6 @@ type ErrorFixture = {
   metadata?: { raw: string };
 };
 
-type ProfileUsageReadback = {
-  cooldownUntil?: number;
-  cooldownReason?: string;
-  cooldownModel?: string;
-  disabledUntil?: number;
-  disabledReason?: string;
-};
-
 function prepareProviderOwner(providerId: string, pluginId = "qwen"): ProviderPlugin {
   const provider = requireRegisteredProvider(registeredProviders.get(pluginId) ?? [], providerId);
   const registry = createEmptyPluginRegistry();
@@ -106,113 +100,95 @@ function prepareProviderOwner(providerId: string, pluginId = "qwen"): ProviderPl
   return handle.plugin;
 }
 
-async function runTransportError(params: {
-  provider: string;
-  fixture: ErrorFixture;
-}): Promise<AssistantMessage> {
+async function runTransportError(provider: string, fixture: ErrorFixture) {
   const server = createServer((request, response) => {
     request.resume();
-    response.writeHead(params.fixture.status, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify({
+    respondJson(
+      response,
+      {
         error: {
-          code: params.fixture.code,
-          type: params.fixture.type ?? params.fixture.code,
-          message: params.fixture.message,
-          ...(params.fixture.metadata ? { metadata: params.fixture.metadata } : {}),
+          code: fixture.code,
+          type: fixture.type ?? fixture.code,
+          message: fixture.message,
+          ...(fixture.metadata ? { metadata: fixture.metadata } : {}),
         },
-      }),
+      },
+      fixture.status,
     );
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const baseUrl = `${await listenLoopback(server)}/compatible-mode/v1`;
   try {
-    const address = server.address() as AddressInfo;
-    const context: Context = {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    };
     const assistant = await streamOpenAICompletions(
-      {
-        ...model,
-        provider: params.provider,
-        baseUrl: `http://127.0.0.1:${address.port}/compatible-mode/v1`,
-      },
-      context,
+      { ...model, provider, baseUrl },
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
       { apiKey: "synthetic-test-key" },
     ).result();
     expect(assistant).toMatchObject({
       stopReason: "error",
-      provider: params.provider,
+      provider,
       model: MODEL_ID,
-      errorCode: String(params.fixture.code),
+      errorCode: String(fixture.code),
     });
-    expect(assistant.errorMessage).toContain(params.fixture.message);
-    if (params.fixture.metadata) {
-      expect(assistant.errorMessage).toContain(params.fixture.metadata.raw);
+    expect(assistant.errorMessage).toContain(fixture.message);
+    if (fixture.metadata) {
+      expect(assistant.errorMessage).toContain(fixture.metadata.raw);
     }
     return assistant;
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 }
 
-async function runThroughFailureRecoveryInScope(params: {
+async function runThroughFailureRecoveryInScope({
+  provider,
+  providerOwner,
+  fixture,
+}: {
   provider: string;
   providerOwner?: ProviderPlugin;
   fixture: ErrorFixture;
-}): Promise<{
-  failureReason: unknown;
-  usage: ProfileUsageReadback | undefined;
-  affectedModelBlocked: boolean;
-  otherModelBlocked: boolean;
-  suspensionReasons: string[];
-}> {
-  const assistant = await runTransportError(params);
+}) {
+  const assistant = await runTransportError(provider, fixture);
   return await withOpenClawTestState(
-    { label: `qwen-dashscope-${params.provider.replaceAll(/[^a-z0-9]+/gi, "-")}` },
+    { label: `qwen-dashscope-${provider.replaceAll(/[^a-z0-9]+/gi, "-")}` },
     async (state) => {
-      const profileId = `${params.provider}:fixture`;
+      const profileId = `${provider}:fixture`;
+      const agentDir = state.agentDir();
       const profileStore = {
         version: 1,
         profiles: {
           [profileId]: {
             type: "api_key" as const,
-            provider: params.provider,
+            provider,
             key: "synthetic-test-key",
           },
         },
       };
       await state.writeAuthProfiles(profileStore);
-      const runId = `run:${params.provider}:${params.fixture.code}`;
-      const sessionId = `session:${params.provider}:${params.fixture.code}`;
+      const sessionId = `session:${provider}:${fixture.code}`;
       const runParams = {
-        runId,
+        runId: `run:${provider}:${fixture.code}`,
         sessionId,
-        sessionKey: `agent:main:${params.provider}:${params.fixture.code}`,
-        sessionFile: `${state.agentDir()}/session.jsonl`,
-        workspaceDir: state.agentDir(),
+        sessionKey: `agent:main:${provider}:${fixture.code}`,
+        sessionFile: `${agentDir}/session.jsonl`,
+        workspaceDir: agentDir,
         prompt: "hello",
         timeoutMs: 60_000,
         config: {},
       } satisfies Parameters<typeof handleEmbeddedAssistantFailure>[0]["runInput"]["runParams"];
+      const runInput = { runParams, agentDir, fallbackConfigured: false };
+      const runtime = { pluginHarnessOwnsTransport: false, lastProfileId: profileId };
+      const preparedRuntime = { provider, modelId: MODEL_ID };
       const failover = createEmbeddedRunFailoverRetryController({
         runInput: {
-          runParams,
+          ...runInput,
           globalLane: "qwen-dashscope-throttle-test",
-          agentDir: state.agentDir(),
-          fallbackConfigured: false,
         },
         preparedRuntime: {
-          provider: params.provider,
-          modelId: MODEL_ID,
+          ...preparedRuntime,
           profileFailureStore: profileStore,
           snapshot: () => ({
-            lastProfileId: profileId,
-            pluginHarnessOwnsTransport: false,
+            ...runtime,
             agentHarness: { id: "embedded" },
           }),
           getApiKeyInfo: () => null,
@@ -225,33 +201,26 @@ async function runThroughFailureRecoveryInScope(params: {
         currentAttemptAssistant: assistant,
         messagesSnapshot: [assistant],
       });
-      const terminalState = resolveEmbeddedRunAttemptTerminalState({
-        attempt,
-        assistant,
-      });
       let failureReason: unknown;
       const suspensionReasons: string[] = [];
       try {
         await handleEmbeddedAssistantFailure({
           runInput: {
-            runParams,
-            fallbackConfigured: false,
+            ...runInput,
             suspendForFailure: ({ reason }) => {
               suspensionReasons.push(reason);
             },
-            agentDir: state.agentDir(),
             isProbeSession: false,
           },
           normalizedAttempt: {
             attempt,
             attemptAssistant: assistant,
             currentAttemptAssistant: assistant,
-            terminalState,
-            activeErrorContext: { provider: params.provider, model: MODEL_ID },
+            terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+            activeErrorContext: { provider, model: MODEL_ID },
           },
           preparedRuntime: {
-            provider: params.provider,
-            modelId: MODEL_ID,
+            ...preparedRuntime,
             model: { id: MODEL_ID },
             attemptedThinking: new Set(["off"]),
             attemptAuthProfileStore: profileStore,
@@ -259,10 +228,9 @@ async function runThroughFailureRecoveryInScope(params: {
           },
           runtime: {
             thinkLevel: "off",
-            pluginHarnessOwnsTransport: false,
-            lastProfileId: profileId,
+            ...runtime,
           },
-          providerOwner: params.providerOwner,
+          providerOwner,
           getThinkLevel: () => "off",
           runtimeAuthRetry: false,
           failover,
@@ -278,10 +246,8 @@ async function runThroughFailureRecoveryInScope(params: {
             ? Reflect.get(error, "reason")
             : undefined;
       }
-      const persisted = readPersistedAuthProfileStateRaw(state.agentDir()) as {
-        usageStats?: Record<string, ProfileUsageReadback>;
-      } | null;
-      const freshStore = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir());
+      const persisted = readPersistedAuthProfileStateRaw(agentDir) as AuthProfileState | null;
+      const freshStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
       expect(freshStore.usageStats?.[profileId]).toEqual(persisted?.usageStats?.[profileId]);
       return {
         failureReason,
@@ -302,44 +268,39 @@ function runThroughFailureRecovery(params: Parameters<typeof runThroughFailureRe
   );
 }
 
-function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.failureReason).toBe("rate_limit");
-  expect.soft(result.usage).toMatchObject({
-    cooldownReason: "rate_limit",
-    cooldownModel: MODEL_ID,
-    cooldownUntil: expect.any(Number),
-  });
-  expect.soft(result.usage).not.toHaveProperty("disabledReason");
-  expect.soft(result.usage).not.toHaveProperty("disabledUntil");
-  expect.soft(result.affectedModelBlocked).toBe(true);
-  expect.soft(result.otherModelBlocked).toBe(false);
-}
-
-function expectBillingState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.failureReason).toBe("billing");
-  expect.soft(result.usage).toMatchObject({
-    disabledReason: "billing",
-    disabledUntil: expect.any(Number),
-  });
-  expect.soft(result.usage).not.toHaveProperty("cooldownReason");
-  expect.soft(result.affectedModelBlocked).toBe(true);
-  expect.soft(result.otherModelBlocked).toBe(true);
-}
-
-function expectOpenRouterState(
+function expectFailureState(
   result: Awaited<ReturnType<typeof runThroughFailureRecovery>>,
   reason: "rate_limit" | "billing",
+  openRouter: boolean,
 ): void {
-  expect.soft(result.failureReason).toBe(reason);
-  expect
-    .soft(result.suspensionReasons)
-    .toEqual([reason === "rate_limit" ? "quota_exhausted" : "manual"]);
-  if (reason === "billing") {
-    expectBillingState(result);
-  } else {
+  const billing = reason === "billing";
+  const managedThrottle = openRouter && !billing;
+  expect.soft(result).toMatchObject({
+    failureReason: reason,
+    affectedModelBlocked: !managedThrottle,
+    otherModelBlocked: billing,
+  });
+  if (openRouter) {
+    expect.soft(result.suspensionReasons).toEqual([billing ? "manual" : "quota_exhausted"]);
+  }
+  if (managedThrottle) {
     expect.soft(result.usage).toBeUndefined();
-    expect.soft(result.affectedModelBlocked).toBe(false);
-    expect.soft(result.otherModelBlocked).toBe(false);
+    return;
+  }
+  expect.soft(result.usage).toMatchObject(
+    billing
+      ? {
+          disabledReason: "billing",
+          disabledUntil: expect.any(Number),
+        }
+      : {
+          cooldownReason: "rate_limit",
+          cooldownModel: MODEL_ID,
+          cooldownUntil: expect.any(Number),
+        },
+  );
+  for (const key of billing ? ["cooldownReason"] : ["disabledReason", "disabledUntil"]) {
+    expect.soft(result.usage).not.toHaveProperty(key);
   }
 }
 
@@ -365,7 +326,11 @@ describe("self-managed provider HTTP recovery", () => {
           }),
         { trustConfigIdentity: true },
       );
-      expect(result.failureReason).toBe(reason);
+      expect(result).toMatchObject({
+        failureReason: reason,
+        affectedModelBlocked: !transient,
+        otherModelBlocked: !transient,
+      });
       if (transient) {
         expect(result.usage).toBeUndefined();
       } else {
@@ -375,13 +340,14 @@ describe("self-managed provider HTTP recovery", () => {
             : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
         );
       }
-      expect(result.affectedModelBlocked).toBe(!transient);
-      expect(result.otherModelBlocked).toBe(!transient);
     },
   );
 });
 
 describe("Qwen DashScope 429 profile classification", () => {
+  const quotaCode = "insufficient_quota";
+  const allocated = "Allocated quota exceeded, please increase your quota limit.";
+  const exceeded = "You exceeded your current quota, please check your plan and billing details.";
   it.each<
     [
       provider: string,
@@ -400,34 +366,14 @@ describe("Qwen DashScope 429 profile classification", () => {
       { raw: '{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}' },
     ],
     ["openrouter", 429, "API key budget limit exceeded", "billing"],
-    [
-      QWEN_TOKEN_PLAN_PROVIDER_ID,
-      "insufficient_quota",
-      "Allocated quota exceeded, please increase your quota limit.",
-      "rate_limit",
-    ],
-    [
-      "qwen",
-      "Throttling.AllocationQuota",
-      "Allocated quota exceeded, please increase your quota limit.",
-      "rate_limit",
-    ],
-    [
-      "bailian-token-plan",
-      "insufficient_quota",
-      "You exceeded your current quota, please check your plan and billing details.",
-      "rate_limit",
-    ],
+    [QWEN_TOKEN_PLAN_PROVIDER_ID, quotaCode, allocated, "rate_limit"],
+    ["qwen", "Throttling.AllocationQuota", allocated, "rate_limit"],
+    ["bailian-token-plan", quotaCode, exceeded, "rate_limit"],
     ["qwen", "PrepaidBillOverdue", "The prepaid bill is overdue.", "billing"],
     ["qwen", "rate_limit_error", "Rate limit exceeded", "rate_limit"],
-    [
-      "openai",
-      "insufficient_quota",
-      "You exceeded your current quota, please check your plan and billing details.",
-      "billing",
-    ],
-    ["qwen", "insufficient_quota", "Free allocated quota exceeded.", "billing"],
-    ["qwen", "insufficient_quota", "Unknown quota condition", "billing"],
+    ["openai", quotaCode, exceeded, "billing"],
+    ["qwen", quotaCode, "Free allocated quota exceeded.", "billing"],
+    ["qwen", quotaCode, "Unknown quota condition", "billing"],
   ])("classifies %s %s (%s) as %s", async (provider, code, message, reason, metadata) => {
     const result = await runThroughFailureRecovery({
       provider,
@@ -437,12 +383,6 @@ describe("Qwen DashScope 429 profile classification", () => {
           : prepareProviderOwner(provider, provider === "openrouter" ? "openrouter" : "qwen"),
       fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
     });
-    if (provider === "openrouter") {
-      expectOpenRouterState(result, reason);
-    } else if (reason === "rate_limit") {
-      expectRateLimitState(result);
-    } else {
-      expectBillingState(result);
-    }
+    expectFailureState(result, reason, provider === "openrouter");
   });
 });

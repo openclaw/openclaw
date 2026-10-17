@@ -56,24 +56,22 @@ beforeEach(() => {
   manifestMocks.loadPluginManifestRegistryCore.mockReset();
 });
 
-function useManifest(pluginId: string) {
-  beforeEach(() => {
-    const rootDir = path.dirname(
-      resolveBundledPluginPublicModulePath({
-        pluginId,
-        artifactBasename: "openclaw.plugin.json",
-      }),
-    );
-    const loaded = loadPluginManifest(rootDir);
-    if (!loaded.ok) {
-      throw new Error(loaded.error);
-    }
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
-    });
-    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
-    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
+function loadManifest(pluginId: string) {
+  const rootDir = path.dirname(
+    resolveBundledPluginPublicModulePath({
+      pluginId,
+      artifactBasename: "openclaw.plugin.json",
+    }),
+  );
+  const loaded = loadPluginManifest(rootDir);
+  if (!loaded.ok) {
+    throw new Error(loaded.error);
+  }
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
   });
+  manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+  manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
 }
 
 function resolveAlias(
@@ -100,6 +98,7 @@ async function expectAlias(
   modelId: string,
   baseUrl: string,
 ) {
+  loadManifest(pluginId);
   expect(resolveOwningPluginIdsForProviderRef({ provider: alias })).toEqual([pluginId]);
   const catalog = resolveBundledStaticCatalogModel({
     provider,
@@ -128,6 +127,7 @@ async function expectConfiguredAlias(
   modelBaseUrl: string | undefined,
   expectedApi: ModelApi,
 ) {
+  loadManifest(catalogProvider);
   const baseUrl = `https://${catalogProvider}-proxy.example/v1`;
   const settings = {
     reasoning: false,
@@ -170,22 +170,30 @@ async function expectConfiguredAlias(
   });
 }
 
-describe("Fireworks manifest provider alias", () => {
-  const modelId = "accounts/fireworks/routers/glm-5p3-fast";
-  const modelBaseUrl = "https://fireworks-proxy.example/model";
+it.each([
+  [
+    "fireworks",
+    "fireworks",
+    "fireworks-ai",
+    "accounts/fireworks/routers/glm-5p3-fast",
+    "https://api.fireworks.ai/inference/v1",
+  ],
+  ["stepfun", "stepfun", "stepfun-ai", "step-3.7-flash", "https://api.stepfun.ai/v1"],
+  [
+    "stepfun",
+    "stepfun-plan",
+    "stepfun-ai-step-plan",
+    "step-3.7-flash",
+    "https://api.stepfun.ai/step_plan/v1",
+  ],
+  ["together", "together", "togetherai", "zai-org/GLM-5.2", "https://api.together.xyz/v1"],
+  ["kilocode", "kilocode", "kilo", "kilo-auto/balanced", "https://api.kilo.ai/api/gateway/"],
+])("%s owns %s alias %s before runtime load and resolves its catalog model", expectAlias);
 
-  useManifest("fireworks");
-
-  it("finds the alias owner before runtime loading and resolves the canonical catalog model", async () => {
-    await expectAlias(
-      "fireworks",
-      "fireworks",
-      "fireworks-ai",
-      modelId,
-      "https://api.fireworks.ai/inference/v1",
-    );
-  });
-
+describe.each([
+  ["fireworks", "fireworks-ai", "accounts/fireworks/routers/glm-5p3-fast", "X-Fireworks-Route"],
+  ["stepfun", "stepfun-ai", "step-3.7-flash", "X-StepFun-Route"],
+])("%s explicit alias configuration", (catalogProvider, provider, modelId, header) => {
   it.each([
     ["omitted API", undefined, undefined, undefined, "openai-completions"],
     ["provider API", "openai-responses", undefined, undefined, "openai-responses"],
@@ -193,86 +201,19 @@ describe("Fireworks manifest provider alias", () => {
       "model API and URL",
       "openai-responses",
       "anthropic-messages",
-      modelBaseUrl,
+      `https://${catalogProvider}-proxy.example/model`,
       "anthropic-messages",
     ],
-  ] as const)(
-    "preserves explicit alias configuration with %s",
-    async (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
-      await expectConfiguredAlias(
-        "fireworks-ai",
-        "fireworks",
-        modelId,
-        "X-Fireworks-Route",
-        providerApi,
-        modelApi,
-        configuredModelBaseUrl,
-        expectedApi,
-      );
-    },
-  );
-});
-
-describe("StepFun manifest provider aliases", () => {
-  const modelId = "step-3.7-flash";
-  const modelBaseUrl = "https://stepfun-proxy.example/model";
-
-  useManifest("stepfun");
-
-  it("finds models.dev alias owners before runtime loading and resolves canonical catalog models", async () => {
-    await expectAlias("stepfun", "stepfun", "stepfun-ai", modelId, "https://api.stepfun.ai/v1");
-    await expectAlias(
-      "stepfun",
-      "stepfun-plan",
-      "stepfun-ai-step-plan",
+  ] as const)("preserves %s", async (_name, providerApi, modelApi, modelBaseUrl, expectedApi) => {
+    await expectConfiguredAlias(
+      provider,
+      catalogProvider,
       modelId,
-      "https://api.stepfun.ai/step_plan/v1",
-    );
-  });
-
-  it.each([
-    ["omitted API", undefined, undefined, undefined, "openai-completions"],
-    ["provider API", "openai-responses", undefined, undefined, "openai-responses"],
-    [
-      "model API and URL",
-      "openai-responses",
-      "anthropic-messages",
+      header,
+      providerApi,
+      modelApi,
       modelBaseUrl,
-      "anthropic-messages",
-    ],
-  ] as const)(
-    "preserves explicit stepfun-ai alias configuration with %s",
-    async (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
-      await expectConfiguredAlias(
-        "stepfun-ai",
-        "stepfun",
-        modelId,
-        "X-StepFun-Route",
-        providerApi,
-        modelApi,
-        configuredModelBaseUrl,
-        expectedApi,
-      );
-    },
-  );
-});
-
-describe("Together manifest provider alias", () => {
-  const modelId = "zai-org/GLM-5.2";
-
-  useManifest("together");
-
-  it("owns togetherai before runtime load and resolves the canonical catalog model", async () => {
-    await expectAlias("together", "together", "togetherai", modelId, "https://api.together.xyz/v1");
-  });
-});
-
-describe("Kilocode manifest provider alias", () => {
-  const modelId = "kilo-auto/balanced";
-
-  useManifest("kilocode");
-
-  it("owns kilo before runtime load and resolves the canonical catalog model", async () => {
-    await expectAlias("kilocode", "kilocode", "kilo", modelId, "https://api.kilo.ai/api/gateway/");
+      expectedApi,
+    );
   });
 });

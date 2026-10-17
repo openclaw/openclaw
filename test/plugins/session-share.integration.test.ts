@@ -27,6 +27,7 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../src/config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import {
@@ -75,6 +76,68 @@ type TranscriptPage = {
   nextCursor?: string;
 };
 
+function sessionScope(id: string) {
+  return { agentId: "main", sessionKey: `agent:main:${id}`, sessionId: id };
+}
+
+async function writeSession(id: string, patch: Partial<SessionEntry> = {}) {
+  const scope = sessionScope(id);
+  await replaceSessionEntry(scope, {
+    sessionId: id,
+    updatedAt: Date.now(),
+    category: "Team",
+    ...patch,
+  });
+  return scope;
+}
+
+function profileActor(id: string) {
+  return { type: "human", source: "profile", id } as const;
+}
+
+function githubProfile(accountId: number, login: string, name: string, email?: string) {
+  return syncGitHubIdentity({
+    identity: { accountId, login, name },
+    authenticationAlias: email ? { kind: "email", email } : { kind: "github-login", login },
+  });
+}
+
+function linkedActor(id: string) {
+  return { type: "human", id, identity: { type: "profile", id }, label: "Catalog Person" };
+}
+
+async function writeProfileSession(id: string, profileId: string, updatedAt = Date.now()) {
+  const scope = sessionScope(id);
+  await upsertSessionEntryCore(scope, {
+    sessionId: id,
+    updatedAt,
+    label: "Shared",
+    category: "Team",
+    createdActor: profileActor(profileId),
+  });
+  return {
+    scope,
+    appendUser: (content: string, timestamp?: number) =>
+      appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: {
+          role: "user",
+          content,
+          timestamp,
+          __openclaw: { senderIdentity: { type: "profile", id: profileId } },
+        },
+      }),
+  };
+}
+
+function withCommands(run: (fixture: ReturnType<typeof commandFixture>) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, () => run(commandFixture()));
+}
+
+function expectSingleItem(items: unknown, shape: unknown) {
+  expect(items).toMatchObject([shape]);
+}
+
 function commandFixture(groups: string[] = ["Team"]) {
   const config: OpenClawConfig = {
     plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
@@ -113,6 +176,19 @@ const remoteIdentity = {
   id: "4242",
 };
 
+function remoteHuman(threadId: string, id = "4242", domain = remoteIdentity.domain) {
+  return {
+    ...nativeSession,
+    threadId,
+    createdActor: {
+      type: "human" as const,
+      id,
+      identity: { ...remoteIdentity, id, domain },
+      label: "Remote Person",
+    },
+  };
+}
+
 function nodeConfig(
   nodes: Record<string, { owner?: string; linkGitHubIdentities?: boolean }>,
 ): OpenClawConfig {
@@ -148,18 +224,7 @@ function catalogFixture(stateDir: string) {
   const list = vi.fn<PluginRuntime["nodes"]["list"]>().mockResolvedValue({
     nodes: [{ nodeId: "alpha", displayName: " Alpha ", connected: true, commands }],
   });
-  const invoke = vi
-    .fn<PluginRuntime["nodes"]["invoke"]>()
-    .mockImplementation(async ({ command }) =>
-      command === commands[0]
-        ? { payloadJSON: JSON.stringify({ sessions: [nativeSession] }) }
-        : {
-            payloadJSON: JSON.stringify({
-              threadId: nativeSession.threadId,
-              items: [{ type: "userMessage", text: "Published question" }],
-            }),
-          },
-    );
+  const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>();
   const runtime = createPluginRuntimeMock({
     config: { current: () => config },
     nodes: { list, invoke },
@@ -181,21 +246,11 @@ function catalogFixture(stateDir: string) {
       await vi.advanceTimersByTimeAsync(0);
       await Promise.all(publications);
     },
-    start: async () => {
-      await Promise.all(
-        services.map(async (service) => {
-          await service.start(serviceContext);
-        }),
-      );
-    },
+    start: () => Promise.all(services.map((service) => service.start(serviceContext))),
     stop: async () => {
       scheduler.beginClose();
       try {
-        await Promise.all(
-          services.map(async (service) => {
-            await service.stop?.(serviceContext);
-          }),
-        );
+        await Promise.all(services.map((service) => service.stop?.(serviceContext)));
       } finally {
         await scheduler.stop();
       }
@@ -228,8 +283,7 @@ async function withCatalogFixture(
 
 describe("session-share node commands", () => {
   it("refreshes shared metadata without rescanning the inventory on the node thread", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const source = commandFixture();
+    await withCommands(async (source) => {
       expect((await source.list()).sessions).toEqual([]);
       const scope = { agentId: "main", sessionKey: "agent:main:shared-cache" };
       const entry = {
@@ -268,43 +322,29 @@ describe("session-share node commands", () => {
   it("derives titles only for the requested page while preserving transcript-title search", async () => {
     await withCatalogFixture(async (receiver) => {
       const source = commandFixture();
+      const named = { threadId: "agent:main:named", name: "Named session" };
+      const derived = [0, 1, 2].map((index) => ({
+        threadId: `agent:main:derived-${index}`,
+        name: `Derived title ${index}`,
+      }));
       receiver.invoke.mockImplementation(async ({ command, params }) => {
         const handler = source.commands.find((candidate) => candidate.command === command)!;
         return { payloadJSON: await handler.handle(JSON.stringify(params)) };
       });
       const recency = Date.now();
       for (let index = 0; index < 3; index++) {
-        const scope = {
-          agentId: "main",
-          sessionKey: `agent:main:derived-${index}`,
-          sessionId: `derived-${index}`,
-        };
-        await replaceSessionEntry(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: recency,
-          category: "Team",
-        });
+        const scope = await writeSession(`derived-${index}`, { updatedAt: recency });
         await appendSessionTranscriptMessageByIdentity({
           ...scope,
           message: { role: "user", content: `Derived title ${index}` },
         });
-        await replaceSessionEntry(scope, {
-          sessionId: scope.sessionId,
-          category: "Team",
+        await writeSession(scope.sessionId, {
           updatedAt: recency - index,
           lastInteractionAt: recency - index,
           lastActivityAt: recency - index,
         });
       }
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: "agent:main:named" },
-        {
-          sessionId: "named",
-          updatedAt: recency + 1,
-          category: "Team",
-          label: "Named session",
-        },
-      );
+      await writeSession("named", { updatedAt: recency + 1, label: "Named session" });
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
       const counter = trackSqliteStatementExecutions(
         requireNativeSqliteDatabase(db),
@@ -317,11 +357,8 @@ describe("session-share node commands", () => {
               : null,
       );
       try {
-        expect((await source.list({ limit: 1 })).sessions).toMatchObject([
-          { threadId: "agent:main:named", name: "Named session" },
-        ]);
-        expect.soft(counter.counts.transcript).toBe(0);
-        expect.soft(counter.counts.participants).toBe(0);
+        expectSingleItem((await source.list({ limit: 1 })).sessions, named);
+        expect.soft(counter.counts).toMatchObject({ transcript: 0, participants: 0 });
       } finally {
         counter.restore();
       }
@@ -329,31 +366,24 @@ describe("session-share node commands", () => {
       expect(JSON.stringify(await source.list({ limit: 100 }))).toBe(response);
       await receiver.hydrate();
       const first = await receiver.catalog.list({ limitPerHost: 1 });
-      expect(first[0]?.sessions).toMatchObject([
-        { threadId: "agent:main:named", name: "Named session" },
-      ]);
+      expectSingleItem(first[0]?.sessions, named);
       expect(first[0]?.nextCursor).toBeDefined();
       const second = await receiver.catalog.list({
         limitPerHost: 2,
         cursors: { "node:alpha": first[0]!.nextCursor! },
       });
-      expect(second[0]?.sessions.map(({ threadId, name }) => ({ threadId, name }))).toEqual([
-        { threadId: "agent:main:derived-0", name: "Derived title 0" },
-        { threadId: "agent:main:derived-1", name: "Derived title 1" },
-      ]);
+      expect(second[0]?.sessions.map(({ threadId, name }) => ({ threadId, name }))).toEqual(
+        derived.slice(0, 2),
+      );
       const last = await receiver.catalog.list({
         limitPerHost: 2,
         cursors: { "node:alpha": second[0]!.nextCursor! },
       });
-      expect(last[0]?.sessions).toMatchObject([
-        { threadId: "agent:main:derived-2", name: "Derived title 2" },
-      ]);
+      expectSingleItem(last[0]?.sessions, derived[2]);
       expect(last[0]?.nextCursor).toBeUndefined();
       for (const search of ["Derived title 2", "MAIN:DERIVED-2"]) {
         const found = await receiver.catalog.list({ search, limitPerHost: 1 });
-        expect(found[0]?.sessions).toMatchObject([
-          { threadId: "agent:main:derived-2", name: "Derived title 2" },
-        ]);
+        expectSingleItem(found[0]?.sessions, derived[2]);
       }
       expect(receiver.invoke).toHaveBeenCalledTimes(1);
       db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
@@ -377,11 +407,7 @@ describe("session-share node commands", () => {
             : state.path("configured", "sessions.json");
         const configuredStorePath = resolveStorePath(store, { agentId: "main" });
         const defaultStorePath = resolveStorePath(undefined, { agentId: "main" });
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:configured",
-          sessionId: "configured-session",
-        };
+        const scope = { ...sessionScope("configured"), sessionId: "configured-session" };
         for (const [storePath, text] of [
           [defaultStorePath, "Default store copy"],
           [configuredStorePath, "Configured store question"],
@@ -397,17 +423,12 @@ describe("session-share node commands", () => {
           });
         }
         fixture.config.session = { store };
-        expect.soft((await fixture.list()).sessions).toEqual([
-          expect.objectContaining({
-            threadId: scope.sessionKey,
-            name: "Configured store question",
-          }),
-        ]);
+        expect
+          .soft((await fixture.list()).sessions)
+          .toMatchObject([{ threadId: scope.sessionKey, name: "Configured store question" }]);
         expect
           .soft((await fixture.read(scope.sessionKey)).items)
-          .toEqual([
-            expect.objectContaining({ type: "userMessage", text: "Configured store question" }),
-          ]);
+          .toMatchObject([{ type: "userMessage", text: "Configured store question" }]);
 
         const pendingRead = fixture.read(scope.sessionKey);
         fixture.config.session = { store: defaultStorePath };
@@ -425,13 +446,9 @@ describe("session-share node commands", () => {
   );
 
   it("publishes selected root sessions while denying grouped subagents, with stable paging and search", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fixture = commandFixture();
-      const profile = syncGitHubIdentity({
-        identity: { accountId: 4242, login: "source-person", name: "Source Person" },
-        authenticationAlias: { kind: "github-login", login: "source-person" },
-      });
-      const createdActor = { type: "human", source: "profile", id: profile.id } as const;
+    await withCommands(async (fixture) => {
+      const profile = githubProfile(4242, "source-person", "Source Person");
+      const createdActor = profileActor(profile.id);
       const actor = publishedActor("4242", "Source Person");
       // Keep the tied fixture fresh: subsequent writes prune ancient unarchived sessions.
       const recency = Date.now();
@@ -462,19 +479,13 @@ describe("session-share node commands", () => {
             worktree: { id: "beta-worktree", repoRoot: "/work/beta", branch: "b".repeat(6010) },
           },
         ],
-        ["agent:main:private", { label: "Private", category: "Other" }],
-        ["agent:main:draft", { label: "Draft", visibility: "draft" }],
-        ["agent:main:incognito", { label: "Incognito", incognito: true }],
-        ["agent:main:catalog:external", { label: "Adopted" }],
-        ["agent:main:subagent:key-only", { label: "Subagent" }],
+        ["agent:main:private", { category: "Other" }],
+        ["agent:main:draft", { visibility: "draft" }],
+        ["agent:main:incognito", { incognito: true }],
+        ["agent:main:catalog:external", {}],
+        ["agent:main:subagent:key-only", {}],
         ["agent:main:dashboard:spawn-owned", { createdVia: "spawn" }],
-        [
-          "agent:main:acp:resumed-child",
-          {
-            spawnedBy: "agent:main:main",
-            spawnDepth: 1,
-          },
-        ],
+        ["agent:main:acp:resumed-child", { spawnedBy: "agent:main:main", spawnDepth: 1 }],
         ["agent:main:main", { updatedAt: recency - 1 }],
         ["agent:main:cron:job:run:root", { updatedAt: recency - 1, createdVia: "cron" }],
       ] as const) {
@@ -487,57 +498,45 @@ describe("session-share node commands", () => {
         await expect.soft(fixture.read(`agent:main:${key}`)).rejects.toThrow("not shared");
       }
       const identityReads = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
-      const first = await fixture.list({ limit: 1 });
-      expect(first.sessions).toEqual([
-        {
-          ...nativeSession,
-          threadId: "agent:main:alpha",
-          name: "Alpha",
-          color: "blue",
-          cwd: "/work/alpha",
-          createdAt: recency - 100,
-          updatedAt: recency,
-          recencyAt: recency,
-          createdActor: actor,
-        },
-      ]);
-      expect.soft(identityReads).not.toHaveBeenCalled();
-      expect(first.nextCursor).toBeDefined();
-      identityReads.mockClear();
-      const older = await fixture.list({ limit: 1, cursor: first.nextCursor });
-      expect(older.sessions).toEqual([
-        {
-          ...nativeSession,
-          threadId: "agent:main:beta",
-          name: "Beta",
-          cwd: "/work/beta",
-          createdAt: recency - 90,
-          updatedAt: recency,
-          recencyAt: recency,
-          gitBranch: "b".repeat(6000),
-          archived: true,
-          status: "archived",
-          createdActor: actor,
-        },
-      ]);
-      expect.soft(identityReads).not.toHaveBeenCalled();
-      expect(older.nextCursor).toBeDefined();
-      identityReads.mockClear();
-      const roots = await fixture.list({ cursor: older.nextCursor });
+      let cursor: string | undefined;
+      for (const [key, name, age, details] of [
+        ["alpha", "Alpha", 100, { color: "blue" }],
+        ["beta", "Beta", 90, { gitBranch: "b".repeat(6000), archived: true, status: "archived" }],
+      ] as const) {
+        const page = await fixture.list({ limit: 1, cursor });
+        expect(page.sessions).toEqual([
+          {
+            ...nativeSession,
+            threadId: `agent:main:${key}`,
+            name,
+            cwd: `/work/${key}`,
+            createdAt: recency - age,
+            updatedAt: recency,
+            recencyAt: recency,
+            createdActor: actor,
+            ...details,
+          },
+        ]);
+        expect.soft(identityReads).not.toHaveBeenCalled();
+        expect(page.nextCursor).toBeDefined();
+        cursor = page.nextCursor;
+        identityReads.mockClear();
+      }
+      const roots = await fixture.list({ cursor });
       expect(roots.sessions.map((session) => session.threadId)).toEqual([
         "agent:main:cron:job:run:root",
         "agent:main:main",
       ]);
       expect.soft(identityReads).not.toHaveBeenCalled();
       expect(roots.nextCursor).toBeUndefined();
-      expect(
-        (await fixture.list({ searchTerm: "ALPHA" })).sessions.map((session) => session.threadId),
-      ).toEqual(["agent:main:alpha"]);
-      expect(
-        (await fixture.list({ searchTerm: "MAIN:BETA" })).sessions.map(
-          (session) => session.threadId,
-        ),
-      ).toEqual(["agent:main:beta"]);
+      for (const [searchTerm, key] of [
+        ["ALPHA", "alpha"],
+        ["MAIN:BETA", "beta"],
+      ]) {
+        expect((await fixture.list({ searchTerm })).sessions.map((s) => s.threadId)).toEqual([
+          `agent:main:${key}`,
+        ]);
+      }
       for (const key of ["private", "draft", "incognito", "catalog:external"]) {
         await expect(fixture.read(`agent:main:${key}`)).rejects.toThrow("not shared");
       }
@@ -547,29 +546,27 @@ describe("session-share node commands", () => {
   });
 
   it("batches distinct and repeated creators without mixing labels or retaining facts across requests", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fixture = commandFixture();
-      const creator = syncGitHubIdentity({
-        identity: { accountId: 4242, login: "original-person", name: "Original Person" },
-        authenticationAlias: { kind: "email", email: "creator@example.test" },
-      });
-      const target = syncGitHubIdentity({
-        identity: { accountId: 4343, login: "merged-person", name: "Merged Person" },
-        authenticationAlias: { kind: "email", email: "target@example.test" },
-      });
+    await withCommands(async (fixture) => {
+      const creator = githubProfile(
+        4242,
+        "original-person",
+        "Original Person",
+        "creator@example.test",
+      );
+      const target = githubProfile(4343, "merged-person", "Merged Person", "target@example.test");
       const distinct = Array.from({ length: 8 }, (_, index) => ({
         accountId: 5000 + index,
-        profile: syncGitHubIdentity({
-          identity: { accountId: 5000 + index, login: `person-${index}`, name: `Person ${index}` },
-          authenticationAlias: { kind: "email", email: `person-${index}@example.test` },
-        }),
+        profile: githubProfile(
+          5000 + index,
+          `person-${index}`,
+          `Person ${index}`,
+          `person-${index}@example.test`,
+        ),
       }));
-      const actor = { type: "human", source: "profile", id: creator.id } as const;
+      const actor = profileActor(creator.id);
       const actors = [
         ...Array.from({ length: 8 }, () => actor),
-        ...distinct.map(
-          ({ profile }) => ({ type: "human", source: "profile", id: profile.id }) as const,
-        ),
+        ...distinct.map(({ profile }) => profileActor(profile.id)),
         { type: "human", source: "profile", id: "missing", label: "First fallback" },
         { type: "human", source: "profile", id: "missing", label: "Second fallback" },
         { type: "human", source: "channel", id: creator.id, label: "Channel person" },
@@ -577,16 +574,11 @@ describe("session-share node commands", () => {
       ] as const;
       const now = Date.now();
       for (const [index, createdActor] of actors.entries()) {
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: `agent:main:creator-${index}` },
-          {
-            sessionId: `creator-${index}`,
-            updatedAt: now - index,
-            label: `Session ${index}`,
-            category: "Team",
-            createdActor,
-          },
-        );
+        await writeSession(`creator-${index}`, {
+          updatedAt: now - index,
+          label: `Session ${index}`,
+          createdActor,
+        });
       }
       const counter = trackSqliteStatementExecutions(
         requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
@@ -601,8 +593,7 @@ describe("session-share node commands", () => {
       let first: SessionPage;
       try {
         first = await fixture.list();
-        expect.soft(counter.counts.identities).toBe(0);
-        expect.soft(counter.counts.profiles).toBe(0);
+        expect.soft(counter.counts).toMatchObject({ identities: 0, profiles: 0 });
       } finally {
         counter.restore();
       }
@@ -633,21 +624,15 @@ describe("session-share node commands", () => {
   });
 
   it("propagates a failed profile reader without replaying creator queries on the host", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fixture = commandFixture();
+    await withCommands(async (fixture) => {
       const now = Date.now();
       for (const index of [0, 1]) {
         const profile = ensureProfileForEmail(`terminal-${index}@example.test`);
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: `agent:main:terminal-${index}` },
-          {
-            sessionId: `terminal-${index}`,
-            updatedAt: now - index,
-            label: `Terminal ${index}`,
-            category: "Team",
-            createdActor: { type: "human", source: "profile", id: profile.id },
-          },
-        );
+        await writeSession(`terminal-${index}`, {
+          updatedAt: now - index,
+          label: `Terminal ${index}`,
+          createdActor: profileActor(profile.id),
+        });
       }
       const cached = openOpenClawStateDatabase();
       const corruption = Object.assign(new Error("database disk image is malformed"), {
@@ -671,25 +656,10 @@ describe("session-share node commands", () => {
   it.each(["list", "read"] as const)(
     "refuses a replaced physical source during %s identity preparation",
     async (operation) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const fixture = commandFixture();
+      await withCommands(async (fixture) => {
         const profile = ensureProfileForEmail("physical@example.test");
-        const scope = { agentId: "main", sessionKey: "agent:main:physical", sessionId: "physical" };
-        await upsertSessionEntryCore(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-          label: "Shared",
-          category: "Team",
-          createdActor: { type: "human", source: "profile", id: profile.id },
-        });
-        await appendSessionTranscriptMessageByIdentity({
-          ...scope,
-          message: {
-            role: "user",
-            content: "Shared",
-            __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
-          },
-        });
+        const { scope, appendUser } = await writeProfileSession("physical", profile.id);
+        await appendUser("Shared");
         const pathname = openOpenClawAgentDatabase({ agentId: "main" }).path;
         const gate = holdStateRead();
         const pending = operation === "list" ? fixture.list() : fixture.read(scope.sessionKey);
@@ -712,26 +682,10 @@ describe("session-share node commands", () => {
   );
 
   it("reads real newest-first transcript rows with portable sender and revokes moved sessions", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fixture = commandFixture();
+    await withCommands(async (fixture) => {
       const profile = ensureProfileForEmail("source@example.test");
-      const scope = { agentId: "main", sessionKey: "agent:main:shared", sessionId: "shared" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "shared",
-        updatedAt: 1,
-        label: "Shared",
-        category: "Team",
-        createdActor: { type: "human", source: "profile", id: profile.id },
-      });
-      await appendSessionTranscriptMessageByIdentity({
-        ...scope,
-        message: {
-          role: "user",
-          content: "Shared question",
-          timestamp: 1,
-          __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
-        },
-      });
+      const { scope, appendUser } = await writeProfileSession("shared", profile.id, 1);
+      await appendUser("Shared question", 1);
       await appendSessionTranscriptMessageByIdentity({
         ...scope,
         message: {
@@ -741,22 +695,14 @@ describe("session-share node commands", () => {
         },
       });
       const first = await fixture.read(scope.sessionKey, { limit: 1 });
-      expect(first.items).toEqual([
-        expect.objectContaining({ type: "agentMessage", text: "Shared answer" }),
-      ]);
+      expectSingleItem(first.items, { type: "agentMessage", text: "Shared answer" });
       const older = await fixture.read(scope.sessionKey, { limit: 1, cursor: first.nextCursor });
       expect(older.items).toEqual([
         expect.objectContaining({
           type: "userMessage",
           text: "Shared question",
           sender: expect.objectContaining({
-            identity: {
-              type: "remote",
-              pluginId: "session-share",
-              domain: "openclaw",
-              idKind: "profile",
-              id: profile.id,
-            },
+            identity: publishedActor(profile.id, "", "profile").identity,
           }),
         }),
       ]);
@@ -798,10 +744,7 @@ describe("session-share node commands", () => {
 describe("session-share receiver identity integration", () => {
   it("rejects an earlier host snapshot after another host prepares", async () => {
     await withCatalogFixture(async (fixture) => {
-      syncGitHubIdentity({
-        identity: { accountId: 702, login: "second-host", name: "Second" },
-        authenticationAlias: { kind: "email", email: "second-host@example.test" },
-      });
+      githubProfile(702, "second-host", "Second", "second-host@example.test");
       fixture.list.mockResolvedValue({
         nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
       });
@@ -854,39 +797,20 @@ describe("session-share receiver identity integration", () => {
   it("keeps claims remote by default and applies only explicit owner and numeric GitHub links", async () => {
     const nodeId = "alpha";
     await withCatalogFixture(async (fixture) => {
-      const profile = syncGitHubIdentity({
-        identity: { accountId: 4242, login: "catalog-person", name: "Catalog Person" },
-        authenticationAlias: { kind: "github-login", login: "catalog-person" },
-      });
+      const profile = githubProfile(4242, "catalog-person", "Catalog Person");
       fixture.list.mockResolvedValue({ nodes: [{ nodeId, connected: true, commands }] });
       const hostId = `node:${nodeId}`;
       const namespacedIdentity = { ...remoteIdentity, domain: hostId };
       const identityReads = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
       const fullIdentityScans = () =>
         identityReads.mock.calls.filter(([, profileIds]) => profileIds === undefined).length;
-      const human = {
-        ...nativeSession,
-        createdActor: {
-          type: "human" as const,
-          id: "4242",
-          identity: remoteIdentity,
-          label: "Remote Person",
-        },
-      };
+      const human = remoteHuman(nativeSession.threadId);
       const agent = {
         ...nativeSession,
         threadId: "agent:main:agent",
         createdActor: { type: "agent" as const, id: "assistant", label: "Assistant" },
       };
-      const unmatched = {
-        ...human,
-        threadId: "agent:main:unmatched",
-        createdActor: {
-          ...human.createdActor,
-          id: "9999",
-          identity: { ...remoteIdentity, id: "9999" },
-        },
-      };
+      const unmatched = remoteHuman("agent:main:unmatched", "9999");
       const transcript = {
         threadId: nativeSession.threadId,
         items: [remoteIdentity, remoteIdentity, { ...remoteIdentity, id: "9999" }].map(
@@ -900,17 +824,8 @@ describe("session-share receiver identity integration", () => {
       fixture.invoke.mockImplementation(async ({ command }) =>
         command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
       );
-      const namespacedHuman = {
-        ...human,
-        createdActor: { ...human.createdActor, identity: namespacedIdentity },
-      };
-      const namespacedUnmatched = {
-        ...unmatched,
-        createdActor: {
-          ...unmatched.createdActor,
-          identity: { ...namespacedIdentity, id: "9999" },
-        },
-      };
+      const namespacedHuman = remoteHuman(human.threadId, "4242", hostId);
+      const namespacedUnmatched = remoteHuman(unmatched.threadId, "9999", hostId);
       await fixture.hydrate();
       expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
         namespacedHuman,
@@ -927,12 +842,7 @@ describe("session-share receiver identity integration", () => {
         await fixture.hydrate();
         const rows = (await fixture.catalog.list({}))[0]!.sessions;
         expect(rows[0]).toEqual(namespacedHuman);
-        expect(rows[1]?.createdActor).toMatchObject({
-          type: "human",
-          id: profile.id,
-          identity: { type: "profile", id: profile.id },
-          label: "Catalog Person",
-        });
+        expect(rows[1]?.createdActor).toMatchObject(linkedActor(profile.id));
         expect(rows[2]).toEqual(namespacedUnmatched);
       }
       fixture.setConfig(nodeConfig({ [nodeId]: { linkGitHubIdentities: true } }));
@@ -940,19 +850,11 @@ describe("session-share receiver identity integration", () => {
       identityReads.mockClear();
       const linked = (await fixture.catalog.list({}))[0]!.sessions;
       expect.soft(fullIdentityScans()).toBe(0);
-      expect(linked[0]?.createdActor).toMatchObject({
-        type: "human",
-        id: profile.id,
-        identity: { type: "profile", id: profile.id },
-        label: "Catalog Person",
-      });
+      expect(linked[0]?.createdActor).toMatchObject(linkedActor(profile.id));
       expect(linked[1]).toEqual(agent);
       expect(linked[2]).toEqual(namespacedUnmatched);
       identityReads.mockClear();
-      const page = await fixture.catalog.read({
-        hostId,
-        threadId: nativeSession.threadId,
-      });
+      const page = await fixture.catalog.read({ hostId, threadId: nativeSession.threadId });
       expect.soft(fullIdentityScans()).toBe(0);
       expect(page.items.map((item) => item.sender)).toEqual([
         { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },

@@ -2,16 +2,16 @@ import { createServer } from "node:http";
 import { crc32 } from "node:zlib";
 import { runAgentLoop } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Message, Model } from "openclaw/plugin-sdk/llm";
-// Native provider conversation contracts: streamed reasoning and retained runtime context.
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import bedrockPlugin from "../../extensions/amazon-bedrock/index.js";
 import { submitEmbeddedAttemptPrompt } from "../../src/agents/embedded-agent-runner/run/attempt-prompt-submit.js";
-import { buildRuntimeContextCustomMessage } from "../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import {
-  clearEmbeddedSessionPromptStates,
-  retainEmbeddedSessionPromptState,
-} from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
+  createBaseInput,
+  sessionId,
+} from "../../src/agents/embedded-agent-runner/run/attempt-prompt-submit.test-support.js";
+import { buildRuntimeContextCustomMessage } from "../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { clearEmbeddedSessionPromptStates } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import { createSubscribedSessionHarness } from "../../src/agents/embedded-agent-subscribe.e2e-harness.js";
 import {
   createAssistant,
@@ -21,24 +21,28 @@ import {
   streamMocks,
   testModel,
 } from "../../src/agents/sessions/agent-session-loop-correctness.test-support.js";
+import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { onAgentEventForRun } from "../../src/infra/agent-events.js";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
 import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../helpers/promise.js";
 
-const model = {
+const model = makeProviderModelFixture({
   id: "amazon.nova-micro-v1:0",
   name: "Reasoning subscription fixture",
   api: "bedrock-converse-stream",
   provider: "amazon-bedrock",
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 4096,
-} satisfies Model;
+});
+
+const reasoningDelta = (reasoningContent: { text: string } | { redactedContent: string }) => ({
+  contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent } },
+});
 
 function bedrockEvent(type: string, payload: unknown): Buffer {
   // Amazon event-stream frames carry string headers and CRCs over the prelude
@@ -81,27 +85,12 @@ describe("native provider reasoning subscription", () => {
       const firstDeltaConsumed = createDeferred();
       async function* responses() {
         yield { messageStart: { role: "assistant" } };
-        yield {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { reasoningContent: { text: "before" } },
-          },
-        };
+        yield reasoningDelta({ text: "before" });
         if (consumption === "incremental") {
           await firstDeltaConsumed.promise;
         }
-        yield {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { reasoningContent: { redactedContent: "AQID" } },
-          },
-        };
-        yield {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { reasoningContent: { text: " after" } },
-          },
-        };
+        yield reasoningDelta({ redactedContent: "AQID" });
+        yield reasoningDelta({ text: " after" });
         yield { contentBlockStop: { contentBlockIndex: 0 } };
         yield { messageStop: { stopReason: "end_turn" } };
       }
@@ -141,14 +130,7 @@ describe("native provider reasoning subscription", () => {
         );
       });
       try {
-        await new Promise<void>((resolve) => {
-          server.listen(0, "127.0.0.1", resolve);
-        });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing loopback server address");
-        }
-        const fixtureModel = { ...model, baseUrl: `http://127.0.0.1:${address.port}` };
+        const fixtureModel = { ...model, baseUrl: await listenLoopback(server) };
         await runAgentLoop(
           [{ role: "user", content: "Explain the fixture.", timestamp: 0 }],
           { systemPrompt: "", messages: [] },
@@ -192,10 +174,7 @@ describe("native provider reasoning subscription", () => {
         firstDeltaConsumed.resolve();
         unsubscribe();
         subscription.unsubscribe();
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(server);
       }
     },
   );
@@ -203,7 +182,6 @@ describe("native provider reasoning subscription", () => {
 
 describe("runtime-context replay at prompt submission", () => {
   registerAgentSessionLoopTestLifecycle();
-  const sessionId = "responses-runtime-context";
 
   afterEach(() => {
     clearEmbeddedSessionPromptStates([sessionId]);
@@ -237,7 +215,7 @@ describe("runtime-context replay at prompt submission", () => {
               [{ type: "toolCall", id: "call_read", name: "read_fixture", arguments: {} }],
               "toolUse",
             )
-          : createAssistant(activeModel, [{ type: "text", text: "done" }]),
+          : createAssistant(activeModel, "done"),
       );
     });
     const { session } = await createTestSession({
@@ -255,26 +233,16 @@ describe("runtime-context replay at prompt submission", () => {
         },
       ],
     });
-    using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
-    const sessionPromptState = promptStateLease.state;
+    const input = createBaseInput();
     const submit = (text: string) =>
       submitEmbeddedAttemptPrompt({
-        attempt: { sessionId },
+        ...input,
         activeSession: session,
         appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext,
-        contextTokenBudget: 8_000,
-        images: [],
+        appendContext: undefined,
+        prependContext: undefined,
         modelPrompt: text,
-        onFinalPromptText: vi.fn(),
-        onSteeringAcknowledged: vi.fn(),
-        persistToolResultProjections: async () => {},
-        runtimeOnly: false,
         systemPrompt: session.systemPrompt,
-        toolResultAggregateMaxChars: 8_000,
-        toolResultMaxChars: 4_000,
-        toolResultPromptProjectionState: sessionPromptState.toolResults,
-        trajectoryRecorder: null,
-        transcriptLeafId: null,
         transcriptPrompt: text,
         runtimeContextMessage: buildRuntimeContextCustomMessage(`context for ${text}`),
         promptActiveSession: (prompt, options) => session.prompt(prompt, options),
