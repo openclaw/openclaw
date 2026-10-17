@@ -1,0 +1,144 @@
+import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
+import type { GatewayRequestHandler } from "../../server-methods/types.js";
+import {
+  createDispatchTestHarness,
+  createOperatorWsClient,
+} from "./authenticated-request-dispatch.test-support.js";
+
+beforeEach(() => resetDiagnosticEventsForTest());
+afterEach(() => resetDiagnosticEventsForTest());
+
+async function dispatch(
+  method: string,
+  params: Record<string, unknown>,
+  payload: unknown,
+  delivery: "wire" | "internal" | "error" | "unavailable" | "serialization" = "wire",
+) {
+  const events: Extract<DiagnosticEventPayload, { type: "gateway.rpc"; phase: "response" }>[] = [];
+  onTestFinished(
+    onInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "gateway.rpc" && event.phase === "response") {
+          events.push(event);
+        }
+      },
+      { include: ["gateway.rpc"] },
+    ),
+  );
+  const handler: GatewayRequestHandler = ({ respond }) => respond(delivery !== "error", payload);
+  const harness = createDispatchTestHarness({ extraHandlers: { [method]: handler } });
+  harness.send.mockReturnValue(
+    delivery === "unavailable" ? { kind: "unavailable" } : { kind: "sent", bytes: 1234 },
+  );
+  if (delivery === "serialization") {
+    harness.send.mockReturnValueOnce({ kind: "serialization", error: new Error("synthetic") });
+  }
+  await harness.dispatcher.dispatch(
+    { type: "req", id: "private-request", method, params },
+    createOperatorWsClient({ clientInfo: { id: "openclaw-control-ui", mode: "webchat" } }),
+    undefined,
+    delivery === "internal" ? (frame) => harness.send(frame) : undefined,
+  );
+  await waitForDiagnosticEventsDrained();
+  return events;
+}
+
+it.each([
+  { rowMode: "sidebar", payload: { rowsUnchanged: true }, rowsOutcome: "unchanged" },
+  {
+    rowMode: "sidebar",
+    payload: { rowsDelta: { baseRevision: "private-revision" } },
+    rowsOutcome: "delta",
+  },
+  { rowMode: "sidebar", payload: { sessions: [] }, rowsOutcome: "full" },
+  { rowMode: "compact", payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
+])(
+  "attributes session response bytes as $rowsOutcome",
+  async ({ rowMode, payload, rowsOutcome }) => {
+    const events = await dispatch("sessions.list", { rowMode, source: "sidebar" }, payload);
+    expect(events).toMatchObject([
+      {
+        responseBytes: 1234,
+        sessionsList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          callerSource: "sidebar",
+          rowMode,
+          filter: "general",
+          rowsOutcome,
+        },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private-");
+  },
+);
+
+it.each([
+  {
+    params: { cursor: "private-cursor", limit: 20 },
+    kind: "delta",
+    shape: "cursor",
+    limitBucket: "<=20",
+  },
+  { params: { offset: 1, limit: 21 }, kind: undefined, shape: "older", limitBucket: "<=80" },
+  {
+    params: { pendingBefore: 2, offset: 1, limit: 80 },
+    kind: undefined,
+    shape: "pending",
+    limitBucket: "<=80",
+  },
+  {
+    params: { inputRunIds: ["private-run"], cursor: "private-cursor", pendingBefore: 2, limit: 81 },
+    kind: "reset",
+    shape: "receipt",
+    limitBucket: "<=200",
+  },
+  { params: { offset: 0 }, kind: undefined, shape: "tail", limitBucket: "<=200" },
+  { params: { limit: 201 }, kind: undefined, shape: "tail", limitBucket: ">200" },
+])(
+  "attributes validated history response shape $shape/$limitBucket",
+  async ({ params, kind, shape, limitBucket }) => {
+    const events = await dispatch(
+      "chat.history",
+      { sessionKey: "private-session", ...params },
+      { kind },
+    );
+    expect(events).toMatchObject([
+      {
+        responseBytes: 1234,
+        chatHistory: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          shape,
+          limitBucket,
+          outcome: kind ?? "page",
+        },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private-");
+  },
+);
+
+it("preserves internal history source and excludes failed responses and startup", async () => {
+  const params = { sessionKey: "private-session", cursor: "private-cursor" };
+  expect(await dispatch("chat.history", params, { kind: "delta" }, "internal")).toMatchObject([
+    { responseBytes: 1234, chatHistory: { source: "internal", shape: "cursor", outcome: "delta" } },
+  ]);
+  for (const method of ["sessions.list", "chat.history", "chat.startup"]) {
+    for (const delivery of ["error", "unavailable", "serialization"] as const) {
+      const events = await dispatch(method, params, { kind: "delta" }, delivery);
+      expect(events).toHaveLength(1);
+      expect(events[0]).not.toHaveProperty("chatHistory");
+      expect(events[0]).not.toHaveProperty("sessionsList");
+    }
+  }
+  expect(await dispatch("chat.startup", params, { kind: "delta" })).toEqual([
+    expect.not.objectContaining({ chatHistory: expect.anything() }),
+  ]);
+});

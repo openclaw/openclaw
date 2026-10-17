@@ -25,6 +25,7 @@ type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 type ModelsListAttribution = Extract<RpcEvent, { phase: "received" }>["modelsList"];
 type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["sessionsList"];
 type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
+type ChatHistoryAttribution = NonNullable<Extract<RpcEvent, { phase: "response" }>["chatHistory"]>;
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
@@ -45,8 +46,9 @@ export class GatewayRpcDiagnostics {
     private readonly startedAt = performance.now(),
     queueWaitMs?: number,
     modelsList?: ModelsListAttribution,
-    sessionsList?: SessionsListAttribution,
+    private readonly sessionsList?: SessionsListAttribution,
     cronList?: CronListAttribution,
+    private readonly chatHistoryClient?: Pick<ChatHistoryAttribution, "clientKind" | "source">,
   ) {
     this.queueWaitMs = queueWaitMs;
     this.emit({
@@ -78,7 +80,11 @@ export class GatewayRpcDiagnostics {
     }
   }
 
-  response(outcome: ResponseOutcome, responseBytes?: number): void {
+  response(
+    outcome: ResponseOutcome,
+    responseBytes?: number,
+    response?: { payload: unknown; params: unknown },
+  ): void {
     const sent = outcome === "ok" || outcome === "error";
     const firstResponse = this.responseState !== "sent";
     if (sent ? !firstResponse && responseBytes === undefined : this.deliveryFailureRecorded) {
@@ -94,6 +100,31 @@ export class GatewayRpcDiagnostics {
     }
     // Acceptance and final frames can share one request and outlive its handler.
     // Keep first-response timing separate from each encoded frame's byte count.
+    // Successful replies have passed method validation; never attribute rejected params.
+    const result =
+      outcome === "ok" && (this.sessionsList || this.chatHistoryClient)
+        ? asOptionalRecord(response?.payload)
+        : undefined;
+    let chatHistory: ChatHistoryAttribution | undefined;
+    if (this.chatHistoryClient && result && response) {
+      const params = asOptionalRecord(response.params);
+      const limit = typeof params?.limit === "number" ? params.limit : 200;
+      chatHistory = {
+        ...this.chatHistoryClient,
+        shape:
+          params?.inputRunIds !== undefined
+            ? "receipt"
+            : params?.pendingBefore !== undefined
+              ? "pending"
+              : typeof params?.offset === "number" && params.offset > 0
+                ? "older"
+                : params?.cursor !== undefined
+                  ? "cursor"
+                  : "tail",
+        limitBucket: limit <= 20 ? "<=20" : limit <= 80 ? "<=80" : limit <= 200 ? "<=200" : ">200",
+        outcome: result.kind === "delta" ? "delta" : result.kind === "reset" ? "reset" : "page",
+      };
+    }
     this.emit({
       type: "gateway.rpc",
       method: this.method,
@@ -101,6 +132,22 @@ export class GatewayRpcDiagnostics {
       outcome,
       firstResponse: sent ? firstResponse : undefined,
       responseBytes,
+      ...(this.sessionsList && result
+        ? {
+            sessionsList: {
+              ...this.sessionsList,
+              rowsOutcome:
+                this.sessionsList.rowMode !== "sidebar"
+                  ? "not-sidebar"
+                  : result.rowsUnchanged === true
+                    ? "unchanged"
+                    : result.rowsDelta !== undefined
+                      ? "delta"
+                      : "full",
+            },
+          }
+        : {}),
+      ...(chatHistory ? { chatHistory } : {}),
       durationMs: performance.now() - this.startedAt,
     });
   }
@@ -283,5 +330,15 @@ export function createGatewayRpcDiagnostics(
       page: typeof params?.offset === "number" && params.offset > 0 ? "append" : "first",
     };
   }
-  return new GatewayRpcDiagnostics(label, undefined, undefined, modelsList, sessionsList, cronList);
+  return new GatewayRpcDiagnostics(
+    label,
+    undefined,
+    undefined,
+    modelsList,
+    sessionsList,
+    cronList,
+    method === "chat.history" && listRequest
+      ? { clientKind: listRequest.clientKind, source: listRequest.source }
+      : undefined,
+  );
 }
