@@ -123,7 +123,17 @@ function createFixture(testCase: IndexCase) {
       : openOpenClawAgentDatabase(options);
   const database = open();
   testCase.seed(database.db);
-  return { options, open, database };
+  const read = async () => {
+    if (testCase.role === "state") {
+      const reader = await openExistingOpenClawStateDatabaseReadOnly(options);
+      assert(reader);
+      return { db: reader.db, [Symbol.dispose]: () => reader.walMaintenance.close() };
+    }
+    const result = openOpenClawAgentDatabaseReadOnly(options);
+    assert(result.found);
+    return { db: result.database.db, [Symbol.dispose]: () => result.database.close() };
+  };
+  return { open, read, database };
 }
 
 function readRows(db: EngineConnection, testCase: IndexCase) {
@@ -145,6 +155,20 @@ function snapshot(db: EngineConnection, testCase: IndexCase) {
   return { rows: readRows(db, testCase), schema: readSchema(db) };
 }
 
+function removeQueryIndexes(testCase: IndexCase, path: string, drifted = false) {
+  closeDatabases();
+  using previous = new DatabaseSync(path);
+  for (const index of testCase.indexes) {
+    previous.exec(`DROP INDEX IF EXISTS ${index.name}`);
+    if (drifted) {
+      previous.exec(
+        `CREATE INDEX ${index.name} ON ${index.table}(${index.primaryKey}, ${index.primaryKey})`,
+      );
+    }
+  }
+  return readSchema(previous);
+}
+
 it.each(["fresh", "missing", "drifted"] as const)(
   "opens %s query indexes without migrating or changing stored rows",
   (kind) => {
@@ -153,18 +177,7 @@ it.each(["fresh", "missing", "drifted"] as const)(
       let database = fixture.database;
       const before = snapshot(database.db, testCase);
       if (kind !== "fresh") {
-        closeDatabases();
-        {
-          using previous = new DatabaseSync(database.path);
-          for (const index of testCase.indexes) {
-            previous.exec(`DROP INDEX IF EXISTS ${index.name}`);
-            if (kind === "drifted") {
-              previous.exec(
-                `CREATE INDEX ${index.name} ON ${index.table}(${index.primaryKey}, ${index.primaryKey})`,
-              );
-            }
-          }
-        }
+        removeQueryIndexes(testCase, database.path, kind === "drifted");
         database = fixture.open();
       }
 
@@ -199,48 +212,23 @@ it.each(["fresh", "missing", "drifted"] as const)(
 it.each(cases)(
   "admits $role readers on either side of the additive index upgrade",
   async (testCase) => {
-    const { database, options } = createFixture(testCase);
+    const { database, read } = createFixture(testCase);
     // The preceding same-version reader knows every current contract except these additions.
     const names = testCase.indexes.map((index) => index.name).join("|");
     const previousSchema = testCase
       .schema()
       .replace(new RegExp(`CREATE INDEX IF NOT EXISTS (?:${names})\\b[^;]*;`, "gu"), "");
-    expect(() =>
-      assertSqliteSchemaContains(
-        requireNativeSqliteDatabase(database.db),
-        database.path,
-        previousSchema,
-        testCase.compatibility,
-      ),
-    ).not.toThrow();
+    assertSqliteSchemaContains(
+      requireNativeSqliteDatabase(database.db),
+      database.path,
+      previousSchema,
+      testCase.compatibility,
+    );
     const rows = readRows(database.db, testCase);
-    closeDatabases();
-    let before;
+    const expected = { rows, schema: removeQueryIndexes(testCase, database.path) };
     {
-      using previous = new DatabaseSync(database.path);
-      for (const index of testCase.indexes) {
-        previous.exec(`DROP INDEX IF EXISTS ${index.name}`);
-      }
-      before = readSchema(previous);
-    }
-    const expected = { rows, schema: before };
-
-    if (testCase.role === "state") {
-      const reader = await openExistingOpenClawStateDatabaseReadOnly(options);
-      assert(reader);
-      try {
-        expect(snapshot(reader.db, testCase)).toEqual(expected);
-      } finally {
-        reader.walMaintenance.close();
-      }
-    } else {
-      const result = openOpenClawAgentDatabaseReadOnly(options);
-      assert(result.found);
-      try {
-        expect(snapshot(result.database.db, testCase)).toEqual(expected);
-      } finally {
-        result.database.close();
-      }
+      using reader = await read();
+      expect(snapshot(reader.db, testCase)).toEqual(expected);
     }
     using after = new DatabaseSync(database.path, { readOnly: true });
     expect(snapshot(after, testCase)).toEqual(expected);

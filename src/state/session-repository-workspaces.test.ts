@@ -392,24 +392,22 @@ it.runIf(process.platform !== "win32")(
     const replacementRoot = path.dirname(replacement.database.path);
     const retired = `${root}-retired`;
     roots.push(retired);
-    let originalMoved = false;
-    let replacementInstalled = false;
+    const restore: (() => void)[] = [];
+    const move = (from: string, to: string) => {
+      renameSync(from, to);
+      restore.unshift(() => renameSync(to, from));
+    };
     const unsubscribe = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === source.sessionKey) {
-        renameSync(root, retired);
-        originalMoved = true;
-        renameSync(replacementRoot, root);
-        replacementInstalled = true;
+        move(root, retired);
+        move(replacementRoot, root);
       }
     });
     try {
       const failure = await store
         .delete({ workspaceId: workspace.workspaceId, assertCurrent })
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-      expect(replacementInstalled).toBe(true);
+        .catch((error: unknown) => error);
+      expect(restore).toHaveLength(2);
       expect.soft(failure).toMatchObject({
         message: expect.stringContaining("SQLite database file identity changed"),
       });
@@ -417,11 +415,8 @@ it.runIf(process.platform !== "win32")(
       expect(await fs.readFile(database.path)).toEqual(replacementBytes);
     } finally {
       unsubscribe();
-      if (replacementInstalled) {
-        renameSync(root, replacementRoot);
-      }
-      if (originalMoved) {
-        renameSync(retired, root);
+      for (const undo of restore) {
+        undo();
       }
       await closeOpenClawStateDatabaseByPathAsync(database.path);
     }

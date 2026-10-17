@@ -51,13 +51,9 @@ export function hashSqliteSchema(database: DatabaseSync): string {
 
 /** Execute schema SQL in memory and return its comparable shape. */
 export function createSqliteSchemaShapeFromSql(schemaUrl: URL): SqliteSchemaShape {
-  const db = new DatabaseSync(":memory:");
-  try {
-    db.exec(readFileSync(schemaUrl, "utf8"));
-    return collectSqliteSchemaShape(db);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(":memory:");
+  db.exec(readFileSync(schemaUrl, "utf8"));
+  return collectSqliteSchemaShape(db);
 }
 
 /** Collect table columns and indexes from an open SQLite database. */

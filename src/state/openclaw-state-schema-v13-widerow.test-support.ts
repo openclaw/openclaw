@@ -357,17 +357,13 @@ export function seedLegacyWideRowSubagentRun(
     `INSERT INTO subagent_runs (
        run_id, child_session_key, controller_session_key, requester_session_key,
        created_at, payload_json, task, requester_display_key, cleanup
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, 'agent:controller:legacy', ?, 200, ?, ?, 'legacy-requester', 'keep')`,
   ).run(
     payload.runId,
     payload.childSessionKey,
-    "agent:controller:legacy",
     payload.requesterSessionKey,
-    200,
     JSON.stringify(payload),
     payload.task,
-    "legacy-requester",
-    "keep",
   );
   if (requesterStorePath !== null || controllerStorePath !== null) {
     db.exec(`

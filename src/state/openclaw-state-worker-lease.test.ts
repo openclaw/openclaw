@@ -25,15 +25,6 @@ function endSession(sessionId: string, endedAt = 1) {
   return { type: "capture.endSession" as const, input: { sessionId, endedAt } };
 }
 
-function observeSettlement(promise: Promise<unknown>) {
-  const result = { settled: false };
-  const mark = () => {
-    result.settled = true;
-  };
-  void promise.then(mark, mark);
-  return result;
-}
-
 const physical = vi.hoisted(() => ({
   client: undefined as
     | ReturnType<typeof createSqliteWorkerClient<OpenClawStateWorkerOperations>>
@@ -132,7 +123,11 @@ afterEach(() => {
   physical.databaseAdmission = undefined;
 });
 
-function createLeaseFixture() {
+function createLeaseFixture(cold = false) {
+  const openGate = createDeferredCore();
+  if (cold) {
+    physical.openGate = openGate.promise;
+  }
   const actor = createSqliteWorkerClientActor();
   physical.client = createSqliteWorkerClient<OpenClawStateWorkerOperations>({
     actor,
@@ -161,26 +156,36 @@ function createLeaseFixture() {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
   };
   physical.databaseAdmission = context.admission;
-  return { maintenance, context };
+  return {
+    maintenance,
+    context,
+    openGate,
+    lease: (finalize?: (scope: DomainScope) => Promise<void>) =>
+      maintenance.run(() => createOpenClawStateWorkerLease(context, finalize)),
+    async close(...pending: Promise<unknown>[]) {
+      openGate.resolve();
+      await Promise.allSettled(pending);
+      await maintenance.close();
+    },
+  };
 }
 
 it("closes fresh callback admission while accepted callbacks and terminal writes finish", async () => {
-  const { maintenance, context } = createLeaseFixture();
+  const fixture = createLeaseFixture();
+  const { maintenance } = fixture;
   const acceptedCommand = endSession("accepted");
   const terminalCommand = endSession("terminal", 2);
   const forbiddenCommand = endSession("not-admitted", 3);
   const finishAccepted = createDeferredCore();
   const acceptedFinished = createDeferredCore();
   const pendingCommand = createDeferredCore();
-  const lease = maintenance.run(() =>
-    createOpenClawStateWorkerLease(context, async (terminal) => {
-      physical.events.push("finalize-start");
-      finishAccepted.resolve();
-      await acceptedFinished.promise;
-      await terminal.execute(terminalCommand);
-      physical.events.push("finalize-end");
-    }),
-  );
+  const lease = fixture.lease(async (terminal) => {
+    physical.events.push("finalize-start");
+    finishAccepted.resolve();
+    await acceptedFinished.promise;
+    await terminal.execute(terminalCommand);
+    physical.events.push("finalize-end");
+  });
   await lease.ready;
   const accepted = lease.runOperation(async (operation) => {
     try {
@@ -216,13 +221,12 @@ it("closes fresh callback admission while accepted callbacks and terminal writes
 });
 
 it("drains a command accepted before cold acquisition after its callback returns", async () => {
-  const openGate = createDeferredCore();
+  const fixture = createLeaseFixture(true);
+  const { maintenance, openGate } = fixture;
   const commandStarted = createDeferredCore();
   const finishCommand = createDeferredCore();
-  physical.openGate = openGate.promise;
   physical.beforeDispatch = commandStarted.resolve;
-  const { maintenance, context } = createLeaseFixture();
-  const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
+  const lease = fixture.lease();
   const callbackResult = createDeferredCore<string>();
   const acceptedCommand = endSession("accepted-before-open");
   physical.commandCompletion = finishCommand.promise.then(() => {
@@ -235,7 +239,8 @@ it("drains a command accepted before cold acquisition after its callback returns
     commands.push(scope.execute(acceptedCommand));
     return callbackResult.promise;
   });
-  const operationState = observeSettlement(operation);
+  const settled = vi.fn();
+  void operation.then(settled, settled);
   callbackResult.resolve("callback-complete");
   await callbackResult.promise;
   const closing = maintenance.close();
@@ -247,13 +252,13 @@ it("drains a command accepted before cold acquisition after its callback returns
     await expect(invocation.execute(endSession("after-callback", 2))).rejects.toThrow(
       "Shared-state worker operation is closed",
     );
-    expect(operationState.settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     expect(physical.events).toEqual([]);
 
     openGate.resolve();
     await lease.ready;
     await commandStarted.promise;
-    expect(operationState.settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     expect(physical.events).toEqual([acceptedCommand]);
     finishCommand.resolve();
     await expect(commands[0]).resolves.toBeUndefined();
@@ -270,10 +275,8 @@ it("drains a command accepted before cold acquisition after its callback returns
 it("cancels a queued callback without abandoning the shared actor's cold acquisition", async ({
   signal,
 }) => {
-  const openGate = createDeferredCore();
-  physical.openGate = openGate.promise;
-  const { maintenance, context } = createLeaseFixture();
-  const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
+  const fixture = createLeaseFixture(true);
+  const lease = fixture.lease();
   const canceled = new AbortController();
   const pending = lease.execute(endSession("canceled-before-open"), { signal: canceled.signal });
   const reason = new Error("callback task deadline expired");
@@ -285,9 +288,7 @@ it("cancels a queued callback without abandoning the shared actor's cold acquisi
     );
     expect(physical.events).toEqual([]);
   } finally {
-    openGate.resolve();
-    await Promise.allSettled([pending, lease.ready]);
-    await maintenance.close();
+    await fixture.close(pending, lease.ready);
   }
   expect(physical.events).toEqual(["physical-close"]);
 });
@@ -304,11 +305,10 @@ it.for([
 ])(
   "preserves independent opening ownership for $kind",
   async ({ reason, abort, persistent }, { signal }) => {
-    const openGate = createDeferredCore();
-    physical.openGate = openGate.promise;
+    const fixture = createLeaseFixture(true);
+    const { maintenance, context, openGate } = fixture;
     const opens = vi.fn();
     physical.onOpen = opens;
-    const { maintenance, context } = createLeaseFixture();
     const owner = getOpenClawStateWorkerOwner();
     const canceled = new AbortController();
     const first = maintenance.run(() => owner.open(context, { signal: canceled.signal }));
@@ -330,9 +330,7 @@ it.for([
       await withinTest(Promise.all([firstRejected, survivingOutcome]), signal);
       expect(opens).toHaveBeenCalledOnce();
     } finally {
-      openGate.resolve();
-      await Promise.allSettled([first, surviving]);
-      await maintenance.close();
+      await fixture.close(first, surviving);
     }
     expect(physical.events).toEqual(persistent ? [] : ["physical-close"]);
   },
@@ -340,11 +338,10 @@ it.for([
 
 it("retires an abandoned actor after joining its accepted native opening", async ({ signal }) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  const { context, maintenance } = createLeaseFixture();
+  const fixture = createLeaseFixture(true);
+  const { context, openGate } = fixture;
   const owner = getOpenClawStateWorkerOwner();
-  const openGate = createDeferredCore();
   const opening = createDeferredCore();
-  physical.openGate = openGate.promise;
   physical.onOpen = opening.resolve;
   const cancel = new AbortController();
   const reason = new Error("callback abandoned its accepted opening");
@@ -355,12 +352,13 @@ it("retires an abandoned actor after joining its accepted native opening", async
     { signal: cancel.signal },
   );
   const rejected = expect(pending).rejects.toBe(reason);
-  const pendingState = observeSettlement(pending);
+  const settled = vi.fn();
+  void pending.then(settled, settled);
   try {
     await withinTest(opening.promise, signal);
     cancel.abort(reason);
     await vi.advanceTimersByTimeAsync(0);
-    expect(pendingState.settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     openGate.resolve();
     await withinTest(rejected, signal);
     expect(operation).not.toHaveBeenCalled();
@@ -370,7 +368,7 @@ it("retires an abandoned actor after joining its accepted native opening", async
     openGate.resolve();
     await Promise.allSettled([pending]);
     await owner.close();
-    await maintenance.close();
+    await fixture.close();
     vi.useRealTimers();
   }
 });
@@ -378,9 +376,9 @@ it("retires an abandoned actor after joining its accepted native opening", async
 it.each(["replaced", "revoked"] as const)(
   "refuses a finite command when its resource claim is %s before dispatch",
   async (change) => {
-    const { maintenance, context } = createLeaseFixture();
-    const successor = createOpenClawDatabaseMaintenanceScope();
-    const lease = maintenance.run(() => createOpenClawStateWorkerLease(context));
+    const fixture = createLeaseFixture();
+    const { maintenance } = fixture;
+    const lease = fixture.lease();
     await lease.ready;
     let revoked = false;
     const assertOwner = vi.spyOn(maintenance, "assertOwnerCurrent").mockImplementation(() => {
@@ -407,7 +405,7 @@ it.each(["replaced", "revoked"] as const)(
     } finally {
       assertOwner.mockRestore();
       await lease.release();
-      await Promise.all([maintenance.close(), successor.close()]);
+      await fixture.close();
     }
   },
 );
