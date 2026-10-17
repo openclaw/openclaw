@@ -456,6 +456,43 @@ describe("guardSessionManager transcript visibility", () => {
     });
   });
 
+  it.each([{ privateCompletion: true as const }, { trigger: "memory" as const }])(
+    "refreshes hidden run visibility before and after ordinary input (%j)",
+    async (hiddenOptions) => {
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+      const { sessionManager, target } = await openPersistedSessionManager();
+      guardSessionManager(sessionManager, {
+        runId: "hidden-first",
+        ...hiddenOptions,
+      }).appendMessage(makeUserMessage("Internal input", 1));
+      sessionManager.appendMessage(assistantText("Internal result", 2));
+      guardSessionManager(sessionManager, { runId: "human-run" }).appendMessage(
+        makeUserMessage("What did you find?", 3),
+      );
+      sessionManager.appendMessage(assistantText("The requested answer", 4));
+      guardSessionManager(sessionManager, { runId: "hidden-next", ...hiddenOptions }).appendMessage(
+        assistantText("Further internal work", 5),
+      );
+
+      const messages = SessionManager.open(target).buildSessionContext().messages;
+      expect(messages.map((message) => Reflect.get(message, "display") === false)).toEqual([
+        true,
+        true,
+        false,
+        false,
+        true,
+      ]);
+      expect(updates.map(({ message }) => Reflect.get(message!, "display") === false)).toEqual([
+        true,
+        true,
+        false,
+        false,
+        true,
+      ]);
+    },
+  );
+
   it("keeps the user-turn recorder attached when hiding memory maintenance", () => {
     const sm = SessionManager.inMemory();
     const markRuntimePersisted = vi.fn();

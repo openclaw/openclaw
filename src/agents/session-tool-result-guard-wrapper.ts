@@ -62,6 +62,7 @@ type GuardedSessionManager = SessionManager &
         recorder: UserTurnTranscriptRecorder | undefined;
         replayKey: string | undefined;
       },
+      hidden: boolean,
     ) => void;
   };
 
@@ -140,6 +141,7 @@ export function guardSessionManager(
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   let inputProvenance = opts?.inputProvenance;
+  let hidden = opts?.privateCompletion === true || opts?.trigger === "memory";
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   let preparedUserTurnTranscriptRecorder = opts?.preparedUserTurnTranscriptRecorder;
   let preparedUserReplayKey =
@@ -160,6 +162,7 @@ export function guardSessionManager(
         recorder: preparedUserTurnTranscriptRecorder,
         replayKey: preparedUserReplayKey,
       },
+      hidden,
     );
     return guardedSessionManager;
   }
@@ -229,7 +232,7 @@ export function guardSessionManager(
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
-      hidden: opts?.privateCompletion === true || opts?.trigger === "memory",
+      hidden,
       inputProvenance,
       message,
     });
@@ -386,6 +389,7 @@ export function guardSessionManager(
     provenance,
     suppressUserPersistence,
     preparedUserTurn,
+    hideMessages,
   ) => {
     transcriptRunId = runId;
     guard.setTranscriptRunId(runId, errors);
@@ -393,6 +397,8 @@ export function guardSessionManager(
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;
+    // Managers outlive individual runs; neither private nor public visibility may carry over.
+    hidden = hideMessages;
     pendingPreparedUserTurnMessage = preparedUserTurn.message;
     preparedUserTurnTranscriptRecorder = preparedUserTurn.recorder;
     preparedUserReplayKey = preparedUserTurn.replayKey;
