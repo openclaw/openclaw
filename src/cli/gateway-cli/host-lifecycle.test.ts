@@ -74,15 +74,12 @@ describe("Gateway host lifecycle authority", () => {
     const commit = vi.fn(() => {
       serving = false;
     });
-    const host = owner(commit);
-    const capability = host.capability.externalRestart;
-    if (!capability?.commitStop) {
-      throw new Error("Missing committed stop capability");
-    }
-    capability.commitStop();
+    const commitStop = owner(commit).capability.externalRestart?.commitStop;
+    expect(commitStop).toBeTypeOf("function");
+    commitStop!();
     expect(commit).toHaveBeenCalledOnce();
     expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
-    expect(() => capability.commitStop!()).toThrow("retired or non-serving");
+    expect(() => commitStop!()).toThrow("retired or non-serving");
   });
 
   it.each(["retired", "replaced"])("refuses committed stop from a %s host", async (change) => {

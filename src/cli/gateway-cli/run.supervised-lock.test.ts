@@ -16,12 +16,7 @@ vi.mock("../../infra/tls/gateway.js", () => ({
   inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
 
-function createLogger() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-  };
-}
+const createLogger = () => ({ info: vi.fn(), warn: vi.fn() });
 
 type RecoveryParams = Parameters<typeof testing.runGatewayLoopWithSupervisedLockRecovery>[0];
 
@@ -88,44 +83,37 @@ describe("supervised gateway lock recovery", () => {
     expect(clock.sleep).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a healthy launchd-supervised gateway in control", async () => {
-    const startLoop = rejectLoop(new GatewayLockError("gateway already running"));
-    const probeHealth = vi.fn(async () => true);
-    const log = createLogger();
-
-    await recover({
-      startLoop,
-      supervisor: "launchd",
-      healthHost: "0.0.0.0",
-      log,
-      probeHealth,
-    });
-
-    expect(startLoop).toHaveBeenCalledTimes(1);
-    expect(probeHealth).toHaveBeenCalledWith({ host: "0.0.0.0", port: 18789 });
-    expect(log.info).toHaveBeenCalledWith(
-      "gateway already running under launchd; existing gateway is healthy, leaving it in control",
-    );
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("uses exit 78 semantics for healthy systemd-supervised lock conflicts", async () => {
-    const startLoop = rejectLoop(
-      new GatewayLockError("another gateway instance is already listening"),
-    );
-    const probeHealth = vi.fn(async () => true);
-
-    const failure = await recover({ startLoop, probeHealth }).catch((error: unknown) => error);
-
-    expect(failure).toMatchObject({
-      message: expect.stringContaining(
-        "exiting with code 78 to prevent a systemd Restart=always loop",
-      ),
-    });
-    expect(startLoop).toHaveBeenCalledTimes(1);
-    expect(probeHealth).toHaveBeenCalledWith({ host: "127.0.0.1", port: 18789 });
-    expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(78);
-  });
+  it.each(["launchd", "systemd"] as const)(
+    "handles a healthy %s-supervised gateway",
+    async (supervisor) => {
+      const host = supervisor === "launchd" ? "0.0.0.0" : "127.0.0.1";
+      const message =
+        supervisor === "launchd"
+          ? "gateway already running"
+          : "another gateway instance is already listening";
+      const startLoop = rejectLoop(new GatewayLockError(message));
+      const probeHealth = vi.fn(async () => true);
+      const log = createLogger();
+      const params = { startLoop, probeHealth, supervisor, healthHost: host, log };
+      const failure = await recover(params).catch((error: unknown) => error);
+      expect(startLoop).toHaveBeenCalledOnce();
+      expect(probeHealth).toHaveBeenCalledWith({ host, port: 18789 });
+      if (supervisor === "systemd") {
+        expect(failure).toMatchObject({
+          message: expect.stringContaining(
+            "exiting with code 78 to prevent a systemd Restart=always loop",
+          ),
+        });
+        expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(78);
+      } else {
+        expect(failure).toBeUndefined();
+        expect(log.info).toHaveBeenCalledWith(
+          "gateway already running under launchd; existing gateway is healthy, leaving it in control",
+        );
+        expect(log.warn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("preserves an agent-embedded owner error under a supervisor", async () => {
     const err = new GatewayLockError(
@@ -177,14 +165,11 @@ describe("supervised gateway lock recovery", () => {
   });
 
   it("recognizes only the OpenClaw health response", () => {
-    expect(
-      testing.isGatewayHealthzResponse(200, JSON.stringify({ ok: true, status: "live" })),
-    ).toBe(true);
-    expect(
-      testing.isGatewayHealthzResponse(200, JSON.stringify({ ok: true, status: "ready" })),
-    ).toBe(false);
-    expect(testing.isGatewayHealthzResponse(404, "not found")).toBe(false);
-    expect(testing.isGatewayHealthzResponse(200, "not json")).toBe(false);
+    const health = testing.isGatewayHealthzResponse;
+    expect(health(200, '{"ok":true,"status":"live"}')).toBe(true);
+    expect(health(200, '{"ok":true,"status":"ready"}')).toBe(false);
+    expect(health(404, "not found")).toBe(false);
+    expect(health(200, "not json")).toBe(false);
   });
 
   it("bounds slow health responses with an absolute deadline", async () => {

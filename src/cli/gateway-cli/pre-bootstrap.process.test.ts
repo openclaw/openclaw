@@ -33,6 +33,10 @@ function stateManifest(root: string): Record<string, string> {
   );
 }
 
+function writeJson(filename: string, value: unknown) {
+  fs.writeFileSync(filename, JSON.stringify(value));
+}
+
 function createFixture(prefix: string) {
   const root = fs.realpathSync(tempDirs.make(prefix));
   const stateDir = path.join(root, "state");
@@ -128,19 +132,13 @@ describe("Gateway config selection before migration admission", () => {
 
   it.each([
     { name: "managed template", apiKey: "${REPRO_PROVIDER_KEY}", managed: true, included: false },
-    {
-      name: "unmanaged template",
-      apiKey: "${REPRO_PROVIDER_KEY}",
-      managed: false,
-      included: false,
-    },
+    { name: "unmanaged template", apiKey: "${REPRO_PROVIDER_KEY}", managed: false },
     { name: "included template", apiKey: "${REPRO_PROVIDER_KEY}", managed: true, included: true },
     { name: "managed shorthand", apiKey: "$REPRO_PROVIDER_KEY", managed: true, included: false },
     {
       name: "managed object",
       apiKey: { source: "env", provider: "default", id: "REPRO_PROVIDER_KEY" },
       managed: true,
-      included: false,
     },
   ])(
     "preserves $name through startup without writing config",
@@ -157,17 +155,14 @@ describe("Gateway config selection before migration admission", () => {
         },
       };
       if (included) {
-        fs.writeFileSync(path.join(stateDir, "providers.json"), JSON.stringify(providers));
+        writeJson(path.join(stateDir, "providers.json"), providers);
       }
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
-          messages: { responsePrefix: "$${STALE_KEY}" },
-          models: { providers: included ? { $include: "providers.json" } : providers },
-        }),
-      );
+      writeJson(configPath, {
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+        messages: { responsePrefix: "$${STALE_KEY}" },
+        models: { providers: included ? { $include: "providers.json" } : providers },
+      });
       const before = stateManifest(stateDir);
       const result = await runIsolatedModuleScript(
         {
@@ -235,8 +230,8 @@ describe("Gateway config selection before migration admission", () => {
       } else if (name === "future backup after config selection changes") {
         const selectedPath = path.join(stateDir, "selected.json");
         backup = { ...healthy, env: { vars: { OPENCLAW_CONFIG_PATH: selectedPath } } };
-        fs.writeFileSync(selectedPath, JSON.stringify(clobbered));
-        fs.writeFileSync(`${selectedPath}.bak`, JSON.stringify(future));
+        writeJson(selectedPath, clobbered);
+        writeJson(`${selectedPath}.bak`, future);
       } else if (name === "discarded clobbered environment") {
         current = {
           gateway: { mode: "local" },
@@ -244,8 +239,8 @@ describe("Gateway config selection before migration admission", () => {
         };
         backup = healthy;
       }
-      fs.writeFileSync(configPath, JSON.stringify(current));
-      fs.writeFileSync(`${configPath}.bak`, JSON.stringify(backup));
+      writeJson(configPath, current);
+      writeJson(`${configPath}.bak`, backup);
       const before = stateManifest(stateDir);
       const result = await runIsolatedModuleScript(
         {
@@ -294,31 +289,23 @@ describe("Gateway config selection before migration admission", () => {
       const { root, stateDir, configPath, env, options } = createFixture(
         "openclaw-readonly-bootstrap-",
       );
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          gateway: { mode: "local" },
-          meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
-          agents: { entries: { main: {}, helper: {} } },
-          plugins: {
-            enabled: false,
-            installs: { example: { source: "path", installPath: path.join(root, "plugin") } },
-          },
-        }),
-      );
+      const plugins = {
+        enabled: false,
+        installs: { example: { source: "path", installPath: path.join(root, "plugin") } },
+      };
+      writeJson(configPath, {
+        gateway: { mode: "local" },
+        meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
+        agents: { entries: { main: {}, helper: {} } },
+        plugins,
+      });
       if (withBackup) {
-        fs.writeFileSync(
-          `${configPath}.bak`,
-          JSON.stringify({
-            gateway: { mode: "local" },
-            agents: { defaults: { workspace: path.join(root, "workspace") } },
-            messages: { ackReaction: "synthetic long-lived config baseline" },
-            plugins: {
-              enabled: false,
-              installs: { example: { source: "path", installPath: path.join(root, "plugin") } },
-            },
-          }),
-        );
+        writeJson(`${configPath}.bak`, {
+          gateway: { mode: "local" },
+          agents: { defaults: { workspace: path.join(root, "workspace") } },
+          messages: { ackReaction: "synthetic long-lived config baseline" },
+          plugins,
+        });
       }
       const before = stateManifest(stateDir);
       const inheritedEnv = {
@@ -344,25 +331,15 @@ describe("Gateway config selection before migration admission", () => {
   );
 
   it.each([
-    {
-      flag: "--allow-unconfigured",
-      dispatch: "fast",
-      suffix: [],
-      dev: false,
-      allowUnconfigured: true,
-    },
-    {
-      flag: "--allow-unconfigured",
-      dispatch: "Commander",
-      suffix: ["--"],
-      dev: false,
-      allowUnconfigured: true,
-    },
-    { flag: "--dev", dispatch: "fast", suffix: [], dev: true, allowUnconfigured: false },
-    { flag: "--dev", dispatch: "Commander", suffix: ["--"], dev: true, allowUnconfigured: false },
+    { flag: "--allow-unconfigured", dispatch: "fast" },
+    { flag: "--allow-unconfigured", dispatch: "Commander" },
+    { flag: "--dev", dispatch: "fast" },
+    { flag: "--dev", dispatch: "Commander" },
   ])(
     "passes $flag through $dispatch startup admission without config",
-    async ({ flag, suffix, dev, allowUnconfigured }) => {
+    async ({ flag, dispatch }) => {
+      const suffix = dispatch === "Commander" ? ["--"] : [];
+      const dev = flag === "--dev";
       const { root, configPath, env, options } = createFixture("openclaw-startup-allowance-");
       const allowanceEnv = {
         ...env,
@@ -406,7 +383,7 @@ describe("Gateway config selection before migration admission", () => {
     `,
         options,
       );
-      expect(readResult(result)).toEqual([{ dev, allowUnconfigured }]);
+      expect(readResult(result)).toEqual([{ dev, allowUnconfigured: !dev }]);
       expect(fs.existsSync(configPath)).toBe(false);
     },
     75_000,
