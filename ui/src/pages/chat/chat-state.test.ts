@@ -34,7 +34,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createChatPageStateContext } from "./chat-page.test-support.ts";
+import { createChatPageSessions, createChatPageStateContext } from "./chat-page.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { projectChatRun } from "./chat-run-projection.ts";
@@ -1196,7 +1196,7 @@ describe("canonical session message recovery", () => {
     const { state } = createSessionEventState({
       chatMessages: [prompt],
       chatRunId: activeRunId,
-
+      chatStream: replyText,
       client: {
         request: vi.fn().mockResolvedValue({
           messages: [prompt, persistedReply],
@@ -1242,6 +1242,10 @@ describe("canonical session message recovery", () => {
       ? [persistedEvent, terminalEvent]
       : [terminalEvent, persistedEvent]) {
       handlePageGatewayEvent(state, event);
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Original prompt" },
+        { role: "assistant", text: replyText },
+      ]);
     }
     await loadChatHistory(state as unknown as Parameters<typeof loadChatHistory>[0]);
 
@@ -1958,7 +1962,7 @@ describe("canonical session message recovery", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith(
           "chat.history",
-          { sessionKey: state.sessionKey, ...historyBudget },
+          { sessionKey: state.sessionKey, knownState: {}, ...historyBudget },
           { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         ),
       );
@@ -3137,7 +3141,7 @@ describe("loadPageAssistantIdentity", () => {
         snapshot: { client, connected: true, hello: null },
       },
       chatSubmissions: createChatSubmissions(),
-      sessions: { refresh: vi.fn().mockResolvedValue(undefined) },
+      sessions: { ...createChatPageSessions(), refresh: vi.fn().mockResolvedValue(undefined) },
     } as unknown as ApplicationContext;
     const state = createPageState(
       context,

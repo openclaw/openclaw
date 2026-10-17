@@ -173,7 +173,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         return;
       }
       state.handleChatDraftChange(draft, []);
-      state.requestUpdate?.();
     });
   }
 
@@ -323,14 +322,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
-    // Effective-tools previews key their requests on the model override, so a
-    // post-switch refresh only needs a re-render.
-    pageState.refreshCurrentSessionTools = async () => {
-      pageState.requestUpdate?.();
-    };
     pageState.refreshCurrentChat = async () => {
       await refreshPageChat(pageState);
-      pageState.requestUpdate?.();
     };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
     pageState.openSessionCompanion = (question) => this.openSessionCompanion(pageState, question);
@@ -370,7 +363,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
-        pageState.requestUpdate?.();
       }),
     );
     // Identity publications start scoped loads even when this retained pane is hidden.
@@ -419,7 +411,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           ...this.context.theme.settings,
           token: this.context.gateway.connection.token,
         };
-        pageState.requestUpdate();
       }),
     );
     // Agent changes retire scoped owners and subscriptions before admitting another action.
@@ -462,7 +453,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           // preview admission before the roster refresh can publish access loss.
           state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
           this.invalidateSessionSharing(event.payload);
-          state.requestUpdate?.();
         }
         if (event.event === "sessions.changed" || event.event === "session.message") {
           return;
@@ -470,7 +460,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (event.event === "presence") {
           const hadMultipleIdentities = this.hasMultipleIdentities();
           const presence = readPresenceEntries(event.payload);
-          this.presencePayload = presence ? { presence } : undefined;
+          this.presence.update(presence ? { presence } : undefined);
           this.pruneTypingActors();
           if (!this.hasMultipleIdentities()) {
             this.resetSessionSuggestions();
@@ -482,11 +472,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (state) {
           if (event.event === "config.changed") {
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
-            state.requestUpdate?.();
           }
           if (event.event === "config.changed" || event.event === "agent.identity.changed") {
             chatAvatars.invalidateChatAvatarCache(state);
-            void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+            void chatAvatars.refreshChatAvatar(state);
             void chatAvatars.refreshSenderAgentAvatars(state);
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
@@ -712,8 +701,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);
-    this.taskSuggestionBusyIds.clear();
-    this.taskSuggestionOperations.clear();
+    this.tasks.busyIds = new Set();
+    this.tasks.operations = new Map();
     this.resetSessionSuggestions();
     this.resetSessionReactions();
     this.clearTypingActors();
@@ -727,9 +716,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.swarm.hydrator?.dispose();
     this.swarm.hydrator = null;
-    this.headerWorktreePaths.clear();
-    this.headerBranches.clear();
-    this.presencePayload = undefined;
+    this.headerPresentation.worktreePaths = new Map();
+    this.headerPresentation.branches = new Map();
+    this.presence.update(undefined);
     this.announceCommandPaletteTarget(null);
     dismissConfirmedActionPopovers(this.element);
     resetChatViewState(this.presentationId);

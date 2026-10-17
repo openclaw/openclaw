@@ -145,6 +145,146 @@ describe("isSwarmEnabledInConfig", () => {
 });
 
 describe("SwarmRosterHydrator", () => {
+  it.each(["older group", "bounded members", "new member", "warm new member"] as const)(
+    "reconciles the initial %s child roster with the shared boot descriptor",
+    async (window) => {
+      vi.useFakeTimers();
+      const grows = window === "new member" || window === "warm new member";
+      const children =
+        window === "older group"
+          ? [row(0), { ...row(1), swarmGroupId: "older-terminal-group", status: "done" as const }]
+          : Array.from({ length: grows ? 66 : 65 }, (_, index) => row(index));
+      const parent = swarmParent(children.slice(0, window === "older group" ? 1 : 64));
+      if (window !== "older group") {
+        parent.swarm!.groups[0]!.running = 65;
+      }
+      const described = vi.fn(async () => ({ session: parent }));
+      const childPage = createDeferred<SessionsListResult>();
+      const client = createTestGatewayClient(async (method, params) => {
+        if (method === "sessions.describe") {
+          return described();
+        }
+        if (method === "sessions.list") {
+          return isRecord(params) && params.spawnedBy ? childPage.promise : result([], 0, 0);
+        }
+        return { subscribed: true };
+      });
+      const { gateway } = createGatewayHarness(client);
+      const sessions = createTestSessionCapability(gateway);
+      // Resource discovery precedes the delayed Swarm roster on chat boot.
+      await sessions.describe({ key: parent.key });
+      const hydrator = new SwarmRosterHydrator();
+      onTestFinished(() => hydrator.dispose());
+      hydrator.update({
+        sessions,
+        parentKey: parent.key,
+        sourceEpoch: 1,
+        readParent: (refresh) =>
+          sessions
+            .describe({ key: parent.key }, { refresh })
+            .then(({ session }) => session ?? null),
+        currentRows: () => (window === "warm new member" ? children : []),
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      if (grows) {
+        described.mockResolvedValue({
+          session: {
+            ...parent,
+            swarm: {
+              ...parent.swarm!,
+              groups: [{ ...parent.swarm!.groups[0]!, running: 66 }],
+            },
+          },
+        });
+      }
+      childPage.resolve(result(children, 0, children.length));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hydrator.hydrated).toBe(true);
+      expect(hydrator.rows).toHaveLength(children.length + 1);
+      expect(described).toHaveBeenCalledTimes(grows ? 2 : 1);
+      if (grows) {
+        expect(
+          hydrator.rows.find((entry) => entry.key === parent.key)?.swarm?.groups[0]?.running,
+        ).toBe(66);
+      }
+    },
+  );
+
+  it.each([
+    { state: "running", shown: 1, omitted: 0, discovered: 1, reads: 2 },
+    { state: "queued", shown: 1, omitted: 0, discovered: 1, reads: 2 },
+    { state: "running", shown: 4, omitted: 1, discovered: 1, reads: 1 },
+    { state: "queued", shown: 4, omitted: 1, discovered: 1, reads: 1 },
+    { state: "running", shown: 4, omitted: 1, discovered: 2, reads: 2 },
+  ] as const)(
+    "reconciles $discovered unlisted $state groups against $omitted declared omitted groups",
+    async ({ state, shown, omitted, discovered, reads }) => {
+      vi.useFakeTimers();
+      const children = Array.from({ length: shown + discovered }, (_, index) => ({
+        ...row(index),
+        swarmGroupId: `group-${index}`,
+        status: state,
+      }));
+      const groups = children.map((child, index) => ({
+        groupId: child.swarmGroupId,
+        createdAt: index < shown + omitted ? shown - index : index + 1,
+        queued: state === "queued" ? 1 : 0,
+        running: state === "running" ? 1 : 0,
+        done: 0,
+        failed: 0,
+        children: [{ sessionKey: child.key, status: state }],
+      }));
+      const parent: GatewaySessionRow = {
+        ...parentRow(),
+        swarm: { groups: groups.slice(0, shown), otherActiveGroups: omitted },
+      };
+      const current: GatewaySessionRow = {
+        ...parent,
+        swarm: {
+          groups: groups.toSorted((left, right) => right.createdAt - left.createdAt).slice(0, 4),
+          otherActiveGroups: Math.max(0, groups.length - 4),
+        },
+      };
+      const described = vi
+        .fn()
+        .mockResolvedValueOnce({ session: parent })
+        .mockResolvedValue({ session: current });
+      const childPage = createDeferred<SessionsListResult>();
+      const client = createTestGatewayClient(async (method, params) => {
+        if (method === "sessions.describe") {
+          return described();
+        }
+        if (method === "sessions.list") {
+          return isRecord(params) && params.spawnedBy ? childPage.promise : result([], 0, 0);
+        }
+        return { subscribed: true };
+      });
+      const { gateway } = createGatewayHarness(client);
+      const sessions = createTestSessionCapability(gateway);
+      await sessions.describe({ key: parent.key });
+      const hydrator = new SwarmRosterHydrator();
+      onTestFinished(() => hydrator.dispose());
+      hydrator.update({
+        sessions,
+        parentKey: parent.key,
+        sourceEpoch: 1,
+        readParent: (refresh) =>
+          sessions
+            .describe({ key: parent.key }, { refresh })
+            .then(({ session }) => session ?? null),
+        // Warm child presentation does not certify the fresh descriptor's counts.
+        currentRows: () => children,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      childPage.resolve(result(children, 0, children.length));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(described).toHaveBeenCalledTimes(reads);
+      expect(hydrator.rows.find((entry) => entry.key === parent.key)?.swarm).toEqual(
+        reads === 2 ? current.swarm : parent.swarm,
+      );
+    },
+  );
+
   it("keeps child requests and parent reads independent of unrelated canonical roster publications", async () => {
     vi.useFakeTimers();
     let children = [row(0)];

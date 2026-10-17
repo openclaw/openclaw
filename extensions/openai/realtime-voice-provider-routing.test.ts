@@ -208,6 +208,28 @@ describe("OpenAI realtime voice provider routing", () => {
     }
   });
 
+  it.each([{ model: GA_MODEL }, { model: OPAQUE_REALTIME_MODEL }, customEndpoint])(
+    "advertises family Settings facts independently of the active route: %j",
+    async (providerConfig) => {
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      const capabilities = await readInternalRealtimeVoiceProviderApi(
+        provider,
+      ).resolveBrowserSessionCapabilitiesAsync({ providerConfig });
+
+      expect(capabilities.modelFamilySettings).toEqual({
+        family: "gpt-live",
+        unlistedModelVoices: "active",
+        unsupportedTransports: ["provider-websocket"],
+        gatewayRelayHandlesAgentConsult: true,
+        hint: {
+          titleKey: "talkPage.gptLive.title",
+          descriptionKey: "talkPage.gptLive.hint",
+          readyKey: "talkPage.gptLive.ready",
+        },
+      });
+    },
+  );
+
   it.each([
     ["subscription", { model: SUBSCRIPTION_MODEL }, true],
     ["Platform", { model: GA_MODEL, apiKey: PLATFORM_KEY }, undefined],

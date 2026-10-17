@@ -504,10 +504,18 @@ describe("startGatewayEventSubscriptions", () => {
     expect(handler.dispose).toHaveBeenCalledOnce();
   });
 
-  registerSubscriptionRegistrationTests((params) => {
-    unsubs = startGatewayEventSubscriptions(params);
-    return unsubs;
-  });
+  registerSubscriptionRegistrationTests(
+    (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+      return unsubs;
+    },
+    (terminal) => {
+      agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminal);
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(async () => {}, { dispose() {} }),
+      );
+    },
+  );
 
   it("drives a registered chat run through the terminal persistence transition table", async () => {
     const runId = "run-lifecycle-table";

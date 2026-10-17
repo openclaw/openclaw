@@ -6,6 +6,7 @@ import {
   memoryVectorSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
@@ -21,6 +22,10 @@ import {
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { withLegacyAgentPostgresIndexes } from "../../state/openclaw-agent-index-retirement-migration.js";
+import {
+  LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
+  withLegacyAgentPostgresMemoryRevisionTriggers,
+} from "../../state/openclaw-agent-memory-revision-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
@@ -123,12 +128,12 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // These predecessors share the table layout before the three appended
-    // trajectory columns. Pin the catalog so future DDL gets its own descriptor.
+    // Schema 30 appends trajectory columns; schema 31 removes revision triggers.
+    // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 30 ||
-      (sourceVersion !== 27 && sourceVersion !== 28 && sourceVersion !== 29)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 31 ||
+      ![27, 28, 29, 30].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -139,9 +144,10 @@ export async function loadAgentPortDescriptor(
     fact: (typeof agentPostgresRuntime.expectedCatalog)[number],
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion !== agentEngineSchema.version;
+  const legacyTrajectory = sourceVersion < 30;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
-      !historical ||
+      !legacyTrajectory ||
       fact.table !== "trajectory_runtime_events" ||
       !isColumn(fact) ||
       !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name),
@@ -239,21 +245,29 @@ export async function loadAgentPortDescriptor(
         };
       },
       transcript_events(row) {
-        if (row.event_zstd == null) {
-          return row;
+        let decoded = row;
+        if (row.event_zstd != null) {
+          if (!(row.event_zstd instanceof Uint8Array)) {
+            throw new DatabasePortDataError("Invalid compressed transcript payload");
+          }
+          decoded = {
+            ...row,
+            event_json: readTranscriptPayload({
+              event_json: null,
+              event_zstd: row.event_zstd,
+              event_utf8_bytes: Number(row.event_utf8_bytes),
+            }),
+            event_zstd: null,
+          };
         }
-        if (!(row.event_zstd instanceof Uint8Array)) {
-          throw new DatabasePortDataError("Invalid compressed transcript payload");
-        }
-        return {
-          ...row,
-          event_json: readTranscriptPayload({
-            event_json: null,
-            event_zstd: row.event_zstd,
-            event_utf8_bytes: Number(row.event_utf8_bytes),
-          }),
-          event_zstd: null,
-        };
+        // SQLite upgrades leave old predicates lazy; PostgreSQL reads stored facts.
+        // The port already holds this canonical payload, so no extra read is needed.
+        return decoded.navigation_type == null &&
+          decoded.navigation_valid !== 0 &&
+          decoded.navigation_valid !== 0n &&
+          typeof decoded.event_json === "string"
+          ? { ...decoded, ...deriveTranscriptPredicateFields(decoded.event_json) }
+          : decoded;
       },
     },
     inspectSqliteSource(db) {
@@ -354,7 +368,10 @@ export async function loadAgentPortDescriptor(
   if (!historical) {
     return descriptor;
   }
-  let postData = withLegacyAgentPostgresTrajectoryStorage(descriptor.postData);
+  let postData = withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData);
+  if (legacyTrajectory) {
+    postData = withLegacyAgentPostgresTrajectoryStorage(postData);
+  }
   if (sourceVersion < 29) {
     postData = withLegacyAgentPostgresIndexes(postData);
   }
@@ -368,7 +385,17 @@ export async function loadAgentPortDescriptor(
       /^INSERT OR IGNORE INTO[^;]+;/gm,
       "",
     ),
-    preData: withLegacyAgentPostgresTrajectoryStorage(descriptor.preData),
+    triggers: [
+      ...(descriptor.triggers ?? []),
+      ...LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS.map((trigger) => ({
+        name: trigger.name,
+        table: trigger.table,
+        sql: trigger.sql.replace("IF NOT EXISTS ", "").replace(/;$/, ""),
+      })),
+    ],
+    preData: legacyTrajectory
+      ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
+      : descriptor.preData,
     postData,
     expectedCatalog: catalog.map((fact) =>
       sourceVersion < 29 &&

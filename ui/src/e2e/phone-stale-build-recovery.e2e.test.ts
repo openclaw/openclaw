@@ -447,7 +447,9 @@ suite.define(() => {
         const failedRecovery = page.locator(".sidebar-update-card--floating .sidebar-update-card");
         await expect.poll(() => failedRecovery.getByRole("button").isEnabled()).toBe(true);
         await expect.poll(() => failedRecovery.textContent()).toContain("Retry now");
-        await expect.poll(() => failedRecovery.textContent()).toContain("Gateway reconnects");
+        await expect
+          .poll(() => failedRecovery.textContent())
+          .toContain("Could not refresh. Check your connection and try again.");
         expect(documentRequests).toHaveLength(documentCountBeforeFailedProbe);
         expect(
           await failedRecovery.evaluate(

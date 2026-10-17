@@ -133,9 +133,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     return resolvePlacementComposer({
       gatewaySnapshot: this.context.gateway.snapshot,
       requiredProfile: this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
-      movingKey: this.headerPlacementMovingKey,
-      reclaimingKey: this.headerPlacementReclaimingKey,
-      restartingKey: this.headerPlacementRestartingKey,
+      movingKey: this.headerPresentation.placementMovingKey,
+      reclaimingKey: this.headerPresentation.placementReclaimingKey,
+      restartingKey: this.headerPresentation.placementRestartingKey,
       row,
       startupPending,
       requiredWorkerInferenceProfileId: this.state
@@ -156,7 +156,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     this.sessionPresentationKey = undefined;
     this.pairingPresentationOwner = undefined;
-    this.continueInTerminalDialog = null;
+    this.headerPresentation.continueInTerminalDialog = null;
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
     this.outboxRecoveryReady = false;
@@ -172,12 +172,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return;
     }
     const pendingProperty = {
-      move: "headerPlacementMovingKey",
-      recover: "headerPlacementRestartingKey",
-      reclaim: "headerPlacementReclaimingKey",
+      move: "placementMovingKey",
+      recover: "placementRestartingKey",
+      reclaim: "placementReclaimingKey",
     } as const;
     const property = pendingProperty[mode];
-    const pendingKey = this[property];
+    const pendingKey = this.headerPresentation[property];
     const placementStartup = scope.context.placementStartup;
     const onPendingChange = (key: string | null) => {
       if (mode === "recover" && key !== null && this.state) {
@@ -185,9 +185,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.state.chatRunError = null;
       }
       // Only the request that still owns the row may clear its progress key.
-      if (key !== null || this[property] === row.key) {
-        this[property] = key;
-        this.invalidate();
+      if (key !== null || this.headerPresentation[property] === row.key) {
+        this.headerPresentation[property] = key;
       }
     };
     const params = {
@@ -252,7 +251,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     if (state.connected && state.pendingAbort) {
-      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+      void replayPendingChatAbort(state);
     }
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
@@ -444,14 +443,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.replaceStagedAttachmentGatewayOwner(snapshot.client);
     }
     if (snapshot.phase !== "connected") {
-      this.presencePayload = undefined;
+      this.presence.update(undefined);
     } else if (clientChanged || !wasConnected) {
       const presence = readPresenceEntries(snapshot.hello?.snapshot);
-      this.presencePayload = presence ? { presence } : undefined;
+      this.presence.update(presence ? { presence } : undefined);
     }
     if (sourceChanged) {
       this.resetSessionReadAcknowledgements();
-      this.continueInTerminalDialog = null;
+      this.headerPresentation.continueInTerminalDialog = null;
       this.cancelHeaderRename();
       cancelChatScroll(state);
       releaseChatMediaResourceOwner(state);
@@ -492,7 +491,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // A new gateway/account owns its own membership + identity data; drop the
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.
-      this.sessionSharingStates = new Map();
+      this.collaboration.sharingStates = new Map();
       this.sessionSharingHydrationTargets.clear();
       state.guardianNotices = [];
       state.providerPolicyNotice = null;
@@ -587,7 +586,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.sidebarFocusVersion += 1;
     }
     if (state.connected && state.pendingAbort) {
-      void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+      void replayPendingChatAbort(state);
     }
     const canonicalRouteSessionKey =
       routeSessionKey && !catalogRouteKey
@@ -600,7 +599,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
-      state.requestUpdate?.();
       // Persisted state may already own the canonical key; continue startup
       // because no later route update would load its history.
       if (state.sessionKey !== canonicalRouteSessionKey) {
@@ -627,7 +625,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       setQuestionPromptClient(this.questionPromptState, null);
       stopChatRealtimeTalk(state);
       maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
-      state.requestUpdate?.();
       return;
     }
     this.refreshSwarmRoster();
@@ -665,13 +662,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       if (questionClient) {
         refreshPendingQuestionsWithRetry(this.questionPromptState, questionClient, clientIsCurrent);
       }
-      this.headerWorktreePaths.clear();
-      this.headerBranches.clear();
-      this.headerPlatform = null;
+      this.headerPresentation.worktreePaths = new Map();
+      this.headerPresentation.branches = new Map();
+      this.headerPresentation.platform = null;
       if (catalogRouteKey) {
         void this.loadHeaderPlatform(startupClient, startupGeneration);
         void this.loadCatalogSession(catalogRouteKey, false);
-        state.requestUpdate?.();
         return;
       }
       const historyRefresh = refreshPageChat(state, {
@@ -687,7 +683,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       void historyRefresh.finally(() => {
         void finishStartup();
       });
-      void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
+      void refreshChatModelAuthStatus(state);
       void state.loadAssistantIdentity();
       this.syncSessionSuggestionTarget(
         resolveChatAgentId(state) ?? "main",

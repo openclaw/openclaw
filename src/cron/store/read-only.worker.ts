@@ -4,6 +4,7 @@ import { inspectCronRowsForDoctor } from "../../commands/doctor/cron/store-inven
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
+import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import {
   assertStateReadSchema,
   openOpenClawStateReadConnection,
@@ -114,14 +115,16 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
     }
     return await control.runNativeSection(() => {
       // Copying stays in a separate process; the parent owns every unpublished child artifact.
-      const connection = stagingRoot
-        ? openOpenClawStateReadConnection(
-            location,
-            runSqliteReadOnlyWorkerSync(location, stagingRoot),
-            undefined,
-            stagingRoot,
-          )
-        : undefined;
+      const connection = isStatePostgres()
+        ? openOpenClawStateReadConnection(location, location)
+        : stagingRoot
+          ? openOpenClawStateReadConnection(
+              location,
+              runSqliteReadOnlyWorkerSync(location, stagingRoot),
+              undefined,
+              stagingRoot,
+            )
+          : undefined;
       // The connection owner retains failed-close token custody without imposing a schema gate.
       const db = connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
       try {

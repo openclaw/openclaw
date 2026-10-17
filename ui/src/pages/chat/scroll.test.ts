@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEffect, createRoot } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
@@ -30,10 +33,8 @@ function createScrollHost(
   let commit = () => {};
   let cancel = () => {};
   const cancelCommit = vi.fn();
-  const renderLifecycle: RenderLifecycle = {
-    invalidate: vi.fn(),
+  const renderLifecycle: Pick<RenderLifecycle, "afterCommit"> = {
     afterCommit: vi.fn((effect, onCancel) => {
-      renderLifecycle.invalidate();
       cancel = () => onCancel?.();
       commit = () => {
         cancel =
@@ -69,6 +70,31 @@ function createScrollHost(
   };
 
   return { host, container, commit: () => commit(), cancel: () => cancel(), cancelCommit };
+}
+
+function observeScrollState(host: ChatScrollHost) {
+  const changed = vi.fn();
+  createRoot((dispose) => {
+    onTestFinished(dispose);
+    projectChatFields(host, [
+      "chatReadingHistory",
+      "chatNewMessagesBelow",
+      "chatFollowLocked",
+      "chatUserNearBottom",
+    ]);
+    createEffect(
+      () => ({
+        readingHistory: host.chatReadingHistory,
+        newMessagesBelow: host.chatNewMessagesBelow,
+        followLocked: host.chatFollowLocked,
+        nearBottom: host.chatUserNearBottom,
+      }),
+      changed,
+    );
+  });
+  flush();
+  changed.mockClear();
+  return changed;
 }
 
 function scroll(host: ChatScrollHost, scrollTop: number, clientHeight = 400) {
@@ -140,13 +166,16 @@ describe("handleChatScroll", () => {
     expect(host).toMatchObject({ chatFollowLocked: true, chatUserNearBottom: false });
     Object.defineProperty(container, "clientHeight", { value: 600 });
     container.scrollTop = 1400;
-    const invalidate = vi.fn();
-    host.renderLifecycle.invalidate = invalidate;
+    const changed = observeScrollState(host);
     handleChatScrollTakeover(host);
     expect(host).toMatchObject({ chatReadingHistory: true, chatFollowLocked: true });
     handleChatScrollTakeover(host, true);
     expect(host.chatFollowLocked).toBe(false);
-    expect(invalidate).toHaveBeenCalled();
+    flush();
+    expect(changed).toHaveBeenCalledExactlyOnceWith(
+      { readingHistory: false, newMessagesBelow: false, followLocked: false, nearBottom: true },
+      expect.anything(),
+    );
   });
 });
 
@@ -345,12 +374,10 @@ describe("programmatic scroll ownership", () => {
 
 it("retires pending follow at the physical end and publishes the locked state once", () => {
   const { host } = createScrollHost();
-  const invalidate = vi.fn();
-  host.renderLifecycle.invalidate = invalidate;
+  const changed = observeScrollState(host);
   const frames = installAnimationFrameQueue();
   scheduleChatScroll(host, true);
   expect(frames.callbacks).toHaveLength(1);
-  invalidate.mockClear();
   lockChatScroll(host);
   expect(frames.callbacks).toHaveLength(0);
   expect(host).toMatchObject({
@@ -358,9 +385,14 @@ it("retires pending follow at the physical end and publishes the locked state on
     chatUserNearBottom: false,
     chatHasAutoScrolled: true,
   });
-  expect(invalidate).toHaveBeenCalledTimes(1);
+  flush();
+  expect(changed).toHaveBeenCalledExactlyOnceWith(
+    { readingHistory: false, newMessagesBelow: false, followLocked: true, nearBottom: false },
+    expect.anything(),
+  );
   lockChatScroll(host);
-  expect(invalidate).toHaveBeenCalledTimes(1);
+  flush();
+  expect(changed).toHaveBeenCalledTimes(1);
   handleChatScrollTakeover(host, true);
   expect(host).toMatchObject({ chatFollowLocked: false, chatUserNearBottom: true });
 });

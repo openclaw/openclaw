@@ -121,6 +121,12 @@ The bundle preserves every table's columns, keys, and retained rows. Index DDL
 and version publication remain atomic on both engines; verified backups retain
 the predecessor index definitions for rollback.
 
+Agent [schema 31](/reference/database-schemas/agent-schema-history#agent-schema-31)
+moves memory index revision advancement from six row triggers into the batch
+writer's transaction. SQLite and PostgreSQL drop the triggers without changing
+retained rows or revision values. Older writers require the verified pre-upgrade
+backup because they rely on those triggers to invalidate readers.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports
@@ -620,9 +626,13 @@ but disables the new structured controls; upgrading can read retained receipts.
 
 The mutable JSON predicate projections require
 [agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns).
-Older writers must be fenced because they update canonical JSON without maintaining
-the promoted columns. The forward migration backfills every retained row once;
-NULL-only repair on reopen cannot make a downgrade and re-upgrade safe.
+The forward migration eagerly backfills session-node and existing outbox rows;
+SQLite transcript predicates remain lazy until a canonical payload write or rewrite
+materializes them. Existing beta stores with materialized predicates remain valid,
+and this lazy classification requires no schema bump. Older writers must still be
+fenced because they update canonical JSON without maintaining the promoted columns.
+Already-materialized values are trusted, so lazy fallback for unclassified rows
+cannot make a downgrade and re-upgrade safe.
 
 ### Schema bumps and older updaters
 

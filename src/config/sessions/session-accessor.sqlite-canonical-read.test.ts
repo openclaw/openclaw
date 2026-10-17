@@ -88,12 +88,13 @@ describe("canonical SQLite metadata reads", () => {
     const queries = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(database.db),
       ["entries"],
-      (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
+      (sql) => (/(?:from|join)\s+"session_nodes"/i.test(sql) ? "entries" : null),
     );
     try {
       expect(loadSessionEntryReadOnly({ ...scope, projection: "list" })).toEqual(expected);
       expect(queries.textBytes.entries).toBeLessThan(2048);
       queries.textBytes.entries = 0;
+      queries.counts.entries = 0;
       runOpenClawAgentWriteTransaction((writer) => {
         expect(
           appendTranscriptEventsInTransaction(
@@ -106,6 +107,7 @@ describe("canonical SQLite metadata reads", () => {
           ),
         ).toBe(2);
       }, scope);
+      expect(queries.counts.entries).toBeGreaterThan(0);
       expect(queries.textBytes.entries).toBeLessThan(4096);
     } finally {
       queries.restore();

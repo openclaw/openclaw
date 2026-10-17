@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { deriveContextEngineTurnOutboxState } from "../agents/harness/context-engine-turn-outbox-state.js";
 import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
+import {
+  prepareTranscriptPayload,
+  transcriptPredicateSql,
+} from "../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
@@ -17,12 +21,14 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   ensureOpenClawAgentSchema,
 } from "./openclaw-agent-db-schema.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_V21_SQL,
   restoreEmptyV21StorageForHistoricalFixture,
 } from "./openclaw-agent-schema-v21.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "./openclaw-agent-schema-v25.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
@@ -57,9 +63,9 @@ function seedVersion(database: DatabaseSync, version: number) {
     INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
     VALUES ('primary', 'agent', ${version}, 'main', 1, 1);`);
 }
-function seedSchema(database: DatabaseSync) {
-  database.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
-  seedVersion(database, 25);
+function seedSchema(database: DatabaseSync, version: 24 | 25 = 25) {
+  database.exec(version === 24 ? OPENCLAW_AGENT_SCHEMA_V24_SQL : OPENCLAW_AGENT_SCHEMA_V25_SQL);
+  seedVersion(database, version);
   database.exec(`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
     VALUES ('agent:main:main', 'history', '{"sessionId":"history","updatedAt":1}', 1);
     INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
@@ -68,7 +74,7 @@ function seedSchema(database: DatabaseSync) {
 }
 
 describe("agent JSON predicate migration", () => {
-  it("matches shared writer derivations while preserving raw and compressed payloads", () => {
+  it("keeps transcripts untouched while lazy predicates match canonical writer semantics", () => {
     using database = new DatabaseSync(":memory:");
     seedSchema(database);
     const sessionEntries = [
@@ -101,12 +107,20 @@ describe("agent JSON predicate migration", () => {
     for (const [index, entry] of sessionEntries.entries()) {
       insertNode.run(`agent:main:case-${index}`, `case-${index}`, entry);
     }
-    const events = [
-      "{}",
+    const navigationEvents = [
+      '{"type":"reset","targetId":"prior"}',
+      '{"type":"compaction","firstKeptEntryId":"kept"}',
       '{"type":"message","message":{"role":"assistant"}}',
       '{"type":"custom_message","customType":"openclaw.runtime-context","display":true}',
       '{"type":"custom","customType":"openclaw.cache-ttl","display":1}',
       '{"type":"message","type":"reset","message":{"role":"user","role":"system"}}',
+      '{"type":"message","message":{"role":"toolResult"},"message":{"role":"user"}}',
+      '{"type":"custom","customType":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display":false}',
+    ];
+    const events = [
+      "{}",
+      '{"type":"session","id":"history","version":3}',
+      ...navigationEvents,
       '{"t\\u0079pe":"message","type":"reset","message":{"role":"user","r\\u006fle":"system"}}',
       '{"type\\u0000suffix":"message","type":"reset","message\\u0000suffix":{"role\\u0000suffix":"user","role":"assistant"}}',
       '{"customType\\u0000suffix":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display\\u0000suffix":true,"display":false}',
@@ -126,23 +140,26 @@ describe("agent JSON predicate migration", () => {
     for (const [index, event] of events.entries()) {
       insertEvent.run(index + 1, event);
     }
-    const compressedEvent = '{"type":"message","message":{"role":"user"}}';
-    const compressedBytes = zstdCompressSync(Buffer.from(compressedEvent));
-    const navigation = JSON.stringify({
-      version: 1,
-      report: { kind: "canonical" },
-      navigation: JSON.parse(compressedEvent),
-      reset: {},
-      model: {},
-      modelBytes: 0,
-      modelWithoutCheckpointBytes: 0,
-      withoutCustomDataBytes: 0,
-    });
-    database
-      .prepare(`INSERT INTO transcript_events
+    // Exercise the same predicates through real stored navigation, not a fabricated envelope.
+    const compressedEvents = navigationEvents.map(
+      (event) => `${event.slice(0, -1)},"padding":"${"x".repeat(4096)}"}`,
+    );
+    const compressedPayloads = compressedEvents.map((event) =>
+      prepareTranscriptPayload(database, event, undefined, "UTF-8"),
+    );
+    const insertCompressed = database.prepare(`INSERT INTO transcript_events
       (session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at)
-      VALUES ('history', ?, NULL, ?, ?, ?, 1)`)
-      .run(events.length + 1, compressedBytes, Buffer.byteLength(compressedEvent), navigation);
+      VALUES ('history', ?, NULL, ?, ?, ?, 1)`);
+    for (const [index, payload] of compressedPayloads.entries()) {
+      expect(payload.event_json, navigationEvents[index]).toBeNull();
+      expect(payload.event_zstd, navigationEvents[index]).toBeInstanceOf(Uint8Array);
+      insertCompressed.run(
+        events.length + index + 1,
+        payload.event_zstd,
+        payload.event_utf8_bytes,
+        payload.navigation_json,
+      );
+    }
     const payloads = [{}, { state: "pending" }, { state: "ready" }, { state: null }, { state: 1 }];
     for (const [index, payload] of payloads.entries()) {
       database
@@ -150,9 +167,18 @@ describe("agent JSON predicate migration", () => {
         (advancement_key, engine_id, session_id, payload_json, created_at) VALUES (?, 'engine', 'history', ?, 1)`)
         .run(String(index), JSON.stringify(payload));
     }
-    database.exec("BEGIN IMMEDIATE");
-    migrateAgentJsonPredicatesInTransaction(database);
-    database.exec("COMMIT");
+    database.setAuthorizer((action, table) =>
+      table === "transcript_events" && action === constants.SQLITE_UPDATE
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      migrateAgentJsonPredicatesInTransaction(database);
+      database.exec("COMMIT");
+    } finally {
+      database.setAuthorizer(null);
+    }
     for (const [index, entry] of sessionEntries.entries()) {
       const expected = deriveSessionPredicateColumns(entry);
       expect(
@@ -168,21 +194,42 @@ describe("agent JSON predicate migration", () => {
         has_optional_references: expected.has_optional_references,
       });
     }
-    const readEvent =
-      database.prepare(`SELECT navigation_type, navigation_custom_type, navigation_display,
-      message_role, navigation_last_type, navigation_last_custom_type, navigation_valid
-      FROM transcript_events WHERE session_id = 'history' AND seq = ?`);
-    for (const [index, event] of [...events, compressedEvent].entries()) {
-      expect(readEvent.get(index + 1), event).toEqual(deriveTranscriptPredicateFields(event));
+    const predicates = getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
+      .selectFrom("transcript_events")
+      .select([
+        transcriptPredicateSql(database, "navigation_type").as("navigation_type"),
+        transcriptPredicateSql(database, "navigation_custom_type").as("navigation_custom_type"),
+        transcriptPredicateSql(database, "navigation_display").as("navigation_display"),
+        transcriptPredicateSql(database, "message_role").as("message_role"),
+        transcriptPredicateSql(database, "navigation_last_type").as("navigation_last_type"),
+        transcriptPredicateSql(database, "navigation_last_custom_type").as(
+          "navigation_last_custom_type",
+        ),
+        transcriptPredicateSql(database, "navigation_valid").as("navigation_valid"),
+      ])
+      .where("session_id", "=", "history");
+    for (const [index, event] of [...events, ...compressedEvents].entries()) {
+      expect(
+        executeSqliteQueryTakeFirstSync(database, predicates.where("seq", "=", index + 1)),
+        event,
+      ).toEqual(deriveTranscriptPredicateFields(event));
     }
     expect(
-      readRow(
-        database,
-        `SELECT event_zstd, navigation_json FROM transcript_events
-      WHERE session_id = 'history' AND seq = ?`,
-        events.length + 1,
-      ),
-    ).toEqual({ event_zstd: new Uint8Array(compressedBytes), navigation_json: navigation });
+      readRows(database, "SELECT DISTINCT navigation_type, message_role FROM transcript_events"),
+    ).toEqual([{ navigation_type: null, message_role: null }]);
+    for (const [index, payload] of compressedPayloads.entries()) {
+      expect(
+        readRow(
+          database,
+          `SELECT event_zstd, navigation_json FROM transcript_events
+        WHERE session_id = 'history' AND seq = ?`,
+          events.length + index + 1,
+        ),
+      ).toEqual({
+        event_zstd: new Uint8Array(payload.event_zstd!),
+        navigation_json: payload.navigation_json,
+      });
+    }
     expect(
       readRows(
         database,
@@ -202,6 +249,56 @@ describe("agent JSON predicate migration", () => {
       });
     }
   });
+
+  it.each([false, true])(
+    "preserves stable-v24 transcripts through admission (rollback=%s)",
+    async (rollback) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const pathname = state.path("predicates-v24.sqlite");
+        using database = new DatabaseSync(pathname);
+        seedSchema(database, 24);
+        // Stable admission has already settled the historical trigger's pending validity flag.
+        database.exec("UPDATE session_nodes SET entry_valid = 1");
+        const event =
+          '{"type":"message","message":{"role":"user","content":"retained stable transcript"}}';
+        database
+          .prepare(`INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+        VALUES ('history', 1, ?, 1)`)
+          .run(event);
+        const original = witness(database);
+        if (rollback) {
+          database.setAuthorizer((action, name, value) =>
+            action === constants.SQLITE_PRAGMA &&
+            name === "user_version" &&
+            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+              ? constants.SQLITE_DENY
+              : constants.SQLITE_OK,
+          );
+        }
+        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          const migrate = () => admit(database, pathname, state.env);
+          if (rollback) {
+            expect(migrate).toThrow(/authoriz/u);
+          } else {
+            migrate();
+          }
+        });
+        database.setAuthorizer(null);
+        expectVersion(database, rollback ? 24 : OPENCLAW_AGENT_SCHEMA_VERSION);
+        expect(assertOpenClawMigrationWitnessPreserved(original, witness(database))).toEqual({
+          warnings: [],
+        });
+        expect(readRow(database, "SELECT event_json FROM transcript_events")?.event_json).toBe(
+          event,
+        );
+        if (!rollback) {
+          expect(
+            readRow(database, "SELECT navigation_type, message_role FROM transcript_events"),
+          ).toEqual({ navigation_type: null, message_role: null });
+        }
+      });
+    },
+  );
 
   it.each(["commit", "rollback", "without-outbox", "missing-additive-indexes"] as const)(
     "publishes both version markers only with the complete v26 migration (%s)",

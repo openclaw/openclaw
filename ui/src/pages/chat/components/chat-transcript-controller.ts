@@ -1,4 +1,5 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
+import { registerListener } from "../../../../../src/shared/listeners.js";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   getChatSessionScrollPosition,
@@ -12,15 +13,21 @@ import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.t
 export type ChatTranscript = ReturnType<typeof createChatTranscript>;
 
 export function createChatTranscript(
-  notify: () => void,
   scrollPaneId: () => string,
   callbacks: TranscriptCallbacks = {},
 ) {
   let activeSessionKey: string | null = null;
   let sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   let connected = false;
+  const listeners = new Set<() => void>();
+  const publish = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
 
   return {
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     get renderedSessionKey(): string | null {
       return activeSessionKey;
     },
@@ -40,7 +47,7 @@ export function createChatTranscript(
           : (savedPosition?.scrollTop ?? null);
         activeSessionKey = sessionKey;
         sessionVirtualizer = new ChatSessionVirtualizerHost(
-          notify,
+          publish,
           initialOffset,
           (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
           callbacks,

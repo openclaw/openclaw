@@ -6,8 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetModelsJsonReadyCacheForTest } from "../agents/models-config-state.test-support.js";
 import { CUSTOM_PROXY_MODELS_CONFIG } from "../agents/models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { persistClawInstallRecord } from "../claws/provenance.js";
-import { makeProvenancePlan } from "../claws/provenance.test-helpers.js";
+import { makeProvenancePlan, seedLegacyClawInstall } from "../claws/provenance.test-helpers.js";
 import { resolveClawToolPolicyConsent } from "../claws/tool-policy-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -52,7 +51,7 @@ async function fixture() {
     { schemaVersion: 1, agent: { id: "worker" } },
     { openClawProfile: { schemaVersion: 1, agent: { tools: { allow: ["read"] } } } },
   );
-  persistClawInstallRecord(plan, { env: process.env });
+  seedLegacyClawInstall(plan, { env: process.env });
   const { id, ...agent } = plan.agent.config;
   const config = {
     ...CUSTOM_PROXY_MODELS_CONFIG,

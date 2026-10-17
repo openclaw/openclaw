@@ -278,7 +278,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
               "content--new-session": view().activeRoute === "new-session",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().activeRoute === "workboard",
-              "content--actions-blocked": view().pageActionsBlocked,
             },
           ]}
           ref={(element) => {
@@ -288,25 +287,8 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           }}
           tabindex={-1}
           onMouseDown={beginNativeWindowDragFromTopInset}
-          inert={
-            (!view().nativeEmbed && view().pageActionsBlocked) ||
-            (view().mobileNavLayout && view().navDrawerOpen)
-          }
+          inert={view().mobileNavLayout && view().navDrawerOpen}
         >
-          <Show when={view().pageActionsBlocked}>
-            <div class="connection-action-block" role="status" aria-live="polite">
-              <span class="connection-action-block__icon" aria-hidden="true">
-                <Icon name="globeOff" />
-              </span>
-              <span class="connection-action-block__text">
-                {t(
-                  view().settingsTakeover
-                    ? "connection.settingsChangesUnavailable"
-                    : "connection.actionsUnavailable",
-                )}
-              </span>
-            </div>
-          </Show>
           <Show
             when={
               floatingSidebarAttentionVisible(view().floatingUpdateCard) ||
@@ -333,10 +315,8 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           >
             <RouterOutlet
               ref={(element) => (props.host.routeOutlet = element)}
-              inert={view().pageActionsBlocked || view().reloadRequired}
-              aria-disabled={
-                view().pageActionsBlocked || view().reloadRequired ? "true" : undefined
-              }
+              inert={view().reloadRequired}
+              aria-disabled={view().reloadRequired ? "true" : undefined}
               router={view().runtime.router}
               retryContext={view().context}
               retryEnabled={view().gatewayConnected}

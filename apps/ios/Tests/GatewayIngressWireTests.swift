@@ -360,6 +360,7 @@ extension GatewayIngressControllerTests {
         defer { state.restore() }
         let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
         defer { server.stop() }
+        var connections = server.connectRoles.makeAsyncIterator()
         let fixture = try IngressWireFixture(server: server)
         let model = NodeAppModel()
         let fleet = GatewayOperatorFleet()
@@ -376,9 +377,11 @@ extension GatewayIngressControllerTests {
             let config = fixture.config(authorization)
             model.applyGatewayConnectConfig(config)
             fleet.reconcile(desiredStableIDs: [config.stableID], configs: [config])
-            try await waitForIngress {
-                server.roles.contains("node") && server.roles.filter { $0 == "operator" }.count == 2
+            // Synchronize on decoded connect frames after the fixture captures their auth.
+            for _ in 0..<3 {
+                _ = try #require(await connections.next())
             }
+            try #require(server.roles.contains("node") && server.roles.filter { $0 == "operator" }.count == 2)
             let loader = fixture.loader(config)
             let loaded = try await loader.load(
                 response: IngressWireFixture.media, kind: .image, expectedGatewayID: config.effectiveStableID)

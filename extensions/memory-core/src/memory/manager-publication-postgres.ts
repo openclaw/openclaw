@@ -17,6 +17,7 @@ import {
   readSqliteDatabaseWriteRevision,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import {
@@ -283,11 +284,8 @@ export function bindPostgresMemoryPublication(
     if (command.type === "database.reset") {
       return write(
         () => {
-          const query = getNodeSqliteKysely<
-            Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown> & {
-              memory_index_state: { id: number; revision: number };
-            }
-          >(db);
+          const query =
+            getNodeSqliteKysely<Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown>>(db);
           let changed = false;
           // Admitted facts include optional vector projections; generated text columns
           // disappear with their source rows while the index definitions stay admitted.
@@ -300,13 +298,7 @@ export function bindPostgresMemoryPublication(
           }
           cacheSize = 0;
           if (changed) {
-            executeSqliteQuerySync(
-              db,
-              query
-                .updateTable(MEMORY_INDEX_STATE_TABLE)
-                .set((eb) => ({ revision: eb("revision", "+", 1) }))
-                .where("id", "=", 1),
-            );
+            advanceMemoryIndexRevision(db);
           }
           return changed;
         },
@@ -429,6 +421,7 @@ export function bindPostgresMemoryPublication(
           if (command.input.vectorIndexComplete) {
             markMemoryVectorIndexClean(db);
           }
+          advanceMemoryIndexRevision(db);
           rebuilding = undefined;
         },
         { publishFacts: true },
@@ -504,14 +497,30 @@ export function bindPostgresMemoryPublication(
     if (command.type === "source.refresh") {
       return rebuilding
         ? { ok: true, value: false }
-        : write(() => refreshMemorySessionSourceState(db, command.input), { publishFacts: true });
+        : write(
+            () => {
+              const changed = refreshMemorySessionSourceState(db, command.input);
+              if (changed) {
+                advanceMemoryIndexRevision(db);
+              }
+              return changed;
+            },
+            { publishFacts: true },
+          );
     }
     if (command.type === "source.delete") {
       return rebuilding
         ? { ok: true, value: false }
         : write(
-            () =>
-              new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
+            () => {
+              const changed = new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
+                command.input,
+              );
+              if (changed) {
+                advanceMemoryIndexRevision(db);
+              }
+              return changed;
+            },
             { publishFacts: true },
           );
     }
@@ -594,6 +603,9 @@ export function bindPostgresMemoryPublication(
               decode<MemorySourceIndexRow>(source.fragments ?? records("source")),
             );
           }
+        }
+        if (!rebuilding) {
+          advanceMemoryIndexRevision(db);
         }
         return true;
       },

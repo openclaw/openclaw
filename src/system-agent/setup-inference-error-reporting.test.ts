@@ -56,32 +56,26 @@ const guidance = "Run `openclaw onboard` to connect and live-test AI first.";
 
 async function observeScenario(scenario: Scenario, json: boolean) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-error-reporting-140392-"));
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const exits: number[] = [];
   const phases: string[] = [];
   const tempDirs: string[] = [];
-  let callbackAttempts = 0;
-  let managedDispatches = 0;
-  let onboardingDispatches = 0;
-  let faultReached = 0;
   const marker = `dependency-${scenario}-reason-140392`;
   const cause = `${marker}; OPENAI_API_KEY=${syntheticToken}; {"access_token":"${syntheticStructuredValue}"}; ${syntheticCustomValue}`;
   const fault = json ? new Error(cause) : cause;
-  const renderedRuntime: RuntimeEnv = {
-    log: (...args) => stdout.push(args.map(String).join(" ")),
-    error: (...args) => stderr.push(args.map(String).join(" ")),
-    exit: (code) => {
-      exits.push(code);
-    },
+  const enter = (phase: FailurePhase) => {
+    phases.push(phase === "revalidate" ? "runtime-load" : phase);
+    if (scenario === phase) {
+      // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
+      throw fault;
+    }
+  };
+  const output = {
+    log: vi.fn<RuntimeEnv["log"]>(),
+    error: vi.fn<RuntimeEnv["error"]>(),
+    exit: vi.fn<RuntimeEnv["exit"]>(),
   };
   const policy = { redactSensitive: "off", redactPatterns: ["PR140392_PRIVATE_[A-Z]+"] };
-  let restorePolicy = () => {};
+  vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(policy);
   try {
-    const policySpy = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(policy);
-    restorePolicy = () => {
-      policySpy.mockRestore();
-    };
     await withEnvAsync(
       {
         OPENCLAW_STATE_DIR: path.join(root, "state"),
@@ -105,17 +99,12 @@ async function observeScenario(scenario: Scenario, json: boolean) {
         await metadata.run(async () => {
           const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
           let changedArtifact = false;
-          const originalFingerprint = fixture.deps.fingerprintPluginRuntimeArtifact;
-          if (!originalFingerprint) {
-            throw new Error("fixture has no artifact fingerprint dependency");
-          }
+          const originalFingerprint = expectDefined(
+            fixture.deps.fingerprintPluginRuntimeArtifact,
+            "fixture artifact fingerprint",
+          );
           runtimeLoader.mockReset().mockImplementation(() => {
-            phases.push("runtime-load");
-            if (scenario === "revalidate") {
-              faultReached += 1;
-              // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-              throw fault;
-            }
+            enter("revalidate");
             return createEmptyPluginRegistry();
           });
           vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockImplementation(
@@ -124,8 +113,10 @@ async function observeScenario(scenario: Scenario, json: boolean) {
           vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
             tempDirs.push(params.workspaceDir);
             phases.push("probe");
-            expect(params.agentHarnessRuntimeOverride).toBe("openclaw");
-            expect(params.authProfileId).toBe("openai:proof");
+            expect(params).toMatchObject({
+              agentHarnessRuntimeOverride: "openclaw",
+              authProfileId: "openai:proof",
+            });
             params.onSuccessfulAuthBinding?.(fixture.binding.auth);
             if (scenario === "drift") {
               changedArtifact = true;
@@ -143,12 +134,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
             fingerprintPluginRuntimeArtifact: (input) =>
               `${originalFingerprint(input)}${changedArtifact ? "-changed" : ""}`,
             captureSystemAgentOwnerPluginArtifacts: (input) => {
-              phases.push("capture");
-              if (scenario === "capture") {
-                faultReached += 1;
-                // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-                throw fault;
-              }
+              enter("capture");
               return captureSystemAgentOwnerPluginArtifacts(input);
             },
           };
@@ -162,13 +148,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
                 requireExecutionOwner: true,
                 deps,
                 onVerifiedExecution: (verified) => {
-                  phases.push("callback");
-                  callbackAttempts += 1;
-                  if (scenario === "callback") {
-                    faultReached += 1;
-                    // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-                    throw fault;
-                  }
+                  enter("callback");
                   binding = verified;
                 },
               });
@@ -181,43 +161,32 @@ async function observeScenario(scenario: Scenario, json: boolean) {
               return { ...result, binding };
             },
           );
-          inferenceMocks.runSystemAgent.mockImplementation(async () => {
-            managedDispatches += 1;
-          });
-          inferenceMocks.runGuidedOnboarding.mockImplementation(async () => {
-            onboardingDispatches += 1;
-          });
+          inferenceMocks.runSystemAgent.mockReset().mockResolvedValue(undefined);
+          inferenceMocks.runGuidedOnboarding.mockReset().mockResolvedValue(undefined);
           await runSystemAgentWithInference(
             json ? { json: true } : { message: "status", interactive: false },
-            renderedRuntime,
+            output,
           );
         });
       },
     );
-    expect(onboardingDispatches).toBe(0);
+    const stdout = output.log.mock.calls.map((args) => args.map(String).join(" "));
+    const stderr = output.error.mock.calls.map((args) => args.map(String).join(" "));
+    expect(inferenceMocks.runGuidedOnboarding).not.toHaveBeenCalled();
     expect(tempDirs).toHaveLength(scenario === "capture" ? 0 : 1);
     for (const dir of tempDirs) {
       await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
     }
+    const success = scenario === "success";
+    expect(inferenceMocks.runSystemAgent).toHaveBeenCalledTimes(success ? 1 : 0);
+    expect(output.exit.mock.calls.map(([code]) => code)).toEqual(success ? [] : [1]);
+    const phaseCount = scenario === "capture" ? 1 : success || scenario === "callback" ? 4 : 3;
+    expect(phases).toEqual(["capture", "probe", "runtime-load", "callback"].slice(0, phaseCount));
     if (scenario === "success") {
-      expect(phases).toEqual(["capture", "probe", "runtime-load", "callback"]);
-      expect(callbackAttempts).toBe(1);
-      expect(managedDispatches).toBe(1);
-      expect(exits).toEqual([]);
       expect(stdout).toEqual([]);
       expect(stderr).toEqual([]);
       return;
     }
-    expect(managedDispatches).toBe(0);
-    expect(exits).toEqual([1]);
-    expect(callbackAttempts).toBe(scenario === "callback" ? 1 : 0);
-    expect(phases).toEqual(
-      scenario === "capture"
-        ? ["capture"]
-        : scenario === "callback"
-          ? ["capture", "probe", "runtime-load", "callback"]
-          : ["capture", "probe", "runtime-load"],
-    );
     let message: string;
     if (json) {
       expect(stdout).toHaveLength(1);
@@ -233,20 +202,18 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     } else {
       expect(stdout).toEqual([]);
       expect(stderr).toHaveLength(1);
-      const output = expectDefined(stderr[0], "text error");
-      expect(output.endsWith(`\n${guidance}`)).toBe(true);
-      message = output.slice(0, -guidance.length - 1);
+      const text = expectDefined(stderr[0], "text error");
+      expect(text.endsWith(`\n${guidance}`)).toBe(true);
+      message = text.slice(0, -guidance.length - 1);
     }
     expect(message.startsWith("OpenClaw requires working inference: ")).toBe(true);
     expect(message).not.toContain(syntheticToken);
     expect(message).not.toContain(syntheticStructuredValue);
     expect(message).not.toContain(syntheticCustomValue);
     if (scenario === "drift") {
-      expect(faultReached).toBe(0);
       expect(message).toContain("verified inference owner changed");
       return;
     }
-    expect(faultReached).toBe(1);
     if (scenario === "capture") {
       expect(message).toContain("Refresh or reinstall the plugin and retry.");
     }
@@ -256,37 +223,9 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     expect(message).toContain("access_token");
     expect(message).toContain("***");
   } finally {
-    try {
-      runtimeLoader.mockReset();
-      restorePolicy();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-      await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
-      const evidenceDir = process.env.OPENCLAW_SETUP_ERROR_PROOF_DIR;
-      if (evidenceDir) {
-        await fs.writeFile(
-          path.join(evidenceDir, `${scenario}-${json ? "json" : "text"}.json`),
-          JSON.stringify(
-            {
-              scenario,
-              json,
-              stdout,
-              stderr,
-              exits,
-              phases,
-              faultReached,
-              callbackAttempts,
-              managedDispatches,
-              onboardingDispatches,
-              tempDirsCreated: tempDirs.length,
-              rootRemoved: true,
-            },
-            null,
-            2,
-          ),
-        );
-      }
-    }
+    runtimeLoader.mockReset();
+    await fs.rm(root, { recursive: true, force: true });
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
   }
 }
 

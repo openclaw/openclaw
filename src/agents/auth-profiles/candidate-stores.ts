@@ -13,16 +13,14 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { listAgentEntries, resolveAgentDir } from "../agent-scope.js";
 import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import {
-  loadPersistedAuthProfileStoreAtDatabasePath,
-  mergePersistedAuthProfileState,
-} from "./persisted.js";
+import { mergePersistedAuthProfileState } from "./persisted.js";
 import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import { invalidateRuntimeAuthProfileStoreSnapshotsForOwner } from "./runtime-snapshots.js";
-import { closeAuthProfileReadPool } from "./sqlite-read-pool.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
@@ -40,7 +38,7 @@ import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
 import { runAuthProfileStoreUpdate } from "./store-update.js";
 import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
 export type CandidateAuthProfileStore = {
@@ -146,20 +144,6 @@ export async function listCandidateAuthProfileStores(params: {
   );
 }
 
-/** Read an already-discovered candidate without creating a missing database. */
-export function loadCandidateAuthProfileStore(
-  candidate: CandidateAuthProfileStore,
-): AuthProfileStore | null {
-  try {
-    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
-    return loadPersistedAuthProfileStoreAtDatabasePath(candidate.databasePath, "agent");
-  } finally {
-    if (!candidate.configured) {
-      closeAuthProfileReadPool({ kind: "database", databasePath: candidate.databasePath });
-    }
-  }
-}
-
 /** Read the captured physical candidate through the existing auth reader. */
 export async function loadCandidateAuthProfileStoreAsync(
   candidate: CandidateAuthProfileStore,
@@ -174,6 +158,24 @@ export async function loadCandidateAuthProfileStoreAsync(
   } finally {
     await reader.dispose();
   }
+}
+
+/** Keep the owner's current credential facts available at a later write boundary. */
+export async function prepareCandidateAuthProfileCredentialRead(
+  candidate: CandidateAuthProfileStore,
+  profileId: string,
+): Promise<() => AuthProfileCredential | undefined> {
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ env: candidate.env }),
+    {
+      identity: `${candidate.databaseIdentity.key}:${candidate.databaseIdentity.birthtime ?? ""}`,
+      databasePath: candidate.databasePath,
+    },
+    profileId,
+  );
+  const store = await loadCandidateAuthProfileStoreAsync(candidate);
+  authority.observe(store?.profiles[profileId]);
+  return authority.readCurrentCredential;
 }
 
 type CandidateAuthProfileUpdate = {

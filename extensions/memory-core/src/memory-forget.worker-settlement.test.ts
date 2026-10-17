@@ -94,6 +94,7 @@ describe("memory forget worker settlement", () => {
     async (failResult) => {
       const state = await seedSelectedMemory(true);
       const before = state.derived();
+      const beforeRevision = Number(state.revision()?.revision);
       const origins = await listMemoryEntryOrigins({ agentId: "main" });
       const reportPath = path.join(fixture.stateDir, "forget-native-report.jsonl");
       const restore = observeMemoryForgetWorker(state.db, { failResult, reportPath });
@@ -127,12 +128,16 @@ describe("memory forget worker settlement", () => {
         expect(state.derived()).toEqual(
           failResult === "forget.mark" ? before : { chunks: [], sources: [], cache: [] },
         );
+        expect(Number(state.revision()?.revision)).toBe(
+          beforeRevision + (failResult === "forget.mark" ? 1 : 2),
+        );
         expect(await fs.readFile(state.memoryPath, "utf8")).toBe(state.content);
         expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
 
         restore();
         await forgetMemoryEntries(state.params);
         expect(state.derived()).toEqual({ chunks: [], sources: [], cache: [] });
+        expect(Number(state.revision()?.revision)).toBe(beforeRevision + 3);
         expect(await fs.readFile(state.memoryPath, "utf8")).toBe(state.retained);
         expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
         expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual(tombstones);

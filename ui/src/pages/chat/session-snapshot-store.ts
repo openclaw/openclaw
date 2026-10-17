@@ -81,6 +81,8 @@ const snapshotSchema = json.object(
     transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
     progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
     deltaCursor: json.optional(json.text),
+    // Only persisted warm metadata needs its full validator; read admission loads it below.
+    historyState: json.optional(json.unknown),
     displayedLeafEntryId: json.optional(json.nullable(json.text)),
     // Message contents are opaque; only the array boundary needs validation.
     messages: json.checked<unknown[]>(Array.isArray),
@@ -106,7 +108,9 @@ const recordSchema = json.refine(
   (record) => record.sessionId === record.snapshot.sessionId,
 );
 
-type SessionSnapshotRecord = json.SnapshotValue<typeof recordSchema>;
+type SessionSnapshotRecord = Omit<json.SnapshotValue<typeof recordSchema>, "snapshot"> & {
+  snapshot: ChatSessionSnapshot;
+};
 const metadataFields = {
   savedAt: nonnegative,
   sessionKey: sessionKeySchema,
@@ -137,9 +141,23 @@ type PendingSessionState = {
 
 const activeStores = new Set<SessionSnapshotStore>();
 
-function parseSnapshotRecord(value: unknown, sessionKey?: string): SessionSnapshotRecord | null {
+async function parseSnapshotRecord(
+  value: unknown,
+  sessionKey?: string,
+): Promise<SessionSnapshotRecord | null> {
   const parsed = json.parseSnapshot(recordSchema, value);
-  return parsed && (!sessionKey || parsed.sessionKey === sessionKey) ? parsed : null;
+  if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
+    return null;
+  }
+  const historyState = parsed.snapshot.historyState;
+  if (historyState !== undefined) {
+    const { isChatHistoryState } =
+      await import("../../lib/protocol-validators.generated/history-state.js");
+    if (!isChatHistoryState(historyState)) {
+      return null;
+    }
+  }
+  return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
 function createSnapshotRecord(
@@ -177,6 +195,7 @@ function createSnapshotRecord(
       };
     }
     // Pairing credentials stay in the live projection, never the browser's disk cache.
+    let redacted = false;
     const serialized = JSON.stringify(projected, (_key, value: unknown) => {
       if (value === projected.messages) {
         return projected.messages.map((message) => {
@@ -188,9 +207,15 @@ function createSnapshotRecord(
           return display;
         });
       }
-      return removePairingQrContent(value);
+      const sanitized = removePairingQrContent(value);
+      redacted ||= sanitized !== value;
+      return sanitized;
     });
     snapshot = JSON.parse(serialized);
+    // A receipt cannot certify metadata changed by the disk privacy projection.
+    if (redacted) {
+      delete snapshot.historyState;
+    }
     weight = serialized.length;
   } catch {
     return null;
@@ -466,7 +491,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
       return null;
     }
-    const record = parseSnapshotRecord(value, sessionKey);
+    const record = await parseSnapshotRecord(value, sessionKey);
+    if (!isCurrent()) {
+      return null;
+    }
     if (!record) {
       debugSnapshotStore("resetting cache after record shape mismatch");
       await resetSessionSnapshotDatabase();

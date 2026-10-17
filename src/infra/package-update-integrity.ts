@@ -364,7 +364,8 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     const digest = createHash("sha256");
     const fullModeDigest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
-    const permissive: Array<{ file: string; stat: BigIntStats }> = [];
+    // One chmod covers every alias; a second repair would use a pre-chmod stat.
+    const permissive = new Map<string, { file: string; stat: BigIntStats }>();
     const entriesObserved = new Map<string, EntryObservation>();
     let bytes = 0;
     let remainingEntries = MAX_TREE_ENTRIES - 1;
@@ -453,7 +454,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       }
       observed.push({ file, stat });
       if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o077n) !== 0n) {
-        permissive.push({ file, stat });
+        permissive.set(identity(stat), { file, stat });
       }
       // npm's disposable hidden lockfile is a cache, not package content:
       // https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#hidden-lockfiles
@@ -617,7 +618,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       observations.set(fingerprint, entriesObserved);
       if (!legacy) {
         fullModeDigests.set(fingerprint, fullModeDigest.digest("hex"));
-        permissionRepairs.set(fingerprint, permissive);
+        permissionRepairs.set(fingerprint, [...permissive.values()]);
       }
       if (historicalDevices) {
         settlementObservations.set(fingerprint, observed);

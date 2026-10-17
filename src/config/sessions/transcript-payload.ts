@@ -1,5 +1,9 @@
 import { sql, type Expression, type RawBuilder } from "kysely";
-import { jsonPathValue, jsonRemovePaths } from "../../infra/database-engine/json-values.js";
+import {
+  jsonPathValue,
+  jsonRemovePaths,
+  jsonValid,
+} from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -395,6 +399,65 @@ export function transcriptEventNavigationSql(
       `${alias}.event_json`,
     );
   return storedProjectionSql(database, "navigation", identity, alias);
+}
+
+/** Old SQLite transcripts keep lazy predicates until their next payload write. */
+export function transcriptPredicateSql<K extends keyof TranscriptPredicateFields>(
+  database: EngineConnection,
+  field: K,
+  alias: TranscriptPayloadAlias = "transcript_events",
+): RawBuilder<TranscriptPredicateFields[K]> {
+  const stored =
+    /* kysely-allow-raw: closed payload aliases and predicate keys name persisted owner facts. */
+    sql.ref<TranscriptPredicateFields[K]>(`${alias}.${field}`);
+  // PostgreSQL starts with materialized predicates, including SQLite port imports.
+  if (isPostgresSqlConnection(database)) {
+    return stored;
+  }
+  const type =
+    /* kysely-allow-raw: the closed payload alias selects the classification marker. */
+    sql.ref(`${alias}.navigation_type`);
+  const valid =
+    /* kysely-allow-raw: the closed payload alias selects recorded validity. */
+    sql.ref(`${alias}.navigation_valid`);
+  const identity =
+    /* kysely-allow-raw: the closed payload alias selects the canonical raw identity. */
+    sql.ref(`${alias}.event_json`);
+  const metadata =
+    /* kysely-allow-raw: closed payload aliases select the duplicate-preserving navigation envelope. */
+    sql.ref(`${alias}.navigation_json`);
+  const source = sql`coalesce(${identity}, ${jsonPathValue(database, metadata, sql.lit("$.navigation"), "json")})`;
+  const sourceValid = jsonValid(database, source);
+  const event = sql`CASE WHEN ${sourceValid} THEN ${source} ELSE '{}' END`;
+  let derived: RawBuilder<unknown>;
+  if (field === "navigation_valid") {
+    derived = sql`coalesce(${sourceValid}, 0)`;
+  } else if (field === "navigation_display") {
+    derived =
+      /* kysely-allow-raw: SQLite-only legacy classification preserves JSON true versus numeric one. */
+      sql`CASE WHEN json_type(${event}, '$.display') = 'true' THEN 1 ELSE 0 END`;
+  } else {
+    const isCustom = field === "navigation_custom_type" || field === "navigation_last_custom_type";
+    const path = field === "message_role" ? "$.message.role" : isCustom ? "$.customType" : "$.type";
+    const value =
+      field === "navigation_last_type" || field === "navigation_last_custom_type"
+        ? /* kysely-allow-raw: SQLite-only legacy navigation uses the final duplicate root member. */
+          sql`(SELECT value FROM json_each(${event}) WHERE key = ${sql.lit(isCustom ? "customType" : "type")} ORDER BY id DESC LIMIT 1)`
+        : jsonPathValue(database, event, sql.lit(path));
+    const accepted =
+      field === "message_role"
+        ? ["user", "assistant", "toolResult", "system"]
+        : isCustom
+          ? ["openclaw.runtime-context", "openclaw.cache-ttl"]
+          : ["session", "message", "reset", "compaction", "custom_message", "custom"];
+    derived = sql`CASE WHEN ${value} IN (${sql.join(accepted.map((candidate) => sql.lit(candidate)))}) THEN ${value} END`;
+  }
+  // A valid unknown type shares legacy defaults and can harmlessly rederive.
+  // Classified and malformed rows never parse their payload again here.
+  return /* kysely-allow-raw: closed predicate keys select matching stored and derived owner facts. */ sql<
+    TranscriptPredicateFields[K]
+  >`CASE WHEN ${type} IS NOT NULL OR ${valid} = 0
+    THEN ${stored} ELSE ${derived} END`;
 }
 
 export function transcriptEventRunIdSql(
