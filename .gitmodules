@@ -1,0 +1,4 @@
+[submodule "desktop/opc-1"]
+	path = desktop/opc-1
+	url = https://github.com/abuz8studios-ship-it/openclaw-desktop.git
+	branch = main
