@@ -472,7 +472,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
         if (event.delta) {
-          this.config.onTranscript?.("assistant", event.delta, false);
+          this.emitTranscript("assistant", event.delta, false, event);
         }
         return;
 
@@ -483,7 +483,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
         {
           const transcript = event.transcript ?? event.text;
           if (transcript) {
-            this.config.onTranscript?.("assistant", transcript, true);
+            this.emitTranscript("assistant", transcript, true, event);
           }
         }
         return;
@@ -491,13 +491,13 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       case "conversation.input_transcript.delta":
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
-          this.config.onTranscript?.("user", event.delta, false);
+          this.emitTranscript("user", event.delta, false, event);
         }
         return;
 
       case "conversation.item.input_audio_transcription.completed":
         if (event.transcript) {
-          this.config.onTranscript?.("user", event.transcript, true);
+          this.emitTranscript("user", event.transcript, true, event);
         }
         return;
 

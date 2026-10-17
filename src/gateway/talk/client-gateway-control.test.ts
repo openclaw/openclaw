@@ -92,6 +92,41 @@ describe("Talk client Gateway control owner", () => {
     },
   );
 
+  it("carries provider item and response ids on sideband transcript events", async () => {
+    const talkEvents: Array<{ type: string; itemId?: string; parentId?: string }> = [];
+    const owner = createTalkClientGatewayControlOwner({
+      voiceSessionId: "voice-transcript-ids",
+      providerId: "openai",
+      sessionTarget,
+      connId: "conn-gateway",
+      context: controlContext(vi.fn(), (event) => talkEvents.push(event)),
+      runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
+      runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    });
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
+
+    owner.control.onTranscript?.("user", "what time is it", true, { itemId: "item_user" });
+    owner.control.onTranscript?.("assistant", "It is noon.", true, {
+      itemId: "item_assistant",
+      responseId: "resp_1",
+    });
+
+    expect(
+      talkEvents
+        .filter((event) => event.type === "transcript.done" || event.type === "output.text.done")
+        .map(({ type, itemId, parentId }) => ({ type, itemId, parentId })),
+    ).toEqual([
+      { type: "transcript.done", itemId: "item_user", parentId: undefined },
+      { type: "output.text.done", itemId: "item_assistant", parentId: "resp_1" },
+    ]);
+
+    await owner.close();
+  });
+
   it.each(["completed", "cancelled"] as const)(
     "persists sideband transcripts, settles a %s consult, and closes idempotently",
     async (outcome) => {
