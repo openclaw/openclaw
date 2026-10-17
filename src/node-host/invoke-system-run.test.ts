@@ -521,6 +521,39 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(result.runCommand).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      reason: "security=deny",
+      message: "SYSTEM_RUN_DISABLED: security=deny",
+      guidance:
+        "Execution is disabled by the native security policy. Do not retry through another execution host or workaround; ask the operator to change the policy if this command is intended.",
+    },
+    {
+      reason: "allowlist-miss",
+      message: "SYSTEM_RUN_DENIED: allowlist miss",
+      guidance:
+        "Do not attempt the same outcome through a workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or ask the user to approve this exact command after explaining the risk.",
+    },
+  ] as const)(
+    "adds recovery guidance to native $reason denials without executing",
+    async ({ reason, message, guidance }) => {
+      const result = await runMac({
+        runViaResponse: {
+          ok: false,
+          error: { code: "SYSTEM_RUN_DENIED", reason, message },
+        },
+      });
+
+      expectExecDeniedEvent(result.sendNodeEvent, reason);
+      expect(invokeResult(result.sendInvokeResult)).toEqual({
+        ok: false,
+        error: { code: "SYSTEM_RUN_DENIED", message: `${message}\n${guidance}` },
+      });
+      expect(result.requestExecHost).toHaveBeenCalledOnce();
+      expect(result.runCommand).not.toHaveBeenCalled();
+    },
+  );
+
   it("reports an unreachable companion without local replay", async () => {
     const result = await runMac();
     expect(result.requestExecHost).toHaveBeenCalledOnce();
@@ -1618,6 +1651,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     expect(invoke.runCommand).not.toHaveBeenCalled();
     expectError(invoke.sendInvokeResult, "requires explicit approval in strictInlineEval mode");
+    expect(invokeResult(invoke.sendInvokeResult).error?.message).toContain(
+      "\nDo not attempt the same outcome through a workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or ask the user to approve this exact command after explaining the risk.",
+    );
   });
 
   it("persists benign awk allow-always approvals in strict inline-eval mode without reopening inline carriers", async () => {
